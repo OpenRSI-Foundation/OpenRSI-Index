@@ -261,9 +261,12 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
   that depends on a future or unsupported Harness capability, separate verifier
   image, or clean-Base Judge does not count. If such a capability is essential
   to the evaluation boundary, this gate fails.
-- Fail this gate only when the design leaves a credible direct path to evaluation
-  leakage or reward hacking, or when the exposure and safeguards are materially
-  undefined.
+- Treat shared Work/Judge snapshots and Work-root control of the inherited
+  interpreter or libraries as platform-wide residual limitations. Do not reject
+  a proposal solely for those properties or require arbitrary-root isolation.
+- Still fail for concrete task-specific paths to evaluation leakage, evaluator
+  or score tampering, or fabricated results, and for materially undefined
+  exposure or safeguards.
 
 ### 8. Data and Network Boundaries
 
