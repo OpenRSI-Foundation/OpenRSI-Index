@@ -1,0 +1,87 @@
+# Portable example, not a site configuration. Copy outside the repository and
+# set host paths, installed tools, and LSF policy before submitting jobs.
+# /srv/rsi paths below are placeholders; keep only the data binds your task needs.
+name = "bluevela"
+adapter = "bluevela"
+owner = "${USER}"
+
+[scheduler]
+kind = "lsf"
+submit_binary = "bsub"
+status_binary = "bjobs"
+cancel_binary = "bkill"
+remote_binary = "blaunch"
+remote_host_flag = "-z"
+queue = "normal"
+group = "rsi"
+exclusive = true
+poll_seconds = 10.0
+
+[storage]
+run_root = "/srv/rsi/harness/runs"
+image_cache = "/srv/rsi/harness/images"
+logs_root = "/srv/rsi/harness/logs"
+hf_home = "/srv/rsi/cache/huggingface"
+hf_datasets_cache = "/srv/rsi/cache/datasets"
+
+[builder]
+binary = "/usr/bin/podman"
+cpu_slots = 64
+memory_mb = 524288
+walltime = "02:00"
+temp_root = "/tmp"
+min_tmp_mb = 71680
+rootless_apt_sandbox = true
+faked_binary = "/usr/bin/faked-sysv"
+fakeroot_library = "/usr/lib/x86_64-linux-gnu/libfakeroot/libfakeroot-sysv.so"
+
+[apptainer]
+mount_policy = "scoped"
+binary = "/usr/bin/apptainer"
+dns_bind = "/etc/resolv.conf"
+extra_binds = []
+work_binds = [
+  { source = "/srv/rsi/datacomp-small/READY.json", target = "/rsi-data/datacomp-small/READY.json", read_only = true },
+  { source = "/srv/rsi/datacomp-small/available_uids.npy", target = "/rsi-data/datacomp-small/available_uids.npy", read_only = true },
+  { source = "/srv/rsi/datacomp-small/manifests/pool.manifest.json", target = "/rsi-data/datacomp-small/manifests/pool.manifest.json", read_only = true },
+  { source = "/srv/rsi/datacomp-small/commonpool/metadata", target = "/rsi-data/datacomp-small/commonpool/metadata", read_only = true },
+  { source = "/srv/rsi/datacomp-small/commonpool/features", target = "/rsi-data/datacomp-small/commonpool/features", read_only = true },
+  { source = "/srv/rsi/datacomp-small/commonpool/shards", target = "/rsi-data/datacomp-small/commonpool/shards", read_only = true },
+  { source = "/srv/rsi/datacomp-small/reference/l14-top30", target = "/rsi-data/datacomp-small/reference/l14-top30", read_only = true },
+  { source = "/srv/rsi/shared/data/adamh-v6-pretokenized-12b", target = "/rsi-data/data/adamh-v6-pretokenized-12b", read_only = true },
+  { source = "/srv/rsi/shared/data/adamh-v6-training-views", target = "/rsi-data/data/adamh-v6-training-views", read_only = true },
+  { source = "/srv/rsi/shared/cache/marin-adamh-baseline", target = "/rsi-data/cache/marin-adamh-baseline", read_only = true },
+]
+judge_binds = [
+  { source = "/srv/rsi/datacomp-small", target = "/rsi-data/datacomp-small", read_only = true },
+  { source = "/srv/rsi/shared/data/adamh-v6-pretokenized-12b", target = "/rsi-data/data/adamh-v6-pretokenized-12b", read_only = true },
+  { source = "/srv/rsi/shared/data/adamh-v6-training-views", target = "/rsi-data/data/adamh-v6-training-views", read_only = true },
+  { source = "/srv/rsi/shared/data/paloma-rev-65cd6fc", target = "/rsi-data/data/paloma-rev-65cd6fc", read_only = true },
+  { source = "/srv/rsi/shared/cache/marin-adamh-baseline", target = "/rsi-data/cache/marin-adamh-baseline", read_only = true },
+]
+judge_authority_root = "/srv/rsi/harness/authority"
+build_args = ["--fakeroot"]
+# Harbor tasks conventionally expose their mutable checkout at /testbed.  A
+# portable profile may override this without changing the adapter code.
+workspace_target = "/testbed"
+temp_root = "/tmp"
+container_python = "/opt/venv/bin/python"
+rdma_binds = ["/dev/infiniband", "/sys/class/infiniband"]
+
+# Portable task code consumes this logical shared-data namespace.  A profile
+# for another site supplies its own root without changing tasks or launchers.
+[apptainer.environment]
+RSI_SHARED_DATA_ROOT = "/rsi-data"
+
+[apptainer.work_environment]
+RSI_SHARED_DATA_ROOT = "/rsi-data"
+
+[apptainer.judge_environment]
+RSI_SHARED_DATA_ROOT = "/rsi-data"
+
+[resources]
+min_cpu_slots = 8
+min_memory_mb = 65536
+min_runtime_tmp_mb = 71680
+gpus_per_node = 8
+walltime_margin_seconds = 900

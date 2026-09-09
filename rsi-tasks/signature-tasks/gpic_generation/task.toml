@@ -1,0 +1,131 @@
+schema_version = "1.3"
+source = "keshik6/gpic@afa82daab73cfeab4ef9fbd174ff62b68bffc456"
+artifacts = [
+  "/app/project",
+  { source = "/app/output", exclude = [
+    "*/wandb", "*/wandb/*",
+    "*/hf-cache", "*/hf-cache/*",
+    "*/attempts/*/outputs/*/checkpoints/*",   # only the staged submission checkpoint ships
+  ] },
+]
+
+[task]
+name = "scale-autoresearch/gpic-generation"
+description = "Design and train ANY text-to-image model from scratch on the GPIC 100M training corpus for at most one full epoch at 256x256, then generate one image per caption for the frozen 50k GPIC test-caption set with pure conditional sampling (guidance = 1.0); the scored metric is FD-DINOv2 against the sealed GPIC test reference (lower is better), normalized against the sealed PixelGen JiT_T2I baseline trained under the identical contract."
+authors = [{ name = "Scale AutoResearch" }]
+keywords = ["text-to-image", "generative", "diffusion", "flow-matching", "gpic", "fd-dinov2", "single-epoch", "webdataset", "from-scratch"]
+
+[metadata]
+difficulty = "hard"
+category = "model_development"
+upstream_commit = "afa82daab73cfeab4ef9fbd174ff62b68bffc456"
+license = "gpic repo: MIT; GPIC dataset: MIT release, images permissively licensed (CC BY / CC0 / Public Domain) for research and commercial use"
+
+[metadata.optimization]
+metric = "FD-DINOv2 of 50k generated 256x256 images (one per frozen test caption, guidance 1.0) against the sealed GPIC test reference statistics; lower is better; reward normalizes by the sealed baseline FD"
+direction = "lower"
+submission_mode = "artifact"
+scope = "the generative model is fully free: architecture, parameterization, size, objective (flow matching, diffusion, autoregressive, masked prediction, GAN, hybrids), optimizer, schedules, batch shape, precision, augmentation, data ordering, dataloader engineering, sampler and step count, and all training code; frozen are the GPIC train corpus and the at-most-one-epoch data budget, the 256x256 output resolution, the pure-conditional (guidance = 1.0) sampling contract, the frozen 50k test-caption set, the per-attempt GPU-hour cap on the 1x8 H100 topology, the pretrained-weights allowlist (Qwen3-1.7B text encoder only), the DINO-representation ban, and the frozen FD-DINOv2 evaluator"
+
+[metadata.science]
+headline = "How far can a from-scratch text-to-image model get on 100M images in exactly one pass, with no guidance at sampling time and the evaluation representation off-limits as a training signal?"
+guiding_question = "Single-epoch training removes the multi-epoch memorization crutch that dominates academic diffusion benchmarks, and guidance 1.0 removes the sampling-time crutch: which modeling choices (objective, pixel- vs latent-space, architecture and its size, text conditioning, sampler) actually carry sample quality under a strict one-pass data budget? Unlike LLM pretraining, the objective itself is a free variable here. The pinned PixelGen JiT_T2I pixel-space flow-matching baseline is the attribution anchor; the fixed-data regime means bigger is not automatically better (cf. the NanoGPT-slowrun evidence that under fixed data, an unregularized 1.4B model beats a 2.7B one)."
+
+[metadata.fidelity]
+reference = "pinned keshik6/gpic public repository only (gpic_eval toolkit + baselines/PixelGen)"
+baseline = "unchanged baselines/PixelGen/config_pretrain_gpic_full.yaml (JiT_T2I ~1.12B, frozen Qwen3-1.7B, global batch 256, bf16-mixed, 1 node x 8 GPUs) trained one full epoch (390,625 steps), sampled with EulerSamplerJiT 50 steps at guidance 1.0"
+non_repository_inputs = "none for scientific design; H100 SKU, container, offline data staging, the main.py import fix (src.lightning_*_keshik -> src.lightning_*_gpic; packaging patch applied to pristine and agent copies alike), the 50k caption jsonl (captions for the 50,000 keys carried by the sealed test_stats.npz, in npz order, sha256-pinned at staging), launch translation, async submit wrapper, generation contract, verifier, and reward are task infrastructure. NOTE: the repo's shipped sampling config uses guidance 4.0 (with 1.75 in its run name); the task contract fixes guidance to 1.0 and the sealed baseline is sampled at 1.0."
+
+[metadata.baseline]
+method = "task-pristine pinned PixelGen GPIC-full config under this exact contract (guidance 1.0 sampling)"
+score_status = "provisional_values_pending_author_reproduction"
+provisional_note = "No FD-DINOv2 number has been published or measured for this config at guidance 1.0 — the repository reports none, and its own sampling run name encodes cfg 1.75. The task authors run the pristine config once (1 epoch, 1x8 H100), sample the 50k captions at guidance 1.0 / 50 Euler steps, and evaluate with the pinned gpic_eval; B_FD, the GPU-hour cap, r_ref/r_floor, and the spot-gate thresholds are all sealed from that run (plus two extra baseline regenerations for the noise band). GPIC_B_FD below is a placeholder."
+reference_run = "pending"
+parameters = 1120000000              # ~JiT_T2I 1.12B; exact count sealed at reproduction
+training_gpu_hours_cap = 1000.0      # per attempt; provisional, re-sealed from measured baseline wall x 8
+images_seen = 100000000              # exactly one pass; per-attempt ceiling
+fd_dinov2 = 200.0                    # provisional PLACEHOLDER, pending author run
+reward = 0.0                         # r = 1.0 at baseline by construction
+
+[metadata.reward]
+formula = "r = B_FD / fd_dinov2; reward = 0 if fd invalid or r <= r_floor else clip((r - 1)/(r_ref - 1), 0, 1)"
+r_ref = 1.25   # provisional; a 20% FD reduction saturates the reward; re-placed outside the measured regeneration-noise band at sealing (env GPIC_R_REF)
+r_floor = 1.0  # provisional; may be raised above the noise band at sealing (env GPIC_R_FLOOR)
+
+[metadata.run_contract]
+full_run_gpus = 8
+agent_trajectories = 1
+web_search = "disabled"
+hard_network_isolation = true
+scientific_budget = "at most 1000.0 (provisional) H100-hours of GPU compute per candidate attempt on 1x8 ranks; all GPU work of an attempt charged (training, generation of the 50k submission images, screening FD); CPU-only work free; frozen final verification uncharged; data budget: at most one pass over the fixed 8000-shard GPIC train list per attempt (images_seen <= 100M, every consumed sample unique)"
+topology_mapping = "released 1x8-GPU topology retained exactly; /task-tools/launch_gpic_1x8.sh is the launch layer; /task-tools/gpic_async_run.py enforces the GPU-hour cap with a watchdog hard kill and records read-byte telemetry for the one-pass data budget"
+measured_single_run = "pending author reproduction (estimate: ~60-80 h wall on 1x8 H100 = ~500-650 H100-hours for the pristine baseline epoch)"
+default_agent_session = "async submit wrapper; 30-minute status.json polling with the agent offline; interrupted runs resume in place from the trainer's own checkpointing without rewinding the data stream; judge resumed attempts by real status/checkpoint/log evidence"
+
+[agent]
+network_mode = "none"
+
+[environment]
+network_mode = "none"
+docker_image = "scale-autoresearch/gpic-generation-environment:v1"
+build_timeout_sec = 10800
+cpus = 64
+memory_mb = 524288
+storage_mb = 16777216   # ~16 TiB: 12.8 TB train tars + val tars + workspace + checkpoints + 50k PNGs
+gpus = 8
+gpu_types = ["H100"]
+
+[environment.env]
+WANDB_MODE = "offline"
+HF_HUB_OFFLINE = "1"
+GPIC_GPU_HOURS_CAP = "1000.0"
+GPIC_TOPOLOGY_GPUS = "8"
+GPIC_IMAGES_CEILING = "100000000"
+GPIC_TRAIN_DIR = "/datasets/gpic/train"
+GPIC_VAL_DIR = "/datasets/gpic/val"
+GPIC_EVAL_JSONL = "/datasets/gpic/gpic_eval_50k.jsonl"
+GPIC_VAL_STATS = "/datasets/gpic/val_stats.npz"
+GPIC_TRAIN_BYTES = "0"   # set by staging (GPIC_STAGING_MANIFEST.json train bytes); 0 disables the over-read telemetry flag
+GPIC_PRETRAINED_ALLOWLIST = "Qwen/Qwen3-1.7B"
+GPIC_QWEN_DIR = "/opt/hf/Qwen3-1.7B"
+
+[verifier]
+timeout_sec = 14400
+environment_mode = "separate"
+network_mode = "none"
+
+[verifier.environment]
+network_mode = "none"
+docker_image = "scale-autoresearch/gpic-generation-tests:v1"
+build_timeout_sec = 10800
+cpus = 32
+memory_mb = 262144
+storage_mb = 2097152
+gpus = 8
+gpu_types = ["H100"]
+
+[verifier.environment.env]
+WANDB_MODE = "offline"
+HF_HUB_OFFLINE = "1"
+GPIC_EVAL_JSONL = "/opt/gpic-ref/gpic_eval_50k.jsonl"   # verifier-owned copy, sha256-matched to the agent-visible one
+GPIC_TEST_STATS = "/opt/gpic-ref/test_stats.npz"        # sealed; never staged in the agent image
+GPIC_B_FD = "200.0"
+GPIC_R_REF = "1.25"
+GPIC_R_FLOOR = "1.0"
+GPIC_SPOT_N = "2048"
+GPIC_SPOT_COS = "0.98"
+GPIC_SPOT_PASS_FRAC = "0.99"
+GPIC_SPOT_MEDIAN_COS = "0.995"
+GPIC_SPOT_TIMEOUT = "7200"
+GPIC_SPOT_SALT = "${GPIC_SPOT_SALT}"                    # harness-supplied secret; never present in the agent image
+GPIC_IMAGES_CEILING = "100000000"
+GPIC_GPU_HOURS_CAP = "1000.0"
+GPIC_PRETRAINED_ALLOWLIST = "Qwen/Qwen3-1.7B"
+
+[verifier.env]
+POLICY_JUDGE_MODEL = "${POLICY_JUDGE_MODEL}"
+POLICY_JUDGE_MODEL_SECONDARY = "${POLICY_JUDGE_MODEL_SECONDARY:-}"
+OPENAI_API_KEY = "${OPENAI_API_KEY:-}"
+ANTHROPIC_API_KEY = "${ANTHROPIC_API_KEY:-}"
+GEMINI_API_KEY = "${GEMINI_API_KEY:-}"
+GOOGLE_API_KEY = "${GOOGLE_API_KEY:-}"

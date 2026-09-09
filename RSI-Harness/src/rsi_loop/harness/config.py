@@ -1,0 +1,301 @@
+# Copyright (c) 2026 ByteDance Ltd. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field, fields
+from pathlib import Path
+
+from rsi_loop.harness.constants import LOG_DIR, TASKS_DIR
+
+
+@dataclass
+class RSILoopConfig:
+    """Configuration for RSI Loop internals exposed through RSI_* env vars."""
+
+    # Network proxy
+    http_proxy: str | None = None
+    https_proxy: str | None = None
+    no_proxy: str | None = None
+
+    # Package mirrors
+    pypi_index_url: str | None = None
+    maven_mirror_url: str | None = None
+    go_proxy: str | None = None
+    nodejs_mirror_url: str | None = None
+    npm_registry_url: str | None = None
+    apt_mirror_url: str | None = None
+
+    # Agent configuration
+    agent_api_key: str | None = None
+    agent_api_base_url: str | None = None
+    agent_model: str | None = None
+    agent_timeout: int | None = None
+    agent_extra_env: dict[str, str] = field(default_factory=dict)
+
+    # Claude Code cache optimization — suppress the random cch attribution
+    # header and dynamic system prompt sections that break prompt caching on
+    # third-party API proxies.  Enable via RSI_CLAUDE_CACHE_OPT=1.
+    claude_cache_opt: bool = False
+
+    # Judge extra environment (for LLM-based graders etc.)
+    judge_extra_env: dict[str, str] = field(default_factory=dict)
+
+    # Git credentials (for private repos in setup_cmds)
+    git_user: str | None = None
+    git_token: str | None = None
+
+    # Container resource limits (work vs judge independently)
+    work_cpu_limit: int | None = None       # CPUs for work containers (e.g. 4)
+    work_mem_limit: str | None = None       # memory for work containers (e.g. "8g")
+    judge_cpu_limit: int | None = None      # CPUs for judge containers
+    judge_mem_limit: str | None = None      # memory for judge containers
+
+    # Docker build extra hosts (DNS overrides)
+    extra_hosts: dict[str, str] | None = None
+
+    # Remote container registry
+    registry: str | None = None
+
+    # Container backend: "docker" or "k8s"
+    backend: str = "docker"
+
+    # K8s backend settings
+    k8s_namespace: str = "default"
+    k8s_node_selector: dict[str, str] = field(default_factory=dict)
+    k8s_image_registry: str = ""
+    k8s_kubeconfig: str | None = None
+    # Paths
+    log_dir: Path = field(default_factory=lambda: LOG_DIR)
+    tasks_dir: Path = field(default_factory=lambda: TASKS_DIR)
+
+
+def load_config(cli_overrides: dict | None = None) -> RSILoopConfig:
+    """Load config from: defaults < public RSI env vars < CLI flags."""
+    config = RSILoopConfig()
+
+    # Map of config field -> env var names to try (in priority order)
+    _env_map = {
+        "http_proxy": ["RSI_HTTP_PROXY", "HTTP_PROXY", "http_proxy"],
+        "https_proxy": ["RSI_HTTPS_PROXY", "HTTPS_PROXY", "https_proxy"],
+        "no_proxy": ["RSI_NO_PROXY", "NO_PROXY", "no_proxy"],
+        "pypi_index_url": ["RSI_PYPI_INDEX_URL"],
+        "maven_mirror_url": ["RSI_MAVEN_MIRROR_URL"],
+        "go_proxy": ["RSI_GO_PROXY"],
+        "nodejs_mirror_url": ["RSI_NODEJS_MIRROR_URL"],
+        "npm_registry_url": ["RSI_NPM_REGISTRY_URL"],
+        "apt_mirror_url": ["RSI_APT_MIRROR_URL"],
+        "agent_api_key": ["RSI_AGENT_API_KEY"],
+        "agent_api_base_url": ["RSI_AGENT_API_BASE_URL"],
+        "agent_model": ["RSI_AGENT_MODEL"],
+        "agent_timeout": ["RSI_AGENT_TIMEOUT"],
+        "git_user": ["RSI_GIT_USER"],
+        "git_token": ["RSI_GIT_TOKEN"],
+        "registry": ["RSI_REGISTRY"],
+        "backend": ["RSI_BACKEND"],
+        "k8s_namespace": ["RSI_K8S_NAMESPACE"],
+        "k8s_image_registry": ["RSI_K8S_IMAGE_REGISTRY"],
+        "k8s_kubeconfig": ["RSI_K8S_KUBECONFIG"],
+        "work_cpu_limit": ["RSI_WORK_CPU_LIMIT"],
+        "work_mem_limit": ["RSI_WORK_MEM_LIMIT"],
+        "log_dir": ["RSI_LOG_DIR"],
+        "tasks_dir": ["RSI_TASKS_DIR"],
+    }
+
+    for field_name, env_keys in _env_map.items():
+        for env_key in env_keys:
+            val = os.environ.get(env_key)
+            if val is not None:
+                f = next(f for f in fields(config) if f.name == field_name)
+                if f.type in ("Path", "Path | None"):
+                    setattr(config, field_name, Path(val))
+                elif f.type in ("int", "int | None"):
+                    setattr(config, field_name, int(val))
+                else:
+                    setattr(config, field_name, val)
+                break
+
+    # RSI_CLAUDE_CACHE_OPT: truthy value enables cache optimization
+    if os.environ.get("RSI_CLAUDE_CACHE_OPT", "").strip() not in ("", "0", "false", "no"):
+        config.claude_cache_opt = True
+
+    # Parse RSI_AGENT_EXTRA_ENV: "KEY1=VAL1,KEY2=VAL2"
+    extra_env_str = os.environ.get("RSI_AGENT_EXTRA_ENV", "")
+    if extra_env_str:
+        for item in extra_env_str.split(","):
+            item = item.strip()
+            if "=" in item:
+                k, v = item.split("=", 1)
+                config.agent_extra_env[k.strip()] = v.strip()
+
+    # Parse RSI_JUDGE_EXTRA_ENV: "KEY1=VAL1,KEY2=VAL2"
+    judge_env_str = os.environ.get("RSI_JUDGE_EXTRA_ENV", "")
+    if judge_env_str:
+        for item in judge_env_str.split(","):
+            item = item.strip()
+            if "=" in item:
+                k, v = item.split("=", 1)
+                config.judge_extra_env[k.strip()] = v.strip()
+
+    # Parse RSI_EXTRA_HOSTS: "host1:ip1,host2:ip2"
+    extra_hosts_str = os.environ.get("RSI_EXTRA_HOSTS", "")
+    if extra_hosts_str:
+        config.extra_hosts = {}
+        for item in extra_hosts_str.split(","):
+            item = item.strip()
+            if ":" in item:
+                host, ip = item.rsplit(":", 1)
+                config.extra_hosts[host.strip()] = ip.strip()
+
+    # Parse RSI_K8S_NODE_SELECTOR: "key1=val1,key2=val2"
+    k8s_ns_str = os.environ.get("RSI_K8S_NODE_SELECTOR", "")
+    if k8s_ns_str:
+        for item in k8s_ns_str.split(","):
+            item = item.strip()
+            if "=" in item:
+                k, v = item.split("=", 1)
+                config.k8s_node_selector[k.strip()] = v.strip()
+
+    # Override from CLI flags
+    if cli_overrides:
+        for k, v in cli_overrides.items():
+            if v is not None and hasattr(config, k):
+                setattr(config, k, v)
+
+    return config
+
+
+def get_env_directives(config: RSILoopConfig) -> str:
+    """Generate Dockerfile directives for build-time proxy/mirror injection.
+
+    Proxy vars (HTTP_PROXY, etc.) use only ARG so they are available during
+    build but NOT baked into the final image.  Docker automatically exposes
+    the predefined proxy ARGs to RUN commands.
+
+    Package-mirror vars (PIP_INDEX_URL, etc.) are not Docker-predefined, so
+    they need an explicit ARG+ENV pair to be visible in RUN commands.  The
+    ENV is intentionally set to the *ARG reference* so that if the build-arg
+    is empty the ENV is simply unset.
+    """
+    lines: list[str] = []
+
+    # Proxy: Docker predefined build args — just declare ARG, Docker handles the rest.
+    # These will NOT persist in the final image.
+    if config.http_proxy:
+        lines.append("ARG http_proxy")
+        lines.append("ARG HTTP_PROXY")
+    if config.https_proxy:
+        lines.append("ARG https_proxy")
+        lines.append("ARG HTTPS_PROXY")
+    if config.no_proxy:
+        lines.append("ARG no_proxy")
+        lines.append("ARG NO_PROXY")
+
+    # Package mirrors: ARG only — available during build but NOT persisted in image.
+    # Docker ARGs are visible to subsequent RUN commands in the same build stage.
+    if config.pypi_index_url:
+        lines.append(f"ARG PIP_INDEX_URL={config.pypi_index_url}")
+    if config.maven_mirror_url:
+        lines.append(f"ARG MAVEN_MIRROR_URL={config.maven_mirror_url}")
+    if config.go_proxy:
+        lines.append(f"ARG GOPROXY={config.go_proxy}")
+
+    return "\n".join(lines)
+
+
+def get_build_args(config: RSILoopConfig) -> dict[str, str]:
+    """Generate Docker build args for proxy/mirror passthrough during image builds."""
+    args: dict[str, str] = {}
+    if config.http_proxy:
+        args["HTTP_PROXY"] = config.http_proxy
+        args["http_proxy"] = config.http_proxy
+    if config.https_proxy:
+        args["HTTPS_PROXY"] = config.https_proxy
+        args["https_proxy"] = config.https_proxy
+    if config.no_proxy:
+        args["NO_PROXY"] = config.no_proxy
+        args["no_proxy"] = config.no_proxy
+    if config.pypi_index_url:
+        args["PIP_INDEX_URL"] = config.pypi_index_url
+    if config.maven_mirror_url:
+        args["MAVEN_MIRROR_URL"] = config.maven_mirror_url
+    if config.go_proxy:
+        args["GOPROXY"] = config.go_proxy
+    return args
+
+
+def get_build_secrets(config: RSILoopConfig) -> dict[str, str]:
+    """Return {secret_id: value} for BuildKit --mount=type=secret."""
+    secrets: dict[str, str] = {}
+    if config.git_user:
+        secrets["git_user"] = config.git_user
+    if config.git_token:
+        secrets["git_token"] = config.git_token
+    return secrets
+
+
+def get_container_env(config: RSILoopConfig, include_judge_extra: bool = False) -> dict[str, str]:
+    """Generate environment variables dict for container runtime (docker create --env)."""
+    env: dict[str, str] = {}
+    if config.http_proxy:
+        env["http_proxy"] = config.http_proxy
+        env["HTTP_PROXY"] = config.http_proxy
+    if config.https_proxy:
+        env["https_proxy"] = config.https_proxy
+        env["HTTPS_PROXY"] = config.https_proxy
+    if config.no_proxy:
+        env["no_proxy"] = config.no_proxy
+        env["NO_PROXY"] = config.no_proxy
+    if config.agent_api_key:
+        env["ANTHROPIC_API_KEY"] = config.agent_api_key
+    if config.agent_api_base_url:
+        env["ANTHROPIC_BASE_URL"] = config.agent_api_base_url
+    if include_judge_extra and config.judge_extra_env:
+        env.update(config.judge_extra_env)
+    return env
+
+
+def get_container_resource_kwargs(
+    config_cpu_limit: int | None,
+    config_mem_limit: str | None,
+    task_cpu_limit: int | None = None,
+    task_mem_limit: str | None = None,
+) -> dict:
+    """Return Docker container create kwargs for CPU/memory limits.
+
+    Priority: config (CLI/env/experiment) > task.json per-spec defaults.
+    """
+    kwargs: dict = {}
+    cpu = config_cpu_limit if config_cpu_limit is not None else task_cpu_limit
+    mem = config_mem_limit if config_mem_limit is not None else task_mem_limit
+    if cpu is not None:
+        kwargs["nano_cpus"] = int(cpu * 1e9)
+    if mem is not None:
+        kwargs["mem_limit"] = mem
+    return kwargs
+
+
+def create_backend_from_config(config: RSILoopConfig, docker_client=None):
+    """Create a ContainerBackend from config."""
+    from rsi_loop.harness.backend.factory import create_backend
+
+    return create_backend(
+        config.backend,
+        docker_client=docker_client,
+        k8s_namespace=config.k8s_namespace,
+        k8s_node_selector=config.k8s_node_selector,
+        k8s_image_registry=config.k8s_image_registry,
+        k8s_kubeconfig=config.k8s_kubeconfig,
+    )

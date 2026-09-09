@@ -1,0 +1,313 @@
+{
+  "schema_version": "2",
+  "description": "Only contains labels we have human evidence for. Unlabeled criteria are not evaluated.",
+  "criteria": [
+    "verifiable",
+    "solvable",
+    "difficult",
+    "interesting",
+    "outcome_verified",
+    "anti_cheat_robustness",
+    "functional_verification",
+    "deterministic_reproducible",
+    "essential_difficulty",
+    "test_instruction_alignment",
+    "novel",
+    "agentic",
+    "reviewable",
+    "instruction_concision",
+    "solution_quality",
+    "environment_hygiene",
+    "structured_data_schema",
+    "typos",
+    "difficulty_explanation_quality",
+    "solution_explanation_quality",
+    "verification_explanation_quality",
+    "category_and_tags",
+    "task_name",
+    "resource_configuration",
+    "task_readme",
+    "expert_time_estimate",
+    "no_extraneous_files",
+    "artifact_efficiency",
+    "verifier_execution_isolation",
+    "ctrf_reporting",
+    "do_not_modify_enforced",
+    "task_security",
+    "binary_reward"
+  ],
+  "tasks": {
+    "fail-rubric-agentic": {
+      "source": "synthetic",
+      "path": "fail-rubric-agentic",
+      "labels": {
+        "agentic": "fail"
+      },
+      "notes": "Synthetic: designed to fail agentic."
+    },
+    "fail-rubric-anti-cheat": {
+      "source": "synthetic",
+      "path": "fail-rubric-anti-cheat",
+      "labels": {
+        "anti_cheat_robustness": "fail"
+      },
+      "notes": "Synthetic: designed to fail anti_cheat_robustness."
+    },
+    "fail-rubric-artifact-efficiency": {
+      "source": "synthetic",
+      "path": "fail-rubric-artifact-efficiency",
+      "labels": {
+        "artifact_efficiency": "fail"
+      },
+      "notes": "Synthetic: designed to fail artifact_efficiency (ships full /app tree including a build-time-fixed dataset as an artifact instead of baking it into the verifier image)."
+    },
+    "fail-rubric-binary-reward": {
+      "source": "synthetic",
+      "path": "fail-rubric-binary-reward",
+      "labels": {
+        "binary_reward": "fail"
+      },
+      "notes": "Synthetic: designed to fail binary_reward (writes passed/total fraction as the reward instead of thresholding to 0/1)."
+    },
+    "fail-rubric-deterministic": {
+      "source": "synthetic",
+      "path": "fail-rubric-deterministic",
+      "labels": {
+        "deterministic_reproducible": "fail"
+      },
+      "notes": "Synthetic: designed to fail deterministic_reproducible."
+    },
+    "fail-rubric-difficult": {
+      "source": "synthetic",
+      "path": "fail-rubric-difficult",
+      "labels": {
+        "difficult": "fail"
+      },
+      "notes": "Synthetic: designed to fail difficult."
+    },
+    "fail-rubric-environment-hygiene": {
+      "source": "synthetic",
+      "path": "fail-rubric-environment-hygiene",
+      "labels": {
+        "environment_hygiene": "fail"
+      },
+      "notes": "Synthetic: designed to fail environment_hygiene."
+    },
+    "fail-rubric-essential-difficulty": {
+      "source": "synthetic",
+      "path": "fail-rubric-essential-difficulty",
+      "labels": {
+        "essential_difficulty": "fail"
+      },
+      "notes": "Synthetic: designed to fail essential_difficulty."
+    },
+    "fail-rubric-functional-verification": {
+      "source": "synthetic",
+      "path": "fail-rubric-functional-verification",
+      "labels": {
+        "functional_verification": "fail"
+      },
+      "notes": "Synthetic: designed to fail functional_verification."
+    },
+    "fail-rubric-instruction-concision": {
+      "source": "synthetic",
+      "path": "fail-rubric-instruction-concision",
+      "labels": {
+        "instruction_concision": "fail"
+      },
+      "notes": "Synthetic: designed to fail instruction_concision."
+    },
+    "fail-rubric-instruction-concision-fluff": {
+      "source": "synthetic",
+      "path": "fail-rubric-instruction-concision-fluff",
+      "labels": {
+        "instruction_concision": "fail"
+      },
+      "notes": "Synthetic: designed to fail instruction_concision (roleplay/fluff variant)."
+    },
+    "fail-rubric-interesting": {
+      "source": "synthetic",
+      "path": "fail-rubric-interesting",
+      "labels": {
+        "interesting": "fail"
+      },
+      "notes": "Synthetic: designed to fail interesting."
+    },
+    "fail-rubric-no-ctrf": {
+      "source": "synthetic",
+      "path": "fail-rubric-no-ctrf",
+      "labels": {
+        "ctrf_reporting": "fail"
+      },
+      "notes": "Synthetic: designed to fail ctrf_reporting (pytest-based verifier runs pytest without --ctrf, reporting only a bare reward)."
+    },
+    "fail-rubric-novel": {
+      "source": "synthetic",
+      "path": "fail-rubric-novel",
+      "labels": {
+        "novel": "fail"
+      },
+      "notes": "Synthetic: designed to fail novel."
+    },
+    "fail-rubric-outcome-verified": {
+      "source": "synthetic",
+      "path": "fail-rubric-outcome-verified",
+      "labels": {
+        "outcome_verified": "fail"
+      },
+      "notes": "Synthetic: designed to fail outcome_verified."
+    },
+    "fail-rubric-reviewable": {
+      "source": "synthetic",
+      "path": "fail-rubric-reviewable",
+      "labels": {
+        "reviewable": "fail"
+      },
+      "notes": "Synthetic: designed to fail reviewable."
+    },
+    "fail-rubric-solution-quality": {
+      "source": "synthetic",
+      "path": "fail-rubric-solution-quality",
+      "labels": {
+        "solution_quality": "fail"
+      },
+      "notes": "Synthetic: designed to fail solution_quality."
+    },
+    "fail-rubric-solvable": {
+      "source": "synthetic",
+      "path": "fail-rubric-solvable",
+      "labels": {
+        "solvable": "fail"
+      },
+      "notes": "Synthetic: designed to fail solvable."
+    },
+    "fail-rubric-structured-schema": {
+      "source": "synthetic",
+      "path": "fail-rubric-structured-schema",
+      "labels": {
+        "structured_data_schema": "fail"
+      },
+      "notes": "Synthetic: designed to fail structured_data_schema."
+    },
+    "fail-rubric-test-alignment": {
+      "source": "synthetic",
+      "path": "fail-rubric-test-alignment",
+      "labels": {
+        "test_instruction_alignment": "fail"
+      },
+      "notes": "Synthetic: designed to fail test_instruction_alignment."
+    },
+    "fail-rubric-typos": {
+      "source": "synthetic",
+      "path": "fail-rubric-typos",
+      "labels": {
+        "typos": "fail"
+      },
+      "notes": "Synthetic: designed to fail typos."
+    },
+    "fail-rubric-verifiable": {
+      "source": "synthetic",
+      "path": "fail-rubric-verifiable",
+      "labels": {
+        "verifiable": "fail"
+      },
+      "notes": "Synthetic: designed to fail verifiable."
+    },
+    "fail-rubric-verifier-isolation": {
+      "source": "synthetic",
+      "path": "fail-rubric-verifier-isolation",
+      "labels": {
+        "verifier_execution_isolation": "fail"
+      },
+      "notes": "Synthetic: designed to fail verifier_execution_isolation (verifier executes the agent-produced script as root with /logs/verifier unprotected and no privilege drop)."
+    },
+    "fail-rubric-difficulty-explanation": {
+      "source": "synthetic",
+      "path": "fail-rubric-difficulty-explanation",
+      "labels": {
+        "difficulty_explanation_quality": "fail"
+      },
+      "notes": "Synthetic: designed to fail difficulty_explanation_quality."
+    },
+    "fail-rubric-solution-explanation": {
+      "source": "synthetic",
+      "path": "fail-rubric-solution-explanation",
+      "labels": {
+        "solution_explanation_quality": "fail"
+      },
+      "notes": "Synthetic: designed to fail solution_explanation_quality."
+    },
+    "fail-rubric-verification-explanation": {
+      "source": "synthetic",
+      "path": "fail-rubric-verification-explanation",
+      "labels": {
+        "verification_explanation_quality": "fail"
+      },
+      "notes": "Synthetic: designed to fail verification_explanation_quality."
+    },
+    "fail-rubric-category-tags": {
+      "source": "synthetic",
+      "path": "fail-rubric-category-tags",
+      "labels": {
+        "category_and_tags": "fail"
+      },
+      "notes": "Synthetic: designed to fail category_and_tags."
+    },
+    "fail-rubric-task-name": {
+      "source": "synthetic",
+      "path": "fail-rubric-task-name",
+      "labels": {
+        "task_name": "fail"
+      },
+      "notes": "Synthetic: designed to fail task_name."
+    },
+    "fail-rubric-resource-config": {
+      "source": "synthetic",
+      "path": "fail-rubric-resource-config",
+      "labels": {
+        "resource_configuration": "fail"
+      },
+      "notes": "Synthetic: designed to fail resource_configuration."
+    },
+    "fail-rubric-task-readme": {
+      "source": "synthetic",
+      "path": "fail-rubric-task-readme",
+      "labels": {
+        "task_readme": "fail"
+      },
+      "notes": "Synthetic: designed to fail task_readme."
+    },
+    "fail-rubric-expert-time": {
+      "source": "synthetic",
+      "path": "fail-rubric-expert-time",
+      "labels": {
+        "expert_time_estimate": "fail"
+      },
+      "notes": "Synthetic: designed to fail expert_time_estimate."
+    },
+    "fail-rubric-no-extraneous-files": {
+      "source": "synthetic",
+      "path": "fail-rubric-no-extraneous-files",
+      "labels": {
+        "no_extraneous_files": "fail"
+      },
+      "notes": "Synthetic: designed to fail no_extraneous_files (leftover scratch_notes.txt referenced by nothing)."
+    },
+    "fail-rubric-do-not-modify": {
+      "source": "synthetic",
+      "path": "fail-rubric-do-not-modify",
+      "labels": {
+        "do_not_modify_enforced": "fail"
+      },
+      "notes": "Synthetic: designed to fail do_not_modify_enforced (instruction forbids modifying /app/data/measurements.txt, but the verifier recomputes the expected answer from the agent's transferred copy of that file with no pristine-copy/checksum check, so an agent can overwrite it and still pass)."
+    },
+    "fail-rubric-task-security": {
+      "source": "synthetic",
+      "path": "fail-rubric-task-security",
+      "labels": {
+        "task_security": "fail"
+      },
+      "notes": "Synthetic: designed to fail task_security (Dockerfile exfiltrates environment variables to an external server). Added alongside the criterion in benchmark-template#157 but never labeled until the rubric-regression dataset made labels.json the source of truth."
+    }
+  }
+}

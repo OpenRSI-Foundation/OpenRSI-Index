@@ -1,0 +1,40 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.agents/skills/proposal-agent/scripts/proposal_session.py",
+              "hook",
+              "--platform",
+              "claude-code",
+              "--checkout",
+              "${CLAUDE_PROJECT_DIR}"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3",
+            "args": [
+              "${CLAUDE_PROJECT_DIR}/.agents/skills/proposal-agent/scripts/proposal_session.py",
+              "hook",
+              "--platform",
+              "claude-code",
+              "--checkout",
+              "${CLAUDE_PROJECT_DIR}"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

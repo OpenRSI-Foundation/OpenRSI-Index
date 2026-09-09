@@ -1,0 +1,65 @@
+# Environment
+.env
+# Site-specific cluster profiles contain private host paths.
+*.local.toml
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+.mypy_cache/
+
+# Railway deployment files (copied by tools/discord-review-bot/setup-railway.sh)
+tools/discord-review-bot/checks/
+tools/discord-review-bot/rubrics/
+task-proposal-results/
+
+# OS
+.DS_Store
+
+# IDEs
+.vscode/
+.cursor/
+.idea/
+
+# Node
+node_modules/
+
+# Harbor
+jobs/
+
+# Harbor datasets
+datasets/
+
+# Local clones of the private rubric repo (RSI-Index-Rubrics). Never let a
+# rubric back into this public tree.
+private-rubrics/
+RSI-Index-Rubrics/
+
+# /review-task skill artifacts (downloaded in worktrees)
+.review/
+
+# Local dry-run output from generate_chart.py (CI publishes to the `chart` branch)
+docs/diagrams/tb3-by-domain.svg
+docs/diagrams/cache.json
+
+tmp.sh
+todo
+bakeart_v2.0_schema_cpu_simplified
+concurrent-agent-serving-optimizer-qwen36-27b
+
+# Local Superpowers planning and orchestration artifacts
+superpowers/
+.superpowers/
+.agents/skills
+tmp.md
+CLUSTER_INSTRUCTIONS (1).md
+docs
+
+# Public documentation
+!/assets/docs/
+/assets/docs/*
+!/assets/docs/quick-start.md
+
+AGENTS.md

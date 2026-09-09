@@ -1,0 +1,62 @@
+Tool: built-in image_gen
+
+Initial generation prompt
+
+Use case: infographic-diagram.
+Asset type: a polished English-language figure for the RSI-Anything research contribution website and repository.
+Create one wide landscape figure, approximately 2400 x 1350 pixels. Make a refined scientific editorial illustration, clear enough for a research presentation, not a website screenshot.
+
+Visual direction: warm ivory background, deep navy typography (#192840), antique gold accents (#B59045), restrained periwinkle and teal secondary colors. Elegant large serif title paired with clean, highly legible sans-serif labels. Lots of whitespace, meticulous alignment, thin consistent linework, a few delicate orbital/star-trail details echoing the project's frontier-research identity. Sophisticated small illustrated objects with flat colors and very subtle dimensionality. No robots, no cartoon people, no stock photography, no neon, no giant gradients, no dense dashboard, no fake UI chrome.
+
+At the top, exact title: "RSI-Anything".
+Directly below, exact tagline: "Your baseline becomes the exam."
+Small eyebrow above the title: "RSI'S FIRST EXAM".
+
+The main content is a left-to-right five-stage pipeline. Five equally sized airy sections connected by thin directional arrows. Use large readable stage numbers 01 to 05 and a distinct beautiful scientific/technical illustration per stage: a research notebook with a gold idea spark; discussion bubbles and a review checklist; a repository folder with a code terminal; compute servers with a tiny experiment trace; an organized task package beside trajectory documents. Keep all text away from connectors and illustrations, with ample margins.
+
+Stage 01 exact title: "Create a proposal"
+Exact supporting text, on separate lines:
+"Research question + baseline"
+"Evaluation + compute budget"
+Small role label: "You + proposal-agent"
+
+Stage 02 exact title: "Submit & refine"
+Exact supporting text:
+"Task Ideas Discussion"
+"Automatic review"
+Small role label: "You confirm; agents review"
+Draw a small, unobtrusive curved return arrow from stage 02 toward stage 01, labelled exactly "Feedback & revision". Make the forward arrow from stage 02 to stage 03 carry a small "PASS" label.
+
+Stage 03 exact title: "Build the task"
+Exact supporting text:
+"Private repository"
+"Harbor task + RSI-Harness + skills"
+Small role label: "Agents build after acceptance"
+A small "ACCEPTED" tag sits on the repository illustration.
+
+Stage 04 exact title: "Validate & run"
+Exact supporting text:
+"Run on your own compute"
+"Capture the agent trajectory"
+Small role label: "You launch; agents execute"
+
+Stage 05 exact title: "Upload & share"
+Exact supporting text:
+"Task + proposal record + run logs"
+"Feedback to the pipeline"
+Small role label: "Ready for independent review"
+
+Above the five stages, place two discreet input chips flowing together toward stage 01. Exact chip text: "Your coauthored open project" and "An influential open project". Small group label: "TWO WAYS IN". They must not dominate the main pipeline.
+
+Below stages 01–03, use a restrained thin bracket with the exact label "Idea to ready task in ~1 hour". Below stages 04–05, use a matching bracket labelled "Experiment runtime varies by task". These labels must clearly keep the one-hour estimate separate from experiment runtime.
+
+At the bottom, a clean, small note spanning the width, exact text: "Bring the compute your task needs. CPU-only tasks are welcome. Final inclusion requires review and reproduction."
+
+Information constraints: There are exactly five numbered stages. Contributor confirmation precedes posting the proposal. Review feedback can loop back. PASS triggers task building; acceptance produces the private repository. The contribution includes both the task and the actual agent trajectory. Do not imply all experiments finish in one hour, that submission guarantees inclusion, or that GPUs are required for CPU-only tasks. Do not invent stage-by-stage time estimates or performance numbers. Do not add any other prose, slogans, logos, URLs or watermarks. Render every supplied label accurately and make the central five-stage workflow the visual focus.
+
+Final correction prompt
+
+Edit this RSI-Anything infographic with only two precise textual corrections. Preserve the entire composition, typography, colors, illustrations, five stages, spacing, all other text, and image quality exactly.
+1. In stage 03, replace the bottom teal italic role label "Agents build after acceptance" with the exact text "Agents build automatically". This is important because PASS triggers building and ACCEPTED produces the repository.
+2. On the small dark terminal panel in front of the stage 03 private repository folder, remove all current tiny text and file-tree marks, including /harbor-task, README.md, task.yaml, data/, skills/, harness/. Replace them with just three clean readable lines: "Harbor task", "RSI-Harness", "Skills". Keep the terminal panel itself and its three colored window dots. Do not introduce filenames or any additional text.
+Change nothing else.

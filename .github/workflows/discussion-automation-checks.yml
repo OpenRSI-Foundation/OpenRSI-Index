@@ -1,0 +1,40 @@
+name: Discussion automation checks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/discussion-*.yml
+      - checks/**
+      - .agents/skills/proposal-agent/scripts/**
+  pull_request:
+    paths:
+      - .github/workflows/discussion-*.yml
+      - checks/**
+      - .agents/skills/proposal-agent/scripts/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+      - name: Test Discussion review and dispatch
+        run: |
+          uv run --python 3.12 --with pytest --with pyyaml --with openai --with httpx \
+            python -m pytest -q \
+            checks/test_discussion_review_workflow.py \
+            checks/test_discussion_task_dispatch_workflow.py \
+            checks/test_discussion_task_dispatch.py \
+            checks/test_proposal_pass_dispatch.py \
+            checks/test_proposal_review_marker.py \
+            checks/test_org_owner_gate.py \
+            checks/test_proposal_session.py \
+            checks/test_rubric_review.py

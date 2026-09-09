@@ -1,0 +1,416 @@
+name: Discussion Rubric Review
+
+# CUSTOMIZE VALIDATION PIPELINE — change the category name to match your repo
+# Discussions events only trigger workflows on the default branch.
+
+on:
+  discussion:
+    types: [created, edited]
+
+concurrency:
+  group: discussion-review-${{ github.event.discussion.node_id }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    # Only review discussions in the "Task Ideas" category
+    if: github.event.discussion.category.name == 'Task Ideas'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Create reaction Discussion App token
+        id: reaction-token
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: RSI-Index
+          repositories: ${{ github.event.repository.name }}
+          permission-discussions: write
+
+      - name: React with eyes
+        if: steps.reaction-token.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.reaction-token.outputs.token }}
+          DISCUSSION_NODE_ID: ${{ github.event.discussion.node_id }}
+        run: |
+          gh api graphql \
+            -f query='mutation($id: ID!, $content: ReactionContent!) {
+              addReaction(input: { subjectId: $id, content: $content }) {
+                reaction { content }
+              }
+            }' \
+            -f id="$DISCUSSION_NODE_ID" \
+            -f content="EYES"
+
+      - name: Post or update running review comment
+        id: progress
+        if: steps.reaction-token.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.reaction-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.reaction-token.outputs.app-slug }}
+          DISCUSSION_ID: ${{ github.event.discussion.node_id }}
+          DISCUSSION_NUMBER: ${{ github.event.discussion.number }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
+          REPOSITORY_NAME: ${{ github.event.repository.name }}
+        run: |
+          set -euo pipefail
+          BODY=$(cat <<'COMMENT_EOF'
+          <!-- rubric-review-bot -->
+          <!-- rubric-review-status:running -->
+          ## 📋 Task Proposal Rubric Review
+
+          ⏳ Proposal review is running. This usually takes about 1 minute.
+          COMMENT_EOF
+          )
+
+          SUPERSEDED_BODY=$(cat <<'COMMENT_EOF'
+          <!-- rubric-review-bot -->
+          <!-- rubric-review-status:superseded -->
+          ## 📋 Task Proposal Rubric Review
+
+          ↪️ Proposal review was superseded by a newer proposal edit.
+          COMMENT_EOF
+          )
+
+          # Preserve completed reviews. Only unfinished progress comments from
+          # cancelled runs are retired before this run creates its own comment.
+          RUNNING_COMMENT_IDS=$(gh api graphql \
+            -f query='query($repo: String!, $owner: String!, $number: Int!, $endCursor: String) {
+              repository(name: $repo, owner: $owner) {
+                discussion(number: $number) {
+                  comments(first: 100, after: $endCursor) {
+                    nodes { id body author { login } }
+                    pageInfo { hasNextPage endCursor }
+                  }
+                }
+              }
+            }' \
+            -f owner="$REPOSITORY_OWNER" \
+            -f repo="$REPOSITORY_NAME" \
+            -F number="$DISCUSSION_NUMBER" \
+            --paginate --slurp | \
+            jq -r --arg bot "$BOT_LOGIN" \
+              '[.[].data.repository.discussion.comments.nodes[] | select(.author.login == $bot) | select(.body | contains("<!-- rubric-review-bot -->")) | select(.body | contains("<!-- rubric-review-status:running -->")) | .id] | .[]')
+
+          while IFS= read -r comment_id; do
+            [ -n "$comment_id" ] || continue
+            gh api graphql \
+              -f query='mutation($commentId: ID!, $body: String!) {
+                updateDiscussionComment(input: { commentId: $commentId, body: $body }) {
+                  comment { id url }
+                }
+              }' \
+              -f commentId="$comment_id" \
+              -f body="$SUPERSEDED_BODY"
+          done <<< "$RUNNING_COMMENT_IDS"
+
+          COMMENT_RESULT=$(gh api graphql \
+            -f query='mutation($discussionId: ID!, $body: String!) {
+              addDiscussionComment(input: { discussionId: $discussionId, body: $body }) {
+                comment { id url }
+              }
+            }' \
+            -f discussionId="$DISCUSSION_ID" \
+            -f body="$BODY")
+          COMMENT_ID=$(jq -er '.data.addDiscussionComment.comment.id' <<< "$COMMENT_RESULT")
+          printf 'comment_id=%s\n' "$COMMENT_ID" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
+      - name: Create private Skills read token
+        id: skills-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: RSI-Index
+          repositories: RSI-Skills
+          permission-contents: read
+
+      # The proposal rubric is private: it is fetched from the organization-only
+      # Skills repository per run instead of living in the public tree.
+      - name: Checkout private discussion rubric
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: RSI-Index/RSI-Skills
+          ref: main
+          token: ${{ steps.skills-token.outputs.token }}
+          path: private-skills
+          sparse-checkout: rubrics/task-proposal.md
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+
+      - name: Write proposal to file
+        env:
+          DISCUSSION_TITLE: ${{ github.event.discussion.title }}
+          DISCUSSION_BODY: ${{ github.event.discussion.body }}
+        run: |
+          printf '# %s\n\n%s\n' "$DISCUSSION_TITLE" "$DISCUSSION_BODY" > proposal.md
+
+      - name: Run rubric review
+        id: review
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUBRIC_FILE: ${{ github.workspace }}/private-skills/rubrics/task-proposal.md
+        run: |
+          if ! uv run checks/rubric_review.py proposal.md > result.json 2> review.log; then
+            cat review.log
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          result = json.loads(Path("result.json").read_text(encoding="utf-8"))
+          decision = result.get("decision")
+          review = result.get("review")
+
+          allowed_decisions = {"Reject", "Pass"}
+          if decision not in allowed_decisions:
+              raise SystemExit(
+                  f"Judge returned a missing or non-canonical decision: {decision!r}"
+              )
+
+          if not isinstance(review, str) or not review.strip():
+              raise SystemExit("Judge returned an empty review")
+
+          with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as output:
+              output.write(f"decision={decision}\n")
+          Path("review_text.md").write_text(review, encoding="utf-8")
+          PY
+
+      - name: Render canonical proposal review marker
+        id: marker
+        env:
+          DECISION: ${{ steps.review.outputs.decision }}
+          DISCUSSION_TITLE: ${{ github.event.discussion.title }}
+          DISCUSSION_BODY: ${{ github.event.discussion.body }}
+          DISCUSSION_NODE_ID: ${{ github.event.discussion.node_id }}
+        run: |
+          marker=$(python3 checks/proposal_review_marker.py)
+          printf 'marker=%s\n' "$marker" >> "$GITHUB_OUTPUT"
+
+      - name: Create comment Discussion App token
+        id: comment-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: RSI-Index
+          repositories: ${{ github.event.repository.name }}
+          permission-discussions: write
+
+      - name: Format and post or update comment
+        id: publish-review
+        env:
+          GH_TOKEN: ${{ steps.comment-token.outputs.token }}
+          DISCUSSION_ID: ${{ github.event.discussion.node_id }}
+          PROGRESS_COMMENT_ID: ${{ steps.progress.outputs.comment_id }}
+          REVIEW_MARKER: ${{ steps.marker.outputs.marker }}
+          DECISION: ${{ steps.review.outputs.decision }}
+        run: |
+          set -euo pipefail
+          # Decision badge
+          case "$DECISION" in
+            "Pass")   BADGE="🟢 **PASS**" ;;
+            "Reject") BADGE="🔴 **REJECT**" ;;
+            *)
+              echo "Unexpected non-canonical decision: $DECISION" >&2
+              exit 1
+              ;;
+          esac
+
+          REVIEW=$(cat review_text.md)
+          BOT_MARKER="<!-- rubric-review-bot -->"
+
+          case "$DECISION" in
+            "Pass")
+              NEXT_STEP="> 🤖 **PASS — Initial check passed. Task building starts automatically. Minor revisions may still be needed in some cases.**"
+              ;;
+            *)
+              NEXT_STEP="> 🤖 This automated recommendation is not eligible for task dispatch. Edit your proposal to trigger a fresh review. Judged against the private task proposal rubric; ask a maintainer if a point is unclear."
+              ;;
+          esac
+
+          # Build comment body
+          BODY=$(cat << COMMENT_EOF
+          ${BOT_MARKER}
+          <!-- rubric-review-status:completed -->
+          ${REVIEW_MARKER}
+          ## 📋 Task Proposal Rubric Review
+
+          **Recommendation:** $BADGE
+
+          <details>
+          <summary>Full Review</summary>
+
+          $REVIEW
+
+          </details>
+
+          $NEXT_STEP
+          COMMENT_EOF
+          )
+
+          # Update only this run's progress comment. If a newer edit already
+          # superseded it, this cancelled run must not publish over that state.
+          if [ -n "$PROGRESS_COMMENT_ID" ]; then
+            CURRENT_BODY=$(gh api graphql \
+              -f query='query($commentId: ID!) {
+                node(id: $commentId) {
+                  ... on DiscussionComment { body }
+                }
+              }' \
+              -f commentId="$PROGRESS_COMMENT_ID" \
+              --jq '.data.node.body // ""')
+            if [[ "$CURRENT_BODY" != *"<!-- rubric-review-status:running -->"* ]]; then
+              echo "Current review comment is no longer active; skipping publication"
+              exit 0
+            fi
+            COMMENT_RESULT=$(gh api graphql \
+              -f query='mutation($commentId: ID!, $body: String!) {
+                updateDiscussionComment(input: {
+                  commentId: $commentId
+                  body: $body
+                }) {
+                  comment { id url }
+                }
+              }' \
+              -f commentId="$PROGRESS_COMMENT_ID" \
+              -f body="$BODY")
+            REVIEW_COMMENT_ID=$(jq -er '.data.updateDiscussionComment.comment.id' <<< "$COMMENT_RESULT")
+            echo "Updated this run's review comment"
+          else
+            # Fall back to a new comment if the progress acknowledgement was unavailable.
+            COMMENT_RESULT=$(gh api graphql \
+              -f query='mutation($discussionId: ID!, $body: String!) {
+                addDiscussionComment(input: {
+                  discussionId: $discussionId
+                  body: $body
+                }) {
+                  comment {
+                    id
+                    url
+                  }
+                }
+              }' \
+              -f discussionId="$DISCUSSION_ID" \
+              -f body="$BODY")
+            REVIEW_COMMENT_ID=$(jq -er '.data.addDiscussionComment.comment.id' <<< "$COMMENT_RESULT")
+          fi
+          printf 'review_comment_id=%s\n' "$REVIEW_COMMENT_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Create private Skills dispatch token
+        id: dispatch-token
+        if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: RSI-Index
+          repositories: RSI-Skills
+          permission-contents: write
+
+      - name: Dispatch passed proposal privately
+        if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != '' && steps.dispatch-token.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
+          REVIEW_COMMENT_NODE_ID: ${{ steps.publish-review.outputs.review_comment_id }}
+        run: |
+          set -euo pipefail
+          valid=$(python3 checks/proposal_pass_dispatch.py "$GITHUB_EVENT_PATH" "$REVIEW_COMMENT_NODE_ID" proposal-pass-payload.json)
+          if [ "$valid" != "true" ]; then
+            echo "Published Pass did not produce a valid dispatch payload" >&2
+            exit 1
+          fi
+
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+
+          payload = json.loads(Path("proposal-pass-payload.json").read_text(encoding="utf-8"))
+          request = {
+              "event_type": "discussion_task_command",
+              "client_payload": payload,
+          }
+          with Path("proposal-pass-request.json").open("w", encoding="utf-8") as output:
+              json.dump(request, output, sort_keys=True, separators=(",", ":"))
+          PY
+
+          gh api --method POST /repos/RSI-Index/RSI-Skills/dispatches \
+            --input proposal-pass-request.json
+
+      - name: Create failure comment Discussion App token
+        id: failure-token
+        if: always() && !cancelled() && steps.publish-review.outcome != 'success'
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: RSI-Index
+          repositories: ${{ github.event.repository.name }}
+          permission-discussions: write
+
+      - name: Post or update failed review comment
+        if: always() && !cancelled() && steps.publish-review.outcome != 'success' && steps.failure-token.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.failure-token.outputs.token }}
+          DISCUSSION_ID: ${{ github.event.discussion.node_id }}
+          PROGRESS_COMMENT_ID: ${{ steps.progress.outputs.comment_id }}
+        run: |
+          set -euo pipefail
+          BODY=$(cat <<'COMMENT_EOF'
+          <!-- rubric-review-bot -->
+          <!-- rubric-review-status:failed -->
+          ## 📋 Task Proposal Rubric Review
+
+          ⚠️ Proposal review failed before completion. Edit the proposal to retry.
+          COMMENT_EOF
+          )
+
+          if [ -n "$PROGRESS_COMMENT_ID" ]; then
+            CURRENT_BODY=$(gh api graphql \
+              -f query='query($commentId: ID!) {
+                node(id: $commentId) {
+                  ... on DiscussionComment { body }
+                }
+              }' \
+              -f commentId="$PROGRESS_COMMENT_ID" \
+              --jq '.data.node.body // ""')
+            if [[ "$CURRENT_BODY" != *"<!-- rubric-review-status:running -->"* ]]; then
+              echo "Current review comment is no longer active; skipping failure publication"
+              exit 0
+            fi
+            gh api graphql \
+              -f query='mutation($commentId: ID!, $body: String!) {
+                updateDiscussionComment(input: { commentId: $commentId, body: $body }) {
+                  comment { id url }
+                }
+              }' \
+              -f commentId="$PROGRESS_COMMENT_ID" \
+              -f body="$BODY"
+          else
+            gh api graphql \
+              -f query='mutation($discussionId: ID!, $body: String!) {
+                addDiscussionComment(input: { discussionId: $discussionId, body: $body }) {
+                  comment { id url }
+                }
+              }' \
+              -f discussionId="$DISCUSSION_ID" \
+              -f body="$BODY"
+          fi

@@ -1,0 +1,82 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="304" viewBox="0 0 1440 304" fill="none" role="img" aria-labelledby="title description">
+  <title id="title">RSI-Anything: you guide, agents execute</title>
+  <desc id="description">Five stages distinguish contributor input from agent execution. 1. Create proposal: you share your idea; proposal-agent drafts the proposal, estimated 20 minutes. 2. Submit to Discussion: you confirm the proposal; proposal-agent posts it and the review agent reviews it automatically, estimated 5 minutes. 3. Get a private repo: you answer task-defining questions only if asked; agents build the repository, estimated 25 minutes. 4. Validate and run: you provide GPU access and launch the bundled skills; agents validate, run, monitor, and recover the experiment. Time varies by task. 5. Upload and share: you request the required uploads and give feedback; agents upload logs on request, estimated a few minutes. Times are approximate elapsed time for each stage, including agent execution. Follow the guide below for setup, proposal records, and experiment uploads.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1440" y2="304" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F7F9FF"/>
+      <stop offset="0.5" stop-color="#FBFAFE"/>
+      <stop offset="1" stop-color="#F5FAF9"/>
+    </linearGradient>
+    <marker id="arrow" viewBox="0 0 8 10" refX="6" refY="5" markerWidth="6" markerHeight="7" orient="auto">
+      <path d="M1 1L6 5L1 9" stroke="#ACB9CF" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+    <style>
+      text { font-family: Arial, Helvetica, sans-serif; text-anchor: middle; dominant-baseline: alphabetic; }
+      .number { fill: #FFFFFF; font-size: 18px; font-weight: 700; }
+      .label { fill: #263B5C; font-size: 24px; font-weight: 700; letter-spacing: -0.5px; }
+      .you { fill: #315C9C; font-size: 18px; font-weight: 700; }
+      .agents { fill: #6A55A5; font-size: 18px; }
+      .time { fill: #61728A; font-size: 18px; }
+      .row-label { font-size: 13px; font-weight: 700; letter-spacing: 1px; }
+      .arrow { stroke: #ACB9CF; stroke-width: 2; marker-end: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="0.75" y="0.75" width="1438.5" height="302.5" rx="22" fill="url(#background)" stroke="#E0E7F1" stroke-width="1.5"/>
+
+  <path d="M261 48H457" class="arrow"/>
+  <path d="M525 48H721" class="arrow"/>
+  <path d="M789 48H985" class="arrow"/>
+  <path d="M1053 48H1249" class="arrow"/>
+
+  <circle cx="228" cy="48" r="23" fill="#497AC3"/>
+  <circle cx="492" cy="48" r="23" fill="#8171C4"/>
+  <circle cx="756" cy="48" r="23" fill="#8171C4"/>
+  <circle cx="1020" cy="48" r="23" fill="#448E88"/>
+  <circle cx="1284" cy="48" r="23" fill="#398678"/>
+  <g class="number" transform="translate(0 54)">
+    <text x="228" y="0">01</text>
+    <text x="492" y="0">02</text>
+    <text x="756" y="0">03</text>
+    <text x="1020" y="0">04</text>
+    <text x="1284" y="0">05</text>
+  </g>
+
+  <!-- Five centered columns; every text row shares a baseline, 54px apart. -->
+  <g class="label" transform="translate(0 106)">
+    <text x="228" y="0">Create proposal</text>
+    <text x="492" y="0">Submit to Discussion</text>
+    <text x="756" y="0">Get a private repo</text>
+    <text x="1020" y="0">Validate &amp; run</text>
+    <text x="1284" y="0">Upload &amp; share</text>
+  </g>
+
+  <rect x="16" y="130" width="1408" height="48" rx="12" fill="#EAF1FD"/>
+  <g class="you" transform="translate(0 160)">
+    <text x="55" y="0" class="row-label">YOU</text>
+    <text x="228" y="0">Share your idea</text>
+    <text x="492" y="0">Confirm the proposal</text>
+    <text x="756" y="0">Answer only if asked</text>
+    <text x="1020" y="0">Provide GPUs; start skills</text>
+    <text x="1284" y="0">Ask to upload; add feedback</text>
+  </g>
+
+  <rect x="16" y="184" width="1408" height="48" rx="12" fill="#F0EBFA"/>
+  <g class="agents" transform="translate(0 214)">
+    <text x="55" y="0" class="row-label">AGENTS</text>
+    <text x="228" y="0">proposal-agent drafts</text>
+    <text x="492" y="0">Post &amp; review automatically</text>
+    <text x="756" y="0">Build the private repo</text>
+    <text x="1020" y="0">Validate, run &amp; recover</text>
+    <text x="1284" y="0">Upload logs on request</text>
+  </g>
+
+  <g class="time" transform="translate(0 268)">
+    <text x="55" y="0" class="row-label">TIME</text>
+    <text x="228" y="0">Est. 20 min</text>
+    <text x="492" y="0">Est. 5 min</text>
+    <text x="756" y="0">Est. 25 min</text>
+    <text x="1020" y="0">Varies by task</text>
+    <text x="1284" y="0">Est. a few minutes</text>
+  </g>
+</svg>

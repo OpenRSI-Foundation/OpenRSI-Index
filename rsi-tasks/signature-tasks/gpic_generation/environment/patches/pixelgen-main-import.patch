@@ -1,0 +1,16 @@
+Task-infrastructure fix for the pinned gpic repo (afa82daab73cfeab4ef9fbd174ff62b68bffc456):
+baselines/PixelGen/main.py imports src.lightning_{data,model}_keshik, which do not exist
+in the tree; the shipped GPIC variants are src.lightning_{data,model}_gpic and export the
+same DataModule / LightningModel names. Applied to BOTH /opt/project (pristine) and
+/app/project (agent copy) at image build, so it never appears as an agent diff.
+--- a/baselines/PixelGen/main.py
++++ b/baselines/PixelGen/main.py
+@@ -6,6 +6,6 @@
+ from src.utils.patch_bugs import *
+ from lightning import Trainer, LightningModule
+
+-from src.lightning_data_keshik import DataModule
+-from src.lightning_model_keshik import LightningModel
++from src.lightning_data_gpic import DataModule
++from src.lightning_model_gpic import LightningModel
+ from lightning.pytorch.cli import LightningCLI, LightningArgumentParser, SaveConfigCallback

@@ -1,0 +1,112 @@
+name: Dispatch Discussion task command
+
+on:
+  discussion_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout public default branch
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+
+      - name: Validate event
+        id: gate
+        run: python3 checks/discussion_task_dispatch.py "$GITHUB_EVENT_PATH" dispatch-payload.json
+
+      - name: Create dispatch App token
+        id: app-token
+        if: steps.gate.outputs.candidate == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: RSI-Index
+          repositories: RSI-Skills
+          permission-contents: write
+          permission-members: read
+
+      - name: Verify current organization Owner
+        id: owner-gate
+        if: steps.gate.outputs.candidate == 'true' && steps.gate.outputs.is_author != 'true'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          COMMENTER_LOGIN: ${{ steps.gate.outputs.commenter_login }}
+        run: |
+          if gh api "/orgs/RSI-Index/memberships/$COMMENTER_LOGIN" > membership.json 2>/dev/null; then
+            python3 checks/org_owner_gate.py membership.json "$COMMENTER_LOGIN"
+          else
+            printf 'is_owner=false\n' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create acknowledgement App token
+        id: ack-token
+        if: steps.gate.outputs.candidate == 'true' && (steps.gate.outputs.is_author == 'true' || steps.owner-gate.outputs.is_owner == 'true')
+        continue-on-error: true
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: RSI-Index
+          repositories: ${{ github.event.repository.name }}
+          permission-discussions: write
+
+      - name: Acknowledge accepted task command
+        if: steps.gate.outputs.candidate == 'true' && (steps.gate.outputs.is_author == 'true' || steps.owner-gate.outputs.is_owner == 'true') && steps.ack-token.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.ack-token.outputs.token }}
+          COMMENT_NODE_ID: ${{ github.event.comment.node_id }}
+        run: |
+          gh api graphql \
+            -f query='mutation($id: ID!, $content: ReactionContent!) {
+              addReaction(input: { subjectId: $id, content: $content }) {
+                reaction { content }
+              }
+            }' \
+            -f id="$COMMENT_NODE_ID" \
+            -f content="EYES"
+
+      - name: Build dispatch request
+        if: steps.gate.outputs.candidate == 'true' && (steps.gate.outputs.is_author == 'true' || steps.owner-gate.outputs.is_owner == 'true')
+        env:
+          COMMAND: ${{ steps.gate.outputs.command }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          payload = json.load(Path("dispatch-payload.json").open(encoding="utf-8"))
+          if not isinstance(payload, dict) or payload.get("trigger_kind") != "comment":
+              raise SystemExit("manual dispatch payload had an invalid trigger kind")
+          event_types = {
+              "task": "discussion_task_command",
+              "reset": "discussion_task_reset",
+          }
+          try:
+              event_type = event_types[os.environ["COMMAND"]]
+          except KeyError:
+              raise SystemExit("invalid Discussion command") from None
+          request = {
+              "event_type": event_type,
+              "client_payload": payload,
+          }
+          with Path("repository-dispatch.json").open("w", encoding="utf-8") as output:
+              json.dump(request, output, sort_keys=True, separators=(",", ":"))
+          PY
+
+      - name: Dispatch privately
+        if: steps.gate.outputs.candidate == 'true' && (steps.gate.outputs.is_author == 'true' || steps.owner-gate.outputs.is_owner == 'true')
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          gh api --method POST /repos/RSI-Index/RSI-Skills/dispatches \
+            --input repository-dispatch.json

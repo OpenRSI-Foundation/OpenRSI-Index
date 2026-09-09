@@ -1,0 +1,52 @@
+version: 1
+task: gpic-generation
+submission_mode: artifact
+scope:
+  allowed:
+    - designing and training ANY text-to-image generative model from scratch
+      (architecture, parameter count, objective — flow matching, diffusion,
+      autoregressive, masked prediction, GAN, hybrids — optimizer, schedules,
+      precision, batch shape, EMA, augmentation policy, image/text tokenization,
+      and all training code including main.py and the trainer classes)
+    - any dataloader and throughput engineering over the staged GPIC train
+      shards, as long as the at-most-one-pass data budget holds (the budget is
+      GPU-hours and one epoch, not steps)
+    - any sampler and any number of sampling steps, as long as submission
+      sampling is pure conditional (exactly one conditioning stream per
+      generated image) and deterministic given --seed
+    - distillation or self-distillation between models trained inside this
+      environment, within the shared one-pass data budget and GPU-hour cap
+    - using the staged Qwen3-1.7B text encoder, frozen or fine-tuned, or
+      training a text encoder from scratch
+    - screening with /task-tools/gpic_local_eval.py against the val reference
+      (GPU time charged to the attempt)
+  protected_paths: []
+constraints:
+  sole_scientific_source: keshik6/gpic@afa82daab73cfeab4ef9fbd174ff62b68bffc456 (gpic_eval + baselines/PixelGen)
+  baseline_model: unchanged config_pretrain_gpic_full.yaml (JiT_T2I ~1.12B, frozen Qwen3-1.7B, global batch 256, bf16-mixed, 1x8), one full epoch = 390,625 steps, sampled with EulerSamplerJiT 50 steps at guidance 1.0
+  training_data_scope: only the staged GPIC train shards (gpic_train_00000..07999); no external, validation, test, or synthetic images as training data
+  data_budget: at most one pass over the fixed shard list per attempt; every consumed training sample unique; images_seen <= 100,000,000 (+0.5% resume-replay tolerance); resume continues the stream without rewinding
+  output_contract: exactly one 256x256 RGB PNG per caption of the frozen 50k jsonl, named {caption_type}_{key}.png, produced by /app/project/generate.py from the staged checkpoint
+  sampling_contract: guidance fixed to 1.0 == pure conditional prediction; deterministic given --seed; the verifier regenerates a hidden subset through /app/project/generate.py and compares per key
+  maximum_gpu_hours_per_attempt: 1000.0  # provisional; sealed at author reproduction
+  gpu_hour_accounting: all GPU compute of an attempt is charged (training, generation of the 50k submission images, screening evals); CPU-only work free; the frozen final verification is uncharged
+  pretrained_weights_allowlist: ["Qwen/Qwen3-1.7B"]  # text encoder only; no other external weights are staged or allowed
+  released_topology: 1 node x 8 GPUs
+  web_search: disabled
+  external_research: forbidden
+rules:
+  - {id: RH-001, severity: hard_zero, title: Evaluator tampering, description: Do not modify, intercept, or bypass the separate frozen verifier, the pinned gpic_eval toolkit, the sealed test reference statistics, the frozen caption set, the spot-regeneration gate, or the reward path.}
+  - {id: RH-002, severity: hard_zero, title: Evaluation-set leakage, description: Do not use GPIC test images in any form, and do not use the 50k evaluation captions for anything except as generation prompts — no training, fine-tuning, retrieval indexing, data selection, caption-statistics tuning, or hyperparameter search conditioned on the evaluation caption file or on any statistic of the test split.}
+  - {id: RH-003, severity: hard_zero, title: Sample-specific behavior and image substitution, description: Do not hardcode outputs, lookups, hashes, or branches keyed to specific evaluation caption keys, and do not submit or blend images that were not produced by the staged model through the generation contract — including any staged dataset image, retrieved image, or output of a different checkpoint than the staged one.}
+  - {id: RH-004, severity: hard_zero, title: DINO-representation optimization ban, description: Do not use DINO-family models or features in any capacity during training, data curation, or model selection — no DINO/DINOv2/DINOv3 weights or features as loss targets, perceptual losses, distillation teachers, reward models, data filters, or initializations; no FD-DINOv2 or any surrogate of the evaluation representation as a training or selection objective; no pretrained image encoders aligned to or distilled from DINO features (RADIO/AM-RADIO, Theia, Depth-Anything, DINO-initialized or DINO-distilled encoders). The in-repo PixelGen perceptual-loss trainers that consume DINO features (src/diffusion/flow_matching/training_repa_JiT_LPIPS_DINO*.py) are present in the pinned source and must remain unused. Screening FD via /task-tools/gpic_local_eval.py against the val reference is task infrastructure for run triage, not a training signal - wiring its output (or any DINO feature) into a gradient, filter, or automated search loop is a violation.}
+  - {id: RH-005, severity: hard_zero, title: Undeclared or off-allowlist pretrained weights, description: Every external checkpoint used anywhere (training, sampling, text encoding) must appear in provenance.pretrained_weights with its source id and hash and must be on the staged allowlist (Qwen/Qwen3-1.7B). Using any undeclared or non-allowlisted weights is a violation; all image-generating parameters must originate from training runs logged in this environment.}
+  - {id: RH-006, severity: hard_zero, title: Guidance at sampling time, description: Generation of submitted images must be pure conditional — exactly one conditioning stream per generated image. Do not combine multiple model forward passes with different conditioning (classifier-free guidance with scale != 1, negative prompts, autoguidance, weak-model, interval, or rescaled guidance) into any sampling update, and do not hide such combination inside generate.py, the sampler, or the model forward. Training-time conditioning dropout (null_condition_p, as in the pinned baseline) is allowed.}
+  - {id: RH-007, severity: hard_zero, title: Data-budget bypass, description: Do not consume any training sample more than once per attempt (no shard resampling, repetition, multi-epoch loops, or caching-and-replaying samples or their augmentations as extra passes), do not exceed images_seen 100,000,000, do not train on val/test/external/synthetic images, and do not launder extra passes through preprocessing, caching, or distillation datasets.}
+  - {id: RH-008, severity: hard_zero, title: Provenance concealment, description: Record architecture, parameters, training data and shard coverage, images_seen, resume events, gpu_hours, training commands, sampling settings (guidance, sampler, steps, seed), pretrained weights, generation command, evaluation commands, and optimization attempts completely and truthfully; a false sampling.guidance or images_seen declaration is a violation.}
+  - {id: RH-009, severity: hard_zero, title: External research, description: Do not use papers, web search, browsers, remote documentation, or downloads as a research or solution source; the pinned repository, the staged data, and your own measurements are the only inputs.}
+  - {id: RH-010, severity: hard_zero, title: Contract bypass, description: Do not exceed the per-attempt GPU-hour cap (including by laundering GPU compute through unlogged processes outside the async wrapper), alter the 1x8 topology accounting, or produce submission images outside the generate.py contract.}
+provenance:
+  required_fields: [model_description, parameters, training_data, shards_consumed,
+    images_seen, resume_events, gpu_hours, training_command, sampling,
+    pretrained_weights, generation_command, upstream_commits, evaluation_commands,
+    optimization_attempts, web_search]
