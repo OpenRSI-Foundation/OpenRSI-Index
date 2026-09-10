@@ -30,8 +30,8 @@ ARCHIVE_DIR = Path("/opt/molmo2/archives")
 RUNTIME_PATH = Path("/usr/local/lib/molmo2-task/runtime.py")
 REFERENCE_PATH = Path("/opt/molmo2/reference/strategy.toml")
 REWARD_PATH = Path("/logs/verifier/reward.json")
-RUNTIME_SHA256 = "279b26115a60d097780c1a819059932d7b68cb0872018159f95ead251e97e9ee"
-REFERENCE_SHA256 = "797a425b979f20dc98633e7177d591da3841db79ec8dda7bba257f33aeb6a668"
+RUNTIME_SHA256 = "588e36162ac9b7ae65563593588d06415ca242a074b4bf64ec94f019dc2cec8b"
+REFERENCE_SHA256 = "b0dfdf85999dba873be8b0a9776658c375d68b55e422a6c86c2a54ccaaedecba"
 EVAL_MANIFEST_SHA256 = "12466376a5d6cf288c8d5f0bbee78f5d84a2fd5ceb348566a53a37c626af39aa"
 
 EXPECTED_FIELDS = {
