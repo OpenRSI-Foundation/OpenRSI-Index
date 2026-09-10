@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -43,6 +44,17 @@ class HarborTaskCompiler:
         source_digest = hash_tree(source_dir)
         try:
             task = Task(source_dir, disable_verification=True)
+            # Harbor coerces booleans, floats, and strings into integer counts.
+            # Preserve the task author's explicit integer resource declaration.
+            raw_environment = tomllib.loads(task.paths.config_path.read_text()).get(
+                "environment", {}
+            )
+            if "gpus" in raw_environment:
+                raw_count = raw_environment["gpus"]
+                if type(raw_count) is not int or raw_count < 0:
+                    raise UnsupportedTaskError(
+                        "environment.gpus must be a non-negative integer"
+                    )
         except (OSError, ValidationError, ValueError) as error:
             raise UnsupportedTaskError(
                 f"invalid or missing required Harbor task file: {error}"
@@ -308,9 +320,16 @@ class HarborTaskCompiler:
                 "Harbor and Compose GPU count declarations must match"
             )
         count = compose_count if compose_count is not None else config_count
-        if count is None or count == 0:
-            raise UnsupportedTaskError("a Harbor GPU requirement is required")
+        if count is None:
+            raise UnsupportedTaskError(
+                "a Harbor GPU requirement is required; "
+                "set environment.gpus = 0 for CPU Work"
+            )
         gpu_types = task.config.environment.gpu_types
+        if count == 0 and gpu_types is not None:
+            raise UnsupportedTaskError(
+                "environment.gpus = 0 cannot declare gpu_types"
+            )
         return GPURequirement(
             count=count,
             name=gpu_types[0] if gpu_types else None,

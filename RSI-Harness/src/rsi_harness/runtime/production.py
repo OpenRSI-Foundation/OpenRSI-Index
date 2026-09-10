@@ -1467,11 +1467,14 @@ class ProductionRuntimeServices:
                     "agent": definition.agent.model_copy(update=agent_updates)
                 }
             )
+        needs_gpus = (
+            definition.gpu_requirement.count != 0 or definition.verifier.gpu_count != 0
+        )
         gpu_plan = resolve_gpu_plan(
             definition.gpu_requirement,
             judge_count=definition.verifier.gpu_count,
             requested=request.gpu_selectors,
-            inventory=self.inventory.list_devices(),
+            inventory=self.inventory.list_devices() if needs_gpus else (),
         )
         preparation = RunPreparation(
             request=request,

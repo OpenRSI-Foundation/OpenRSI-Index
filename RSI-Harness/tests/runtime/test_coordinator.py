@@ -21,6 +21,7 @@ from rsi_harness.models import (
     EvaluationRequest,
     GPUAllocation,
     GPUDevice,
+    GPURequirement,
     JudgeGPUMode,
     ManagedNetwork,
     ManagedWorkdirVolume,
@@ -2521,10 +2522,27 @@ def test_engine_infrastructure_round_fails_but_preserves_prior_valid_result(
     assert result.best_round == "agent-1"
 
 
+@pytest.mark.parametrize("cpu_only", (False, True))
 def test_concrete_production_composition_runs_two_rounds_with_real_endpoint(
     tmp_path,
+    cpu_only,
 ) -> None:
     ports = ScriptedBackend(tmp_path)
+    if cpu_only:
+        ports.gpu_plan = RunGPUPlan(
+            authorized_pool=GPUAllocation(),
+            work=GPUAllocation(),
+            judge=GPUAllocation(),
+            judge_mode=JudgeGPUMode.FREEZE_ONLY,
+        )
+        ports.plan = ports.plan.model_copy(
+            update={
+                "task": ports.plan.task.model_copy(
+                    update={"gpu_requirement": GPURequirement(count=0)}
+                ),
+                "gpu_plan": ports.gpu_plan,
+            }
+        )
     responses: list[str] = []
     store = LeaseStore(tmp_path / "leases")
     embedded = EmbeddedSubmissionServerFactory(
@@ -2622,6 +2640,7 @@ def test_concrete_production_composition_runs_two_rounds_with_real_endpoint(
     assert [report.round_id for report in result.reports] == ["agent-1", "agent-2"]
     persisted = store.read("run-1")
     assert persisted is not None and persisted.status == RunStatus.COMPLETED
+    assert persisted.gpu_plan == ports.gpu_plan
     final_result = json.loads(
         (ports.plan.paths.logs / "runs/run-1/minimal-gpu/final_result.json").read_text()
     )

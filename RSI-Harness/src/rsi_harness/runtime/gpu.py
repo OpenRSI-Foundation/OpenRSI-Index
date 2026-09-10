@@ -184,6 +184,11 @@ def resolve_gpu_plan(
     inventory: Sequence[GPUDevice],
 ) -> RunGPUPlan:
     """Plan deterministic Work and Judge GPU allocations from one pool."""
+    if requirement.count == 0:
+        if judge_count == 0 and requested:
+            raise SetupError("CPU-only Work and Judge do not accept --gpus selectors")
+        if judge_count > 0 and not requested:
+            raise SetupError("GPU Judge with CPU Work requires an explicit --gpus pool")
     pool = _resolve_authorized_pool(
         requirement, requested=requested, inventory=inventory
     )

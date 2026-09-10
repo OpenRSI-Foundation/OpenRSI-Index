@@ -79,6 +79,60 @@ def test_compile_uses_official_harbor_model_and_gpu_requirement(tmp_path):
     assert definition.service.build_context == (task_dir / "environment").resolve()
 
 
+@pytest.mark.parametrize("judge_count", (None, 0, 1))
+def test_compile_accepts_explicit_cpu_work(tmp_path, judge_count):
+    """Explicit zero must survive Harbor compilation without inheriting GPUs."""
+    task_toml = DEFAULT_TASK_TOML.replace("gpus = 2", "gpus = 0")
+    if judge_count is not None:
+        task_toml += f"\n[metadata.rsi_harness.verifier]\ngpus = {judge_count}\n"
+    task = write_harbor_task(tmp_path, task_toml=task_toml)
+
+    definition = HarborTaskCompiler().compile(task, CompileOptions())
+
+    assert definition.gpu_requirement.count == 0
+    assert definition.gpu_requirement.name is None
+    assert definition.verifier.gpu_count == (0 if judge_count is None else judge_count)
+
+
+def test_compile_does_not_treat_missing_work_gpu_count_as_cpu(tmp_path):
+    task = write_harbor_task(
+        tmp_path, task_toml=DEFAULT_TASK_TOML.replace("gpus = 2\n", "")
+    )
+
+    with pytest.raises(UnsupportedTaskError, match="GPU requirement"):
+        HarborTaskCompiler().compile(task, CompileOptions())
+
+
+def test_compile_rejects_gpu_type_for_cpu_work(tmp_path):
+    task = write_harbor_task(
+        tmp_path,
+        task_toml=DEFAULT_TASK_TOML.replace(
+            "gpus = 2", 'gpus = 0\ngpu_types = ["H100"]'
+        ),
+    )
+
+    with pytest.raises(UnsupportedTaskError, match="gpus = 0.*gpu_types"):
+        HarborTaskCompiler().compile(task, CompileOptions())
+
+
+@pytest.mark.parametrize(
+    "raw_count", ("false", "true", "0.0", "1.0", '"0"', '"1"', "-1")
+)
+def test_compile_rejects_noninteger_or_negative_work_gpu_declaration(
+    tmp_path, raw_count
+):
+    """Harbor's integer coercion must not turn malformed values into CPU intent."""
+    task = write_harbor_task(
+        tmp_path,
+        task_toml=DEFAULT_TASK_TOML.replace("gpus = 2", f"gpus = {raw_count}"),
+    )
+
+    with pytest.raises(
+        UnsupportedTaskError, match="environment.gpus.*non-negative integer"
+    ):
+        HarborTaskCompiler().compile(task, CompileOptions())
+
+
 def test_compiles_namespaced_verifier_gpu_count(tmp_path):
     """The approved verifier extension must reach the compiled plan."""
     task = write_harbor_task(
@@ -504,9 +558,13 @@ def test_compile_normalizes_explicit_root_equivalent_workdir_declarations(
     assert definition.service.workdir == PurePosixPath("/")
 
 
-def test_compile_requires_matching_task_and_compose_gpu_counts(tmp_path):
+@pytest.mark.parametrize("work_count", (0, 2))
+def test_compile_requires_matching_task_and_compose_gpu_counts(tmp_path, work_count):
     """Choosing either of two conflicting GPU declarations is unsafe."""
-    task_dir = write_harbor_task(tmp_path)
+    task_dir = write_harbor_task(
+        tmp_path,
+        task_toml=DEFAULT_TASK_TOML.replace("gpus = 2", f"gpus = {work_count}"),
+    )
     write_compose(
         task_dir,
         "    build: .\n"

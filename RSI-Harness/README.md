@@ -1,8 +1,8 @@
 # RSI Harness
 
 RSI Harness powers RSI's First Exam for ultra-long-horizon RSI runs, natively
-supporting [Harbor-format tasks](../rsi-tasks/) with or without GPUs, from
-single-node local Docker to multi-node clusters.
+supporting [Harbor-format tasks](../rsi-tasks/) with or without GPUs on local
+Docker, and GPU tasks on multi-node clusters.
 
 Agents such as Claude Code and Codex develop solutions in a persistent, isolated
 Work container and submit them to a fresh Judge for scoring. They can iterate on
@@ -112,6 +112,32 @@ sudo -E "$(command -v rsi-harness)" run /absolute/path/to/task --gpus 0,1
 `--gpus` accepts GPU indexes or UUIDs. Work and Judge GPU counts, images,
 timeouts, and other runtime settings come from the task. Run
 `rsi-harness run --help` for optional controls.
+
+For CPU-only local tasks, declare Work's count explicitly in `task.toml`:
+
+```toml
+[environment]
+gpus = 0
+
+[metadata.rsi_harness.verifier]
+gpus = 0
+```
+
+The Judge declaration may be omitted; it defaults to zero. Omit `gpu_types`
+and the Compose NVIDIA reservation, and run without `--gpus`:
+
+```bash
+sudo -E "$(command -v rsi-harness)" run /absolute/path/to/cpu-task --agent codex
+```
+
+Both containers receive no GPU devices, and NVIDIA tools are not required.
+CPU-only tasks reject `--gpus`; `--gpus 0` selects physical GPU index 0.
+An omitted Work count remains unspecified and must inherit a Compose GPU
+reservation. Explicit Work zero cannot conflict with a positive reservation.
+CPU Work with a GPU Judge is supported when an explicit `--gpus` pool is
+provided. GPU requirements still fail if NVIDIA devices are unavailable.
+CPU-only execution is currently supported by the local Docker backend;
+Blue Vela's launch path still requires GPUs.
 
 ## Run multi-node tasks on a cluster
 
