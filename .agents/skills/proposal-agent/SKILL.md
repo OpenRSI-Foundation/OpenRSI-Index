@@ -11,7 +11,7 @@ After the initial input is valid enough to advance to Round 1, and immediately b
 
 ## First step — Local setup
 
-Before proposal research, check GitHub CLI availability and authentication, then locate the local Public checkout as described in [references/discussion-lifecycle.md](references/discussion-lifecycle.md). The client may have started in another directory. Use absolute checkout, helper, and proposal paths throughout. Resolve Round 6 output names inside the Public checkout, not the client's starting directory; use that same path for writing, rereading, and submission. No repository hook or session activation is needed.
+Before proposal research, check GitHub CLI availability and authentication, then locate the local RSIs-First-Exam checkout as described in [references/discussion-lifecycle.md](references/discussion-lifecycle.md). The client may have started in another directory. Use absolute checkout, helper, and proposal paths throughout. Resolve Round 6 output names inside the RSIs-First-Exam checkout, not the client's starting directory; use that same path for writing, rereading, and submission. No repository hook or session activation is needed.
 
 ## Core behavior
 
