@@ -281,6 +281,7 @@ def test_work_feedback_mount_is_attested_from_created_container(
     ("role", "gpu_allocation", "expected_visibility"),
     (
         ("work", allocation(), "GPU-a,GPU-c"),
+        ("work", GPUAllocation(), "void"),
         ("judge", GPUAllocation(), "void"),
     ),
 )

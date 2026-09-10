@@ -134,9 +134,10 @@ class DockerBackend(ContainerBackend):
         docker_gpus = os.environ.get("RSI_DOCKER_GPUS", "").strip()
         if docker_gpus:
             count = -1 if docker_gpus.lower() == "all" else int(docker_gpus)
-            kwargs["device_requests"] = [
-                DeviceRequest(count=count, capabilities=[["gpu"]])
-            ]
+            if count != 0:
+                kwargs["device_requests"] = [
+                    DeviceRequest(count=count, capabilities=[["gpu"]])
+                ]
 
         container = self._client.containers.create(
             image,

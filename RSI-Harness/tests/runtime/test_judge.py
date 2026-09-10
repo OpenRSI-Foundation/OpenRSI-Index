@@ -345,7 +345,10 @@ def test_phase_gpu_judge_uses_exact_judge_allocation_and_expected_uuid_env(
     )
 
 
-def test_judge_gpu_freeze_only_omits_devices_and_expected_uuid_env(tmp_path) -> None:
+@pytest.mark.parametrize("cpu_work", (False, True))
+def test_judge_gpu_freeze_only_omits_devices_and_expected_uuid_env(
+    tmp_path, cpu_work
+) -> None:
     """A zero-GPU Judge must not inherit Work devices through snapshot mode."""
     runner, runtime, _snapshot, _artifacts, request = make_harness(tmp_path)
     plan, work, log_dir = request
@@ -353,6 +356,11 @@ def test_judge_gpu_freeze_only_omits_devices_and_expected_uuid_env(tmp_path) -> 
         update={
             "task": plan.task.model_copy(
                 update={
+                    "gpu_requirement": (
+                        plan.task.gpu_requirement.model_copy(update={"count": 0})
+                        if cpu_work
+                        else plan.task.gpu_requirement
+                    ),
                     "verifier": plan.task.verifier.model_copy(
                         update={
                             "environment": plan.task.verifier.environment
@@ -370,6 +378,10 @@ def test_judge_gpu_freeze_only_omits_devices_and_expected_uuid_env(tmp_path) -> 
                 update={
                     "judge": GPUAllocation(),
                     "judge_mode": JudgeGPUMode.FREEZE_ONLY,
+                    "work": GPUAllocation() if cpu_work else plan.gpu_plan.work,
+                    "authorized_pool": (
+                        GPUAllocation() if cpu_work else plan.gpu_plan.authorized_pool
+                    ),
                 }
             )
         }

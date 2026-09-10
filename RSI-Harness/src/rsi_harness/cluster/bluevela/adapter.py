@@ -383,6 +383,11 @@ class BlueVelaClusterAdapter(ClusterAdapter):
 
     def _compile(self, request: ClusterRunRequest) -> TaskDefinition:
         definition = self.compiler.compile(request.task_dir, request.options)
+        if definition.gpu_requirement.count == 0:
+            raise SetupError(
+                "Blue Vela cluster runs require Work GPUs; "
+                "use the local Docker backend for environment.gpus = 0"
+            )
         updates: dict[str, str] = {}
         if request.model is not None:
             updates["model"] = request.model

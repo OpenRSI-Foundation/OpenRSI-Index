@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1440" height="304" viewBox="0 0 1440 304" fill="none" role="img" aria-labelledby="title description">
   <title id="title">RSI-Anything: you guide, agents execute</title>
-  <desc id="description">Five stages distinguish contributor input from agent execution. 1. Create proposal: you share your idea; proposal-agent drafts the proposal, estimated 20 minutes. 2. Submit to Discussion: you confirm the proposal; proposal-agent posts it and the review agent reviews it automatically, estimated 5 minutes. 3. Get a private repo: you answer task-defining questions only if asked; agents build the repository, estimated 25 minutes. 4. Validate and run: you provide GPU access and launch the bundled skills; agents validate, run, monitor, and recover the experiment. Time varies by task. 5. Upload and share: you request the required uploads and give feedback; agents upload logs on request, estimated a few minutes. Times are approximate elapsed time for each stage, including agent execution. Follow the guide below for setup, proposal records, and experiment uploads.</desc>
+  <desc id="description">Five stages distinguish contributor input from agent execution. 1. Create proposal: you share your idea; proposal-agent drafts the proposal, estimated 20 minutes. 2. Submit to Discussion: you confirm the proposal; proposal-agent posts it and the review agent reviews it automatically, estimated 5 minutes. 3. Get a private repo: you answer task-defining questions only if asked; agents build the repository, estimated 25 minutes. 4. Validate and run: you provide compute resources and launch the bundled skills; agents validate, run, monitor, and recover the experiment. Time varies by task. 5. Upload and share: you request the required uploads and give feedback; agents upload logs on request, estimated a few minutes. Times are approximate elapsed time for each stage, including agent execution. Follow the guide below for setup, proposal records, and experiment uploads.</desc>
   <defs>
     <linearGradient id="background" x1="0" y1="0" x2="1440" y2="304" gradientUnits="userSpaceOnUse">
       <stop stop-color="#F7F9FF"/>
@@ -57,7 +57,7 @@
     <text x="228" y="0">Share your idea</text>
     <text x="492" y="0">Confirm the proposal</text>
     <text x="756" y="0">Answer only if asked</text>
-    <text x="1020" y="0">Provide GPUs; start skills</text>
+    <text x="1020" y="0">Provide compute; start skills</text>
     <text x="1284" y="0">Ask to upload; add feedback</text>
   </g>
 

@@ -148,7 +148,6 @@ def test_contributing_preserves_automatic_build_and_gpu_trajectory_contract():
     contributing = CONTRIBUTING.read_text(encoding="utf-8")
     normalized = " ".join(contributing.lower().split())
 
-    assert "about 1 hour" in normalized
     for stage in (
         "submit or edit the discussion",
         "pass or reject initial check",
@@ -166,7 +165,7 @@ def test_contributing_preserves_automatic_build_and_gpu_trajectory_contract():
     private_repo = contributing.split("### 4. Use the private task repository", 1)[1]
     assert "must have access" in private_repo.lower()
     assert "required gpu resources" in private_repo.lower()
-    assert "proposal trajectory" in private_repo.lower()
+    assert "complete original trajectory" in private_repo.lower()
     assert "discussion record" in private_repo.lower()
     assert "clone" in private_repo.lower()
     assert "harbor-task-validator" in private_repo

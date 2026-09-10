@@ -40,7 +40,7 @@ from rsi_harness.models import (
     SubmissionStatus,
 )
 from rsi_harness.runtime.artifacts import RunArtifactWriter
-from tests.factories import write_cluster_task
+from tests.factories import DEFAULT_TASK_TOML, write_cluster_task, write_harbor_task
 
 
 def _task_dir(tmp_path: Path) -> Path:
@@ -154,6 +154,42 @@ class RecordingScheduler:
             )
             writer.finalize()
         return LSFJobResult(job_id=job_id, state="DONE", exit_code=0)
+
+
+@pytest.mark.parametrize("judge_gpus", [0, 1])
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_cpu_work_is_rejected_before_cluster_runtime_or_storage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    judge_gpus: int,
+    dry_run: bool,
+) -> None:
+    task_dir = write_harbor_task(
+        tmp_path,
+        task_toml=(
+            DEFAULT_TASK_TOML.replace("gpus = 2", "gpus = 0")
+            + f"\n[metadata.rsi_harness.verifier]\ngpus = {judge_gpus}\n"
+        ),
+    )
+    profile = _profile(tmp_path)
+    scheduler = RecordingScheduler()
+    adapter = BlueVelaClusterAdapter(profile, scheduler=scheduler)
+    monkeypatch.setattr(
+        adapter,
+        "_validate_runtime_inputs",
+        lambda _request: pytest.fail("CPU Work reached cluster runtime validation"),
+    )
+    request = _request(tmp_path, dry_run=dry_run).model_copy(
+        update={"task_dir": task_dir.resolve()}
+    )
+
+    with pytest.raises(SetupError, match="local Docker"):
+        adapter.run(request)
+
+    assert scheduler.events == []
+    assert scheduler.specs == []
+    assert not profile.storage.run_root.parent.exists()
+    assert not request.logs_root.exists()
 
 
 def test_dry_run_resolves_four_gpus_without_mutation(tmp_path: Path) -> None:

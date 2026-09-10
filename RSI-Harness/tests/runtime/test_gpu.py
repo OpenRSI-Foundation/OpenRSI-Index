@@ -175,6 +175,52 @@ def test_phase_aware_gpu_plan(
     assert plan.judge.uuids == judge
 
 
+def test_cpu_plan_needs_no_inventory():
+    plan = resolve_gpu_plan(
+        GPURequirement(count=0), judge_count=0, requested=(), inventory=()
+    )
+
+    assert plan.authorized_pool.uuids == ()
+    assert plan.work.uuids == ()
+    assert plan.judge.uuids == ()
+    assert plan.judge_mode.value == "freeze-only"
+
+
+@pytest.mark.parametrize("requested", (("0",), ("GPU-a",)))
+def test_cpu_plan_rejects_unused_selectors(requested):
+    with pytest.raises(SetupError, match="CPU-only.*--gpus"):
+        resolve_gpu_plan(
+            GPURequirement(count=0),
+            judge_count=0,
+            requested=requested,
+            inventory=eight_h100_inventory(),
+        )
+
+
+def test_gpu_judge_with_cpu_work_requires_explicit_pool():
+    with pytest.raises(SetupError, match="explicit.*--gpus"):
+        resolve_gpu_plan(
+            GPURequirement(count=0),
+            judge_count=1,
+            requested=(),
+            inventory=eight_h100_inventory(),
+        )
+
+
+def test_gpu_judge_with_cpu_work_uses_only_explicit_pool():
+    plan = resolve_gpu_plan(
+        GPURequirement(count=0),
+        judge_count=1,
+        requested=("2",),
+        inventory=eight_h100_inventory(),
+    )
+
+    assert plan.authorized_pool.uuids == ("GPU-c",)
+    assert plan.work.uuids == ()
+    assert plan.judge.uuids == ("GPU-c",)
+    assert plan.judge_mode.value == "disjoint"
+
+
 def test_authorized_pool_may_exceed_work_count():
     plan = resolve_gpu_plan(
         GPURequirement(count=2),

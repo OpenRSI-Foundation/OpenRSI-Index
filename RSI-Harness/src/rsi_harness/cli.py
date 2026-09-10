@@ -257,7 +257,7 @@ def run_command(
             "--gpus",
             help=(
                 "Ordered GPU pool authorized for this run; Work sees only its "
-                "task-declared count"
+                "task-declared count. Omit for CPU-only Work and Judge"
             ),
         ),
     ] = "",

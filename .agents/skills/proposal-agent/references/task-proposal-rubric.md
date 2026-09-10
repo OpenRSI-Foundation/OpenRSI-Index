@@ -60,16 +60,16 @@ them to select a decision tier.
   explains why direct evaluation cannot answer the scientific question, it may
   instead use evaluation-time retraining under a fixed protocol from a submitted
   declarative configuration or manifest.
-- **Normal compute reference:** Work must use at least 1 GPU; the end-to-end lane
-  uses at most 8 GPUs on one physical node and at most 12 hours for one single
-  experiment run. H100 is the budgeting reference, not a required model:
-  compatible A100, B100, or other GPUs are allowed unless the task genuinely
-  requires a specific GPU model. Judge may use zero GPUs when appropriate.
-  Runtime over 12 hours remains non-blocking at proposal stage.
-- **Execution-lane eligibility:** Work must use at least 1 GPU, and one single
-  experiment run must fit on one physical node with at most 8 GPUs at peak.
-  CPU-only Work, multi-node lanes, and lanes using more than 8 GPUs are outside
-  the currently admitted task class.
+- **Normal compute reference:** the end-to-end lane uses at most 8 GPUs on one
+  physical node and at most 12 hours for one single experiment run. Work and
+  Judge may each use zero GPUs. For GPU lanes, H100 is the budgeting reference,
+  not a required model: compatible A100, B100, or other GPUs are allowed unless
+  the task genuinely requires a specific GPU model. Runtime over 12 hours
+  remains non-blocking at proposal stage.
+- **Execution-lane eligibility:** one single experiment run must fit on one
+  physical node with at most 8 GPUs at peak. CPU-only tasks are eligible under
+  the same research and evaluation standards. Multi-node lanes and lanes using
+  more than 8 GPUs are outside the currently admitted task class.
 - **Current execution model:** the current RSI-Harness uses a shared
   Base/Work/Judge environment. Judge evaluates the Work snapshot, and task-owned
   tests are injected Judge-only; this is not an independent clean-Base verifier.
@@ -124,14 +124,14 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
   concrete existing delivery/access interface usable by the current task
   workflow. A vague statement that an operator will pre-provision something
   later is insufficient.
-- Work must use at least 1 GPU. The selected execution lane must fit on a single
-  physical node and use at most 8 GPUs at peak; Judge may use zero GPUs when
-  appropriate. H100 is the budgeting reference, not a required model:
-  compatible A100, B100, or other GPUs are allowed unless the task genuinely
-  requires a specific GPU model. A CPU-only Work lane, a lane that inherently
-  requires multi-node execution, or a lane requiring more than 8 GPUs fails
-  this gate unless the proposal already selects a faithful,
-  repository-supported eligible lane.
+- The selected execution lane must fit on a single physical node and use at
+  most 8 GPUs at peak. Work and Judge may each use zero GPUs; do not fail this
+  gate merely because a task is CPU-only. For GPU lanes, H100 is the budgeting
+  reference, not a required model: compatible A100, B100, or other GPUs are
+  allowed unless the task genuinely requires a specific GPU model. A lane that
+  inherently requires multi-node execution or more than 8 GPUs fails this gate
+  unless the proposal already selects a faithful, repository-supported eligible
+  lane.
 
 ### 3. Model-Development AutoResearch Scope
 
@@ -288,8 +288,9 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
   research question, baseline, evaluation or reward, action space, data
   boundary, network boundary, or compute contract.
 - Existing proposal fields must establish that candidate-producing compute runs
-  in Work by default and Work uses at least 1 GPU; Judge reloads and evaluates the complete materialized
-  candidate snapshot; normal evaluation is candidate-only; Solution
+  in Work by default, with CPU, RAM, and GPU needs declared for each phase
+  (explicitly zero GPUs when unused); Judge reloads and evaluates the complete
+  materialized candidate snapshot; normal evaluation is candidate-only; Solution
   materializes the traceable baseline without training or evaluation;
   candidate-invalid results are unscored unless a finite scalar was selected;
   and Work/Judge follow the current shared snapshot model.
@@ -311,8 +312,9 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
 Always report runtime separately from the nine proposal gates. Hardware
 topology and peak-count eligibility are handled by the Source Repository gate.
 
-- Record the GPU or accelerator type, peak count, and estimated wall-clock time
-  for one scoreable candidate run when provided. Distinguish a single run from
+- Record CPU cores, RAM, GPU count (explicitly zero when unused), GPU type when
+  needed, and estimated wall-clock time for one scoreable candidate run when
+  provided. Distinguish a single run from
   the full multi-trial agent trajectory.
 - When Work candidate production and Judge evaluation differ, record each
   phase's peak hardware and wall time separately, plus the end-to-end peak and
@@ -324,17 +326,16 @@ topology and peak-count eligibility are handled by the Source Repository gate.
   execution failure is sufficient when relevant.
 - If runtime exceeds 12 hours, write a clear `Flag` and state the estimate. The
   runtime flag is retained for resource review after baseline reproduction.
-- CPU-only Work, multi-node execution, or more than 8 GPUs is
-  not a non-blocking compute flag; it fails the Source Repository gate as an
-  ineligible execution lane.
+- Multi-node execution or more than 8 GPUs is not a non-blocking compute flag;
+  it fails the Source Repository gate as an ineligible execution lane.
 - If the estimate is absent or still approximate, write `Estimate incomplete`
   and state what is missing.
 - Runtime over 12 hours remains non-blocking, as does an incomplete runtime
   estimate when single-node and peak-GPU eligibility are already known. When a
   runtime flag is the proposal's only concern, the final decision must still be
   `Pass`.
-- The actual GPU-hour budget, concurrency approval, and strict feasibility gate
-  are set after baseline reproduction and the first representative trial.
+- The actual CPU/GPU compute budget, concurrency approval, and strict feasibility
+  gate are set after baseline reproduction and the first representative trial.
 
 ## Proposal-specific Quality Observations
 
@@ -424,7 +425,8 @@ Hard gate review:
 
 Compute note:
 [Write one of: Within normal reference | Flag | Estimate incomplete.
-Include the known accelerator count, physical-node count, and single-run time.
+Include the known CPU/RAM needs, GPU count (zero when unused), physical-node
+count, and single-run time.
 Runtime Flags and incomplete runtime estimates are explicitly non-blocking at
 proposal stage; hardware eligibility violations belong in the Source Repository
 gate.]
