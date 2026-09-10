@@ -17,8 +17,18 @@
 
 **We're actively looking for contributors to add new, challenging tasks.** Our dedicated **agent-native RSI-Anything pipeline** helps you create a new task in **an hour or less**—bring the idea, and our agents handle the rest. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for a step-by-step guide to creating and submitting tasks. Have fun! 😀
 
+Clone the repository:
 
+```bash
+git clone https://github.com/RSI-Index/RSIs-First-Exam.git
+cd RSIs-First-Exam
+```
 
+Open Codex or Claude Code (app or CLI), start a fresh session, and paste:
+
+```text
+Use the proposal-agent skill at .agents/skills/proposal-agent/SKILL.md in my local RSIs-First-Exam repository. Locate the repository if needed, then follow the skill to complete setup and guide me step by step through creating and submitting an RSI proposal.
+```
 
 ## 💥 Why RSI's First Exam?
 

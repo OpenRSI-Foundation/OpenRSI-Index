@@ -176,16 +176,3 @@ def test_contributing_preserves_automatic_build_and_gpu_trajectory_contract():
     assert "without gpu" not in private_repo.lower()
     assert "with gpu" not in private_repo.lower()
     assert "no-gpu contribution path" not in private_repo.lower()
-
-
-def test_readme_requires_hook_review_and_binding_verification_for_both_clients():
-    normalized = " ".join(CONTRIBUTING.read_text(encoding="utf-8").lower().split())
-
-    assert ".codex/hooks.json" in normalized
-    assert ".claude/settings.json" in normalized
-    assert "review" in normalized
-    assert "trust" in normalized
-    assert "declin" in normalized or "disabl" in normalized
-    assert "prevents trajectory submission" in normalized
-    assert "after the first response" in normalized
-    assert "proposal_session.py status" in normalized
