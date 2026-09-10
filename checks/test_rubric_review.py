@@ -82,6 +82,69 @@ https://github.com/example-org/example-repo/blob/0123456789abcdef/evals/run_eval
     )
 
 
+@pytest.mark.parametrize("section_column", ["", "Research Question | "])
+def test_parse_repository_reference_reads_table_with_pinned_links(review, section_column):
+    proposal = f"""
+Contributor repository: https://github.com/contributor/unrelated
+
+| {section_column}Repository URL | Official source: [TRL](https://github.com/huggingface/trl) |
+| {section_column}Exact commit/tag | Requested ref: `main`; pinned to immutable commit [`42e1cdbafa06d9f7a1c2a7d6cdd98329a55b569f`](https://github.com/huggingface/trl/commit/42e1cdbafa06d9f7a1c2a7d6cdd98329a55b569f). |
+| Reference Baseline | Repository evidence paths | [`trl/trainer/utils.py`](https://github.com/huggingface/trl/blob/42e1cdbafa06d9f7a1c2a7d6cdd98329a55b569f/trl/trainer/utils.py) defines `RepeatSampler`; [`trl/trainer/grpo_trainer.py`](https://github.com/huggingface/trl/blob/42e1cdbafa06d9f7a1c2a7d6cdd98329a55b569f/trl/trainer/grpo_trainer.py) installs the sampler. |
+"""
+
+    reference = review.parse_repository_reference(proposal)
+
+    assert reference == review.RepositoryReference(
+        "huggingface",
+        "trl",
+        "42e1cdbafa06d9f7a1c2a7d6cdd98329a55b569f",
+        ("trl/trainer/utils.py", "trl/trainer/grpo_trainer.py"),
+    )
+
+
+@pytest.mark.parametrize(
+    "ref_value",
+    [
+        "`v1.2.3`",
+        "[v1.2.3](https://github.com/right-org/right-repo/tree/v1.2.3)",
+    ],
+)
+def test_parse_repository_reference_reads_table_paths_and_tag(review, ref_value):
+    proposal = f"""
+| Field | Value |
+| --- | --- |
+| **Repository URL** | https://github.com/right-org/right-repo |
+| Exact commit/tag | {ref_value} |
+| Repository evidence paths | `configs/train.yaml`<br>scripts/train.py; `README.md`; Evaluator: `evals/run.py` returns `score`. |
+"""
+
+    assert review.parse_repository_reference(proposal) == review.RepositoryReference(
+        "right-org",
+        "right-repo",
+        "v1.2.3",
+        ("configs/train.yaml", "scripts/train.py", "README.md", "evals/run.py"),
+    )
+
+
+@pytest.mark.parametrize(
+    "path_field",
+    [
+        "Repository evidence paths: docs/model card.md",
+        "Repository evidence paths: `docs/model card.md`",
+        "Repository evidence paths: docs/model%20card.md",
+        "| Repository evidence paths | `docs/model card.md` |",
+        "| Repository evidence paths | docs/model%20card.md |",
+    ],
+)
+def test_parse_repository_reference_preserves_spaces_in_file_names(review, path_field):
+    proposal = (
+        "Repository URL: https://github.com/right-org/right-repo\n"
+        f"Exact commit/tag: main\n{path_field}\n"
+    )
+
+    assert review.parse_repository_reference(proposal).paths == ("docs/model card.md",)
+
+
 def test_parse_repository_reference_returns_none_without_supported_github_url(review):
     assert review.parse_repository_reference("No repository has been selected.") is None
 
@@ -218,7 +281,8 @@ def encoded_file(text: str) -> dict:
     }
 
 
-def test_fetch_repository_evidence_reads_declared_files_and_repo_tree(review):
+@pytest.mark.parametrize("table", [False, True])
+def test_fetch_repository_evidence_reads_declared_files_and_repo_tree(review, table):
     api = "https://api.github.com/repos/example-org/example-repo"
     resolved_sha = "a" * 40
     responses = {
@@ -252,12 +316,16 @@ def test_fetch_repository_evidence_reads_declared_files_and_repo_tree(review):
         ): encoded_file("def train(): pass"),
     }
     client = FakeGitHubClient(responses)
-    reference = review.RepositoryReference(
-        owner="example-org",
-        repo="example-repo",
-        ref="0123456789abcdef",
-        paths=("configs/train.yaml", "scripts/train.py"),
+    fields = (
+        ("Repository URL", "https://github.com/example-org/example-repo"),
+        ("Exact commit/tag", "0123456789abcdef"),
+        ("Repository evidence paths", "configs/train.yaml, scripts/train.py"),
     )
+    proposal = "\n".join(
+        f"| Section | {field} | {value} |" if table else f"- {field}: {value}"
+        for field, value in fields
+    )
+    reference = review.parse_repository_reference(proposal)
 
     evidence = review.fetch_repository_evidence(reference, client=client)
 
