@@ -183,6 +183,7 @@ _PATH_FIELD_RE = re.compile(
     r"(?im)^[ \t]*(?:[-*][ \t]*)?Repository[ \t]+evidence[ \t]+paths?"
     r"[^:\n]*:[ \t]*(?P<value>[^\n]*)$"
 )
+_MARKDOWN_LINK_RE = re.compile(r"\[([^\]\n]+)\]\([^\)\n]+\)")
 _RELEVANT_TREE_PATH_RE = re.compile(
     r"(?i)(?:^|/)(?:readme(?:\.[^/]*)?|configs?|experiments?|scripts?|"
     r"train(?:ing)?|eval(?:uation)?|benchmarks?|recipes?)(?:/|\.|_|-|$)"
@@ -234,7 +235,27 @@ def fetch_image_blocks(urls: list[str]) -> list[dict]:
     return blocks
 
 
+def _repository_field_value(text: str, pattern: re.Pattern[str]) -> str | None:
+    """Read a legacy field line or a field/value pair in a Markdown table."""
+    match = pattern.search(text)
+    if match:
+        return match.group("value")
+    for line in text.splitlines():
+        cells = re.split(r"(?<!\\)\|", line)
+        for label, value in zip(cells, cells[1:]):
+            label = label.strip(" \t`*_").rstrip(":")
+            match = pattern.fullmatch(f"{label}: {value.strip()}")
+            if match:
+                return match.group("value")
+    return None
+
+
 def _clean_field_value(value: str) -> str | None:
+    # The template allows branch provenance before the resolved immutable SHA.
+    sha = re.search(r"\b[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?\b", value)
+    if sha:
+        return sha.group()
+    value = _MARKDOWN_LINK_RE.sub(r"\1", value)
     cleaned = value.strip().strip("`*_ ")
     if not cleaned or cleaned.lower() in {"-", "n/a", "none", "tbd"}:
         return None
@@ -253,9 +274,9 @@ def _clean_repo_path(value: str) -> str | None:
 
 def parse_repository_reference(text: str) -> RepositoryReference | None:
     """Parse the official GitHub repository, exact ref, and evidence paths."""
-    repository_field = _REPOSITORY_URL_FIELD_RE.search(text)
-    if repository_field:
-        repo_match = _GITHUB_REPO_RE.search(repository_field.group("value"))
+    repository_field = _repository_field_value(text, _REPOSITORY_URL_FIELD_RE)
+    if repository_field is not None:
+        repo_match = _GITHUB_REPO_RE.search(repository_field)
         if repo_match is None:
             return None
     else:
@@ -276,16 +297,23 @@ def parse_repository_reference(text: str) -> RepositoryReference | None:
     owner = repo_match.group("owner")
     repo = repo_match.group("repo").removesuffix(".git")
 
-    ref_match = _REF_FIELD_RE.search(text)
-    ref = _clean_field_value(ref_match.group("value")) if ref_match else None
+    ref_value = _repository_field_value(text, _REF_FIELD_RE)
+    ref = _clean_field_value(ref_value) if ref_value is not None else None
 
     paths: list[str] = []
-    path_match = _PATH_FIELD_RE.search(text)
-    if path_match:
-        for item in re.split(r"[,;]", path_match.group("value")):
-            path = _clean_repo_path(item)
-            if path and path not in paths:
-                paths.append(path)
+    path_value = _repository_field_value(text, _PATH_FIELD_RE)
+    if path_value:
+        legacy_paths = _PATH_FIELD_RE.search(text) is not None
+        # Linked files are collected below after matching their repository/ref.
+        path_value = _MARKDOWN_LINK_RE.sub("", path_value)
+        for item in re.split(r"[,;]|<br\s*/?>", path_value, flags=re.IGNORECASE):
+            quoted_paths = re.findall(r"`([^`\n]*[/.][^`\n]+)`", item)
+            for candidate in quoted_paths or [item]:
+                if not (legacy_paths or quoted_paths) and re.search(r"\s", candidate.strip()):
+                    continue
+                path = _clean_repo_path(candidate)
+                if path and path not in paths:
+                    paths.append(path)
 
     for blob_match in _GITHUB_BLOB_RE.finditer(text):
         blob_repo = blob_match.group("repo").removesuffix(".git")
