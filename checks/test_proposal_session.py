@@ -4,8 +4,6 @@ import importlib.util
 import json
 import subprocess
 import sys
-import threading
-from dataclasses import replace
 from pathlib import Path
 from typing import Sequence
 
@@ -14,8 +12,6 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRIPT = ROOT / ".agents/skills/proposal-agent/scripts/proposal_session.py"
-CODEX_HOOKS = ROOT / ".codex/hooks.json"
-CLAUDE_SETTINGS = ROOT / ".claude/settings.json"
 SPEC = importlib.util.spec_from_file_location("proposal_session", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 module = importlib.util.module_from_spec(SPEC)
@@ -35,21 +31,6 @@ def write_transcript(path: Path, content: bytes = b'{"type":"message"}\n') -> Pa
     return path
 
 
-def hook(
-    session_id: str,
-    transcript: Path,
-    checkout: Path,
-    *,
-    event: str = "Stop",
-) -> dict[str, object]:
-    return {
-        "session_id": session_id,
-        "transcript_path": str(transcript),
-        "cwd": str(checkout),
-        "hook_event_name": event,
-    }
-
-
 def invoke(*args: str, input: str = "") -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(SCRIPT), *args],
@@ -60,40 +41,6 @@ def invoke(*args: str, input: str = "") -> subprocess.CompletedProcess[str]:
     )
 
 
-def configured_hook(path: Path, event: str) -> dict[str, object]:
-    config = json.loads(path.read_text(encoding="utf-8"))
-    handlers = config["hooks"][event]
-    assert len(handlers) == 1
-    commands = handlers[0]["hooks"]
-    assert len(commands) == 1
-    return commands[0]
-
-
-def test_project_hooks_invoke_the_canonical_helper_for_each_client() -> None:
-    root_command = (
-        'python3 "$(git rev-parse --show-toplevel)/.agents/skills/proposal-agent/'
-        'scripts/proposal_session.py" hook --platform codex --checkout '
-        '"$(git rev-parse --show-toplevel)"'
-    )
-    for event in ("UserPromptSubmit", "Stop"):
-        assert configured_hook(CODEX_HOOKS, event) == {
-            "type": "command",
-            "command": root_command,
-        }
-        assert configured_hook(CLAUDE_SETTINGS, event) == {
-            "type": "command",
-            "command": "python3",
-            "args": [
-                "${CLAUDE_PROJECT_DIR}/.agents/skills/proposal-agent/scripts/proposal_session.py",
-                "hook",
-                "--platform",
-                "claude-code",
-                "--checkout",
-                "${CLAUDE_PROJECT_DIR}",
-            ],
-        }
-
-
 def test_claude_skill_alias_resolves_to_the_canonical_skill_directory() -> None:
     alias = ROOT / ".claude/skills"
     assert alias.is_symlink()
@@ -101,7 +48,7 @@ def test_claude_skill_alias_resolves_to_the_canonical_skill_directory() -> None:
     assert alias.resolve() == (ROOT / ".agents/skills").resolve()
 
 
-def activated_binding(
+def proposal_checkout(
     tmp_path: Path,
     *,
     platform: str = "codex",
@@ -109,52 +56,40 @@ def activated_binding(
 ) -> tuple[Path, Path]:
     checkout = init_git_checkout(tmp_path)
     transcript_path = write_transcript(tmp_path / f"{platform}.jsonl", transcript)
-    module.activate(checkout)
-    assert module.capture_hook(
-        checkout,
-        platform,
-        hook("session_exact", transcript_path, checkout),
-    )
-    assert module.capture_hook(
-        checkout,
-        platform,
-        hook(
-            "session_exact",
-            transcript_path,
-            checkout,
-            event="UserPromptSubmit",
-        ),
-    )
     return checkout, transcript_path
 
 
 def bind_discussion(checkout: Path) -> module.DiscussionRef:
-    binding = module.load_binding(checkout)
     ref = module.DiscussionRef(
         node_id="D_1",
         number=41,
         url="https://github.com/RSI-Index/RSIs-First-Exam/discussions/41",
     )
-    state_dir = module._state_dir(binding.checkout_root)
+    state_dir = module._state_dir(checkout)
+    state_dir.mkdir(exist_ok=True)
     module._atomic_json(
-        state_dir / "binding.json",
-        module._binding_payload(replace(binding, discussion=ref)),
+        state_dir / "discussion.json",
+        {"node_id": ref.node_id, "number": ref.number, "url": ref.url},
     )
     return ref
 
 
-def test_session_bound_before_repository_rename_can_fetch_current_discussion(tmp_path):
-    checkout, _ = activated_binding(tmp_path)
-    current = bind_discussion(checkout)
-    binding = module.load_binding(checkout)
-    legacy = replace(current, url="https://github.com/RSI-Index/RSI-Index-Public/discussions/41")
-    module._atomic_json(
-        module._state_dir(checkout) / "binding.json",
-        module._binding_payload(replace(binding, discussion=legacy)),
-    )
+def test_legacy_discussion_survives_without_hooks_or_original_log(tmp_path):
+    checkout = init_git_checkout(tmp_path)
+    state = module._state_dir(checkout)
+    state.mkdir()
+    module._atomic_json(state / "binding.json", {
+        "schema": 1, "platform": "codex", "session_id": "old-session",
+        "transcript_path": "/missing/native.jsonl", "checkout_root": str(checkout),
+        "discussion": {
+            "node_id": "D_1", "number": 41,
+            "url": "https://github.com/RSI-Index/RSI-Index-Public/discussions/41",
+        },
+    })
 
-    assert module.load_binding(checkout).discussion == current
-    assert module.discussion_status(checkout, run=PublishingRunner()).ref == current
+    ref = module.load_discussion(checkout)
+    assert ref.url == "https://github.com/RSI-Index/RSIs-First-Exam/discussions/41"
+    assert module.discussion_status(checkout, run=PublishingRunner()).ref == ref
 
 
 def graphql_variables(arguments: Sequence[str]) -> dict[str, str]:
@@ -433,18 +368,15 @@ class PublishingRunner:
             return completed(argv)
         if argv == ["git", "add", "--", "proposal-trajectory"]:
             return completed(argv)
-        if argv == [
-            "git",
-            "hash-object",
-            "--no-filters",
+        if argv[:3] == ["git", "hash-object", "--no-filters"] and argv[3] in {
             "proposal-trajectory/codex-session.jsonl",
-        ]:
+            "proposal-trajectory/claude-code-session.jsonl",
+        }:
             return completed(argv, stdout="native-blob\n")
-        if argv == [
-            "git",
-            "rev-parse",
+        if argv[:2] == ["git", "rev-parse"] and argv[2] in {
             ":proposal-trajectory/codex-session.jsonl",
-        ]:
+            ":proposal-trajectory/claude-code-session.jsonl",
+        }:
             value = "native-blob" if self.staged_matches else "transformed-blob"
             return completed(argv, stdout=f"{value}\n")
         if argv[:2] == ["git", "-c"]:
@@ -474,358 +406,10 @@ class PublishingRunner:
         raise AssertionError(f"unexpected command: {argv}")
 
 
-def test_activate_then_codex_stop_binds_exact_session(tmp_path: Path) -> None:
-    checkout = init_git_checkout(tmp_path)
-    transcript = write_transcript(tmp_path / "codex.jsonl")
-
-    state_dir = module.activate(checkout)
-    assert state_dir.parent == Path(
-        subprocess.run(
-            ["git", "-C", str(checkout), "rev-parse", "--absolute-git-dir"],
-            check=True,
-            capture_output=True,
-            text=True,
-        ).stdout.strip()
-    )
-    assert module.capture_hook(checkout, "codex", hook("thr_exact", transcript, checkout))
-
-    binding = module.load_binding(checkout)
-    assert binding.session_id == "thr_exact"
-    assert binding.transcript_path == transcript.resolve()
-    assert binding.checkout_root == checkout.resolve()
-    assert not (checkout / ".rsi-proposal-session").exists()
-
-
-def test_other_session_cannot_replace_binding(tmp_path: Path) -> None:
-    checkout = init_git_checkout(tmp_path)
-    first = write_transcript(tmp_path / "first.jsonl")
-    second = write_transcript(tmp_path / "second.jsonl")
-    module.activate(checkout)
-
-    assert module.capture_hook(checkout, "claude-code", hook("one", first, checkout))
-    assert not module.capture_hook(checkout, "claude-code", hook("two", second, checkout))
-
-    binding = module.load_binding(checkout)
-    assert binding.session_id == "one"
-    assert binding.transcript_path == first.resolve()
-
-
-def test_exact_session_refreshes_its_transcript_path(tmp_path: Path) -> None:
-    checkout = init_git_checkout(tmp_path)
-    first = write_transcript(tmp_path / "first.jsonl")
-    refreshed = write_transcript(tmp_path / "refreshed.jsonl")
-    module.activate(checkout)
-    assert module.capture_hook(checkout, "codex", hook("thr_same", first, checkout))
-
-    assert module.capture_hook(checkout, "codex", hook("thr_same", refreshed, checkout))
-    assert module.load_binding(checkout).transcript_path == refreshed.resolve()
-
-
-def test_capture_rejects_bad_platform_cwd_and_transcript(tmp_path: Path) -> None:
-    checkout = init_git_checkout(tmp_path)
-    transcript = write_transcript(tmp_path / "transcript.jsonl")
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    module.activate(checkout)
-
-    with pytest.raises(module.ProposalSessionError, match="unsupported platform"):
-        module.capture_hook(checkout, "other", hook("one", transcript, checkout))
-    with pytest.raises(module.ProposalSessionError, match="outside"):
-        module.capture_hook(checkout, "codex", hook("one", transcript, outside))
-    with pytest.raises(module.ProposalSessionError, match="transcript"):
-        module.capture_hook(
-            checkout,
-            "codex",
-            hook("one", tmp_path / "missing.jsonl", checkout),
-        )
-
-
-def test_activate_rejects_a_non_git_directory(tmp_path: Path) -> None:
-    with pytest.raises(module.ProposalSessionError, match="Git"):
-        module.activate(tmp_path)
-
-
-def test_hook_cli_ignores_missing_activation_and_other_session(tmp_path: Path) -> None:
-    checkout = init_git_checkout(tmp_path)
-    transcript = write_transcript(tmp_path / "transcript.jsonl")
-    payload = json.dumps(hook("one", transcript, checkout))
-
-    no_activation = invoke(
-        "hook", "--platform", "codex", "--checkout", str(checkout), input=payload
-    )
-    assert no_activation.returncode == 0
-    assert no_activation.stdout == no_activation.stderr == ""
-
-    module.activate(checkout)
-    assert module.capture_hook(checkout, "codex", hook("one", transcript, checkout))
-    other_session = invoke(
-        "hook",
-        "--platform",
-        "codex",
-        "--checkout",
-        str(checkout),
-        input=json.dumps(hook("two", transcript, checkout)),
-    )
-    assert other_session.returncode == 0
-    assert other_session.stdout == other_session.stderr == ""
-    assert module.load_binding(checkout).session_id == "one"
-
-
-def test_malformed_active_hook_is_diagnostic_and_status_stays_unbound(tmp_path: Path) -> None:
-    checkout = init_git_checkout(tmp_path)
-    module.activate(checkout)
-
-    malformed = invoke(
-        "hook", "--platform", "claude-code", "--checkout", str(checkout), input="{not-json"
-    )
-    assert malformed.returncode == 0
-    assert malformed.stdout == ""
-    assert "proposal-session hook:" in malformed.stderr
-
-    status = invoke("status", "--checkout", str(checkout))
-    assert status.returncode == 0
-    assert status.stdout.strip() == "unbound"
-    with pytest.raises(module.ProposalSessionError, match="binding"):
-        module.load_binding(checkout)
-
-
-def test_non_stop_hook_event_is_a_silent_no_op(tmp_path: Path) -> None:
-    checkout = init_git_checkout(tmp_path)
-    module.activate(checkout)
-
-    result = invoke(
-        "hook",
-        "--platform",
-        "codex",
-        "--checkout",
-        str(checkout),
-        input=json.dumps({"hook_event_name": "Notification"}),
-    )
-
-    assert result.returncode == 0
-    assert result.stdout == result.stderr == ""
-    assert invoke("status", "--checkout", str(checkout)).stdout.strip() == "unbound"
-
-
-def test_foreign_bound_session_with_invalid_paths_is_a_silent_no_op(tmp_path: Path) -> None:
-    checkout = init_git_checkout(tmp_path)
-    transcript = write_transcript(tmp_path / "bound.jsonl")
-    module.activate(checkout)
-    assert module.capture_hook(checkout, "codex", hook("bound", transcript, checkout))
-
-    foreign = hook("foreign", tmp_path / "missing.jsonl", tmp_path / "outside")
-    result = invoke(
-        "hook",
-        "--platform",
-        "codex",
-        "--checkout",
-        str(checkout),
-        input=json.dumps(foreign),
-    )
-
-    assert result.returncode == 0
-    assert result.stdout == result.stderr == ""
-    assert module.load_binding(checkout).session_id == "bound"
-
-
-def test_concurrent_first_hooks_bind_exactly_one_session(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    checkout = init_git_checkout(tmp_path)
-    first = write_transcript(tmp_path / "first.jsonl")
-    second = write_transcript(tmp_path / "second.jsonl")
-    module.activate(checkout)
-
-    original_load = module._load_existing_binding
-    load_count = 0
-    count_lock = threading.Lock()
-    both_loads_started = threading.Event()
-
-    def synchronized_load(state_dir: Path, checkout_root: Path):
-        nonlocal load_count
-        binding = original_load(state_dir, checkout_root)
-        with count_lock:
-            load_count += 1
-            if load_count == 2:
-                both_loads_started.set()
-        both_loads_started.wait(timeout=0.25)
-        return binding
-
-    monkeypatch.setattr(module, "_load_existing_binding", synchronized_load)
-    start = threading.Barrier(3)
-    results: list[bool | None] = [None, None]
-
-    def capture(index: int, session_id: str, transcript: Path) -> None:
-        start.wait()
-        results[index] = module.capture_hook(
-            checkout, "codex", hook(session_id, transcript, checkout)
-        )
-
-    threads = [
-        threading.Thread(target=capture, args=(0, "first", first)),
-        threading.Thread(target=capture, args=(1, "second", second)),
-    ]
-    for thread in threads:
-        thread.start()
-    start.wait()
-    for thread in threads:
-        thread.join(timeout=5)
-
-    assert all(not thread.is_alive() for thread in threads)
-    assert sorted(results) == [False, True]
-    assert module.load_binding(checkout).session_id in {"first", "second"}
-
-
-def test_current_turn_attestation_serves_multiple_commands_until_stop(
-    tmp_path: Path,
-) -> None:
-    checkout, transcript = activated_binding(tmp_path)
-    bind_discussion(checkout)
-    runner = PublishingRunner()
-
-    assert module.discussion_status(checkout, run=runner).ref.node_id == "D_1"
-    assert module.discussion_status(checkout, run=runner).ref.node_id == "D_1"
-
-    assert module.capture_hook(
-        checkout,
-        "codex",
-        hook("session_exact", transcript, checkout),
-    )
-    calls_after_stop = list(runner.calls)
-    with pytest.raises(module.ProposalSessionError, match="original codex session"):
-        module.discussion_status(checkout, run=runner)
-    assert runner.calls == calls_after_stop
-
-
-@pytest.mark.parametrize("command", ["status", "update", "upload"])
-def test_foreign_session_cannot_run_lifecycle_commands(
-    tmp_path: Path,
-    command: str,
-) -> None:
-    checkout, _ = activated_binding(tmp_path)
-    bind_discussion(checkout)
-    proposal = checkout / "proposal.md"
-    proposal.write_text("# Revised proposal\n", encoding="utf-8")
-    foreign_transcript = write_transcript(tmp_path / "foreign.jsonl")
-
-    assert module.capture_hook(
-        checkout,
-        "claude-code",
-        hook(
-            "foreign_session",
-            foreign_transcript,
-            checkout,
-            event="UserPromptSubmit",
-        ),
-    )
-
-    runner = LifecycleRunner() if command == "update" else PublishingRunner()
-    with pytest.raises(
-        module.ProposalSessionError,
-        match="Resume the original codex session session_exact",
-    ):
-        if command == "status":
-            module.discussion_status(checkout, run=runner)
-        elif command == "update":
-            module.update_discussion(checkout, proposal, run=runner)
-        else:
-            module.upload_trajectory(checkout, run=runner)
-    assert runner.calls == []
-
-
-def test_disabled_hooks_after_binding_cannot_reuse_prior_turn_proof(
-    tmp_path: Path,
-) -> None:
-    checkout, transcript = activated_binding(tmp_path)
-    bind_discussion(checkout)
-    assert module.capture_hook(
-        checkout,
-        "codex",
-        hook("session_exact", transcript, checkout),
-    )
-
-    runner = PublishingRunner()
-    with pytest.raises(module.ProposalSessionError, match="hooks.*enabled"):
-        module.upload_trajectory(checkout, run=runner)
-    assert runner.calls == []
-
-
-def test_discussion_create_requires_current_turn_proof(tmp_path: Path) -> None:
-    checkout = init_git_checkout(tmp_path)
-    transcript = write_transcript(tmp_path / "codex.jsonl")
-    module.activate(checkout)
-    assert module.capture_hook(
-        checkout,
-        "codex",
-        hook("session_exact", transcript, checkout),
-    )
-    proposal = checkout / "proposal.md"
-    proposal.write_text("# Proposal\n", encoding="utf-8")
-    runner = LifecycleRunner()
-
-    with pytest.raises(module.ProposalSessionError, match="original codex session"):
-        module.create_discussion(checkout, proposal, "Proposal", run=runner)
-    assert runner.calls == []
-
-
-def test_malformed_prompt_hook_clears_prior_turn_proof_without_blocking(
-    tmp_path: Path,
-) -> None:
-    checkout, _ = activated_binding(tmp_path)
-    bind_discussion(checkout)
-    malformed_prompt = {
-        "hook_event_name": "UserPromptSubmit",
-        "session_id": "session_exact",
-        "cwd": str(checkout),
-    }
-
-    result = invoke(
-        "hook",
-        "--platform",
-        "codex",
-        "--checkout",
-        str(checkout),
-        input=json.dumps(malformed_prompt),
-    )
-
-    assert result.returncode == 0
-    assert result.stdout == ""
-    assert "proposal-session hook:" in result.stderr
-    runner = PublishingRunner()
-    with pytest.raises(module.ProposalSessionError, match="original codex session"):
-        module.discussion_status(checkout, run=runner)
-    assert runner.calls == []
-
-
-def test_hook_payload_missing_event_clears_prior_turn_proof(
-    tmp_path: Path,
-) -> None:
-    checkout, transcript = activated_binding(tmp_path)
-    bind_discussion(checkout)
-    missing_event = hook("session_exact", transcript, checkout)
-    missing_event.pop("hook_event_name")
-
-    result = invoke(
-        "hook",
-        "--platform",
-        "codex",
-        "--checkout",
-        str(checkout),
-        input=json.dumps(missing_event),
-    )
-
-    assert result.returncode == 0
-    assert result.stdout == result.stderr == ""
-    runner = PublishingRunner()
-    with pytest.raises(module.ProposalSessionError, match="original codex session"):
-        module.discussion_status(checkout, run=runner)
-    assert runner.calls == []
-
-
 def test_create_discussion_uses_confirmed_file_and_persists_identity(
     tmp_path: Path,
 ) -> None:
-    checkout, _ = activated_binding(tmp_path, platform="codex")
+    checkout, _ = proposal_checkout(tmp_path, platform="codex")
     proposal = checkout / "proposal.md"
     proposal.write_text("# Fixed proposal\n", encoding="utf-8")
     runner = LifecycleRunner()
@@ -837,7 +421,7 @@ def test_create_discussion_uses_confirmed_file_and_persists_identity(
         number=41,
         url="https://github.com/RSI-Index/RSIs-First-Exam/discussions/41",
     )
-    assert module.load_binding(checkout).discussion == ref
+    assert module.load_discussion(checkout, required=False) == ref
     assert runner.calls[0] == (["gh", "auth", "status"], None)
     assert runner.calls[1][0] == [
         "gh",
@@ -868,7 +452,7 @@ def test_create_discussion_uses_confirmed_file_and_persists_identity(
 
 
 def test_update_discussion_reuses_exact_bound_node(tmp_path: Path) -> None:
-    checkout, _ = activated_binding(tmp_path)
+    checkout, _ = proposal_checkout(tmp_path)
     bind_discussion(checkout)
     proposal = checkout / "proposal.md"
     proposal.write_text("# Revised proposal\n", encoding="utf-8")
@@ -902,18 +486,18 @@ def test_update_discussion_reuses_exact_bound_node(tmp_path: Path) -> None:
 def test_create_discussion_rejects_auth_category_and_identity_errors(
     tmp_path: Path, runner: LifecycleRunner, message: str
 ) -> None:
-    checkout, _ = activated_binding(tmp_path)
+    checkout, _ = proposal_checkout(tmp_path)
     proposal = checkout / "proposal.md"
     proposal.write_text("proposal\n", encoding="utf-8")
 
     with pytest.raises(module.ProposalSessionError, match=message):
         module.create_discussion(checkout, proposal, "Proposal", run=runner)
 
-    assert module.load_binding(checkout).discussion is None
+    assert module.load_discussion(checkout, required=False) is None
 
 
 def test_update_requires_bound_discussion_and_exact_mutation_identity(tmp_path: Path) -> None:
-    checkout, _ = activated_binding(tmp_path)
+    checkout, _ = proposal_checkout(tmp_path)
     proposal = checkout / "proposal.md"
     proposal.write_text("proposal\n", encoding="utf-8")
 
@@ -930,7 +514,7 @@ def test_update_requires_bound_discussion_and_exact_mutation_identity(tmp_path: 
 
 
 def test_discussion_lifecycle_rejects_disappeared_proposal_file(tmp_path: Path) -> None:
-    checkout, _ = activated_binding(tmp_path)
+    checkout, _ = proposal_checkout(tmp_path)
     missing = checkout / "missing.md"
     runner = LifecycleRunner()
 
@@ -948,7 +532,7 @@ def test_relative_proposal_resolves_from_checkout_not_process_cwd(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    checkout, _ = activated_binding(tmp_path)
+    checkout, _ = proposal_checkout(tmp_path)
     (checkout / "proposal.md").write_text("# Checkout proposal\n", encoding="utf-8")
     other_cwd = tmp_path / "other-cwd"
     other_cwd.mkdir()
@@ -964,7 +548,7 @@ def test_relative_proposal_resolves_from_checkout_not_process_cwd(
 def test_create_rejects_proposal_paths_resolving_outside_checkout(
     tmp_path: Path,
 ) -> None:
-    checkout, _ = activated_binding(tmp_path)
+    checkout, _ = proposal_checkout(tmp_path)
     outside = tmp_path / "outside.md"
     outside.write_text("outside\n", encoding="utf-8")
     symlink = checkout / "outside-link.md"
@@ -978,7 +562,7 @@ def test_create_rejects_proposal_paths_resolving_outside_checkout(
 
 
 def test_create_requires_proposal_to_be_a_regular_file(tmp_path: Path) -> None:
-    checkout, _ = activated_binding(tmp_path)
+    checkout, _ = proposal_checkout(tmp_path)
     (checkout / "proposal-dir").mkdir()
     runner = LifecycleRunner()
 
@@ -1091,11 +675,14 @@ def test_interleaved_replies_keep_global_order_and_name_their_parent() -> None:
 
 def test_upload_preserves_native_bytes_and_complete_discussion(tmp_path: Path) -> None:
     native = b'not-a-stable-schema\x00\n{"tool":"call"}\n'
-    checkout, _ = activated_binding(tmp_path, platform="codex", transcript=native)
+    checkout, _ = proposal_checkout(tmp_path, platform="codex", transcript=native)
     bind_discussion(checkout)
     runner = PublishingRunner()
 
-    result = module.upload_trajectory(checkout, run=runner)
+    result = module.upload_trajectory(
+        checkout, platform="codex", session_id="session_exact",
+        transcript_path=checkout.parent / "codex.jsonl", run=runner,
+    )
 
     assert runner.pushed_tree["proposal-trajectory/codex-session.jsonl"] == native
     assert b"initial body" in runner.pushed_tree["proposal-trajectory/discussion.md"]
@@ -1118,11 +705,14 @@ def test_upload_preserves_native_bytes_and_complete_discussion(tmp_path: Path) -
 
 
 def test_upload_accepts_graphql_app_login_without_bot_suffix(tmp_path: Path) -> None:
-    checkout, _ = activated_binding(tmp_path)
+    checkout, _ = proposal_checkout(tmp_path)
     bind_discussion(checkout)
     runner = PublishingRunner(publication_author="rsi-index-task-dispatcher")
 
-    result = module.upload_trajectory(checkout, run=runner)
+    result = module.upload_trajectory(
+        checkout, platform="codex", session_id="session_exact",
+        transcript_path=checkout.parent / "codex.jsonl", run=runner,
+    )
 
     assert result.repository == "RSI-Index/example-d41"
     assert result.commit_sha == "abc123"
@@ -1168,11 +758,14 @@ def test_upload_accepts_graphql_app_login_without_bot_suffix(tmp_path: Path) -> 
 def test_upload_rejects_unverified_targets_before_push(
     tmp_path: Path, runner: PublishingRunner, message: str
 ) -> None:
-    checkout, _ = activated_binding(tmp_path)
+    checkout, _ = proposal_checkout(tmp_path)
     bind_discussion(checkout)
 
     with pytest.raises(module.ProposalSessionError, match=message):
-        module.upload_trajectory(checkout, run=runner)
+        module.upload_trajectory(
+            checkout, platform="codex", session_id="session_exact",
+            transcript_path=checkout.parent / "codex.jsonl", run=runner,
+        )
 
     assert not runner.pushed
 
@@ -1180,11 +773,14 @@ def test_upload_rejects_unverified_targets_before_push(
 def test_upload_retry_replaces_the_three_fixed_paths_without_duplicates(
     tmp_path: Path,
 ) -> None:
-    checkout, _ = activated_binding(tmp_path)
+    checkout, _ = proposal_checkout(tmp_path)
     bind_discussion(checkout)
     runner = PublishingRunner(existing_trajectory=True)
 
-    module.upload_trajectory(checkout, run=runner)
+    module.upload_trajectory(
+        checkout, platform="codex", session_id="session_exact",
+        transcript_path=checkout.parent / "codex.jsonl", run=runner,
+    )
 
     assert sorted(runner.pushed_tree) == [
         "proposal-trajectory/codex-session.jsonl",
@@ -1199,3 +795,92 @@ def test_discussion_and_upload_cli_commands_are_registered() -> None:
     assert invoke("discussion", "update", "--help").returncode == 0
     assert invoke("discussion", "status", "--help").returncode == 0
     assert invoke("upload", "--help").returncode == 0
+
+
+def test_fresh_checkout_can_submit_without_session_setup(tmp_path: Path) -> None:
+    checkout = init_git_checkout(tmp_path)
+    (checkout / "proposal.md").write_text("# Confirmed proposal\n", encoding="utf-8")
+
+    ref = module.create_discussion(
+        checkout, Path("proposal.md"), "Confirmed proposal", run=LifecycleRunner()
+    )
+
+    assert ref.number == 41
+    assert module.discussion_status(checkout, run=PublishingRunner()).ref == ref
+
+
+@pytest.mark.parametrize("platform", ["codex", "claude-code"])
+def test_explicit_native_upload_without_hooks_from_other_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, platform: str
+) -> None:
+    checkout = init_git_checkout(tmp_path)
+    state = module._state_dir(checkout)
+    state.mkdir()
+    (state / "discussion.json").write_text(json.dumps({
+        "node_id": "D_1", "number": 41,
+        "url": "https://github.com/RSI-Index/RSIs-First-Exam/discussions/41",
+    }), encoding="utf-8")
+    native = b'{"sessionId":"original-session","message":"full original text"}\n'
+    transcript = write_transcript(tmp_path / "original.jsonl", native)
+    monkeypatch.chdir(tmp_path)
+    runner = PublishingRunner()
+
+    result = module.upload_trajectory(
+        checkout, platform=platform, session_id="original-session",
+        transcript_path=transcript, run=runner,
+    )
+
+    assert result.commit_sha == "abc123"
+    assert sorted(runner.pushed_tree) == sorted([
+        f"proposal-trajectory/{platform}-session.jsonl",
+        "proposal-trajectory/discussion.md", "proposal-trajectory/metadata.json",
+    ])
+    assert runner.pushed_tree[f"proposal-trajectory/{platform}-session.jsonl"] == native
+    assert b"nested reply" in runner.pushed_tree["proposal-trajectory/discussion.md"]
+    assert json.loads(runner.pushed_tree["proposal-trajectory/metadata.json"])["session_id"] == "original-session"
+
+
+@pytest.mark.parametrize("platform", ["codex", "claude-code"])
+def test_hookless_upload_pushes_original_bytes_through_real_git(
+    tmp_path: Path, platform: str
+) -> None:
+    checkout, transcript = proposal_checkout(
+        tmp_path, platform=platform, transcript=b'{"message":"original \\u4f60\\u597d"}\n'
+    )
+    bind_discussion(checkout)
+    seed = tmp_path / "seed"
+    remote = tmp_path / "task.git"
+
+    def git(*args: str, cwd: Path | None = None):
+        return subprocess.run(
+            ["git", *args], cwd=cwd, capture_output=True, text=True, check=True
+        )
+
+    git("init", "-q", "-b", "main", str(seed))
+    (seed / "README.md").write_text("Existing task workspace\n", encoding="utf-8")
+    git("add", "README.md", cwd=seed)
+    git("-c", "user.name=Test", "-c", "user.email=test@example.com",
+        "commit", "-qm", "Initial task", cwd=seed)
+    git("clone", "--bare", str(seed), str(remote))
+    github = PublishingRunner()
+
+    def run(arguments, cwd=None):
+        if list(arguments[:3]) == ["gh", "repo", "clone"]:
+            return git("clone", str(remote), arguments[4])
+        if arguments[0] == "git":
+            return git(*arguments[1:], cwd=cwd)
+        return github(arguments, cwd)
+
+    result = module.upload_trajectory(
+        checkout, platform=platform, session_id="original",
+        transcript_path=transcript, run=run,
+    )
+
+    assert git("--git-dir", str(remote), "rev-parse", "main").stdout.strip() == result.commit_sha
+    stored = subprocess.run(
+        ["git", "--git-dir", str(remote), "show",
+         f"main:proposal-trajectory/{platform}-session.jsonl"],
+        capture_output=True, check=True,
+    ).stdout
+    assert stored == transcript.read_bytes()
+    assert git("--git-dir", str(remote), "show", "main:README.md").stdout == "Existing task workspace\n"

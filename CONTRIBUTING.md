@@ -14,26 +14,19 @@
 
 ### 1. Create a proposal
 
-Clone this repository, then start a fresh Codex or Claude Code session from the
-repository root:
+Clone this repository:
 
 ```bash
 git clone https://github.com/RSI-Index/RSIs-First-Exam.git
 cd RSIs-First-Exam
 ```
 
-Before beginning, review the repository hook configuration for your client:
-`.codex/hooks.json` for Codex or `.claude/settings.json` for Claude Code. Trust
-the repository hooks when the client asks. Declining or disabling them prevents
-trajectory submission because the agent cannot attest the original native
-session. After the first response, ask the agent to verify the binding by
-running:
+Open Codex or Claude Code (app or CLI), start a fresh session, and paste:
 
 ```text
-python3 .agents/skills/proposal-agent/scripts/proposal_session.py status --checkout .
+Use the proposal-agent skill at .agents/skills/proposal-agent/SKILL.md in my local RSIs-First-Exam repository. Locate the repository if needed, then follow the skill to complete setup and guide me step by step through creating and submitting an RSI proposal.
 ```
 
-Ask the client to use [proposal-agent](.agents/skills/proposal-agent/SKILL.md).
 Run it on a frontier model at its maximum reasoning setting: at least **Codex
 with GPT-5.6 Sol at max** or **Claude Code with Opus 5 at max**.
 Use that one session for one proposal. The agent will help you define the
@@ -89,8 +82,14 @@ commands.
 > experiment plan, and compute budget that fit those resources.
 
 When your private task repository is available, return to the original
-proposal-agent session and ask it to upload the required proposal trajectory
-and Discussion record. After it reports the private repository and upload
+proposal-agent session and paste:
+
+```text
+Find this session's complete original trajectory and submit it, together with the Discussion record, to the generated private task repository using proposal-agent's upload format.
+```
+
+Keep the local session history until it is uploaded. After the agent reports
+the private repository and upload
 commit SHA, clone that repository on a machine with the required GPU resources
 and follow its README:
 

@@ -17,7 +17,6 @@ from pathlib import Path
 from typing import NoReturn
 
 
-_SCHEMA = 1
 _SUPPORTED_PLATFORMS = frozenset({"codex", "claude-code"})
 PUBLIC_REPOSITORY = "RSI-Index/RSIs-First-Exam"
 DISCUSSION_CATEGORY = "Task Ideas"
@@ -111,24 +110,6 @@ class DiscussionRef:
     node_id: str
     number: int
     url: str
-
-
-@dataclass(frozen=True)
-class SessionBinding:
-    platform: str
-    session_id: str
-    transcript_path: Path
-    checkout_root: Path
-    discussion: DiscussionRef | None = None
-
-
-@dataclass(frozen=True)
-class CurrentTurnProof:
-    platform: str
-    session_id: str
-    transcript_path: Path
-    checkout_root: Path
-    cwd: Path
 
 
 @dataclass(frozen=True)
@@ -248,53 +229,13 @@ def _atomic_json(path: Path, payload: Mapping[str, object]) -> None:
         raise
 
 
-def _load_activation(state_dir: Path, checkout_root: Path) -> bool:
-    activation_path = state_dir / "activation.json"
-    if not activation_path.is_file():
-        return False
-    activation = _read_json(activation_path, "activation state")
-    if set(activation) != {"schema", "checkout_root"}:
-        _fail("activation state has unexpected fields")
-    if activation["schema"] != _SCHEMA or not isinstance(activation["checkout_root"], str):
-        _fail("activation state has invalid values")
+def _resolve_transcript(value: Path) -> Path:
     try:
-        activated_root = Path(activation["checkout_root"]).resolve(strict=True)
+        resolved = value.expanduser().resolve(strict=True)
     except (OSError, RuntimeError) as error:
-        _fail("activation state has an invalid checkout root")
-    if activated_root != checkout_root:
-        _fail("activation state belongs to another checkout")
-    return True
-
-
-def _valid_string(value: object, field: str) -> str:
-    if not isinstance(value, str) or not value.strip():
-        _fail(f"hook payload has invalid {field}")
-    return value
-
-
-def _resolve_hook_cwd(value: object, checkout_root: Path) -> Path:
-    cwd = _valid_string(value, "cwd")
-    try:
-        resolved = Path(cwd).resolve(strict=True)
-    except (OSError, RuntimeError) as error:
-        _fail("hook payload cwd does not exist")
-    if not resolved.is_dir():
-        _fail("hook payload cwd is not a directory")
-    try:
-        resolved.relative_to(checkout_root)
-    except ValueError:
-        _fail("hook payload cwd is outside the activated checkout")
-    return resolved
-
-
-def _resolve_transcript(value: object) -> Path:
-    transcript = _valid_string(value, "transcript_path")
-    try:
-        resolved = Path(transcript).resolve(strict=True)
-    except (OSError, RuntimeError) as error:
-        _fail("hook payload transcript_path does not exist")
+        _fail(f"native transcript does not exist: {value}")
     if not resolved.is_file():
-        _fail("hook payload transcript_path is not a file")
+        _fail(f"native transcript is not a file: {resolved}")
     return resolved
 
 
@@ -302,7 +243,7 @@ def _read_discussion(value: object) -> DiscussionRef | None:
     if value is None:
         return None
     if not isinstance(value, dict) or set(value) != {"node_id", "number", "url"}:
-        _fail("binding discussion is malformed")
+        _fail("saved Discussion is malformed")
     node_id = value["node_id"]
     number = value["number"]
     url = value["url"]
@@ -314,7 +255,7 @@ def _read_discussion(value: object) -> DiscussionRef | None:
         or not isinstance(url, str)
         or not url
     ):
-        _fail("binding discussion has invalid values")
+        _fail("saved Discussion has invalid values")
     # Keep sessions bound before the repository rename usable with GitHub's
     # canonical URL, without changing the bound Discussion node or number.
     if url == f"https://github.com/RSI-Index/RSI-Index-Public/discussions/{number}":
@@ -322,181 +263,29 @@ def _read_discussion(value: object) -> DiscussionRef | None:
     return DiscussionRef(node_id=node_id, number=number, url=url)
 
 
-def _binding_from_json(payload: dict[str, object], checkout_root: Path) -> SessionBinding:
-    required = {
-        "schema",
-        "platform",
-        "session_id",
-        "transcript_path",
-        "checkout_root",
-        "discussion",
-    }
-    if set(payload) != required:
-        _fail("binding state has unexpected fields")
-    if payload["schema"] != _SCHEMA:
-        _fail("binding state has an unsupported schema")
-    platform = payload["platform"]
-    if not isinstance(platform, str) or platform not in _SUPPORTED_PLATFORMS:
-        _fail("binding state has an unsupported platform")
-    session_id = payload["session_id"]
-    if not isinstance(session_id, str) or not session_id.strip():
-        _fail("binding state has an invalid session ID")
-    recorded_root = payload["checkout_root"]
-    if not isinstance(recorded_root, str):
-        _fail("binding state has an invalid checkout root")
-    try:
-        binding_root = Path(recorded_root).resolve(strict=True)
-    except (OSError, RuntimeError) as error:
-        _fail("binding state has an invalid checkout root")
-    if binding_root != checkout_root:
-        _fail("binding state belongs to another checkout")
-    transcript_value = payload["transcript_path"]
-    if not isinstance(transcript_value, str):
-        _fail("binding state has an invalid transcript path")
-    try:
-        transcript_path = Path(transcript_value).resolve(strict=True)
-    except (OSError, RuntimeError) as error:
-        _fail("bound transcript no longer exists")
-    if not transcript_path.is_file() or str(transcript_path) != transcript_value:
-        _fail("binding state has an invalid transcript path")
-    return SessionBinding(
-        platform=platform,
-        session_id=session_id,
-        transcript_path=transcript_path,
-        checkout_root=checkout_root,
-        discussion=_read_discussion(payload["discussion"]),
-    )
-
-
-def _binding_payload(binding: SessionBinding) -> dict[str, object]:
-    discussion: dict[str, object] | None = None
-    if binding.discussion is not None:
-        discussion = {
-            "node_id": binding.discussion.node_id,
-            "number": binding.discussion.number,
-            "url": binding.discussion.url,
-        }
-    return {
-        "schema": _SCHEMA,
-        "platform": binding.platform,
-        "session_id": binding.session_id,
-        "transcript_path": str(binding.transcript_path),
-        "checkout_root": str(binding.checkout_root),
-        "discussion": discussion,
-    }
-
-
-def _current_turn_from_json(
-    payload: dict[str, object], checkout_root: Path
-) -> CurrentTurnProof:
-    required = {
-        "schema",
-        "platform",
-        "session_id",
-        "transcript_path",
-        "checkout_root",
-        "cwd",
-    }
-    if set(payload) != required or payload.get("schema") != _SCHEMA:
-        _fail("current-turn proof has unexpected fields or schema")
-    platform = payload["platform"]
-    session_id = payload["session_id"]
-    recorded_root = payload["checkout_root"]
-    transcript_value = payload["transcript_path"]
-    cwd_value = payload["cwd"]
-    if not isinstance(platform, str) or platform not in _SUPPORTED_PLATFORMS:
-        _fail("current-turn proof has an unsupported platform")
-    if not isinstance(session_id, str) or not session_id.strip():
-        _fail("current-turn proof has an invalid session ID")
-    if not all(isinstance(value, str) for value in (recorded_root, transcript_value, cwd_value)):
-        _fail("current-turn proof has invalid paths")
-    try:
-        proof_root = Path(recorded_root).resolve(strict=True)
-        transcript_path = Path(transcript_value).resolve(strict=True)
-        cwd = Path(cwd_value).resolve(strict=True)
-    except (OSError, RuntimeError):
-        _fail("current-turn proof refers to a missing path")
-    if proof_root != checkout_root or str(proof_root) != recorded_root:
-        _fail("current-turn proof belongs to another checkout")
-    if not transcript_path.is_file() or str(transcript_path) != transcript_value:
-        _fail("current-turn proof has an invalid transcript path")
-    if not cwd.is_dir() or str(cwd) != cwd_value:
-        _fail("current-turn proof has an invalid cwd")
-    try:
-        cwd.relative_to(checkout_root)
-    except ValueError:
-        _fail("current-turn proof cwd is outside the checkout")
-    return CurrentTurnProof(
-        platform=platform,
-        session_id=session_id,
-        transcript_path=transcript_path,
-        checkout_root=proof_root,
-        cwd=cwd,
-    )
-
-
-def _current_turn_payload(proof: CurrentTurnProof) -> dict[str, object]:
-    return {
-        "schema": _SCHEMA,
-        "platform": proof.platform,
-        "session_id": proof.session_id,
-        "transcript_path": str(proof.transcript_path),
-        "checkout_root": str(proof.checkout_root),
-        "cwd": str(proof.cwd),
-    }
-
-
-def _clear_current_turn(state_dir: Path) -> None:
-    try:
-        (state_dir / "current-turn.json").unlink(missing_ok=True)
-    except OSError as error:
-        _fail(f"cannot clear current-turn proof: {error}")
-
-
-def _load_current_turn(state_dir: Path, checkout_root: Path) -> CurrentTurnProof | None:
-    proof_path = state_dir / "current-turn.json"
-    if not proof_path.is_file():
-        return None
-    return _current_turn_from_json(
-        _read_json(proof_path, "current-turn proof"), checkout_root
-    )
-
-
-def _require_current_turn(
-    binding: SessionBinding, state_dir: Path | None = None
-) -> CurrentTurnProof:
-    state = state_dir if state_dir is not None else _state_dir(binding.checkout_root)
-    resume = (
-        f"Resume the original {binding.platform} session {binding.session_id} "
-        "and ensure the repository hooks are trusted and enabled."
-    )
-    try:
-        proof = _load_current_turn(state, binding.checkout_root)
-    except ProposalSessionError as error:
-        _fail(f"Current-turn hook proof is invalid: {error}. {resume}")
-    if proof is None:
-        _fail(f"Current turn is not attested by the repository hooks. {resume}")
-    expected = (binding.platform, binding.session_id, binding.transcript_path)
-    actual = (proof.platform, proof.session_id, proof.transcript_path)
-    if actual != expected:
-        _fail(
-            "This lifecycle command is running from "
-            f"{proof.platform} session {proof.session_id}, not the bound proposal session. "
-            f"{resume}"
-        )
-    return proof
-
-
-def _load_existing_binding(state_dir: Path, checkout_root: Path) -> SessionBinding | None:
-    binding_path = state_dir / "binding.json"
-    if not binding_path.is_file():
-        return None
-    return _binding_from_json(_read_json(binding_path, "binding state"), checkout_root)
+def load_discussion(
+    checkout_root: Path, *, required: bool = True
+) -> DiscussionRef | None:
+    root = _checkout_root(checkout_root)
+    state = _state_dir(root)
+    discussion_path = state / "discussion.json"
+    if discussion_path.is_file():
+        ref = _read_discussion(_read_json(discussion_path, "Discussion state"))
+    elif (state / "binding.json").is_file():
+        # Reuse Discussions created by the former hook-based helper. Neither
+        # activation nor a transcript is required to continue that Discussion.
+        ref = _read_discussion(_read_json(state / "binding.json", "legacy session").get("discussion"))
+    else:
+        ref = None
+    if required and ref is None:
+        _fail("Discussion has not been created")
+    return ref
 
 
 @contextmanager
-def _binding_lock(state_dir: Path):
-    descriptor = os.open(state_dir / "binding.lock", os.O_CREAT | os.O_RDWR, 0o600)
+def _discussion_lock(state_dir: Path):
+    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor = os.open(state_dir / "discussion.lock", os.O_CREAT | os.O_RDWR, 0o600)
     try:
         with os.fdopen(descriptor, "a+") as lock_file:
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
@@ -506,90 +295,6 @@ def _binding_lock(state_dir: Path):
                 fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
     except OSError as error:
         _fail(f"cannot lock proposal session state: {error}")
-
-
-def activate(checkout_root: Path) -> Path:
-    root = _checkout_root(checkout_root)
-    state_dir = _state_dir(root)
-    state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with _binding_lock(state_dir):
-        _atomic_json(
-            state_dir / "activation.json",
-            {"schema": _SCHEMA, "checkout_root": str(root)},
-        )
-        _clear_current_turn(state_dir)
-    return state_dir
-
-
-def capture_hook(
-    checkout_root: Path,
-    platform: str,
-    payload: Mapping[str, object],
-) -> bool:
-    if platform not in _SUPPORTED_PLATFORMS:
-        _fail(f"unsupported platform: {platform}")
-    root = _checkout_root(checkout_root)
-    state_dir = _state_dir(root)
-    if not _load_activation(state_dir, root):
-        return False
-    if not isinstance(payload, Mapping):
-        with _binding_lock(state_dir):
-            _clear_current_turn(state_dir)
-        _fail("hook payload must be a JSON object")
-    event = payload.get("hook_event_name")
-    if event not in {"UserPromptSubmit", "Stop"}:
-        with _binding_lock(state_dir):
-            _clear_current_turn(state_dir)
-        return False
-
-    with _binding_lock(state_dir):
-        _clear_current_turn(state_dir)
-        existing = _load_existing_binding(state_dir, root)
-        if event == "UserPromptSubmit":
-            if existing is None:
-                return False
-            session_id = _valid_string(payload.get("session_id"), "session_id")
-            cwd = _resolve_hook_cwd(payload.get("cwd"), root)
-            transcript_path = _resolve_transcript(payload.get("transcript_path"))
-            proof = CurrentTurnProof(
-                platform=platform,
-                session_id=session_id,
-                transcript_path=transcript_path,
-                checkout_root=root,
-                cwd=cwd,
-            )
-            _atomic_json(state_dir / "current-turn.json", _current_turn_payload(proof))
-            return True
-
-        session_id = _valid_string(payload.get("session_id"), "session_id")
-        if existing is not None and (existing.platform, existing.session_id) != (
-            platform,
-            session_id,
-        ):
-            return False
-
-        _resolve_hook_cwd(payload.get("cwd"), root)
-        transcript_path = _resolve_transcript(payload.get("transcript_path"))
-        binding = SessionBinding(
-            platform=platform,
-            session_id=session_id,
-            transcript_path=transcript_path,
-            checkout_root=root,
-            discussion=None if existing is None else existing.discussion,
-        )
-        _atomic_json(state_dir / "binding.json", _binding_payload(binding))
-        return True
-
-
-def load_binding(checkout_root: Path) -> SessionBinding:
-    root = _checkout_root(checkout_root)
-    state_dir = _state_dir(root)
-    if not _load_activation(state_dir, root):
-        _fail("proposal session capture is not activated")
-    binding = _load_existing_binding(state_dir, root)
-    if binding is None:
-        _fail("proposal session binding is not available")
-    return binding
 
 
 def _run(
@@ -793,13 +498,9 @@ def create_discussion(
         _fail("Discussion title must be nonempty")
     root = _checkout_root(checkout_root)
     state_dir = _state_dir(root)
-    with _binding_lock(state_dir):
-        binding = _load_existing_binding(state_dir, root)
-        if binding is None:
-            _fail("proposal session binding is not available")
-        _require_current_turn(binding, state_dir)
-        if binding.discussion is not None:
-            _fail("a Discussion is already bound to this proposal session")
+    with _discussion_lock(state_dir):
+        if load_discussion(root, required=False) is not None:
+            _fail("a Discussion already exists for this checkout")
         body = _read_proposal(root, proposal_path)
         _ensure_gh_auth(run)
         repository_id, category_id = _repository_and_category(run)
@@ -818,16 +519,8 @@ def create_discussion(
         mutation = _required_object(data.get("createDiscussion"), "Discussion creation")
         ref = _discussion_ref(mutation.get("discussion"), "created Discussion")
         _atomic_json(
-            state_dir / "binding.json",
-            _binding_payload(
-                SessionBinding(
-                    platform=binding.platform,
-                    session_id=binding.session_id,
-                    transcript_path=binding.transcript_path,
-                    checkout_root=binding.checkout_root,
-                    discussion=ref,
-                )
-            ),
+            state_dir / "discussion.json",
+            {"node_id": ref.node_id, "number": ref.number, "url": ref.url},
         )
         return ref
 
@@ -838,22 +531,20 @@ def update_discussion(
     *,
     run: CommandRunner = _run,
 ) -> DiscussionRef:
-    binding = load_binding(checkout_root)
-    _require_current_turn(binding)
-    if binding.discussion is None:
-        _fail("Discussion must be created before it can be updated")
-    body = _read_proposal(binding.checkout_root, proposal_path)
+    root = _checkout_root(checkout_root)
+    discussion = load_discussion(root)
+    body = _read_proposal(root, proposal_path)
     _ensure_gh_auth(run)
     payload = _graphql(
         run,
         UPDATE_DISCUSSION,
-        {"id": binding.discussion.node_id, "body": body},
+        {"id": discussion.node_id, "body": body},
         label="Discussion update",
     )
     data = _required_object(payload.get("data"), "Discussion update response")
     mutation = _required_object(data.get("updateDiscussion"), "Discussion update")
     ref = _discussion_ref(mutation.get("discussion"), "updated Discussion")
-    if ref != binding.discussion:
+    if ref != discussion:
         _fail("updated Discussion identity does not match the bound Discussion")
     return ref
 
@@ -1005,11 +696,7 @@ def fetch_discussion(
 def discussion_status(
     checkout_root: Path, *, run: CommandRunner = _run
 ) -> DiscussionSnapshot:
-    binding = load_binding(checkout_root)
-    _require_current_turn(binding)
-    if binding.discussion is None:
-        _fail("Discussion has not been created")
-    return fetch_discussion(binding.discussion, run=run)
+    return fetch_discussion(load_discussion(checkout_root), run=run)
 
 
 def render_discussion_markdown(snapshot: DiscussionSnapshot) -> str:
@@ -1133,18 +820,25 @@ def _authenticated_login(run: CommandRunner) -> str:
 
 
 def upload_trajectory(
-    checkout_root: Path, *, run: CommandRunner = _run
+    checkout_root: Path,
+    *,
+    platform: str,
+    session_id: str,
+    transcript_path: Path,
+    run: CommandRunner = _run,
 ) -> UploadResult:
-    binding = load_binding(checkout_root)
-    _require_current_turn(binding)
-    if binding.discussion is None:
-        _fail("Discussion must be created before its trajectory can be uploaded")
+    discussion = load_discussion(checkout_root)
+    if platform not in _SUPPORTED_PLATFORMS:
+        _fail(f"unsupported platform: {platform}")
+    if not isinstance(session_id, str) or not session_id.strip():
+        _fail("native session ID must be nonempty")
+    native_transcript = _resolve_transcript(transcript_path)
     _ensure_gh_auth(run)
     login = _authenticated_login(run)
-    snapshot = _fetch_discussion(binding.discussion, run=run, authenticate=False)
+    snapshot = _fetch_discussion(discussion, run=run, authenticate=False)
     repository = _resolve_task_repository(snapshot, run=run, authenticate=False)
     rendered = render_discussion_markdown(snapshot)
-    transcript_name = f"{binding.platform}-session.jsonl"
+    transcript_name = f"{platform}-session.jsonl"
     with tempfile.TemporaryDirectory(prefix="rsi-proposal-upload-") as temporary:
         clone = Path(temporary) / "repository"
         _checked_command(
@@ -1177,13 +871,13 @@ def upload_trajectory(
         trajectory.mkdir()
         transcript = trajectory / transcript_name
         try:
-            shutil.copyfile(binding.transcript_path, transcript)
+            shutil.copyfile(native_transcript, transcript)
             (trajectory / "discussion.md").write_text(rendered, encoding="utf-8")
             metadata = {
-                "discussion_number": binding.discussion.number,
-                "discussion_url": binding.discussion.url,
-                "platform": binding.platform,
-                "session_id": binding.session_id,
+                "discussion_number": discussion.number,
+                "discussion_url": discussion.url,
+                "platform": platform,
+                "session_id": session_id,
                 "source_repository": PUBLIC_REPOSITORY,
                 "target_repository": repository.name_with_owner,
                 "uploaded_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
@@ -1249,50 +943,6 @@ def upload_trajectory(
     )
 
 
-def _hook_cli(arguments: argparse.Namespace) -> int:
-    checkout = Path(arguments.checkout)
-    try:
-        root = _checkout_root(checkout)
-        state_dir = _state_dir(root)
-        if not _load_activation(state_dir, root):
-            return 0
-    except ProposalSessionError:
-        return 0
-    try:
-        payload = json.loads(
-            sys.stdin.read(), object_pairs_hook=_json_object_with_unique_keys
-        )
-        if not isinstance(payload, dict):
-            _fail("hook payload must be a JSON object")
-        capture_hook(root, arguments.platform, payload)
-    except (ProposalSessionError, ValueError, json.JSONDecodeError) as error:
-        try:
-            with _binding_lock(state_dir):
-                _clear_current_turn(state_dir)
-        except ProposalSessionError:
-            pass
-        print(f"proposal-session hook: {error}", file=sys.stderr)
-    return 0
-
-
-def _status_cli(arguments: argparse.Namespace) -> int:
-    try:
-        root = _checkout_root(Path(arguments.checkout))
-        state_dir = _state_dir(root)
-        if not _load_activation(state_dir, root):
-            print("inactive")
-            return 0
-        binding = _load_existing_binding(state_dir, root)
-        if binding is None:
-            print("unbound")
-            return 0
-        print(f"bound {binding.platform} {binding.session_id}")
-        return 0
-    except ProposalSessionError as error:
-        print(f"proposal-session: {error}", file=sys.stderr)
-        return 1
-
-
 def _discussion_cli(arguments: argparse.Namespace) -> int:
     checkout = Path(arguments.checkout)
     try:
@@ -1317,7 +967,12 @@ def _discussion_cli(arguments: argparse.Namespace) -> int:
 
 def _upload_cli(arguments: argparse.Namespace) -> int:
     try:
-        result = upload_trajectory(Path(arguments.checkout))
+        result = upload_trajectory(
+            Path(arguments.checkout),
+            platform=arguments.platform,
+            session_id=arguments.session_id,
+            transcript_path=Path(arguments.transcript),
+        )
         print(f"uploaded {result.repository} {result.commit_sha}")
         return 0
     except ProposalSessionError as error:
@@ -1326,18 +981,8 @@ def _upload_cli(arguments: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Manage local proposal session capture")
+    parser = argparse.ArgumentParser(description="Submit proposals and upload original native session trajectories")
     commands = parser.add_subparsers(dest="command", required=True)
-
-    activate_parser = commands.add_parser("activate")
-    activate_parser.add_argument("--checkout", required=True)
-
-    hook_parser = commands.add_parser("hook")
-    hook_parser.add_argument("--platform", required=True, choices=sorted(_SUPPORTED_PLATFORMS))
-    hook_parser.add_argument("--checkout", required=True)
-
-    status_parser = commands.add_parser("status")
-    status_parser.add_argument("--checkout", required=True)
 
     discussion_parser = commands.add_parser("discussion")
     discussion_commands = discussion_parser.add_subparsers(
@@ -1355,19 +1000,11 @@ def main(argv: list[str] | None = None) -> int:
 
     upload_parser = commands.add_parser("upload")
     upload_parser.add_argument("--checkout", default=".")
+    upload_parser.add_argument("--platform", required=True, choices=sorted(_SUPPORTED_PLATFORMS))
+    upload_parser.add_argument("--session-id", required=True)
+    upload_parser.add_argument("--transcript", required=True, help="Original native session JSONL path")
 
     arguments = parser.parse_args(argv)
-    if arguments.command == "activate":
-        try:
-            print(activate(Path(arguments.checkout)))
-        except ProposalSessionError as error:
-            print(f"proposal-session: {error}", file=sys.stderr)
-            return 1
-        return 0
-    if arguments.command == "hook":
-        return _hook_cli(arguments)
-    if arguments.command == "status":
-        return _status_cli(arguments)
     if arguments.command == "discussion":
         return _discussion_cli(arguments)
     return _upload_cli(arguments)

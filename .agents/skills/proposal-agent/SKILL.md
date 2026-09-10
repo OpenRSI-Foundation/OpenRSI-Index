@@ -9,6 +9,10 @@ Before any Round 0 response or repository tool call, read [references/onboarding
 
 After the initial input is valid enough to advance to Round 1, and immediately before Round 1 gap analysis, read the complete [references/task-proposal-rubric.md](references/task-proposal-rubric.md). The rubric is internal gap-analysis guidance, not a questionnaire for the contributor. Read [references/proposal-template.md](references/proposal-template.md) only while preparing Round 6.
 
+## First step — Local setup
+
+Before proposal research, check GitHub CLI availability and authentication, then locate the local Public checkout as described in [references/discussion-lifecycle.md](references/discussion-lifecycle.md). The client may have started in another directory. Use absolute checkout, helper, and proposal paths throughout. Resolve Round 6 output names inside the Public checkout, not the client's starting directory; use that same path for writing, rereading, and submission. No repository hook or session activation is needed.
+
 ## Core behavior
 
 - Keep every contributor-facing response plain, and easy to understand. Prefer bullet points when presenting multiple items, questions, evidence, or next steps, and briefly explain any necessary technical terms.
