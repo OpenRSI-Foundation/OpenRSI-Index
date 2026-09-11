@@ -288,8 +288,8 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
   research question, baseline, evaluation or reward, action space, data
   boundary, network boundary, or compute contract.
 - Existing proposal fields must establish that candidate-producing compute runs
-  in Work by default, with CPU, RAM, and GPU needs declared for each phase
-  (explicitly zero GPUs when unused); Judge reloads and evaluates the complete
+  in Work by default, with CPU and RAM needs declared where applicable, and GPU
+  needs declared for each phase (explicitly zero GPUs when unused); Judge reloads and evaluates the complete
   materialized candidate snapshot; normal evaluation is candidate-only; Solution
   materializes the traceable baseline without training or evaluation;
   candidate-invalid results are unscored unless a finite scalar was selected;
@@ -312,7 +312,7 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
 Always report runtime separately from the nine proposal gates. Hardware
 topology and peak-count eligibility are handled by the Source Repository gate.
 
-- Record CPU cores, RAM, GPU count (explicitly zero when unused), GPU type when
+- Record CPU cores (if applicable), RAM (if applicable), GPU count (explicitly zero when unused), GPU type when
   needed, and estimated wall-clock time for one scoreable candidate run when
   provided. Distinguish a single run from
   the full multi-trial agent trajectory.
@@ -425,7 +425,7 @@ Hard gate review:
 
 Compute note:
 [Write one of: Within normal reference | Flag | Estimate incomplete.
-Include the known CPU/RAM needs, GPU count (zero when unused), physical-node
+Include the known CPU/RAM needs (if applicable), GPU count (zero when unused), physical-node
 count, and single-run time.
 Runtime Flags and incomplete runtime estimates are explicitly non-blocking at
 proposal stage; hardware eligibility violations belong in the Source Repository

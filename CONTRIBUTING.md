@@ -24,7 +24,7 @@ cd RSIs-First-Exam
 Open Codex or Claude Code (app or CLI), start a fresh session, and paste:
 
 ```text
-Use the proposal-agent skill at .agents/skills/proposal-agent/SKILL.md in my local RSIs-First-Exam repository. Locate the repository if needed, then follow the skill to complete setup and guide me step by step through creating and submitting an RSI proposal.
+Use the proposal-agent skill at RSIs-First-Exam/.agents/skills/proposal-agent/SKILL.md in my local RSIs-First-Exam repository. Locate the repository if needed, then follow the skill to complete setup and guide me step by step through creating and submitting an RSI proposal.
 ```
 
 Run it on a frontier model at its maximum reasoning setting: at least **Codex

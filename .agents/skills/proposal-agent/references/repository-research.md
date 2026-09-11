@@ -26,7 +26,7 @@ Collect the contributor's full professional name and establish public expertise 
 
 Confirm one of two routes:
 
-1. the contributor confirms that they personally coauthored the selected project and choose it as their highest-impact project; or
+1. the contributor confirms that they personally coauthored the selected project and choose it as a representative project; or
 2. the contributor confirms that the selected repository is a well-known project in their field and that they are familiar with its codebase.
 
 For the coauthor route, verify public authorship but do not investigate the contributor's specific contribution. For the domain-expertise route, use the contributor's confirmation for codebase familiarity and public expertise evidence for domain alignment; do not request module-level experience. Stop in Round 0 when neither route applies or the public record clearly shows that the contributor is not expertise-aligned with the proposed question. If the name cannot be reliably disambiguated or public evidence is unavailable, request disambiguating public evidence and stop without drafting if it remains unavailable.

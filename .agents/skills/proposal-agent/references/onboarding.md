@@ -4,6 +4,9 @@ Deliver the orientation below once at the start of a new proposal. Use the contr
 
 Present all onboarding information below before beginning the Round 0 questions; do not omit any section. Do not disclose the full Round 0 question list at once.
 
+Present all content between `(START)` and `(END)` below. For English, reproduce the wording exactly; for other contributor languages, translate it faithfully while preserving every section and requirement. Do not include the boundary markers in the response.
+
+(START)
 ## What FrontierRSI is evaluating
 
 FrontierRSI turns representative, fully open model-development projects into auditable research environments. A research agent starts from a human-built implementation or artifact, proposes a hypothesis, changes a candidate, runs a fixed experiment, observes declared feedback, updates its hypothesis, and repeats. The objective is to measure whether the agent can discover an improvement over a matched human baseline while preserving the experiment's scientific contract.
@@ -17,9 +20,9 @@ FrontierRSI turns representative, fully open model-development projects into aud
 
 ## Bring one project
 
-Start by choosing exactly one project through either route:
+Start by choosing one project through either route:
 
-1. **Coauthored route:** the highest-impact project that you personally coauthored; or
+1. **Coauthored route:** a representative project you coauthored; or
 2. **Domain-expertise route:** a well-known project in your field whose codebase you know especially well.
 
 In either route, explain your relationship to the project and why your experience matches the proposed research area. Contributor-domain fit is a strict eligibility gate.
@@ -47,7 +50,7 @@ Use the official open-source repository when available and pin an immutable comm
 ## Compute orientation
 
 One candidate experiment means taking one fixed idea and configuration from launch through any required training or optimization and evaluation until it produces a valid score. Work and Judge may each use zero GPUs; CPU-only tasks are eligible under the same research and evaluation standards. The selected lane must fit on a single physical node and use at most 8 GPUs at peak. For GPU lanes, H100 is the budgeting reference, not a required model: compatible A100, B100, or other GPUs are allowed unless the task genuinely requires a specific GPU model. A lane that inherently requires multi-node execution or a larger peak is not admitted; a faithful repository-supported eligible lane may be selected instead. Runtime over 12 wall-clock hours remains a non-blocking compute flag for later resource review. This applies to one experiment, not the full multi-experiment AutoResearch trajectory.
-
+(END)
 
 ## What to provide in Round 0
 
@@ -56,9 +59,9 @@ Ask for:
 Ask only one item at a time. Wait for the contributor's answer before asking the next item. Do not ask for the entire list in one response.
 
 1. the contributor's full professional name and publication email;
-2. the one selected project and its official repository URL;
-3. the exact commit or tag, if already known;
-4. which project-selection route applies and a brief explanation of the contributor's relationship to the project and domain fit;
+2. which project-selection route the contributor wants to choose: **Coauthored route:** a representative project they coauthored; or **Domain-expertise route:** a well-known project in their field whose codebase they know especially well;
+3. the one selected project and its official repository URL, and a brief explanation of the contributor's relationship to the project and domain fit;
+4. the exact commit or tag, if already known;
 5. a few sentences describing the initial research question;
 6. why the underlying area is foundational or frontier-relevant currently; and
 7. whether the task uses CPUs only or GPUs, and whether one candidate experiment likely needs multiple physical nodes, more than 8 GPUs at peak, or more than 12 wall-clock hours.
