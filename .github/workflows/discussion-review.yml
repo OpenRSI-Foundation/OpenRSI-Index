@@ -147,7 +147,7 @@ jobs:
           sparse-checkout-cone-mode: false
           persist-credentials: false
 
-      - name: Install uv
+      - name: Install uv from GitHub
         id: setup-uv
         if: steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
@@ -364,7 +364,7 @@ jobs:
             --input proposal-pass-request.json
 
       - name: Mark failed GitHub setup for external classification
-        if: failure() && (steps.public-checkout.outcome == 'failure' || steps.skills-token.outcome == 'failure' || steps.rubric-checkout.outcome == 'failure' || steps.comment-token.outcome == 'failure' || steps.dispatch-token.outcome == 'failure')
+        if: failure() && (steps.public-checkout.outcome == 'failure' || steps.skills-token.outcome == 'failure' || steps.rubric-checkout.outcome == 'failure' || steps.setup-uv.outcome == 'failure' || steps.comment-token.outcome == 'failure' || steps.dispatch-token.outcome == 'failure')
         run: |
           printf 'RSI_GITHUB_SETUP_FAILURE operation=discussion.setup\n'
           printf 'RSI_GITHUB_SETUP_FAILURE=true\n' >> "$GITHUB_ENV"
