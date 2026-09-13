@@ -1,0 +1,60 @@
+name: Discussion GitHub recovery notice
+run-name: rsi-recovery:${{ inputs.episode_id }}:${{ inputs.status }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_repository:
+        required: true
+        type: string
+      source_run_id:
+        required: true
+        type: string
+      discussion_number:
+        required: true
+        type: string
+      episode_id:
+        required: true
+        type: string
+      status:
+        required: true
+        type: choice
+        options: [retrying, exhausted]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: discussion-recovery-${{ inputs.episode_id }}-${{ inputs.status }}
+  cancel-in-progress: false
+
+# The external controller retains notice intent and excludes this workflow from
+# source recovery discovery, so a GitHub outage cannot create notice storms.
+jobs:
+  notice:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout public recovery helper
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Create recovery Discussion App token
+        id: comment-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: RSI-Index
+          repositories: RSIs-First-Exam
+          permission-discussions: write
+      - name: Post one notice for this recovery status
+        env:
+          GH_TOKEN: ${{ steps.comment-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.comment-token.outputs.app-slug }}
+          SOURCE_REPOSITORY: ${{ inputs.source_repository }}
+          SOURCE_RUN_ID: ${{ inputs.source_run_id }}
+          DISCUSSION_NUMBER: ${{ inputs.discussion_number }}
+          EPISODE_ID: ${{ inputs.episode_id }}
+          RECOVERY_STATUS: ${{ inputs.status }}
+        run: python3 checks/discussion_recovery.py notice
