@@ -41,7 +41,10 @@ def test_review_workflow_supersedes_only_unfinished_reviews_then_posts_fresh_pro
     progress = step_named("Post or update running review comment")
 
     assert progress["id"] == "progress"
-    assert progress["if"] == "steps.reaction-token.outcome == 'success'"
+    assert (
+        progress["if"]
+        == "steps.reaction-token.outcome == 'success' && steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'"
+    )
     assert progress["continue-on-error"] == "true"
     assert progress["env"] == {
         "GH_TOKEN": "${{ steps.reaction-token.outputs.token }}",
@@ -51,8 +54,12 @@ def test_review_workflow_supersedes_only_unfinished_reviews_then_posts_fresh_pro
         "REPOSITORY_OWNER": "${{ github.repository_owner }}",
         "REPOSITORY_NAME": "${{ github.event.repository.name }}",
     }
-    assert steps.index(progress) == steps.index(step_named("React with eyes")) + 1
-    assert steps.index(progress) < steps.index(step_named("Create private Skills read token"))
+    assert steps.index(
+        step_named("Check for a completed current proposal review")
+    ) < steps.index(progress)
+    assert steps.index(progress) < steps.index(
+        step_named("Create private Skills read token")
+    )
     assert "<!-- rubric-review-bot -->" in progress["run"]
     assert "<!-- rubric-review-status:running -->" in progress["run"]
     assert "<!-- rubric-review-status:superseded -->" in progress["run"]
@@ -78,6 +85,9 @@ def test_review_workflow_replaces_only_current_progress_with_generic_failure():
         "if": (
             "always() && !cancelled() && "
             "steps.publish-review.outcome != 'success'"
+            " && steps.reuse.outputs.current != 'false'"
+            " && env.RSI_GITHUB_RETRYABLE != 'true'"
+            " && env.RSI_GITHUB_SETUP_FAILURE != 'true'"
         ),
         "continue-on-error": "true",
         "uses": f"actions/create-github-app-token@{APP_TOKEN_SHA}",
@@ -93,13 +103,18 @@ def test_review_workflow_replaces_only_current_progress_with_generic_failure():
         "always() && !cancelled() && "
         "steps.publish-review.outcome != 'success' && "
         "steps.failure-token.outcome == 'success'"
+        " && steps.reuse.outputs.current != 'false'"
+        " && env.RSI_GITHUB_RETRYABLE != 'true'"
+        " && env.RSI_GITHUB_SETUP_FAILURE != 'true'"
     )
     assert failure["continue-on-error"] == "true"
     assert failure["env"]["GH_TOKEN"] == "${{ steps.failure-token.outputs.token }}"
     assert failure["env"]["PROGRESS_COMMENT_ID"] == (
         "${{ steps.progress.outputs.comment_id }}"
     )
-    assert steps.index(failure_token) > steps.index(step_named("Dispatch passed proposal privately"))
+    assert steps.index(failure_token) > steps.index(
+        step_named("Dispatch passed proposal privately")
+    )
     assert steps.index(failure) == steps.index(failure_token) + 1
     assert "Proposal review failed before completion" in failure["run"]
     assert "updateDiscussionComment" in failure["run"]
@@ -129,12 +144,15 @@ def test_successful_review_outputs_authoritative_comment_id_from_update_or_creat
     publish = step_named("Format and post or update comment")
     script = publish["run"]
 
-    assert "COMMENT_RESULT=$(gh api graphql" in script
+    assert (
+        "COMMENT_RESULT=$(python3 checks/discussion_recovery.py gh api graphql"
+        in script
+    )
     assert "jq -er '.data.updateDiscussionComment.comment.id'" in script
     assert "jq -er '.data.addDiscussionComment.comment.id'" in script
     assert "printf 'review_comment_id=%s\\n' \"$REVIEW_COMMENT_ID\"" in script
     superseded = script.split("Current review comment is no longer active", 1)[1].split(
-        "COMMENT_RESULT=$(gh api graphql", 1
+        "COMMENT_RESULT=$(python3 checks/discussion_recovery.py gh api graphql", 1
     )[0]
     assert "exit 0" in superseded
     assert "review_comment_id" not in superseded
@@ -142,9 +160,9 @@ def test_successful_review_outputs_authoritative_comment_id_from_update_or_creat
 
 def test_stale_progress_lookup_paginates_and_excludes_completed_reviews():
     workflow = WORKFLOW.read_text(encoding="utf-8")
-    lookup = workflow.split("RUNNING_COMMENT_IDS=$(gh api graphql", 1)[1].split(
-        "while IFS= read -r comment_id", 1
-    )[0]
+    lookup = workflow.split(
+        "RUNNING_COMMENT_IDS=$(python3 checks/discussion_recovery.py gh api graphql", 1
+    )[1].split("while IFS= read -r comment_id", 1)[0]
 
     assert "$endCursor: String" in lookup
     assert "comments(first: 100, after: $endCursor)" in lookup
@@ -152,7 +170,7 @@ def test_stale_progress_lookup_paginates_and_excludes_completed_reviews():
     assert "--paginate --slurp" in lookup
     assert "[.[].data.repository.discussion.comments.nodes[]" in lookup
     assert "author { login }" in lookup
-    assert 'select(.author.login == $bot)' in lookup
+    assert "select(.author.login == $bot)" in lookup
     assert '--arg bot "$BOT_LOGIN"' in lookup
     assert 'select(.body | contains("<!-- rubric-review-bot -->"))' in lookup
     assert 'select(.body | contains("<!-- rubric-review-status:running -->"))' in lookup
@@ -182,6 +200,7 @@ def test_review_workflow_reads_the_private_skills_rubric_with_an_app_token():
     assert steps["Create private Skills read token"] == {
         "name": "Create private Skills read token",
         "id": "skills-token",
+        "if": "steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'",
         "uses": f"actions/create-github-app-token@{APP_TOKEN_SHA}",
         "with": {
             "client-id": "${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}",
@@ -193,6 +212,8 @@ def test_review_workflow_reads_the_private_skills_rubric_with_an_app_token():
     }
     assert steps["Checkout private discussion rubric"] == {
         "name": "Checkout private discussion rubric",
+        "id": "rubric-checkout",
+        "if": "steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'",
         "uses": f"actions/checkout@{CHECKOUT_SHA}",
         "with": {
             "repository": "RSI-Index/RSI-Skills",
@@ -247,16 +268,24 @@ def test_review_reactions_and_comments_use_just_in_time_scoped_app_tokens():
     assert ordered.index(steps["Create reaction Discussion App token"]) + 1 == (
         ordered.index(steps["React with eyes"])
     )
-    assert ordered.index(steps["Create comment Discussion App token"]) + 1 == (
-        ordered.index(steps["Format and post or update comment"])
+    assert ordered.index(steps["Create comment Discussion App token"]) < ordered.index(
+        steps["Check for a completed current proposal review"]
     )
+    assert ordered.index(
+        steps["Check for a completed current proposal review"]
+    ) < ordered.index(steps["Format and post or update comment"])
     assert "DISCUSSION_TOKEN" not in WORKFLOW.read_text(encoding="utf-8")
     bot_logins = [
         step["env"]["BOT_LOGIN"]
         for step in ordered
         if "BOT_LOGIN" in step.get("env", {})
     ]
-    assert len(bot_logins) == 1
+    assert bot_logins == [
+        "${{ steps.comment-token.outputs.app-slug }}",
+        "${{ steps.reaction-token.outputs.app-slug }}",
+        "${{ steps.comment-token.outputs.app-slug }}",
+        "${{ steps.failure-token.outputs.app-slug }}",
+    ]
     assert all("[bot]" not in login for login in bot_logins)
 
 
@@ -283,7 +312,9 @@ def test_review_workflow_binds_zizmor_flagged_values_as_step_environment():
     progress = steps["Post or update running review comment"]
     format_comment = steps["Format and post or update comment"]
 
-    assert react["env"]["DISCUSSION_NODE_ID"] == "${{ github.event.discussion.node_id }}"
+    assert (
+        react["env"]["DISCUSSION_NODE_ID"] == "${{ github.event.discussion.node_id }}"
+    )
     assert 'id="$DISCUSSION_NODE_ID"' in react["run"]
     assert format_comment["env"]["DECISION"] == "${{ steps.review.outputs.decision }}"
     assert progress["env"]["REPOSITORY_OWNER"] == "${{ github.repository_owner }}"
@@ -305,13 +336,17 @@ def test_review_workflow_renders_and_appends_the_canonical_marker():
     }
     assert render_marker["run"].strip() == (
         "marker=$(python3 checks/proposal_review_marker.py)\n"
-        "printf 'marker=%s\\n' \"$marker\" >> \"$GITHUB_OUTPUT\""
+        'printf \'marker=%s\\n\' "$marker" >> "$GITHUB_OUTPUT"'
     )
-    assert format_comment["env"]["REVIEW_MARKER"] == "${{ steps.marker.outputs.marker }}"
+    assert (
+        format_comment["env"]["REVIEW_MARKER"] == "${{ steps.marker.outputs.marker }}"
+    )
 
-    comment_template = format_comment["run"].split("BODY=$(cat << COMMENT_EOF", 1)[1].split(
-        "COMMENT_EOF", 1
-    )[0]
+    comment_template = (
+        format_comment["run"]
+        .split("BODY=$(cat << COMMENT_EOF", 1)[1]
+        .split("COMMENT_EOF", 1)[0]
+    )
     assert "${REVIEW_MARKER}" in comment_template
     assert format_comment["run"].count('-f body="$BODY"') == 2
 
@@ -341,9 +376,11 @@ def test_review_workflow_accepts_and_publishes_only_pass_or_reject():
 
 def test_pass_publication_starts_building_without_an_initial_task_instruction():
     publish = step_named("Format and post or update comment")["run"]
-    pass_copy = publish.split('"Pass")', 2)[2].split(';;', 1)[0]
+    pass_copy = publish.split('"Pass")', 2)[2].split(";;", 1)[0]
 
-    assert "PASS — Initial check passed. Task building starts automatically." in pass_copy
+    assert (
+        "PASS — Initial check passed. Task building starts automatically." in pass_copy
+    )
     assert "Minor revisions may still be needed in some cases." in pass_copy
     assert "/task" not in pass_copy
 
@@ -363,11 +400,19 @@ def test_pass_dispatch_uses_separate_conditional_private_write_token():
             "owner": "RSI-Index",
             "repositories": "RSI-Skills",
             "permission-contents": "write",
+            "permission-actions": "read",
         },
     }
-    assert steps.index(step_named("Format and post or update comment")) < steps.index(token)
-    assert steps.index(token) < steps.index(step_named("Dispatch passed proposal privately"))
-    assert step_named("Create private Skills read token")["with"]["permission-contents"] == "read"
+    assert steps.index(step_named("Format and post or update comment")) < steps.index(
+        token
+    )
+    assert steps.index(token) < steps.index(
+        step_named("Dispatch passed proposal privately")
+    )
+    assert (
+        step_named("Create private Skills read token")["with"]["permission-contents"]
+        == "read"
+    )
     assert step_named("Checkout private discussion rubric")["with"]["token"] == (
         "${{ steps.skills-token.outputs.token }}"
     )
@@ -427,9 +472,7 @@ def test_dispatch_eligibility_relies_on_the_successful_current_run_publication()
     assert steps.index(publish) < steps.index(dispatch)
     assert "set -euo pipefail" in script
     assert 'if [ "$valid" != "true" ]' in script
-    assert "exit 1" in script.split('if [ "$valid" != "true" ]', 1)[1].split(
-        "fi", 1
-    )[0]
+    assert "exit 1" in script.split('if [ "$valid" != "true" ]', 1)[1].split("fi", 1)[0]
     assert "proposal_pass_dispatch.py" in script
     assert "proposal-pass-live.json" not in script
     assert "viewerDidAuthor" not in script

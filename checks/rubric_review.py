@@ -23,20 +23,32 @@ import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import NamedTuple
-from urllib.parse import quote, unquote
+from urllib.parse import quote, unquote, urlsplit
 
 import httpx
 from openai import AsyncOpenAI, OpenAI
+
+if __name__ == "__main__":
+    from github_retry import (
+        GitHubTransientError,
+        emit_retry_diagnostic,
+        retry_call,
+        transient_http_error,
+    )
+else:
+    from checks.github_retry import (
+        GitHubTransientError,
+        emit_retry_diagnostic,
+        retry_call,
+        transient_http_error,
+    )
 
 # The proposal rubric lives in the private Skills repository rather than this
 # public tree. Workflows check out only that file and set RUBRIC_FILE; locally,
 # clone RSI-Skills beside this repository or pass an explicit path.
 PRIVATE_RUBRIC_REPO = "https://github.com/RSI-Index/RSI-Skills"
 DEFAULT_RUBRIC_FILE = (
-    Path(__file__).parent.parent.parent
-    / "RSI-Skills"
-    / "rubrics"
-    / "task-proposal.md"
+    Path(__file__).parent.parent.parent / "RSI-Skills" / "rubrics" / "task-proposal.md"
 )
 JUDGE_MODEL = "gpt-5.6-terra"
 JUDGE_REASONING_EFFORT = "medium"
@@ -109,9 +121,7 @@ JUDGE_RESPONSE_FORMAT = {
                 "type": "object",
                 "additionalProperties": False,
                 "required": [name for name, _ in GATE_FIELDS],
-                "properties": {
-                    name: _GATE_RESULT_SCHEMA for name, _ in GATE_FIELDS
-                },
+                "properties": {name: _GATE_RESULT_SCHEMA for name, _ in GATE_FIELDS},
             },
             "compute_note": {
                 "type": "object",
@@ -208,9 +218,17 @@ def fetch_image_blocks(urls: list[str]) -> list[dict]:
     blocks: list[dict] = []
     for url in urls:
         try:
-            response = httpx.get(url, follow_redirects=True, timeout=30.0)
+            fetch = lambda: httpx.get(url, follow_redirects=True, timeout=30.0)
+            host = (urlsplit(url).hostname or "").lower()
+            response = (
+                _github_fetch(fetch)
+                if host == "github.com" or host.endswith(".githubusercontent.com")
+                else fetch()
+            )
             response.raise_for_status()
             data = response.content
+        except (GitHubTransientError, GitHubEvidenceUnavailable):
+            raise
         except Exception as exc:  # noqa: BLE001 - images are optional evidence
             print(f"Warning: failed to fetch image {url}: {exc}", file=sys.stderr)
             continue
@@ -309,7 +327,9 @@ def parse_repository_reference(text: str) -> RepositoryReference | None:
         for item in re.split(r"[,;]|<br\s*/?>", path_value, flags=re.IGNORECASE):
             quoted_paths = re.findall(r"`([^`\n]*[/.][^`\n]+)`", item)
             for candidate in quoted_paths or [item]:
-                if not (legacy_paths or quoted_paths) and re.search(r"\s", candidate.strip()):
+                if not (legacy_paths or quoted_paths) and re.search(
+                    r"\s", candidate.strip()
+                ):
                     continue
                 path = _clean_repo_path(candidate)
                 if path and path not in paths:
@@ -346,15 +366,47 @@ def _github_headers() -> dict[str, str]:
     return headers
 
 
+class GitHubEvidenceUnavailable(RuntimeError):
+    """GitHub authentication failure is not evidence against the proposal."""
+
+
+def _github_fetch(fetch):
+    def attempt():
+        try:
+            response = fetch()
+            response.raise_for_status()
+            return response
+        except httpx.HTTPStatusError as exc:
+            response = exc.response
+            error = transient_http_error(
+                response.status_code,
+                response.headers,
+                response.content,
+                operation="rubric.github_evidence",
+            )
+            if error is not None:
+                raise error from None
+            if response.status_code in (401, 403):
+                raise GitHubEvidenceUnavailable(
+                    "GitHub evidence access is not authorized"
+                ) from None
+            raise
+        except httpx.TransportError:
+            raise GitHubTransientError(operation="rubric.github_evidence") from None
+
+    return retry_call(attempt)
+
+
 def _get_json(client, url: str, *, params: dict[str, str] | None = None):
-    response = client.get(
-        url,
-        headers=_github_headers(),
-        params=params,
-        follow_redirects=True,
-        timeout=30.0,
+    response = _github_fetch(
+        lambda: client.get(
+            url,
+            headers=_github_headers(),
+            params=params,
+            follow_redirects=True,
+            timeout=30.0,
+        )
     )
-    response.raise_for_status()
     return response.json()
 
 
@@ -435,6 +487,8 @@ def fetch_repository_evidence(reference: RepositoryReference, *, client=None) ->
                 sections.append(
                     "Repository tree note: GitHub returned a truncated tree."
                 )
+        except (GitHubTransientError, GitHubEvidenceUnavailable):
+            raise
         except Exception as exc:  # noqa: BLE001 - retain partial repository evidence
             sections.append(f"Repository tree fetch error: {exc}")
 
@@ -468,8 +522,12 @@ def fetch_repository_evidence(reference: RepositoryReference, *, client=None) ->
                     )
                     continue
                 sections.append(f"File: {path}\n```text\n{content}\n```")
+            except (GitHubTransientError, GitHubEvidenceUnavailable):
+                raise
             except Exception as exc:  # noqa: BLE001 - one bad file must not hide others
                 sections.append(f"File fetch error ({path}): {exc}")
+    except (GitHubTransientError, GitHubEvidenceUnavailable):
+        raise
     except Exception as exc:  # noqa: BLE001 - report repository failures to the judge
         sections.extend(
             [
@@ -844,4 +902,11 @@ def main(argv: list[str] | None = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except GitHubTransientError as failure:
+        emit_retry_diagnostic(failure)
+        if os.environ.get("GITHUB_ENV"):
+            with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as stream:
+                stream.write("RSI_GITHUB_RETRYABLE=true\n")
+        raise SystemExit(75) from None

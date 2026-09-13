@@ -1,4 +1,5 @@
 name: Discussion Rubric Review
+run-name: "Discussion #${{ github.event.discussion.number }} rubric review"
 
 # CUSTOMIZE VALIDATION PIPELINE — change the category name to match your repo
 # Discussions events only trigger workflows on the default branch.
@@ -16,9 +17,18 @@ jobs:
     # Only review discussions in the "Task Ideas" category
     if: github.event.discussion.category.name == 'Task Ideas'
     runs-on: ubuntu-latest
+    outputs:
+      task_dispatched: ${{ steps.task-dispatch.outcome == 'success' }}
+      trigger_comment_id: ${{ steps.publish-review.outputs.review_comment_id }}
     permissions:
       contents: read
     steps:
+      - name: Checkout public retry helper
+        id: public-checkout
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+
       - name: Create reaction Discussion App token
         id: reaction-token
         continue-on-error: true
@@ -37,7 +47,7 @@ jobs:
           GH_TOKEN: ${{ steps.reaction-token.outputs.token }}
           DISCUSSION_NODE_ID: ${{ github.event.discussion.node_id }}
         run: |
-          gh api graphql \
+          python3 checks/discussion_recovery.py gh api graphql \
             -f query='mutation($id: ID!, $content: ReactionContent!) {
               addReaction(input: { subjectId: $id, content: $content }) {
                 reaction { content }
@@ -46,9 +56,26 @@ jobs:
             -f id="$DISCUSSION_NODE_ID" \
             -f content="EYES"
 
+      - name: Create comment Discussion App token
+        id: comment-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: RSI-Index
+          repositories: ${{ github.event.repository.name }}
+          permission-discussions: write
+
+      - name: Check for a completed current proposal review
+        id: reuse
+        env:
+          GH_TOKEN: ${{ steps.comment-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.comment-token.outputs.app-slug }}
+        run: python3 checks/discussion_recovery.py review-reuse
+
       - name: Post or update running review comment
         id: progress
-        if: steps.reaction-token.outcome == 'success'
+        if: steps.reaction-token.outcome == 'success' && steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.reaction-token.outputs.token }}
@@ -59,6 +86,7 @@ jobs:
           REPOSITORY_NAME: ${{ github.event.repository.name }}
         run: |
           set -euo pipefail
+          [[ "$BOT_LOGIN" == *'[bot]' ]] || BOT_LOGIN="$BOT_LOGIN[bot]"
           BODY=$(cat <<'COMMENT_EOF'
           <!-- rubric-review-bot -->
           <!-- rubric-review-status:running -->
@@ -79,7 +107,7 @@ jobs:
 
           # Preserve completed reviews. Only unfinished progress comments from
           # cancelled runs are retired before this run creates its own comment.
-          RUNNING_COMMENT_IDS=$(gh api graphql \
+          RUNNING_COMMENT_IDS=$(python3 checks/discussion_recovery.py gh api graphql \
             -f query='query($repo: String!, $owner: String!, $number: Int!, $endCursor: String) {
               repository(name: $repo, owner: $owner) {
                 discussion(number: $number) {
@@ -94,12 +122,12 @@ jobs:
             -f repo="$REPOSITORY_NAME" \
             -F number="$DISCUSSION_NUMBER" \
             --paginate --slurp | \
-            jq -r --arg bot "$BOT_LOGIN" \
-              '[.[].data.repository.discussion.comments.nodes[] | select(.author.login == $bot) | select(.body | contains("<!-- rubric-review-bot -->")) | select(.body | contains("<!-- rubric-review-status:running -->")) | .id] | .[]')
+            jq -r --arg bot "$BOT_LOGIN" --arg run "\"run\":\"$GITHUB_RUN_ID\"" \
+              '[.[].data.repository.discussion.comments.nodes[] | select(.author.login == $bot) | select(.body | contains("<!-- rubric-review-bot -->")) | select(.body | contains("<!-- rubric-review-status:running -->")) | select(.body | contains($run) | not) | .id] | .[]')
 
           while IFS= read -r comment_id; do
             [ -n "$comment_id" ] || continue
-            gh api graphql \
+            python3 checks/discussion_recovery.py gh api graphql \
               -f query='mutation($commentId: ID!, $body: String!) {
                 updateDiscussionComment(input: { commentId: $commentId, body: $body }) {
                   comment { id url }
@@ -109,7 +137,7 @@ jobs:
               -f body="$SUPERSEDED_BODY"
           done <<< "$RUNNING_COMMENT_IDS"
 
-          COMMENT_RESULT=$(gh api graphql \
+          COMMENT_RESULT=$(python3 checks/discussion_recovery.py gh api graphql \
             -f query='mutation($discussionId: ID!, $body: String!) {
               addDiscussionComment(input: { discussionId: $discussionId, body: $body }) {
                 comment { id url }
@@ -120,12 +148,9 @@ jobs:
           COMMENT_ID=$(jq -er '.data.addDiscussionComment.comment.id' <<< "$COMMENT_RESULT")
           printf 'comment_id=%s\n' "$COMMENT_ID" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          persist-credentials: false
-
       - name: Create private Skills read token
         id: skills-token
+        if: steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
@@ -137,6 +162,8 @@ jobs:
       # The proposal rubric is private: it is fetched from the organization-only
       # Skills repository per run instead of living in the public tree.
       - name: Checkout private discussion rubric
+        id: rubric-checkout
+        if: steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: RSI-Index/RSI-Skills
@@ -148,9 +175,12 @@ jobs:
           persist-credentials: false
 
       - name: Install uv
+        id: setup-uv
+        if: steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'
         uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
 
       - name: Write proposal to file
+        if: steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'
         env:
           DISCUSSION_TITLE: ${{ github.event.discussion.title }}
           DISCUSSION_BODY: ${{ github.event.discussion.body }}
@@ -159,11 +189,18 @@ jobs:
 
       - name: Run rubric review
         id: review
+        if: steps.reuse.outputs.current == 'true'
         env:
+          REUSED_REVIEW_ID: ${{ steps.reuse.outputs.review_comment_id }}
+          REUSED_DECISION: ${{ steps.reuse.outputs.decision }}
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUBRIC_FILE: ${{ github.workspace }}/private-skills/rubrics/task-proposal.md
         run: |
+          if [ -n "$REUSED_REVIEW_ID" ]; then
+            printf 'decision=%s\n' "$REUSED_DECISION" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if ! uv run checks/rubric_review.py proposal.md > result.json 2> review.log; then
             cat review.log
             exit 1
@@ -194,6 +231,7 @@ jobs:
 
       - name: Render canonical proposal review marker
         id: marker
+        if: steps.reuse.outputs.current == 'true'
         env:
           DECISION: ${{ steps.review.outputs.decision }}
           DISCUSSION_TITLE: ${{ github.event.discussion.title }}
@@ -203,26 +241,23 @@ jobs:
           marker=$(python3 checks/proposal_review_marker.py)
           printf 'marker=%s\n' "$marker" >> "$GITHUB_OUTPUT"
 
-      - name: Create comment Discussion App token
-        id: comment-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
-        with:
-          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
-          owner: RSI-Index
-          repositories: ${{ github.event.repository.name }}
-          permission-discussions: write
-
       - name: Format and post or update comment
         id: publish-review
+        if: steps.reuse.outputs.current == 'true'
         env:
           GH_TOKEN: ${{ steps.comment-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.comment-token.outputs.app-slug }}
+          REUSED_REVIEW_ID: ${{ steps.reuse.outputs.review_comment_id }}
           DISCUSSION_ID: ${{ github.event.discussion.node_id }}
           PROGRESS_COMMENT_ID: ${{ steps.progress.outputs.comment_id }}
           REVIEW_MARKER: ${{ steps.marker.outputs.marker }}
           DECISION: ${{ steps.review.outputs.decision }}
         run: |
           set -euo pipefail
+          if [ -n "$REUSED_REVIEW_ID" ]; then
+            printf 'review_comment_id=%s\n' "$REUSED_REVIEW_ID" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           # Decision badge
           case "$DECISION" in
             "Pass")   BADGE="🟢 **PASS**" ;;
@@ -268,7 +303,7 @@ jobs:
           # Update only this run's progress comment. If a newer edit already
           # superseded it, this cancelled run must not publish over that state.
           if [ -n "$PROGRESS_COMMENT_ID" ]; then
-            CURRENT_BODY=$(gh api graphql \
+            CURRENT_BODY=$(python3 checks/discussion_recovery.py gh api graphql \
               -f query='query($commentId: ID!) {
                 node(id: $commentId) {
                   ... on DiscussionComment { body }
@@ -280,7 +315,7 @@ jobs:
               echo "Current review comment is no longer active; skipping publication"
               exit 0
             fi
-            COMMENT_RESULT=$(gh api graphql \
+            COMMENT_RESULT=$(python3 checks/discussion_recovery.py gh api graphql \
               -f query='mutation($commentId: ID!, $body: String!) {
                 updateDiscussionComment(input: {
                   commentId: $commentId
@@ -295,7 +330,7 @@ jobs:
             echo "Updated this run's review comment"
           else
             # Fall back to a new comment if the progress acknowledgement was unavailable.
-            COMMENT_RESULT=$(gh api graphql \
+            COMMENT_RESULT=$(python3 checks/discussion_recovery.py gh api graphql \
               -f query='mutation($discussionId: ID!, $body: String!) {
                 addDiscussionComment(input: {
                   discussionId: $discussionId
@@ -323,6 +358,7 @@ jobs:
           owner: RSI-Index
           repositories: RSI-Skills
           permission-contents: write
+          permission-actions: read
 
       - name: Dispatch passed proposal privately
         id: task-dispatch
@@ -351,28 +387,18 @@ jobs:
               json.dump(request, output, sort_keys=True, separators=(",", ":"))
           PY
 
-          gh api --method POST /repos/RSI-Index/RSI-Skills/dispatches \
+          python3 checks/discussion_recovery.py gh api --method POST /repos/RSI-Index/RSI-Skills/dispatches \
             --input proposal-pass-request.json
 
-      - name: Post task queue notice
-        if: steps.task-dispatch.outcome == 'success' && steps.comment-token.outcome == 'success'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ steps.comment-token.outputs.token }}
-          DISCUSSION_ID: ${{ github.event.discussion.node_id }}
+      - name: Mark failed GitHub setup for external classification
+        if: failure() && (steps.public-checkout.outcome == 'failure' || steps.skills-token.outcome == 'failure' || steps.rubric-checkout.outcome == 'failure' || steps.comment-token.outcome == 'failure' || steps.dispatch-token.outcome == 'failure')
         run: |
-          gh api graphql \
-            -f query='mutation($discussionId: ID!, $body: String!) {
-              addDiscussionComment(input: { discussionId: $discussionId, body: $body }) {
-                comment { id url }
-              }
-            }' \
-            -f discussionId="$DISCUSSION_ID" \
-            -f body='⏳ Your task is queued and will start automatically when a runner is available. No action is needed.'
+          printf 'RSI_GITHUB_SETUP_FAILURE operation=discussion.setup\n'
+          printf 'RSI_GITHUB_SETUP_FAILURE=true\n' >> "$GITHUB_ENV"
 
       - name: Create failure comment Discussion App token
         id: failure-token
-        if: always() && !cancelled() && steps.publish-review.outcome != 'success'
+        if: always() && !cancelled() && steps.publish-review.outcome != 'success' && steps.reuse.outputs.current != 'false' && env.RSI_GITHUB_RETRYABLE != 'true' && env.RSI_GITHUB_SETUP_FAILURE != 'true'
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
@@ -383,10 +409,11 @@ jobs:
           permission-discussions: write
 
       - name: Post or update failed review comment
-        if: always() && !cancelled() && steps.publish-review.outcome != 'success' && steps.failure-token.outcome == 'success'
+        if: always() && !cancelled() && steps.publish-review.outcome != 'success' && steps.failure-token.outcome == 'success' && steps.reuse.outputs.current != 'false' && env.RSI_GITHUB_RETRYABLE != 'true' && env.RSI_GITHUB_SETUP_FAILURE != 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.failure-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.failure-token.outputs.app-slug }}
           DISCUSSION_ID: ${{ github.event.discussion.node_id }}
           PROGRESS_COMMENT_ID: ${{ steps.progress.outputs.comment_id }}
         run: |
@@ -401,7 +428,7 @@ jobs:
           )
 
           if [ -n "$PROGRESS_COMMENT_ID" ]; then
-            CURRENT_BODY=$(gh api graphql \
+            CURRENT_BODY=$(python3 checks/discussion_recovery.py gh api graphql \
               -f query='query($commentId: ID!) {
                 node(id: $commentId) {
                   ... on DiscussionComment { body }
@@ -413,7 +440,7 @@ jobs:
               echo "Current review comment is no longer active; skipping failure publication"
               exit 0
             fi
-            gh api graphql \
+            python3 checks/discussion_recovery.py gh api graphql \
               -f query='mutation($commentId: ID!, $body: String!) {
                 updateDiscussionComment(input: { commentId: $commentId, body: $body }) {
                   comment { id url }
@@ -422,7 +449,7 @@ jobs:
               -f commentId="$PROGRESS_COMMENT_ID" \
               -f body="$BODY"
           else
-            gh api graphql \
+            python3 checks/discussion_recovery.py gh api graphql \
               -f query='mutation($discussionId: ID!, $body: String!) {
                 addDiscussionComment(input: { discussionId: $discussionId, body: $body }) {
                   comment { id url }
@@ -431,3 +458,40 @@ jobs:
               -f discussionId="$DISCUSSION_ID" \
               -f body="$BODY"
           fi
+
+  queue-notice:
+    needs: review
+    if: needs.review.outputs.task_dispatched == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout public retry helper
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Create queue Discussion App token
+        id: comment-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: RSI-Index
+          repositories: ${{ github.event.repository.name }}
+          permission-discussions: write
+      - name: Post task queue notice
+        env:
+          GH_TOKEN: ${{ steps.comment-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.comment-token.outputs.app-slug }}
+          TRIGGER_COMMENT_ID: ${{ needs.review.outputs.trigger_comment_id }}
+          DISCUSSION_ID: ${{ github.event.discussion.node_id }}
+        run: |
+          python3 checks/discussion_recovery.py gh api graphql \
+            -f query='mutation($discussionId: ID!, $body: String!) {
+              addDiscussionComment(input: { discussionId: $discussionId, body: $body }) {
+                comment { id url }
+              }
+            }' \
+            -f discussionId="$DISCUSSION_ID" \
+            -f body='⏳ Your task is queued and will start automatically when a runner is available. No action is needed.'

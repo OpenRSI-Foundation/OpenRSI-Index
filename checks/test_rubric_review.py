@@ -4,10 +4,14 @@ import asyncio
 import base64
 import importlib.util
 import json
+from functools import partial
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+import httpx
+
+from checks.github_retry import GitHubTransientError, retry_call
 
 SCRIPT = Path(__file__).with_name("rubric_review.py")
 
@@ -58,6 +62,87 @@ def review():
     return load_review_module()
 
 
+@pytest.mark.parametrize("failed_path", ["metadata", "tree", "file"])
+def test_github_evidence_outage_never_becomes_missing_scientific_evidence(
+    review, monkeypatch, failed_path
+):
+    waits = []
+    monkeypatch.setattr(
+        review, "retry_call", partial(retry_call, sleep=waits.append), raising=False
+    )
+    sha = "a" * 40
+
+    def transport(request):
+        path = request.url.path
+        if (
+            failed_path == "metadata"
+            and path == "/repos/org/repo"
+            or failed_path == "tree"
+            and "/git/trees/" in path
+            or failed_path == "file"
+            and "/contents/" in path
+        ):
+            return httpx.Response(503, json={"message": "Service unavailable"})
+        if "/commits/" in path:
+            return httpx.Response(200, json={"sha": sha})
+        if "/git/trees/" in path:
+            return httpx.Response(200, json={"tree": []})
+        return httpx.Response(200, json={"default_branch": "main"})
+
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+        with pytest.raises(GitHubTransientError):
+            review.fetch_repository_evidence(
+                review.RepositoryReference("org", "repo", "main", ("train.py",)),
+                client=client,
+            )
+    assert waits == [1, 5, 10, 30, 60]
+
+
+def test_github_evidence_recovers_before_calling_the_unchanged_judge(
+    review, monkeypatch
+):
+    waits, requests = [], []
+    monkeypatch.setattr(
+        review, "retry_call", partial(retry_call, sleep=waits.append), raising=False
+    )
+
+    def transport(request):
+        requests.append(request)
+        if len(requests) == 1:
+            return httpx.Response(
+                429, headers={"Retry-After": "5"}, json={"message": "rate limit"}
+            )
+        return httpx.Response(
+            200, json={"sha": "a" * 40, "tree": [], "default_branch": "main"}
+        )
+
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+        result = review.fetch_repository_evidence(
+            review.RepositoryReference("org", "repo", "main", ()), client=client
+        )
+    assert "Repository evidence status: fetched" in result
+    assert "fetch failed" not in result
+    assert waits == [5]
+
+
+def test_github_attachment_outage_does_not_silently_remove_evidence(
+    review, monkeypatch
+):
+    monkeypatch.setattr(
+        review,
+        "retry_call",
+        partial(retry_call, sleep=lambda delay: None),
+        raising=False,
+    )
+
+    def get(url, **kwargs):
+        raise httpx.ConnectTimeout("unavailable")
+
+    monkeypatch.setattr(review.httpx, "get", get)
+    with pytest.raises(GitHubTransientError):
+        review.fetch_image_blocks(["https://github.com/user-attachments/assets/abc"])
+
+
 def test_parse_repository_reference_reads_url_ref_and_evidence_paths(review):
     proposal = """
 ## Official Repository
@@ -83,7 +168,9 @@ https://github.com/example-org/example-repo/blob/0123456789abcdef/evals/run_eval
 
 
 @pytest.mark.parametrize("section_column", ["", "Research Question | "])
-def test_parse_repository_reference_reads_table_with_pinned_links(review, section_column):
+def test_parse_repository_reference_reads_table_with_pinned_links(
+    review, section_column
+):
     proposal = f"""
 Contributor repository: https://github.com/contributor/unrelated
 
@@ -685,7 +772,9 @@ def test_call_openai_always_uses_fixed_terra_model_and_medium_reasoning(review):
     class FakeResponses:
         def create(self, **kwargs):
             calls.append(kwargs)
-            return SimpleNamespace(status="completed", output_text=structured_judge_output())
+            return SimpleNamespace(
+                status="completed", output_text=structured_judge_output()
+            )
 
     client = SimpleNamespace(responses=FakeResponses())
 
@@ -702,9 +791,7 @@ def test_call_openai_always_uses_fixed_terra_model_and_medium_reasoning(review):
     assert "never quote" in call["instructions"].lower()
     assert "never encode" in call["instructions"].lower()
     assert call["input"] == "proposal"
-    assert call["tools"] == [
-        {"type": "web_search", "search_context_size": "high"}
-    ]
+    assert call["tools"] == [{"type": "web_search", "search_context_size": "high"}]
     assert call["tool_choice"] == "required"
     assert call["text"] == {"format": review.JUDGE_RESPONSE_FORMAT}
     assert review.JUDGE_RESPONSE_FORMAT["schema"]["properties"]["decision"] == {
@@ -721,16 +808,16 @@ def test_async_call_openai_enables_high_context_web_search(review):
     class FakeResponses:
         async def create(self, **kwargs):
             calls.append(kwargs)
-            return SimpleNamespace(status="completed", output_text=structured_judge_output())
+            return SimpleNamespace(
+                status="completed", output_text=structured_judge_output()
+            )
 
     client = SimpleNamespace(responses=FakeResponses())
 
     result = asyncio.run(review.async_call_openai("rubric", "proposal", client=client))
 
     assert result.endswith("Decision: Pass")
-    assert calls[0]["tools"] == [
-        {"type": "web_search", "search_context_size": "high"}
-    ]
+    assert calls[0]["tools"] == [{"type": "web_search", "search_context_size": "high"}]
     assert calls[0]["tool_choice"] == "required"
     assert calls[0]["max_output_tokens"] == 32768
 
@@ -823,9 +910,7 @@ def test_parse_judge_payload_accepts_long_hard_gate_evidence(review):
 
 def test_call_openai_rejects_pass_with_a_failed_gate(review):
     payload = json.loads(structured_judge_output(decision="Pass"))
-    payload["hard_gate_review"]["contributor_expertise_alignment"]["status"] = (
-        "Fail"
-    )
+    payload["hard_gate_review"]["contributor_expertise_alignment"]["status"] = "Fail"
 
     class FakeResponses:
         @staticmethod
@@ -938,7 +1023,10 @@ def test_default_rubric_comes_from_a_sibling_private_skills_clone(review):
     args = review.build_parser().parse_args(["proposal.md"])
 
     assert review.PRIVATE_RUBRIC_REPO == "https://github.com/RSI-Index/RSI-Skills"
-    assert args.rubric == SCRIPT.parent.parent.parent / "RSI-Skills" / "rubrics/task-proposal.md"
+    assert (
+        args.rubric
+        == SCRIPT.parent.parent.parent / "RSI-Skills" / "rubrics/task-proposal.md"
+    )
 
 
 def test_main_emits_a_review_without_a_publication_guard(
