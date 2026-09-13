@@ -325,6 +325,7 @@ jobs:
           permission-contents: write
 
       - name: Dispatch passed proposal privately
+        id: task-dispatch
         if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != '' && steps.dispatch-token.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
@@ -352,6 +353,22 @@ jobs:
 
           gh api --method POST /repos/RSI-Index/RSI-Skills/dispatches \
             --input proposal-pass-request.json
+
+      - name: Post task queue notice
+        if: steps.task-dispatch.outcome == 'success' && steps.comment-token.outcome == 'success'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.comment-token.outputs.token }}
+          DISCUSSION_ID: ${{ github.event.discussion.node_id }}
+        run: |
+          gh api graphql \
+            -f query='mutation($discussionId: ID!, $body: String!) {
+              addDiscussionComment(input: { discussionId: $discussionId, body: $body }) {
+                comment { id url }
+              }
+            }' \
+            -f discussionId="$DISCUSSION_ID" \
+            -f body='⏳ Your task is queued and will start automatically when a runner is available. No action is needed.'
 
       - name: Create failure comment Discussion App token
         id: failure-token
