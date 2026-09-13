@@ -382,6 +382,46 @@ def test_recovery_workflow_is_dispatch_only_and_names_the_episode():
     assert token["with"]["permission-discussions"] == "write"
 
 
+@pytest.mark.parametrize(
+    "filename,source_job",
+    [("discussion-review.yml", "review"), ("discussion-task-dispatch.yml", "dispatch")],
+)
+def test_eyes_outage_fails_only_a_notification_job_and_can_be_recovered(
+    filename, source_job
+):
+    path = Path(__file__).parent.parent / ".github/workflows" / filename
+    workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
+    assert all(
+        "addReaction" not in step.get("run", "")
+        for step in workflow["jobs"][source_job]["steps"]
+    )
+    reactions = [
+        (job, step)
+        for job in workflow["jobs"].values()
+        for step in job["steps"]
+        if "addReaction" in step.get("run", "")
+    ]
+    assert len(reactions) == 1
+    notification, reaction = reactions[0]
+    assert notification["runs-on"] == "ubuntu-latest"
+    assert "continue-on-error" not in reaction
+    assert all(
+        "continue-on-error" not in step
+        for step in notification["steps"]
+        if step.get("uses", "").startswith("actions/create-github-app-token@")
+    )
+    if source_job == "dispatch":
+        assert (
+            notification["if"] == "needs.dispatch.outputs.command_dispatched == 'true'"
+        )
+        queue = next(
+            step
+            for step in notification["steps"]
+            if step.get("name") == "Post task queue notice"
+        )
+        assert queue["if"] == "needs.dispatch.outputs.task_dispatched == 'true'"
+
+
 def test_reused_review_step_does_not_invoke_model_or_require_ephemeral_result(tmp_path):
     path = Path(__file__).parent.parent / ".github/workflows/discussion-review.yml"
     workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)

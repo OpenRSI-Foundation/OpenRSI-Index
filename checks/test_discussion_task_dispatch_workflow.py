@@ -155,21 +155,15 @@ def test_manual_dispatch_payload_is_explicitly_a_comment_trigger():
 
 def test_authorized_task_command_gets_non_blocking_eyes_acknowledgement():
     workflow, _ = load_workflow()
-    steps = workflow["jobs"]["dispatch"]["steps"]
-    named_steps = steps_by_name(workflow)
-    authorization = (
-        "steps.gate.outputs.candidate == 'true' && "
-        "(steps.gate.outputs.is_author == 'true' || "
-        "steps.owner-gate.outputs.is_owner == 'true')"
-    )
+    notification = workflow["jobs"]["queue-notice"]
+    steps = notification["steps"]
+    named_steps = {step["name"]: step for step in steps}
     token = named_steps["Create acknowledgement App token"]
     reaction = named_steps["Acknowledge accepted task command"]
 
     assert token == {
         "name": "Create acknowledgement App token",
         "id": "ack-token",
-        "if": authorization,
-        "continue-on-error": "true",
         "uses": f"actions/create-github-app-token@{APP_TOKEN_SHA}",
         "with": {
             "client-id": "${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}",
@@ -179,8 +173,9 @@ def test_authorized_task_command_gets_non_blocking_eyes_acknowledgement():
             "permission-discussions": "write",
         },
     }
-    assert reaction["if"] == authorization + " && steps.ack-token.outcome == 'success'"
-    assert reaction["continue-on-error"] == "true"
+    assert notification["if"] == "needs.dispatch.outputs.command_dispatched == 'true'"
+    assert "continue-on-error" not in reaction
+    assert "if" not in reaction  # Both /task and /reset are acknowledged.
     assert reaction["env"] == {
         "GH_TOKEN": "${{ steps.ack-token.outputs.token }}",
         "COMMENT_NODE_ID": "${{ github.event.comment.node_id }}",
@@ -188,7 +183,7 @@ def test_authorized_task_command_gets_non_blocking_eyes_acknowledgement():
     assert "addReaction" in reaction["run"]
     assert 'id="$COMMENT_NODE_ID"' in reaction["run"]
     assert 'content="EYES"' in reaction["run"]
-    assert steps.index(reaction) < steps.index(named_steps["Dispatch privately"])
+    assert steps.index(reaction) > steps.index(named_steps["Post task queue notice"])
 
 
 def test_dispatch_workflow_never_handles_private_or_untrusted_content():
