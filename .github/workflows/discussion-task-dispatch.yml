@@ -1,4 +1,5 @@
 name: Dispatch Discussion task command
+run-name: "Discussion #${{ github.event.discussion.number }} ${{ github.event.comment.body == '/reset' && 'reset' || 'task' }}:${{ github.event.comment.node_id }}"
 
 on:
   discussion_comment:
@@ -10,8 +11,13 @@ permissions:
 jobs:
   dispatch:
     runs-on: ubuntu-latest
+    outputs:
+      command_dispatched: ${{ steps.task-dispatch.outcome == 'success' }}
+      task_dispatched: ${{ steps.task-dispatch.outcome == 'success' && steps.gate.outputs.command == 'task' }}
+      trigger_comment_id: ${{ github.event.comment.node_id }}
     steps:
       - name: Checkout public default branch
+        id: public-checkout
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           ref: ${{ github.event.repository.default_branch }}
@@ -31,6 +37,7 @@ jobs:
           owner: RSI-Index
           repositories: RSI-Skills
           permission-contents: write
+          permission-actions: read
           permission-members: read
 
       - name: Verify current organization Owner
@@ -39,40 +46,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           COMMENTER_LOGIN: ${{ steps.gate.outputs.commenter_login }}
-        run: |
-          if gh api "/orgs/RSI-Index/memberships/$COMMENTER_LOGIN" > membership.json 2>/dev/null; then
-            python3 checks/org_owner_gate.py membership.json "$COMMENTER_LOGIN"
-          else
-            printf 'is_owner=false\n' >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Create acknowledgement App token
-        id: ack-token
-        if: steps.gate.outputs.candidate == 'true' && (steps.gate.outputs.is_author == 'true' || steps.owner-gate.outputs.is_owner == 'true')
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
-        with:
-          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
-          owner: RSI-Index
-          repositories: ${{ github.event.repository.name }}
-          permission-discussions: write
-
-      - name: Acknowledge accepted task command
-        if: steps.gate.outputs.candidate == 'true' && (steps.gate.outputs.is_author == 'true' || steps.owner-gate.outputs.is_owner == 'true') && steps.ack-token.outcome == 'success'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ steps.ack-token.outputs.token }}
-          COMMENT_NODE_ID: ${{ github.event.comment.node_id }}
-        run: |
-          gh api graphql \
-            -f query='mutation($id: ID!, $content: ReactionContent!) {
-              addReaction(input: { subjectId: $id, content: $content }) {
-                reaction { content }
-              }
-            }' \
-            -f id="$COMMENT_NODE_ID" \
-            -f content="EYES"
+        run: python3 checks/discussion_recovery.py owner
 
       - name: Build dispatch request
         if: steps.gate.outputs.candidate == 'true' && (steps.gate.outputs.is_author == 'true' || steps.owner-gate.outputs.is_owner == 'true')
@@ -109,17 +83,42 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
-          gh api --method POST /repos/RSI-Index/RSI-Skills/dispatches \
+          python3 checks/discussion_recovery.py gh api --method POST /repos/RSI-Index/RSI-Skills/dispatches \
             --input repository-dispatch.json
 
+      - name: Mark failed GitHub setup for external classification
+        if: failure() && (steps.public-checkout.outcome == 'failure' || steps.app-token.outcome == 'failure')
+        run: printf 'RSI_GITHUB_SETUP_FAILURE operation=discussion.setup\n'
+
+  queue-notice:
+    needs: dispatch
+    if: needs.dispatch.outputs.command_dispatched == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout public retry helper
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          persist-credentials: false
+      - name: Create acknowledgement App token
+        id: ack-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: RSI-Index
+          repositories: ${{ github.event.repository.name }}
+          permission-discussions: write
       - name: Post task queue notice
-        if: steps.task-dispatch.outcome == 'success' && steps.ack-token.outcome == 'success' && steps.gate.outputs.command == 'task'
-        continue-on-error: true
+        if: needs.dispatch.outputs.task_dispatched == 'true'
         env:
           GH_TOKEN: ${{ steps.ack-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.ack-token.outputs.app-slug }}
+          TRIGGER_COMMENT_ID: ${{ needs.dispatch.outputs.trigger_comment_id }}
           DISCUSSION_ID: ${{ github.event.discussion.node_id }}
         run: |
-          gh api graphql \
+          python3 checks/discussion_recovery.py gh api graphql \
             -f query='mutation($discussionId: ID!, $body: String!) {
               addDiscussionComment(input: { discussionId: $discussionId, body: $body }) {
                 comment { id url }
@@ -127,3 +126,16 @@ jobs:
             }' \
             -f discussionId="$DISCUSSION_ID" \
             -f body='⏳ Your task is queued and will start automatically when a runner is available. No action is needed.'
+      - name: Acknowledge accepted task command
+        env:
+          GH_TOKEN: ${{ steps.ack-token.outputs.token }}
+          COMMENT_NODE_ID: ${{ github.event.comment.node_id }}
+        run: |
+          python3 checks/discussion_recovery.py gh api graphql \
+            -f query='mutation($id: ID!, $content: ReactionContent!) {
+              addReaction(input: { subjectId: $id, content: $content }) {
+                reaction { content }
+              }
+            }' \
+            -f id="$COMMENT_NODE_ID" \
+            -f content="EYES"
