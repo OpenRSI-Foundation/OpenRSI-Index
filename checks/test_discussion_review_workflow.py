@@ -181,7 +181,7 @@ def test_review_workflow_pins_actions_and_drops_checkout_credentials():
     checkouts = [
         step for step in steps if step.get("uses", "").startswith("actions/checkout@")
     ]
-    setup_uv = next(step for step in steps if step.get("name") == "Install uv")
+    setup_uv = next(step for step in steps if step.get("id") == "setup-uv")
 
     assert len(checkouts) == 2
     assert [checkout["uses"] for checkout in checkouts] == [
@@ -192,6 +192,19 @@ def test_review_workflow_pins_actions_and_drops_checkout_credentials():
         checkout.get("with", {}).get("persist-credentials") for checkout in checkouts
     ] == ["false", "false"]
     assert setup_uv["uses"] == f"astral-sh/setup-uv@{SETUP_UV_SHA}"
+
+
+def test_review_workflow_marks_uv_download_failure_as_github_setup():
+    steps = parsed_steps()
+    setup_uv = next(step for step in steps if step.get("id") == "setup-uv")
+    setup_failure = step_named("Mark failed GitHub setup for external classification")
+
+    assert setup_uv["name"] == "Install uv from GitHub"
+    assert "steps.setup-uv.outcome == 'failure'" in setup_failure["if"]
+    assert steps.index(setup_uv) < steps.index(setup_failure)
+    assert steps.index(setup_failure) < steps.index(
+        step_named("Create failure comment Discussion App token")
+    )
 
 
 def test_review_workflow_reads_the_private_skills_rubric_with_an_app_token():
