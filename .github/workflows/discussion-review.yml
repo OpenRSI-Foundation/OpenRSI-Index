@@ -29,33 +29,6 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Create reaction Discussion App token
-        id: reaction-token
-        continue-on-error: true
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
-        with:
-          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
-          owner: RSI-Index
-          repositories: ${{ github.event.repository.name }}
-          permission-discussions: write
-
-      - name: React with eyes
-        if: steps.reaction-token.outcome == 'success'
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ steps.reaction-token.outputs.token }}
-          DISCUSSION_NODE_ID: ${{ github.event.discussion.node_id }}
-        run: |
-          python3 checks/discussion_recovery.py gh api graphql \
-            -f query='mutation($id: ID!, $content: ReactionContent!) {
-              addReaction(input: { subjectId: $id, content: $content }) {
-                reaction { content }
-              }
-            }' \
-            -f id="$DISCUSSION_NODE_ID" \
-            -f content="EYES"
-
       - name: Create comment Discussion App token
         id: comment-token
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
@@ -75,11 +48,11 @@ jobs:
 
       - name: Post or update running review comment
         id: progress
-        if: steps.reaction-token.outcome == 'success' && steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'
+        if: steps.comment-token.outcome == 'success' && steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'
         continue-on-error: true
         env:
-          GH_TOKEN: ${{ steps.reaction-token.outputs.token }}
-          BOT_LOGIN: ${{ steps.reaction-token.outputs.app-slug }}
+          GH_TOKEN: ${{ steps.comment-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.comment-token.outputs.app-slug }}
           DISCUSSION_ID: ${{ github.event.discussion.node_id }}
           DISCUSSION_NUMBER: ${{ github.event.discussion.number }}
           REPOSITORY_OWNER: ${{ github.repository_owner }}
@@ -458,6 +431,40 @@ jobs:
               -f discussionId="$DISCUSSION_ID" \
               -f body="$BODY"
           fi
+
+  reaction-notice:
+    if: github.event.discussion.category.name == 'Task Ideas'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout public retry helper
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Create reaction Discussion App token
+        id: reaction-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: RSI-Index
+          repositories: ${{ github.event.repository.name }}
+          permission-discussions: write
+      - name: React with eyes
+        env:
+          GH_TOKEN: ${{ steps.reaction-token.outputs.token }}
+          DISCUSSION_NODE_ID: ${{ github.event.discussion.node_id }}
+        run: |
+          python3 checks/discussion_recovery.py gh api graphql \
+            -f query='mutation($id: ID!, $content: ReactionContent!) {
+              addReaction(input: { subjectId: $id, content: $content }) {
+                reaction { content }
+              }
+            }' \
+            -f id="$DISCUSSION_NODE_ID" \
+            -f content="EYES"
 
   queue-notice:
     needs: review

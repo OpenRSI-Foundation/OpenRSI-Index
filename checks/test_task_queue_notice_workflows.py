@@ -44,10 +44,13 @@ def test_queue_notice_is_gated_on_successful_task_dispatch(
     )
     assert dispatch["id"] == "task-dispatch"
     assert workflow["jobs"]["queue-notice"]["needs"] == job
+    notification_gate = "command_dispatched" if job == "dispatch" else "task_dispatched"
     assert (
         workflow["jobs"]["queue-notice"]["if"]
-        == f"needs.{job}.outputs.task_dispatched == 'true'"
+        == f"needs.{job}.outputs.{notification_gate} == 'true'"
     )
+    if job == "dispatch":
+        assert notice["if"] == "needs.dispatch.outputs.task_dispatched == 'true'"
     expected_gate = "steps.task-dispatch.outcome == 'success'"
     if job == "dispatch":
         expected_gate += " && steps.gate.outputs.command == 'task'"

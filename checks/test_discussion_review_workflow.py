@@ -43,12 +43,12 @@ def test_review_workflow_supersedes_only_unfinished_reviews_then_posts_fresh_pro
     assert progress["id"] == "progress"
     assert (
         progress["if"]
-        == "steps.reaction-token.outcome == 'success' && steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'"
+        == "steps.comment-token.outcome == 'success' && steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'"
     )
     assert progress["continue-on-error"] == "true"
     assert progress["env"] == {
-        "GH_TOKEN": "${{ steps.reaction-token.outputs.token }}",
-        "BOT_LOGIN": "${{ steps.reaction-token.outputs.app-slug }}",
+        "GH_TOKEN": "${{ steps.comment-token.outputs.token }}",
+        "BOT_LOGIN": "${{ steps.comment-token.outputs.app-slug }}",
         "DISCUSSION_ID": "${{ github.event.discussion.node_id }}",
         "DISCUSSION_NUMBER": "${{ github.event.discussion.number }}",
         "REPOSITORY_OWNER": "${{ github.repository_owner }}",
@@ -233,6 +233,10 @@ def test_review_workflow_reads_the_private_skills_rubric_with_an_app_token():
 def test_review_reactions_and_comments_use_just_in_time_scoped_app_tokens():
     ordered = parsed_steps()
     steps = {step.get("name"): step for step in ordered}
+    reaction_steps = {
+        step.get("name"): step
+        for step in parsed_workflow()["jobs"]["reaction-notice"]["steps"]
+    }
     expected_with = {
         "client-id": "${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}",
         "private-key": "${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}",
@@ -241,10 +245,9 @@ def test_review_reactions_and_comments_use_just_in_time_scoped_app_tokens():
         "permission-discussions": "write",
     }
 
-    assert steps["Create reaction Discussion App token"] == {
+    assert reaction_steps["Create reaction Discussion App token"] == {
         "name": "Create reaction Discussion App token",
         "id": "reaction-token",
-        "continue-on-error": "true",
         "uses": f"actions/create-github-app-token@{APP_TOKEN_SHA}",
         "with": expected_with,
     }
@@ -254,19 +257,15 @@ def test_review_reactions_and_comments_use_just_in_time_scoped_app_tokens():
         "uses": f"actions/create-github-app-token@{APP_TOKEN_SHA}",
         "with": expected_with,
     }
-    assert steps["React with eyes"]["env"]["GH_TOKEN"] == (
+    assert reaction_steps["React with eyes"]["env"]["GH_TOKEN"] == (
         "${{ steps.reaction-token.outputs.token }}"
     )
-    assert steps["React with eyes"]["if"] == "steps.reaction-token.outcome == 'success'"
-    assert steps["React with eyes"]["continue-on-error"] == "true"
+    assert "continue-on-error" not in reaction_steps["React with eyes"]
     assert steps["Format and post or update comment"]["env"]["GH_TOKEN"] == (
         "${{ steps.comment-token.outputs.token }}"
     )
     assert steps["Post or update running review comment"]["env"]["BOT_LOGIN"] == (
-        "${{ steps.reaction-token.outputs.app-slug }}"
-    )
-    assert ordered.index(steps["Create reaction Discussion App token"]) + 1 == (
-        ordered.index(steps["React with eyes"])
+        "${{ steps.comment-token.outputs.app-slug }}"
     )
     assert ordered.index(steps["Create comment Discussion App token"]) < ordered.index(
         steps["Check for a completed current proposal review"]
@@ -282,7 +281,7 @@ def test_review_reactions_and_comments_use_just_in_time_scoped_app_tokens():
     ]
     assert bot_logins == [
         "${{ steps.comment-token.outputs.app-slug }}",
-        "${{ steps.reaction-token.outputs.app-slug }}",
+        "${{ steps.comment-token.outputs.app-slug }}",
         "${{ steps.comment-token.outputs.app-slug }}",
         "${{ steps.failure-token.outputs.app-slug }}",
     ]
@@ -308,7 +307,11 @@ def test_review_workflow_passes_github_expressions_through_step_environment():
 
 def test_review_workflow_binds_zizmor_flagged_values_as_step_environment():
     steps = {step.get("name"): step for step in parsed_steps()}
-    react = steps["React with eyes"]
+    react = next(
+        step
+        for step in parsed_workflow()["jobs"]["reaction-notice"]["steps"]
+        if step.get("name") == "React with eyes"
+    )
     progress = steps["Post or update running review comment"]
     format_comment = steps["Format and post or update comment"]
 
