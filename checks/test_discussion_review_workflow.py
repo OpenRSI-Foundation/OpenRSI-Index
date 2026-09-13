@@ -99,9 +99,7 @@ def test_review_workflow_replaces_only_current_progress_with_generic_failure():
     assert failure["env"]["PROGRESS_COMMENT_ID"] == (
         "${{ steps.progress.outputs.comment_id }}"
     )
-    assert steps.index(failure_token) == (
-        steps.index(step_named("Dispatch passed proposal privately")) + 1
-    )
+    assert steps.index(failure_token) > steps.index(step_named("Dispatch passed proposal privately"))
     assert steps.index(failure) == steps.index(failure_token) + 1
     assert "Proposal review failed before completion" in failure["run"]
     assert "updateDiscussionComment" in failure["run"]

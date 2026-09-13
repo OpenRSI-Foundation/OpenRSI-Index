@@ -104,9 +104,26 @@ jobs:
           PY
 
       - name: Dispatch privately
+        id: task-dispatch
         if: steps.gate.outputs.candidate == 'true' && (steps.gate.outputs.is_author == 'true' || steps.owner-gate.outputs.is_owner == 'true')
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
         run: |
           gh api --method POST /repos/RSI-Index/RSI-Skills/dispatches \
             --input repository-dispatch.json
+
+      - name: Post task queue notice
+        if: steps.task-dispatch.outcome == 'success' && steps.ack-token.outcome == 'success' && steps.gate.outputs.command == 'task'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ steps.ack-token.outputs.token }}
+          DISCUSSION_ID: ${{ github.event.discussion.node_id }}
+        run: |
+          gh api graphql \
+            -f query='mutation($discussionId: ID!, $body: String!) {
+              addDiscussionComment(input: { discussionId: $discussionId, body: $body }) {
+                comment { id url }
+              }
+            }' \
+            -f discussionId="$DISCUSSION_ID" \
+            -f body='⏳ Your task is queued and will start automatically when a runner is available. No action is needed.'

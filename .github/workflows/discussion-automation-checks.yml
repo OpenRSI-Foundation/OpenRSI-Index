@@ -32,6 +32,7 @@ jobs:
             python -m pytest -q \
             checks/test_discussion_review_workflow.py \
             checks/test_discussion_task_dispatch_workflow.py \
+            checks/test_task_queue_notice_workflows.py \
             checks/test_discussion_task_dispatch.py \
             checks/test_proposal_pass_dispatch.py \
             checks/test_proposal_review_marker.py \
