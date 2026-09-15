@@ -13,9 +13,9 @@
   <a href="assets/figures/wechat.png"><img src="https://img.shields.io/badge/WeChat-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat Group"></a>
 </div>
 
-## 📣 Call for Contributors
+## 📣 Call for Contributors — Co-authorship Opportunities
 
-**We're actively looking for contributors to add new, challenging tasks.** Our dedicated **agent-native RSI-Anything pipeline** helps you create a new task in **an hour or less**—bring the idea, and our agents handle the rest. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for a step-by-step guide to creating and submitting tasks. Have fun! 😀
+**We're actively looking for contributors to add new, challenging tasks.** Our dedicated **agent-native RSI-Anything pipeline** helps you create a new task in **an hour or less**—bring the idea, and our agents handle the rest. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for a step-by-step guide to creating and submitting tasks. **Contributors with accepted tasks will be invited as co-authors.** Have fun! 😀
 
 Clone the repository:
 
