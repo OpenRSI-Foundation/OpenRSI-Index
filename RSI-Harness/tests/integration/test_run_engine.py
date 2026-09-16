@@ -84,6 +84,7 @@ def _managed_workdir_volume(plan, *, run_id: str = "run-1"):
 def test_production_installs_hooks_before_securing_generic_agent_auth(
     tmp_path: Path,
 ) -> None:
+    from rsi_harness.runtime.network import PinnedEndpoint
     from rsi_harness.runtime.production import _ProductionRunComposition
 
     secret = "LOCAL-CODEX-AUTH-TOKEN"
@@ -157,7 +158,26 @@ def test_production_installs_hooks_before_securing_generic_agent_auth(
         omit_gpu_device_requests_for_tests=True,
         agent_adapter_factory=lambda _config, _runtime: Agent(),
         quiescence_checker=None,
-        api_endpoints=(),
+        api_endpoints=(
+            PinnedEndpoint(
+                hostname="chatgpt.com",
+                port=443,
+                addresses=(
+                    ipaddress.ip_address("203.0.113.80"),
+                    ipaddress.ip_address("203.0.113.81"),
+                ),
+            ),
+            PinnedEndpoint(
+                hostname="chatgpt.com",
+                port=8443,
+                addresses=(ipaddress.ip_address("203.0.113.80"),),
+            ),
+            PinnedEndpoint(
+                hostname="auth.openai.com",
+                port=443,
+                addresses=(ipaddress.ip_address("203.0.113.82"),),
+            ),
+        ),
         agent_secret_env={},
         verifier_secret_env={},
         agent_auth=auth,
@@ -184,6 +204,11 @@ def test_production_installs_hooks_before_securing_generic_agent_auth(
 
     assert runtime.spec.tmpfs == tuple(mount.tmpfs for mount in auth.mounts)
     assert runtime.spec.gpu_allocation.uuids == ("GPU-a", "GPU-b")
+    assert runtime.spec.extra_hosts == (
+        ("chatgpt.com", "203.0.113.80"),
+        ("chatgpt.com", "203.0.113.81"),
+        ("auth.openai.com", "203.0.113.82"),
+    )
     composition.install_hooks(
         plan, work, "http://172.30.0.1:9020", "control-token"
     )
