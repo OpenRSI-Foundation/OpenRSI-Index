@@ -458,6 +458,7 @@ class ContainerSpec:
     cpus: int | None = None
     memory_mb: int | None = None
     storage_mb: int | None = None
+    extra_hosts: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         if self.workdir is not None:

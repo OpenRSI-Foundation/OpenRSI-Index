@@ -113,6 +113,11 @@ def test_create_passes_exact_gpu_uuids_typed_mounts_and_recovery_labels(tmp_path
             command=("sleep", "infinity"),
             workdir=PurePosixPath("/workspace"),
             environment=(("HOME", "/home/agent"),),
+            extra_hosts=(
+                ("chatgpt.com", "203.0.113.80"),
+                ("chatgpt.com", "203.0.113.81"),
+                ("auth.openai.com", "203.0.113.82"),
+            ),
             mounts=(
                 ContainerMount(
                     source=workspace.resolve(),
@@ -141,6 +146,11 @@ def test_create_passes_exact_gpu_uuids_typed_mounts_and_recovery_labels(tmp_path
         )
     ]
     assert create["network"] == "rsi-run-7-task-3-work-phase"
+    assert create["extra_hosts"] == [
+        "chatgpt.com:203.0.113.80",
+        "chatgpt.com:203.0.113.81",
+        "auth.openai.com:203.0.113.82",
+    ]
     assert create["privileged"] is False
     assert create["cap_drop"] == ["NET_RAW"]
     assert create["labels"] == {
@@ -150,6 +160,15 @@ def test_create_passes_exact_gpu_uuids_typed_mounts_and_recovery_labels(tmp_path
     }
     assert "devices" not in create
     assert "network_mode" not in create
+
+
+def test_create_omits_extra_hosts_without_pinned_mappings(tmp_path):
+    client = FakeDockerClient()
+    runtime = make_runtime(client, tmp_path)
+
+    runtime.create(ContainerSpec(image="work@sha256:abc"))
+
+    assert "extra_hosts" not in client.containers.created[0]
 
 
 def test_work_feedback_mount_requires_exact_read_only_authority(tmp_path):
