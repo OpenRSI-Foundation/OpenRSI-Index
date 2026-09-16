@@ -84,6 +84,7 @@ def _managed_workdir_volume(plan, *, run_id: str = "run-1"):
 def test_production_installs_hooks_before_securing_generic_agent_auth(
     tmp_path: Path,
 ) -> None:
+    from rsi_harness.runtime.network import PinnedEndpoint
     from rsi_harness.runtime.production import _ProductionRunComposition
 
     secret = "LOCAL-CODEX-AUTH-TOKEN"
@@ -157,7 +158,26 @@ def test_production_installs_hooks_before_securing_generic_agent_auth(
         omit_gpu_device_requests_for_tests=True,
         agent_adapter_factory=lambda _config, _runtime: Agent(),
         quiescence_checker=None,
-        api_endpoints=(),
+        api_endpoints=(
+            PinnedEndpoint(
+                hostname="chatgpt.com",
+                port=443,
+                addresses=(
+                    ipaddress.ip_address("203.0.113.80"),
+                    ipaddress.ip_address("203.0.113.81"),
+                ),
+            ),
+            PinnedEndpoint(
+                hostname="chatgpt.com",
+                port=8443,
+                addresses=(ipaddress.ip_address("203.0.113.80"),),
+            ),
+            PinnedEndpoint(
+                hostname="auth.openai.com",
+                port=443,
+                addresses=(ipaddress.ip_address("203.0.113.82"),),
+            ),
+        ),
         agent_secret_env={},
         verifier_secret_env={},
         agent_auth=auth,
@@ -184,6 +204,11 @@ def test_production_installs_hooks_before_securing_generic_agent_auth(
 
     assert runtime.spec.tmpfs == tuple(mount.tmpfs for mount in auth.mounts)
     assert runtime.spec.gpu_allocation.uuids == ("GPU-a", "GPU-b")
+    assert runtime.spec.extra_hosts == (
+        ("chatgpt.com", "203.0.113.80"),
+        ("chatgpt.com", "203.0.113.81"),
+        ("auth.openai.com", "203.0.113.82"),
+    )
     composition.install_hooks(
         plan, work, "http://172.30.0.1:9020", "control-token"
     )
@@ -397,6 +422,76 @@ def test_no_network_codex_local_login_pins_chatgpt_provider_endpoints(
         (
             "https://chatgpt.com/backend-api/codex",
             "https://auth.openai.com",
+        )
+    ]
+
+
+def test_no_network_claude_local_login_pins_oauth_provider_endpoints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rsi_harness.runtime import production
+    from rsi_harness.runtime.network import NetworkPolicyEnforcer, PinnedEndpoint
+    from rsi_harness.runtime.production import ProductionRuntimeServices
+
+    auth = AgentAuthMaterial(
+        agent_name="claude-code",
+        mounts=(),
+        secret_values=frozenset({"claude-local-login-secret"}),
+        provider_endpoints=(
+            "https://api.anthropic.com",
+            "https://platform.claude.com",
+        ),
+    )
+    monkeypatch.setattr(production, "resolve_agent_auth", lambda **_kwargs: auth)
+    requested: list[tuple[str, ...]] = []
+
+    def pin_claude(self, endpoints):
+        del self
+        requested.append(tuple(endpoints))
+        return tuple(
+            PinnedEndpoint(
+                hostname=urlsplit(endpoint).hostname or "",
+                port=443,
+                addresses=(ipaddress.ip_address(f"203.0.113.{90 + index}"),),
+            )
+            for index, endpoint in enumerate(endpoints)
+        )
+
+    monkeypatch.setattr(NetworkPolicyEnforcer, "pin_endpoints", pin_claude)
+
+    class Coordinator:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run(self, request: RunRequest) -> RunResult:
+            del request
+            return RunResult(run_id="claude-local", status=RunStatus.COMPLETED)
+
+    services = ProductionRuntimeServices(
+        data_root=tmp_path / "data",
+        logs_root=tmp_path / "logs",
+        docker_client=object(),
+        inventory=_OneDeviceInventory(),
+        rsi_loop_config=RSILoopConfig(),
+        coordinator_factory=Coordinator,
+        bridge_gateway="127.0.0.1",
+    )
+
+    result = services.run(
+        RunRequest(
+            task_dir=_no_network_task(tmp_path).resolve(),
+            options=CompileOptions(agent_name="claude-code"),
+            agent_auth=AgentAuthSource.LOCAL,
+        )
+    )
+
+    assert result.status is RunStatus.COMPLETED
+    # The OAuth refresh host is pinned alongside the inference API, so a
+    # multi-hour run survives the access-token rotation.
+    assert requested == [
+        (
+            "https://api.anthropic.com",
+            "https://platform.claude.com",
         )
     ]
 

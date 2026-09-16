@@ -316,6 +316,30 @@ def test_prepare_maps_generic_reasoning_effort_to_claude_cli_flag(
     assert "--reasoning-effort" not in prepared.command[2]
 
 
+def test_claude_agent_environment_marks_work_container_as_sandbox() -> None:
+    from rsi_harness.integrations.rsi_loop import (
+        rsi_loop_agent_environment,
+        rsi_loop_runtime_secret_values,
+    )
+    from rsi_loop.harness.agent import create_agent
+
+    config = RSILoopConfig()
+    environment = rsi_loop_agent_environment(
+        config, create_agent("claude-code", config), "claude-opus-5"
+    )
+
+    # Task images without a USER run the Agent as root, where Claude Code
+    # refuses --dangerously-skip-permissions unless IS_SANDBOX is exactly "1".
+    assert environment["IS_SANDBOX"] == "1"
+    # The marker must not join the exact-value redaction set (it would
+    # redact every "1" in the trajectory), unlike RSI_AGENT_EXTRA_ENV values.
+    assert "1" not in rsi_loop_runtime_secret_values(config)
+    codex_environment = rsi_loop_agent_environment(
+        config, create_agent("codex", config), None
+    )
+    assert "IS_SANDBOX" not in codex_environment
+
+
 def test_prepare_rejects_unsupported_claude_reasoning_effort_before_writing_prompt(
     tmp_path: Path,
 ) -> None:

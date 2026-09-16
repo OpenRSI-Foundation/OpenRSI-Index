@@ -478,6 +478,10 @@ class DockerContainerRuntime:
         }
         if spec.shm_size is not None:
             kwargs["shm_size"] = spec.shm_size
+        if spec.extra_hosts:
+            kwargs["extra_hosts"] = [
+                f"{hostname}:{address}" for hostname, address in spec.extra_hosts
+            ]
         if spec.cpus is not None:
             kwargs["nano_cpus"] = int(spec.cpus * 1_000_000_000)
         if spec.memory_mb is not None:

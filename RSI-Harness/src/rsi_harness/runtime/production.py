@@ -965,6 +965,15 @@ class _ProductionRunComposition:
                     workdir=plan.workdir,
                     user="0",
                     environment=tuple(sorted(container_environment.items())),
+                    # Match the firewall's pinned service IPs without requiring
+                    # external DNS from a no-network Work container.
+                    extra_hosts=tuple(
+                        dict.fromkeys(
+                            (endpoint.hostname, str(address))
+                            for endpoint in self.api_endpoints
+                            for address in endpoint.addresses
+                        )
+                    ),
                     mounts=(
                         ContainerMount(
                             source=self.artifacts.feedback_root,
