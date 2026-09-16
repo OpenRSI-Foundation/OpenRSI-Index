@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import re
 import shlex
 import socket
 import subprocess
@@ -286,11 +287,17 @@ class DockerIptablesFirewallBackend:
                 for line in listing
                 if shlex.split(line)[:1] not in (["-N"], ["-P"])
             ]
-            if not host_rules or host_rules[0] != expected_jump:
-                return False
             owned = self._owned_jump_lines(listing, rule_id)
             if [shlex.split(line) for line in owned] != [expected_jump]:
                 return False
+            for preceding in host_rules[:host_rules.index(expected_jump)]:
+                if not self._disjoint_policy_jump(
+                    preceding,
+                    host_chain=host_chain,
+                    kind=kind,
+                    bridge_interface=rules.bridge_interface,
+                ):
+                    return False
             chain_lines = self._checked(
                 ["iptables", "--wait", "-S", policy_chain]
             ).stdout.splitlines()
@@ -304,6 +311,31 @@ class DockerIptablesFirewallBackend:
             if actual_rules != expected_rules:
                 return False
         return True
+
+    @classmethod
+    def _disjoint_policy_jump(
+        cls,
+        tokens: list[str],
+        *,
+        host_chain: str,
+        kind: str,
+        bridge_interface: str,
+    ) -> bool:
+        """Skip only canonical sibling jumps that cannot match this bridge."""
+        if (
+            len(tokens) != 10
+            or tokens[:3] != ["-A", host_chain, "-i"]
+            or tokens[4:7] != ["-m", "comment", "--comment"]
+            or tokens[8] != "-j"
+            or re.fullmatch(r"rsi[0-9a-f]{12}", tokens[3]) is None
+            or tokens[3] == bridge_interface
+        ):
+            return False
+        rule_id, separator, actual_kind = tokens[7].rpartition(":")
+        if not rule_id.startswith("rsi-") or not separator or actual_kind != kind:
+            return False
+        expected_chain = cls._chains(rule_id)[0 if kind == "forward" else 1]
+        return tokens[9] == expected_chain
 
     def _compiled_forward_rules(
         self, rules: NetworkRuleSet
