@@ -51,6 +51,10 @@ class ClaudeCodeAgent(Agent):
     stop_hook = "claude"
 
     def augment_env(self, env: dict[str, str], model: str | None) -> None:
+        # The Work container is the sandbox. Claude Code refuses
+        # --dangerously-skip-permissions as root unless IS_SANDBOX is exactly "1",
+        # and task images without a USER run the Agent as root.
+        env["IS_SANDBOX"] = "1"
         if self._config.claude_cache_opt:
             env["CLAUDE_CODE_ATTRIBUTION_HEADER"] = "0"
         if not self._config.agent_api_base_url and self._config.agent_api_key:

@@ -334,6 +334,12 @@ class CodexLocalAuthProvider:
         )
 
 
+_CLAUDE_OAUTH_PROVIDER_ENDPOINTS = (
+    "https://api.anthropic.com",
+    "https://platform.claude.com",
+)
+
+
 class ClaudeCodeLocalAuthProvider:
     """Resolve the invoking user's standard Claude Code login file."""
 
@@ -411,6 +417,14 @@ class ClaudeCodeLocalAuthProvider:
                 ),
             ),
             secret_values=frozenset(secret_values),
+            # A claude.ai OAuth login refreshes its short-lived access token at
+            # platform.claude.com; a no-network Work container must reach it as
+            # well as the inference API, which provider endpoints replace.
+            provider_endpoints=(
+                _CLAUDE_OAUTH_PROVIDER_ENDPOINTS
+                if isinstance(parsed.get("claudeAiOauth"), dict)
+                else ()
+            ),
         )
 
 
