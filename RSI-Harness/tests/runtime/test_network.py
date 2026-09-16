@@ -542,6 +542,100 @@ def test_firewall_attestation_compares_both_exact_ordered_chains_and_jumps():
         assert backend.is_installed(lease.rule_id, lease.rules) is False
 
 
+def test_firewall_attestation_accepts_canonical_siblings_and_scoped_cleanup():
+    runner = InMemoryIptablesRunner()
+    backend = DockerIptablesFirewallBackend(FakeDockerClient(), runner=runner)
+    enforcer = NetworkPolicyEnforcer(run_id="run-1", firewall=backend)
+    leases = tuple(
+        enforcer.apply(
+            ContainerRef(container_id=f"work-{index}", role="work"),
+            NetworkPolicy(mode="no-network"),
+            network=managed(f"work-network-{index}", "work"),
+        )
+        for index in range(3)
+    )
+
+    for lease in leases:
+        enforcer.attest(lease)
+
+    enforcer.cleanup(leases[1])
+
+    assert backend.exists(leases[1].rule_id) is False
+    for lease in (leases[0], leases[2]):
+        assert backend.exists(lease.rule_id) is True
+        enforcer.attest(lease)
+    for host_chain in ("DOCKER-USER", "INPUT"):
+        comments = [
+            rule[rule.index("--comment") + 1]
+            for rule in runner.chains[host_chain]
+        ]
+        assert len(comments) == 2
+        assert all(leases[1].rule_id not in comment for comment in comments)
+        assert all(
+            any(lease.rule_id in comment for comment in comments)
+            for lease in (leases[0], leases[2])
+        )
+
+
+@pytest.mark.parametrize(
+    ("host_chain", "kind", "policy_chain"),
+    (
+        ("DOCKER-USER", "forward", "RSI_F_DC988898991AD751"),
+        ("INPUT", "input", "RSI_I_DC988898991AD751"),
+    ),
+)
+@pytest.mark.parametrize(
+    "adversarial_prefix",
+    (
+        "unconditional",
+        "same-bridge",
+        "negated-interface",
+        "wildcard-interface",
+        "unknown-comment",
+        "wrong-policy-chain",
+    ),
+)
+def test_firewall_attestation_rejects_noncanonical_or_overlapping_prefix_rules(
+    host_chain,
+    kind,
+    policy_chain,
+    adversarial_prefix,
+):
+    backend, _enforcer, lease, runner = exact_firewall_harness()
+    other_rule_id = "rsi-other-work-deadbeef1234"
+    other_bridge = "rsi0123456789ab"
+    prefix = [
+        "-i",
+        other_bridge,
+        "-m",
+        "comment",
+        "--comment",
+        f"{other_rule_id}:{kind}",
+        "-j",
+        policy_chain,
+    ]
+    runner.chains[host_chain].insert(0, list(prefix))
+    assert backend.is_installed(lease.rule_id, lease.rules) is True
+    runner.chains[host_chain].pop(0)
+
+    if adversarial_prefix == "unconditional":
+        prefix = ["-j", "ACCEPT"]
+    elif adversarial_prefix == "same-bridge":
+        prefix[1] = lease.rules.bridge_interface
+    elif adversarial_prefix == "negated-interface":
+        prefix.insert(0, "!")
+    elif adversarial_prefix == "wildcard-interface":
+        prefix[1] = "rsi0123456789a+"
+    elif adversarial_prefix == "unknown-comment":
+        prefix[5] = f"foreign-policy:{kind}"
+    elif adversarial_prefix == "wrong-policy-chain":
+        prefix[-1] = policy_chain.replace("DC988898991AD751", "0000000000000000")
+
+    runner.chains[host_chain].insert(0, prefix)
+
+    assert backend.is_installed(lease.rule_id, lease.rules) is False
+
+
 def test_partial_input_install_rolls_back_both_jumps_and_policy_chains():
     client = FakeDockerClient()
     container = FakeDockerContainer("work")
