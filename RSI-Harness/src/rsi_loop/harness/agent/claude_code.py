@@ -32,11 +32,15 @@ class ClaudeCodeAgent(Agent):
         "sudo -E bash -c 'NODE_MIRROR=${RSI_NODEJS_MIRROR_URL:-https://nodejs.org/dist} && curl -fsSL $NODE_MIRROR/v20.18.0/node-v20.18.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1'",
         "sudo -E npm install -g @anthropic-ai/claude-code@2.1.159",
     ]
+    # The prompt is fed on stdin, not as an argument: with the task text in
+    # argv, an Agent running `pkill -f <name mentioned in the task>` matches
+    # and kills its own claude process (observed: `pkill -f run_fixed.py`).
     run_cmd = (
-        'claude -p "$(cat {prompt_file})"'
+        "claude -p"
         " --output-format stream-json"
         " --verbose"
         " --dangerously-skip-permissions"
+        " <{prompt_file}"
     )
     resume_cmd = (
         'claude --continue -p "Continue working."'
