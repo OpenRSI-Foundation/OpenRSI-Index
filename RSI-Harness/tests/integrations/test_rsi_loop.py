@@ -277,7 +277,7 @@ def test_prepare_maps_generic_reasoning_effort_to_codex_cli_override(
 @pytest.mark.parametrize(
     ("resume", "expected_prefix"),
     (
-        (False, 'claude --effort max -p "$(cat /tmp/rsi-agent-prompt.md)"'),
+        (False, "claude --effort max -p --output-format stream-json"),
         (True, 'claude --effort max --continue -p "Continue working."'),
     ),
 )
@@ -338,6 +338,35 @@ def test_claude_agent_environment_marks_work_container_as_sandbox() -> None:
         config, create_agent("codex", config), None
     )
     assert "IS_SANDBOX" not in codex_environment
+
+
+def test_claude_prompt_is_read_from_stdin_and_never_expanded_into_argv(
+    tmp_path: Path,
+) -> None:
+    """A task prompt in argv lets `pkill -f <task word>` kill the Agent itself."""
+    prompt_path = (tmp_path / "claude-stdin-prompt.md").resolve()
+    plan = make_run_plan(tmp_path)
+    plan = plan.model_copy(
+        update={
+            "task": plan.task.model_copy(
+                update={
+                    "agent": plan.task.agent.model_copy(
+                        update={"name": "claude-code", "model": "claude-opus-5"}
+                    )
+                }
+            )
+        }
+    )
+
+    prepared = RSILoopAgentAdapter(RSILoopConfig()).prepare(
+        AgentPrepareRequest(run_plan=plan, prompt_path=prompt_path, resume=False)
+    )
+
+    command = prepared.command[2]
+    assert command.startswith("claude -p ")
+    assert "$(cat" not in command
+    assert " </tmp/rsi-agent-prompt.md" in command
+    assert " --model claude-opus-5" in command
 
 
 def test_prepare_rejects_unsupported_claude_reasoning_effort_before_writing_prompt(
