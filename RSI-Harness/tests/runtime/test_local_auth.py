@@ -190,6 +190,10 @@ def test_claude_provider_reads_standard_login_into_private_work_tmpfs(
     assert "claude-local-access-secret" in auth.secret_values
     assert "claude-local-refresh-secret" in auth.secret_values
     assert "claude-local-access-secret" not in repr(auth)
+    assert auth.provider_endpoints == (
+        "https://api.anthropic.com",
+        "https://platform.claude.com",
+    )
 
 
 def test_claude_provider_reads_absolute_config_dir_without_forwarding_host_path(
@@ -216,6 +220,32 @@ def test_claude_provider_reads_absolute_config_dir_without_forwarding_host_path(
     assert auth.mounts[0].tmpfs.target.as_posix() == "/home/agent/.claude"
     assert auth.mounts[0].files[0].content == source.read_bytes()
     assert "custom-dir-secret" in auth.secret_values
+    assert auth.provider_endpoints == (
+        "https://api.anthropic.com",
+        "https://platform.claude.com",
+    )
+
+
+def test_claude_provider_without_oauth_login_keeps_default_provider_endpoints(
+    tmp_path: Path,
+) -> None:
+    _write_claude_auth(tmp_path / ".claude", {"apiKey": "static-key-secret"})
+
+    from rsi_harness.runtime.local_auth import resolve_agent_auth
+
+    auth = resolve_agent_auth(
+        source=AgentAuthSource.LOCAL,
+        agent_name="claude-code",
+        agent_api_key=None,
+        environ={},
+        process_uid=os.getuid(),
+        effective_uid=os.geteuid(),
+        user_lookup=_lookup(tmp_path, os.getuid()),
+    )
+
+    assert auth is not None
+    assert auth.provider_endpoints == ()
+    assert "static-key-secret" in auth.secret_values
 
 
 def test_local_auth_option_rejects_unregistered_agent_before_lookup() -> None:

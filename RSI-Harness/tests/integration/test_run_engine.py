@@ -426,6 +426,76 @@ def test_no_network_codex_local_login_pins_chatgpt_provider_endpoints(
     ]
 
 
+def test_no_network_claude_local_login_pins_oauth_provider_endpoints(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rsi_harness.runtime import production
+    from rsi_harness.runtime.network import NetworkPolicyEnforcer, PinnedEndpoint
+    from rsi_harness.runtime.production import ProductionRuntimeServices
+
+    auth = AgentAuthMaterial(
+        agent_name="claude-code",
+        mounts=(),
+        secret_values=frozenset({"claude-local-login-secret"}),
+        provider_endpoints=(
+            "https://api.anthropic.com",
+            "https://platform.claude.com",
+        ),
+    )
+    monkeypatch.setattr(production, "resolve_agent_auth", lambda **_kwargs: auth)
+    requested: list[tuple[str, ...]] = []
+
+    def pin_claude(self, endpoints):
+        del self
+        requested.append(tuple(endpoints))
+        return tuple(
+            PinnedEndpoint(
+                hostname=urlsplit(endpoint).hostname or "",
+                port=443,
+                addresses=(ipaddress.ip_address(f"203.0.113.{90 + index}"),),
+            )
+            for index, endpoint in enumerate(endpoints)
+        )
+
+    monkeypatch.setattr(NetworkPolicyEnforcer, "pin_endpoints", pin_claude)
+
+    class Coordinator:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def run(self, request: RunRequest) -> RunResult:
+            del request
+            return RunResult(run_id="claude-local", status=RunStatus.COMPLETED)
+
+    services = ProductionRuntimeServices(
+        data_root=tmp_path / "data",
+        logs_root=tmp_path / "logs",
+        docker_client=object(),
+        inventory=_OneDeviceInventory(),
+        rsi_loop_config=RSILoopConfig(),
+        coordinator_factory=Coordinator,
+        bridge_gateway="127.0.0.1",
+    )
+
+    result = services.run(
+        RunRequest(
+            task_dir=_no_network_task(tmp_path).resolve(),
+            options=CompileOptions(agent_name="claude-code"),
+            agent_auth=AgentAuthSource.LOCAL,
+        )
+    )
+
+    assert result.status is RunStatus.COMPLETED
+    # The OAuth refresh host is pinned alongside the inference API, so a
+    # multi-hour run survives the access-token rotation.
+    assert requested == [
+        (
+            "https://api.anthropic.com",
+            "https://platform.claude.com",
+        )
+    ]
+
+
 def test_no_network_agent_without_registered_default_fails_before_mutation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
