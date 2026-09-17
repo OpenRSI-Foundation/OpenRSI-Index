@@ -1,6 +1,17 @@
-![OpenRSI Index](assets/figures/openrsi-index-header-starry.svg)
+<p align="center">
+  <img src="assets/figures/openrsi-index-header-starry.svg" alt="OpenRSI Index" width="567">
+</p>
 
-![Website](https://img.shields.io/badge/Website-2563EB?style=for-the-badge&logo=googleearth&logoColor=white)![GitHub](https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white)![Contribution Call](assets/figures/contribution-call.svg)![Discord](https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white)![WeChat Group](https://img.shields.io/badge/WeChat-07C160?style=for-the-badge&logo=wechat&logoColor=white)
+<div align="center">
+  <a href="https://rsi-first-exam.rsi-anything.workers.dev/"><img src="https://img.shields.io/badge/Website-2563EB?style=for-the-badge&logo=googleearth&logoColor=white" alt="Website"></a>&nbsp;&nbsp;
+  <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index"><img src="https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub"></a>&nbsp;&nbsp;
+  <!-- TODO: Replace the X placeholder with the project profile or announcement URL. -->
+  <!-- <a href="#"><img src="https://img.shields.io/badge/Twitter-000000?style=for-the-badge&logo=X&logoColor=white" alt="X"></a> -->
+  <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md"><img src="assets/figures/contribution-call.svg" alt="Contribution Call"></a>&nbsp;&nbsp;
+  <!-- TODO: Replace the Discord placeholder with the project invite URL. -->
+  <a href="https://discord.gg/3EG8Qhmfsa"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>&nbsp;&nbsp;
+  <a href="assets/figures/wechat.png"><img src="https://img.shields.io/badge/WeChat-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat Group"></a>
+</div>
 
 ## 📣 Call for Contributors
 
@@ -31,24 +42,23 @@ We are witnessing the dawn of a new era: AI is entering a recursive self-improve
 
 We are actively developing this project and welcome [contributions](https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md) from the community. Tasks and execution logs are available in [rsi-tasks/](rsi-tasks/) and [rsi-logs/](rsi-logs/), respectively. See [Quick Start](assets/docs/quick-start.md) for instructions on running these tasks.
 
-**View tasks**
+<details>
+<summary><strong>View tasks</strong></summary>
 
+| Task                                                                | Track          | Category      | Description                                                           | GPU requirement |
+| ------------------------------------------------------------------- | -------------- | ------------- | --------------------------------------------------------------------- | --------------- |
+| `Qwen-122B-RL`                                                      | Signature Task | Post-training | Optimize a full post-training stack under one fixed budget.           | 256× H100       |
+| [`marin-optimizer-update-geometry`](rsi-tasks/signature-tasks/pre-training-optimizer-update-geometry/) | Signature Task | Pre-training  | Design a scale-general optimizer for the Marin scaling ladder.        | 256× H100       |
+| [`gpic-text-to-image`](rsi-tasks/signature-tasks/gpic_generation/)     | Signature Task | Vision        | Train a text-to-image model on one epoch of GPIC.                     | 256× H100       |
+| [`depth-width-allocation`](rsi-tasks/depth-width-allocation/)       | Public Task    | Pre-training  | Optimize decoder-width allocation under a fixed 200M training budget. | 8× H100         |
+| [`learnability-cot`](rsi-tasks/learnability-cot/)                   | Public Task    | Post-training | Adapt reasoning traces for small-model math SFT.                      | 4× H100         |
+| [`gemm-h100-refined`](rsi-tasks/gemm-h100-refined/)                 | Public Task    | MLSys         | Optimize an FP16 CUDA GEMM kernel for H100 throughput.                | 1× H100         |
+| [`liger-tied-ce`](rsi-tasks/liger-tied-ce/)                         | Public Task    | MLSys         | Optimize tied-weight fused cross-entropy for Qwen3 SFT.               | 2× H100         |
+| [`minference-sparse-prefill`](rsi-tasks/minference-sparse-prefill/) | Public Task    | MLSys         | Optimize Triton sparse-prefill attention on H100.                     | 1× H100         |
+| [`molmo2-pointing-refined`](rsi-tasks/molmo2-pointing-refined/)     | Public Task    | Vision        | Optimize Molmo2 video-pointing at inference time.                     | 1× H100         |
+| [`datacomp-small-filtering`](rsi-tasks/datacomp-small-filtering/)   | Public Task    | Vision        | Curate DataComp-small data for fixed ViT-B/32 training.               | 32× H100        |
 
-| Task                                                                                                   | Track          | Category      | Description                                                           | GPU requirement |
-| ------------------------------------------------------------------------------------------------------ | -------------- | ------------- | --------------------------------------------------------------------- | --------------- |
-| `Qwen-122B-RL`                                                                                         | Signature Task | Post-training | Optimize a full post-training stack under one fixed budget.           | 256× H100       |
-| `[marin-optimizer-update-geometry](rsi-tasks/signature-tasks/pre-training-optimizer-update-geometry/)` | Signature Task | Pre-training  | Design a scale-general optimizer for the Marin scaling ladder.        | 256× H100       |
-| `[gpic-text-to-image](rsi-tasks/signature-tasks/gpic_generation/)`                                     | Signature Task | Vision        | Train a text-to-image model on one epoch of GPIC.                     | 256× H100       |
-| `[depth-width-allocation](rsi-tasks/depth-width-allocation/)`                                          | Public Task    | Pre-training  | Optimize decoder-width allocation under a fixed 200M training budget. | 8× H100         |
-| `[learnability-cot](rsi-tasks/learnability-cot/)`                                                      | Public Task    | Post-training | Adapt reasoning traces for small-model math SFT.                      | 4× H100         |
-| `[gemm-h100-refined](rsi-tasks/gemm-h100-refined/)`                                                    | Public Task    | MLSys         | Optimize an FP16 CUDA GEMM kernel for H100 throughput.                | 1× H100         |
-| `[liger-tied-ce](rsi-tasks/liger-tied-ce/)`                                                            | Public Task    | MLSys         | Optimize tied-weight fused cross-entropy for Qwen3 SFT.               | 2× H100         |
-| `[minference-sparse-prefill](rsi-tasks/minference-sparse-prefill/)`                                    | Public Task    | MLSys         | Optimize Triton sparse-prefill attention on H100.                     | 1× H100         |
-| `[molmo2-pointing-refined](rsi-tasks/molmo2-pointing-refined/)`                                        | Public Task    | Vision        | Optimize Molmo2 video-pointing at inference time.                     | 1× H100         |
-| `[datacomp-small-filtering](rsi-tasks/datacomp-small-filtering/)`                                      | Public Task    | Vision        | Curate DataComp-small data for fixed ViT-B/32 training.               | 32× H100        |
-
-
-
+</details>
 
 ### How an evaluation works: RSI-Harness
 
