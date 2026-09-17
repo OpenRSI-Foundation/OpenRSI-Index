@@ -64,6 +64,33 @@ We are actively developing this project and welcome [contributions](https://gith
 
 ## 🤝 Contributors
 
+### Advisors (in alphabetical order)
 
+<table>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://wenhuchen.github.io/">Wenhu Chen</a></strong><br>University of Waterloo</td>
+    <td width="25%" valign="top"><strong><a href="https://yejinc.github.io/">Yejin Choi</a></strong><br>Stanford University</td>
+    <td width="25%" valign="top"><strong><a href="https://www.microsoft.com/en-us/research/people/jfgao/">Jianfeng Gao</a></strong><br>Microsoft Research</td>
+    <td width="25%" valign="top"><strong><a href="https://hannaneh.ai/">Hannaneh Hajishirzi</a></strong><br>University of Washington</td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://koh.pw/">Pang Wei Koh</a></strong><br>University of Washington</td>
+    <td width="25%" valign="top"><strong><a href="https://ranjaykrishna.com/index.html">Ranjay Krishna</a></strong><br>University of Washington</td>
+    <td width="25%" valign="top"><strong><a href="https://www.cs.princeton.edu/people/profile/karthikn">Karthik Narasimhan</a></strong><br>Princeton University</td>
+    <td width="25%" valign="top"><strong><a href="https://mitibm.mit.edu/people/rameswar-panda/">Rameswar Panda</a></strong><br>MIT-IBM Watson AI Lab</td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://people.ece.uw.edu/radha/">Radha Poovendran</a></strong><br>University of Washington</td>
+    <td width="25%" valign="top"><strong><a href="https://dawnsong.io/">Dawn Song</a></strong><br>UC Berkeley</td>
+    <td width="25%" valign="top"><strong><a href="https://ysu1989.github.io/">Yu Su</a></strong><br>The Ohio State University</td>
+    <td width="25%" valign="top"><strong><a href="https://engineering.osu.edu/people/sun.397">Huan Sun</a></strong><br>The Ohio State University</td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://cs.stanford.edu/~diyiy/">Diyi Yang</a></strong><br>Stanford University</td>
+    <td width="25%" valign="top"><strong><a href="https://faculty.ucmerced.edu/mhyang/">Ming‑Hsuan Yang</a></strong><br>UC Merced</td>
+    <td width="25%" valign="top"><strong><a href="https://xiangyue9607.github.io/">Xiang Yue</a></strong><br>Independent Researcher</td>
+    <td width="25%" valign="top"><strong><a href="https://homes.cs.washington.edu/~lsz/">Luke Zettlemoyer</a></strong><br>University of Washington</td>
+  </tr>
+</table>
 
 ## 🙏 Acknowledgements
