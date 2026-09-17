@@ -32,9 +32,9 @@ Use the proposal-agent skill at .agents/skills/proposal-agent/SKILL.md in my loc
 
 **Any questions?** Contact us at [yuetaili@uw.edu](mailto:yuetaili@uw.edu), [zhuofengli12345@gmail.com](mailto:zhuofengli12345@gmail.com), or [yfeng42@uw.edu](mailto:yfeng42@uw.edu).
 
-## 🔥🖥️ Call for Compute
+## 🔥 Call for Compute
 
-We're looking for compute partners to run GPU experiments and build frontier RSI environments. Contact [yuetaili@uw.edu](mailto:yuetaili@uw.edu), [zhuofengli12345@gmail.com](mailto:zhuofengli12345@gmail.com), or [hanxinyang@berkeley.edu](mailto:hanxinyang@berkeley.edu).
+If you have compute resources to run experiments and want to build frontier RSI environments together, contact [yuetaili@uw.edu](mailto:yuetaili@uw.edu), [zhuofengli12345@gmail.com](mailto:zhuofengli12345@gmail.com), or [hanxinyang@berkeley.edu](mailto:hanxinyang@berkeley.edu).
 
 ## 💥 Why OpenRSI Index?
 
