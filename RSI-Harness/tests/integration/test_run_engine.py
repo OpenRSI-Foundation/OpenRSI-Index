@@ -1749,6 +1749,7 @@ def test_prepare_plan_uses_image_workdir_without_overlay_probe(tmp_path: Path) -
     assert metadata["cwd"] == "/image-workdir"
 
 
+@pytest.mark.integration
 def test_real_work_snapshot_and_judge_configs_exclude_exec_only_task_secret(
     tmp_path: Path,
 ) -> None:

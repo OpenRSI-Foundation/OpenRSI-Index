@@ -647,14 +647,17 @@ class MultiNodeBroker:
                 ranks=tuple(results),
                 cancelled=cancelled.is_set(),
             )
-            _atomic_json(
-                self.root / "results" / f"{request.request_id}.json",
-                result,
-            )
-            return result
         finally:
             cancel_path.unlink(missing_ok=True)
             self.release(reserved)
+
+        # A visible result lets the client submit or reuse the phase pool.
+        # Release the request before publishing that terminal evidence.
+        _atomic_json(
+            self.root / "results" / f"{request.request_id}.json",
+            result,
+        )
+        return result
 
 
 def stop_command(
