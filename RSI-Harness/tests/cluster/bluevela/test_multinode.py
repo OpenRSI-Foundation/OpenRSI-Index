@@ -520,6 +520,7 @@ def test_remote_worker_rejects_identity_outside_frozen_control(
 
 def test_broker_executes_all_ranks_publishes_fsynced_result_and_releases(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     multinode = _module()
     commands: list[tuple[str, ...]] = []
@@ -534,6 +535,17 @@ def test_broker_executes_all_ranks_publishes_fsynced_result_and_releases(
         worker_template=_worker(multinode, tmp_path),
     )
     broker.initialize()
+    atomic_json = multinode._atomic_json
+
+    def publish_json(path, value):
+        if isinstance(value, multinode.MultiNodeResult):
+            # The client can return as soon as terminal evidence is visible.
+            broker.require_idle()
+            lease = broker.allocator.acquire(2)
+            broker.allocator.release(lease.lease_id)
+        atomic_json(path, value)
+
+    monkeypatch.setattr(multinode, "_atomic_json", publish_json)
 
     def rank_runner(command, cancelled):
         assert not cancelled.is_set()
