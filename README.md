@@ -32,6 +32,10 @@ Use the proposal-agent skill at .agents/skills/proposal-agent/SKILL.md in my loc
 
 **Any questions?** Contact us at [yuetaili@uw.edu](mailto:yuetaili@uw.edu), [zhuofengli12345@gmail.com](mailto:zhuofengli12345@gmail.com), or [yfeng42@uw.edu](mailto:yfeng42@uw.edu).
 
+## 🔥 Call for Compute
+
+If you have compute resources to run experiments and want to build frontier RSI environments together, contact [yuetaili@uw.edu](mailto:yuetaili@uw.edu), [zhuofengli12345@gmail.com](mailto:zhuofengli12345@gmail.com), or [hanxinyang@berkeley.edu](mailto:hanxinyang@berkeley.edu).
+
 ## 💥 Why OpenRSI Index?
 
 We are witnessing the dawn of a new era: AI is entering a recursive self-improvement loop. The central question is whether this loop can move beyond the best-known human-designed method and reliably extend the scientific frontier. Answering it requires careful measurement, and building that measurement is the purpose of this project.
