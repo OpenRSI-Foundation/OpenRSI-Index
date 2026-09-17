@@ -45,8 +45,8 @@ jobs:
         with:
           client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
           private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
-          owner: RSI-Index
-          repositories: RSIs-First-Exam
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
           permission-discussions: write
       - name: Post one notice for this recovery status
         env:

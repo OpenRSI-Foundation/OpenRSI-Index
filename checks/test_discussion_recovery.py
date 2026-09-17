@@ -96,7 +96,7 @@ def test_gh_read_retries_503_with_finite_timeout_and_no_secret_output(recovery):
         return responses.pop(0)
 
     result = recovery.gh_request(
-        ["api", "/orgs/RSI-Index/memberships/alice"],
+        ["api", "/orgs/OpenRSI-Foundation/memberships/alice"],
         runner=runner,
         sleep=clock.sleep,
         clock=clock.time,
@@ -186,7 +186,7 @@ def test_recovery_notices_deduplicate_episode_and_keep_exhaustion_distinct(recov
         recovery.post_recovery_notice(
             client,
             discussion_id="D_one",
-            source_repository="RSI-Index/RSI-Skills",
+            source_repository="OpenRSI-Foundation/RSI-Skills",
             source_run_id="123",
             episode_id="episode-1",
             status=status,
@@ -378,7 +378,8 @@ def test_recovery_workflow_is_dispatch_only_and_names_the_episode():
     assert job["runs-on"] == "ubuntu-latest"
     assert workflow["permissions"] == {"contents": "read"}
     token = next(step for step in job["steps"] if step.get("id") == "comment-token")
-    assert token["with"]["repositories"] == "RSIs-First-Exam"
+    assert token["with"]["owner"] == "${{ github.repository_owner }}"
+    assert token["with"]["repositories"] == "${{ github.event.repository.name }}"
     assert token["with"]["permission-discussions"] == "write"
 
 

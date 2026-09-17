@@ -94,7 +94,7 @@ def test_review_workflow_replaces_only_current_progress_with_generic_failure():
         "with": {
             "client-id": "${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}",
             "private-key": "${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}",
-            "owner": "RSI-Index",
+            "owner": "${{ github.repository_owner }}",
             "repositories": "${{ github.event.repository.name }}",
             "permission-discussions": "write",
         },
@@ -218,7 +218,7 @@ def test_review_workflow_reads_the_private_skills_rubric_with_an_app_token():
         "with": {
             "client-id": "${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}",
             "private-key": "${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}",
-            "owner": "RSI-Index",
+            "owner": "${{ github.repository_owner }}",
             "repositories": "RSI-Skills",
             "permission-contents": "read",
         },
@@ -229,7 +229,7 @@ def test_review_workflow_reads_the_private_skills_rubric_with_an_app_token():
         "if": "steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'",
         "uses": f"actions/checkout@{CHECKOUT_SHA}",
         "with": {
-            "repository": "RSI-Index/RSI-Skills",
+            "repository": "OpenRSI-Foundation/RSI-Skills",
             "ref": "main",
             "token": "${{ steps.skills-token.outputs.token }}",
             "path": "private-skills",
@@ -253,7 +253,7 @@ def test_review_reactions_and_comments_use_just_in_time_scoped_app_tokens():
     expected_with = {
         "client-id": "${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}",
         "private-key": "${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}",
-        "owner": "RSI-Index",
+        "owner": "${{ github.repository_owner }}",
         "repositories": "${{ github.event.repository.name }}",
         "permission-discussions": "write",
     }
@@ -413,7 +413,7 @@ def test_pass_dispatch_uses_separate_conditional_private_write_token():
         "with": {
             "client-id": "${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}",
             "private-key": "${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}",
-            "owner": "RSI-Index",
+            "owner": "${{ github.repository_owner }}",
             "repositories": "RSI-Skills",
             "permission-contents": "write",
             "permission-actions": "read",
@@ -457,14 +457,14 @@ def test_pass_dispatch_builds_exact_request_and_posts_once_after_publication():
         '"event_type": "discussion_task_command"'
     )
     assert script.index('"event_type": "discussion_task_command"') < script.index(
-        "gh api --method POST /repos/RSI-Index/RSI-Skills/dispatches"
+        "gh api --method POST /repos/OpenRSI-Foundation/RSI-Skills/dispatches"
     )
     assert '"client_payload": payload' in script
-    assert "gh api --method POST /repos/RSI-Index/RSI-Skills/dispatches" in script
+    assert "gh api --method POST /repos/OpenRSI-Foundation/RSI-Skills/dispatches" in script
     assert "--input proposal-pass-request.json" in script
     assert "proposal-pass-live.json" not in script
     assert "viewerDidAuthor" not in script
-    assert raw.count("/repos/RSI-Index/RSI-Skills/dispatches") == 1
+    assert raw.count("/repos/OpenRSI-Foundation/RSI-Skills/dispatches") == 1
 
 
 def test_pass_dispatch_is_guarded_from_reject_failure_supersession_and_missing_id():

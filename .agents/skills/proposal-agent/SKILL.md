@@ -1,6 +1,6 @@
 ---
 name: proposal-agent
-description: Use when a contributor wants to create, repair, or complete an RSI-Index AutoResearch task proposal grounded in a remote model-development repository, including research-question refinement, baseline traceability, evaluation design, workspace boundaries, compute estimates, and final proposal.md generation.
+description: Use when a contributor wants to create, repair, or complete an OpenRSI-Index AutoResearch task proposal grounded in a remote model-development repository, including research-question refinement, baseline traceability, evaluation design, workspace boundaries, compute estimates, and final proposal.md generation.
 ---
 
 ## Stage-specific reference loading
@@ -11,7 +11,7 @@ After the initial input is valid enough to advance to Round 1, and immediately b
 
 ## First step — Local setup
 
-Before proposal research, check GitHub CLI availability and authentication, then locate the local RSIs-First-Exam checkout as described in [references/discussion-lifecycle.md](references/discussion-lifecycle.md). The client may have started in another directory. Use absolute checkout, helper, and proposal paths throughout. Resolve Round 6 output names inside the RSIs-First-Exam checkout, not the client's starting directory; use that same path for writing, rereading, and submission. No repository hook or session activation is needed.
+Before proposal research, check GitHub CLI availability and authentication, then locate the local OpenRSI-Index checkout as described in [references/discussion-lifecycle.md](references/discussion-lifecycle.md). The client may have started in another directory. Use absolute checkout, helper, and proposal paths throughout. Resolve Round 6 output names inside the OpenRSI-Index checkout, not the client's starting directory; use that same path for writing, rereading, and submission. No repository hook or session activation is needed.
 
 ## Core behavior
 

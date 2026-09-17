@@ -210,7 +210,7 @@ def owner_lookup(client, login):
         raise ValueError("invalid GitHub login")
     try:
         membership = json.loads(
-            client.read(["api", f"/orgs/RSI-Index/memberships/{login}"])
+            client.read(["api", f"/orgs/OpenRSI-Foundation/memberships/{login}"])
         )
     except GitHubRequestError as error:
         if error.status == 404:
@@ -257,7 +257,7 @@ def post_recovery_notice(
     status,
     bot_login,
 ):
-    if source_repository not in {"RSI-Index/RSIs-First-Exam", "RSI-Index/RSI-Skills"}:
+    if source_repository not in {"OpenRSI-Foundation/OpenRSI-Index", "OpenRSI-Foundation/RSI-Skills"}:
         raise ValueError("invalid recovery source repository")
     bodies = {
         "retrying": "⏳ GitHub is temporarily unavailable. We are retrying your task automatically for up to 24 hours. No action is needed.",
@@ -293,7 +293,7 @@ def dispatch_request(client, request):
                 client.read(
                     [
                         "api",
-                        f"/repos/RSI-Index/RSI-Skills/actions/workflows/{workflow}/runs?event=repository_dispatch&per_page=100&page={page}",
+                        f"/repos/OpenRSI-Foundation/RSI-Skills/actions/workflows/{workflow}/runs?event=repository_dispatch&per_page=100&page={page}",
                     ]
                 )
             )
@@ -314,7 +314,7 @@ def dispatch_request(client, request):
         "api",
         "--method",
         "POST",
-        "/repos/RSI-Index/RSI-Skills/dispatches",
+        "/repos/OpenRSI-Foundation/RSI-Skills/dispatches",
         "-f",
         "event_type=" + request["event_type"],
     ]
@@ -380,7 +380,7 @@ def _review_reuse(client):
 
 def proxy_gh(client, args):
     """Preserve existing gh snippets; intercept mutations needing reconciliation."""
-    if "/repos/RSI-Index/RSI-Skills/dispatches" in args:
+    if "/repos/OpenRSI-Foundation/RSI-Skills/dispatches" in args:
         request = json.loads(Path(args[args.index("--input") + 1]).read_text())
         dispatch_request(client, request)
         return ""
@@ -494,7 +494,7 @@ def main(argv=None):
             raise ValueError("invalid recovery source identity")
         discussion = client.graphql(
             """query($number: Int!) {
-          repository(owner: "RSI-Index", name: "RSIs-First-Exam") {
+          repository(owner: "OpenRSI-Foundation", name: "OpenRSI-Index") {
             discussion(number: $number) { id }
           }
         }""",
