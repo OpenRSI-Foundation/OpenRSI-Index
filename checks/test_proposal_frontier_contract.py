@@ -25,6 +25,6 @@ def test_review_docs_disclose_web_search_and_required_identity_field():
 def test_review_docs_name_skills_as_the_private_source_of_truth():
     documentation = REVIEW_DOC.read_text(encoding="utf-8")
 
-    assert "RSI-Index/RSI-Skills" in documentation
+    assert "OpenRSI-Foundation/RSI-Skills" in documentation
     assert "RUBRIC_REPO_TOKEN" not in documentation
     assert "Zhuofeng-Li/RSI-Index-Rubrics" not in documentation

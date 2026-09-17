@@ -6,8 +6,8 @@ required by your task, and [uv](https://docs.astral.sh/uv/).
 ## 1 — Install RSI-Harness
 
 ```bash
-git clone https://github.com/RSI-Index/RSIs-First-Exam.git
-cd RSIs-First-Exam
+git clone https://github.com/OpenRSI-Foundation/OpenRSI-Index.git
+cd OpenRSI-Index
 uv tool install ./RSI-Harness
 ```
 

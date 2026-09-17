@@ -2,7 +2,7 @@
 
 After reading the mandatory Round 0 references, first run `gh --version` and `gh auth status --hostname github.com`. If `gh` is missing, help install it for the contributor's system. If signed out, run `gh auth login --hostname github.com --web` and let the contributor complete browser authorization. Reuse an existing login; do not request a pasted token. Check Git and Python availability for the helper. If Git needs GitHub credentials, use `gh auth setup-git --hostname github.com`.
 
-Locate the contributor's local `RSIs-First-Exam` checkout from their supplied path or the accessible workspace. If it is not clear which checkout to use, ask for its path. `<rsi-root>` is the absolute path to this local `RSIs-First-Exam` checkout. The client need not start in that directory; use `<rsi-root>` below, including for the helper itself. If the client cannot access the checkout, ask the contributor to open or attach that folder.
+Locate the contributor's local `OpenRSI-Index` checkout from their supplied path or the accessible workspace. If it is not clear which checkout to use, ask for its path. `<rsi-root>` is the absolute path to this local `OpenRSI-Index` checkout. The client need not start in that directory; use `<rsi-root>` below, including for the helper itself. If the client cannot access the checkout, ask the contributor to open or attach that folder.
 
 Use one native Codex or Claude Code session for one proposal. Keep that session for feedback, revisions, contributor-owned `/task <answer or correction>` responses, and final upload; a closed client may resume it. Use a separate checkout for a second proposal. The client records its own trajectory: no hook setup, activation, early binding, or frozen snapshot is needed.
 
@@ -37,7 +37,7 @@ At ACCEPTED, tell the contributor:
 After the contributor requests upload and `discussion status` shows the verified private task repository is ready, locate this session's original native JSONL:
 
 - **Codex:** use the current session identity exposed by the client (for example `CODEX_THREAD_ID` in its shell), then locate its log under the client's Codex home, normally `~/.codex/sessions/`; archived logs may be under `archived_sessions/`. Match the session ID with the log's `session_meta` record.
-- **Claude Code:** use the current session ID from the client or native skill context (`${CLAUDE_SESSION_ID}` when expanded by Claude Code). Logs normally live at `~/.claude/projects/<project>/<session-id>.jsonl`. Match the log's `sessionId`. The project may reflect the directory where the client started, not the RSIs-First-Exam checkout.
+- **Claude Code:** use the current session ID from the client or native skill context (`${CLAUDE_SESSION_ID}` when expanded by Claude Code). Logs normally live at `~/.claude/projects/<project>/<session-id>.jsonl`. Match the log's `sessionId`. The project may reflect the directory where the client started, not the OpenRSI-Index checkout.
 
 Respect a custom client storage location. If the client has not exposed the ID, locate the original log using this conversation's distinctive content and native metadata; do not simply choose the newest file. If no unambiguous original log is available, ask for the session ID or native log path. Keep the client history available until upload; hooks are not needed to record it.
 

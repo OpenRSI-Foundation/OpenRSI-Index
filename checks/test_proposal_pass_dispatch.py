@@ -23,7 +23,7 @@ def dispatch():
 def proposal_event(*, action: str = "created") -> dict:
     return {
         "action": action,
-        "repository": {"full_name": "RSI-Index/RSIs-First-Exam"},
+        "repository": {"full_name": "OpenRSI-Foundation/OpenRSI-Index"},
         "discussion": {
             "number": 128,
             "node_id": "D_kw128",
@@ -45,7 +45,7 @@ def test_builds_exact_identifier_only_payload_for_reviewed_discussion(dispatch, 
     payload = dispatch.build_proposal_pass_payload(event, "DC_pass")
 
     assert payload == {
-        "source_repository": "RSI-Index/RSIs-First-Exam",
+        "source_repository": "OpenRSI-Foundation/OpenRSI-Index",
         "discussion_number": 128,
         "discussion_node_id": "D_kw128",
         "triggering_comment_node_id": "DC_pass",
@@ -119,7 +119,7 @@ def test_cli_builds_payload_without_live_graphql_authority(tmp_path):
     assert result.stderr == ""
     assert output_path.read_text(encoding="utf-8") == (
         '{"discussion_node_id":"D_kw128","discussion_number":128,'
-        '"source_repository":"RSI-Index/RSIs-First-Exam",'
+        '"source_repository":"OpenRSI-Foundation/OpenRSI-Index",'
         '"trigger_kind":"proposal_pass",'
         '"triggering_comment_node_id":"DC_pass"}'
     )
