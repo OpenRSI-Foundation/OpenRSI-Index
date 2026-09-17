@@ -219,12 +219,20 @@ class SubmissionService:
             )
 
     def close(self, *, timeout_seconds: float = 10.0) -> None:
-        """Reject new work, then drain at most one active serialized round."""
+        """Reject new work, then drain at most one active serialized round.
+
+        A round accepted before shutdown is judged to completion and recorded.
+        The Judge enforces its own timeout, so the drain waits
+        ``timeout_seconds`` beyond that bound; with no active round it returns
+        at once.
+        """
         if timeout_seconds < 0:
             raise ValueError("timeout_seconds must be non-negative")
         with self._state_lock:
             self._accepting = False
-        acquired = self._round_lock.acquire(timeout=timeout_seconds)
+            plan = self._run_plan
+        judge_seconds = 0.0 if plan is None else plan.task.verifier.timeout_seconds
+        acquired = self._round_lock.acquire(timeout=timeout_seconds + judge_seconds)
         if not acquired:
             raise SubmissionShutdownTimeout(
                 "submission round did not drain before shutdown timeout"
