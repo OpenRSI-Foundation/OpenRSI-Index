@@ -18,6 +18,15 @@ permissions:
   contents: read
 
 jobs:
+  proposal-session-python39:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+      - name: Test contributor helper on macOS system Python version
+        run: uv run --python 3.9 --with pytest python -m pytest -q checks/test_proposal_session.py
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
