@@ -1022,7 +1022,7 @@ def test_cli_does_not_allow_model_override(review):
 def test_default_rubric_comes_from_a_sibling_private_skills_clone(review):
     args = review.build_parser().parse_args(["proposal.md"])
 
-    assert review.PRIVATE_RUBRIC_REPO == "https://github.com/RSI-Index/RSI-Skills"
+    assert review.PRIVATE_RUBRIC_REPO == "https://github.com/OpenRSI-Foundation/RSI-Skills"
     assert (
         args.rubric
         == SCRIPT.parent.parent.parent / "RSI-Skills" / "rubrics/task-proposal.md"

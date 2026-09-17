@@ -82,7 +82,7 @@ def test_dispatch_workflow_gates_token_and_dispatch_on_author_or_current_owner()
         "with": {
             "client-id": "${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}",
             "private-key": "${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}",
-            "owner": "RSI-Index",
+            "owner": "${{ github.repository_owner }}",
             "repositories": "RSI-Skills",
             "permission-contents": "write",
             "permission-actions": "read",
@@ -129,7 +129,7 @@ def test_dispatch_workflow_posts_a_parser_built_identifier_only_request():
     assert "discussion_task_reset" in build_request
     assert dispatch["env"] == {"GH_TOKEN": "${{ steps.app-token.outputs.token }}"}
     assert (
-        "gh api --method POST /repos/RSI-Index/RSI-Skills/dispatches" in dispatch["run"]
+        "gh api --method POST /repos/OpenRSI-Foundation/RSI-Skills/dispatches" in dispatch["run"]
     )
     assert "--input repository-dispatch.json" in dispatch["run"]
 
@@ -168,7 +168,7 @@ def test_authorized_task_command_gets_non_blocking_eyes_acknowledgement():
         "with": {
             "client-id": "${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}",
             "private-key": "${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}",
-            "owner": "RSI-Index",
+            "owner": "${{ github.repository_owner }}",
             "repositories": "${{ github.event.repository.name }}",
             "permission-discussions": "write",
         },

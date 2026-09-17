@@ -35,7 +35,7 @@ jobs:
         with:
           client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
           private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
-          owner: RSI-Index
+          owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-discussions: write
 
@@ -128,7 +128,7 @@ jobs:
         with:
           client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
           private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
-          owner: RSI-Index
+          owner: ${{ github.repository_owner }}
           repositories: RSI-Skills
           permission-contents: read
 
@@ -139,7 +139,7 @@ jobs:
         if: steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'
         uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          repository: RSI-Index/RSI-Skills
+          repository: OpenRSI-Foundation/RSI-Skills
           ref: main
           token: ${{ steps.skills-token.outputs.token }}
           path: private-skills
@@ -328,7 +328,7 @@ jobs:
         with:
           client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
           private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
-          owner: RSI-Index
+          owner: ${{ github.repository_owner }}
           repositories: RSI-Skills
           permission-contents: write
           permission-actions: read
@@ -360,7 +360,7 @@ jobs:
               json.dump(request, output, sort_keys=True, separators=(",", ":"))
           PY
 
-          python3 checks/discussion_recovery.py gh api --method POST /repos/RSI-Index/RSI-Skills/dispatches \
+          python3 checks/discussion_recovery.py gh api --method POST /repos/OpenRSI-Foundation/RSI-Skills/dispatches \
             --input proposal-pass-request.json
 
       - name: Mark failed GitHub setup for external classification
@@ -377,7 +377,7 @@ jobs:
         with:
           client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
           private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
-          owner: RSI-Index
+          owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-discussions: write
 
@@ -449,7 +449,7 @@ jobs:
         with:
           client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
           private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
-          owner: RSI-Index
+          owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-discussions: write
       - name: React with eyes
@@ -484,7 +484,7 @@ jobs:
         with:
           client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
           private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
-          owner: RSI-Index
+          owner: ${{ github.repository_owner }}
           repositories: ${{ github.event.repository.name }}
           permission-discussions: write
       - name: Post task queue notice

@@ -6,7 +6,7 @@
 >
 > Bring the idea and our agents handle the rest. Review, validate, and have fun!
 
-**RSI-Anything** is the RSIs-First-Exam contribution pipeline. It turns your research idea into a private, ready-to-use RSI task repository through an automated workflow, asking for your input only when a task-defining choice genuinely needs it.
+**RSI-Anything** is the OpenRSI-Index contribution pipeline. It turns your research idea into a private, ready-to-use RSI task repository through an automated workflow, asking for your input only when a task-defining choice genuinely needs it.
 
 ![Contributor and agent roles across five steps: share your idea while proposal-agent drafts (20 min); confirm the proposal for automatic Discussion submission and review (5 min); answer only if asked while agents build the private repo (25 min); provide GPUs and launch skills while agents validate, run, and recover (varies by task); request uploads and share feedback while agents upload logs (a few minutes).](assets/figures/rsi-anything-workflow.svg)
 
@@ -17,14 +17,14 @@
 Clone this repository:
 
 ```bash
-git clone https://github.com/RSI-Index/RSIs-First-Exam.git
-cd RSIs-First-Exam
+git clone https://github.com/OpenRSI-Foundation/OpenRSI-Index.git
+cd OpenRSI-Index
 ```
 
 Open Codex or Claude Code (app or CLI), start a fresh session, and paste:
 
 ```text
-Use the proposal-agent skill at RSIs-First-Exam/.agents/skills/proposal-agent/SKILL.md in my local RSIs-First-Exam repository. Locate the repository if needed, then follow the skill to complete setup and guide me step by step through creating and submitting an RSI proposal.
+Use the proposal-agent skill at OpenRSI-Index/.agents/skills/proposal-agent/SKILL.md in my local OpenRSI-Index repository. Locate the repository if needed, then follow the skill to complete setup and guide me step by step through creating and submitting an RSI proposal.
 ```
 
 Run it on a frontier model at its maximum reasoning setting: at least **Codex
@@ -37,7 +37,7 @@ it.
 ### 2. Submit the proposal
 
 After you confirm the proposal, `proposal-agent` creates the
-[Task Ideas Discussion](https://github.com/RSI-Index/RSIs-First-Exam/discussions/categories/task-ideas)
+[Task Ideas Discussion](https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/categories/task-ideas)
 from the confirmed file. Return to the original session when review feedback
 arrives; the agent fetches the current Discussion, helps revise the proposal,
 and updates the same Discussion. A new review runs on every edit.
@@ -110,10 +110,10 @@ and follow its README:
    repository.
 
 > [!CAUTION]
-> We review every task for scientific soundness, rigor, and novelty, and independently reproduce submitted tasks. Proposal approval and trajectory submission do not guarantee inclusion. A task with an unreasonable, unsupported, or irreproducible design may still be rejected after trajectory submission and excluded from RSIs-First-Exam.
+> We review every task for scientific soundness, rigor, and novelty, and independently reproduce submitted tasks. Proposal approval and trajectory submission do not guarantee inclusion. A task with an unreasonable, unsupported, or irreproducible design may still be rejected after trajectory submission and excluded from OpenRSI-Index.
 
 ### 5. Share feedback
 
-Please leave brief feedback on `proposal-agent` and the overall RSI-Anything pipeline in [this Discussion](https://github.com/RSI-Index/RSIs-First-Exam/discussions/7).
+Please leave brief feedback on `proposal-agent` and the overall RSI-Anything pipeline in [this Discussion](https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/7).
 
-After pushing the completed experiment trajectory, your task is ready for review. Thank you for contributing to RSIs-First-Exam! 🙏
+After pushing the completed experiment trajectory, your task is ready for review. Thank you for contributing to OpenRSI-Index! 🙏

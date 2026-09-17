@@ -1,13 +1,13 @@
 <p align="center">
-  <img src="assets/figures/rsi-first-exam-header-starry.svg" alt="RSI's First Exam" width="567">
+  <img src="assets/figures/openrsi-index-header-starry.svg" alt="OpenRSI Index" width="567">
 </p>
 
 <div align="center">
   <a href="https://rsi-first-exam.rsi-anything.workers.dev/"><img src="https://img.shields.io/badge/Website-2563EB?style=for-the-badge&logo=googleearth&logoColor=white" alt="Website"></a>
-  <a href="https://github.com/RSI-Index/RSIs-First-Exam"><img src="https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub"></a>
+  <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index"><img src="https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub"></a>
   <!-- TODO: Replace the X placeholder with the project profile or announcement URL. -->
   <!-- <a href="#"><img src="https://img.shields.io/badge/Twitter-000000?style=for-the-badge&logo=X&logoColor=white" alt="X"></a> -->
-  <a href="https://github.com/RSI-Index/RSIs-First-Exam/blob/main/CONTRIBUTING.md"><img src="assets/figures/contribution-call.svg" alt="Contribution Call"></a>
+  <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md"><img src="assets/figures/contribution-call.svg" alt="Contribution Call"></a>
   <!-- TODO: Replace the Discord placeholder with the project invite URL. -->
   <a href="https://discord.gg/3EG8Qhmfsa"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
   <a href="assets/figures/wechat.png"><img src="https://img.shields.io/badge/WeChat-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat Group"></a>
@@ -20,14 +20,14 @@
 Clone the repository:
 
 ```bash
-git clone https://github.com/RSI-Index/RSIs-First-Exam.git
-cd RSIs-First-Exam
+git clone https://github.com/OpenRSI-Foundation/OpenRSI-Index.git
+cd OpenRSI-Index
 ```
 
 Open Codex or Claude Code (app or CLI), start a fresh session, and paste:
 
 ```text
-Use the proposal-agent skill at .agents/skills/proposal-agent/SKILL.md in my local RSIs-First-Exam repository. Locate the repository if needed, then follow the skill to complete setup and guide me step by step through creating and submitting an RSI proposal.
+Use the proposal-agent skill at .agents/skills/proposal-agent/SKILL.md in my local OpenRSI-Index repository. Locate the repository if needed, then follow the skill to complete setup and guide me step by step through creating and submitting an RSI proposal.
 ```
 
 ## 💥 Why RSI's First Exam?
@@ -38,7 +38,7 @@ We are witnessing the dawn of a new era: AI is entering a recursive self-improve
 
 ### Task taxonomy
 
-We are actively developing this project and welcome [contributions](https://github.com/RSI-Index/RSIs-First-Exam/blob/main/CONTRIBUTING.md) from the community. Tasks and execution logs are available in [rsi-tasks/](rsi-tasks/) and [rsi-logs/](rsi-logs/), respectively. See [Quick Start](assets/docs/quick-start.md) for instructions on running these tasks.
+We are actively developing this project and welcome [contributions](https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md) from the community. Tasks and execution logs are available in [rsi-tasks/](rsi-tasks/) and [rsi-logs/](rsi-logs/), respectively. See [Quick Start](assets/docs/quick-start.md) for instructions on running these tasks.
 
 <details>
 <summary><strong>View tasks</strong></summary>
