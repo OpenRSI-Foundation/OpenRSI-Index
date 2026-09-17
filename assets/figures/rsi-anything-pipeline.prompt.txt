@@ -10,7 +10,7 @@ Visual direction: warm ivory background, deep navy typography (#192840), antique
 
 At the top, exact title: "RSI-Anything".
 Directly below, exact tagline: "Your baseline becomes the exam."
-Small eyebrow above the title: "RSI'S FIRST EXAM".
+Small eyebrow above the title: "OpenRSI Index".
 
 The main content is a left-to-right five-stage pipeline. Five equally sized airy sections connected by thin directional arrows. Use large readable stage numbers 01 to 05 and a distinct beautiful scientific/technical illustration per stage: a research notebook with a gold idea spark; discussion bubbles and a review checklist; a repository folder with a code terminal; compute servers with a tiny experiment trace; an organized task package beside trajectory documents. Keep all text away from connectors and illustrations, with ample margins.
 
