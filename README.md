@@ -64,33 +64,6 @@ We are actively developing this project and welcome [contributions](https://gith
 
 ## 🤝 Contributors
 
-### Advisors (in alphabetical order)
 
-<table>
-  <tr>
-    <td width="25%" valign="top"><strong>Wenhu Chen</strong><br>University of Waterloo</td>
-    <td width="25%" valign="top"><strong>Yejin Choi</strong><br>Stanford University</td>
-    <td width="25%" valign="top"><strong>Jianfeng Gao</strong><br>Microsoft Research</td>
-    <td width="25%" valign="top"><strong>Hannaneh Hajishirzi</strong><br>University of Washington</td>
-  </tr>
-  <tr>
-    <td width="25%" valign="top"><strong>Pang Wei Koh</strong><br>University of Washington</td>
-    <td width="25%" valign="top"><strong>Ranjay Krishna</strong><br>University of Washington</td>
-    <td width="25%" valign="top"><strong>Karthik Narasimhan</strong><br>Princeton University</td>
-    <td width="25%" valign="top"><strong>Rameswar Panda</strong><br>MIT-IBM Watson AI Lab</td>
-  </tr>
-  <tr>
-    <td width="25%" valign="top"><strong>Radha Poovendran</strong><br>University of Washington</td>
-    <td width="25%" valign="top"><strong>Dawn Song</strong><br>UC Berkeley</td>
-    <td width="25%" valign="top"><strong>Yu Su</strong><br>The Ohio State University</td>
-    <td width="25%" valign="top"><strong>Huan Sun</strong><br>The Ohio State University</td>
-  </tr>
-  <tr>
-    <td width="25%" valign="top"><strong>Diyi Yang</strong><br>Stanford University</td>
-    <td width="25%" valign="top"><strong>Ming‑Hsuan Yang</strong><br>UC Merced</td>
-    <td width="25%" valign="top"><strong>Xiang Yue</strong><br>Independent Researcher</td>
-    <td width="25%" valign="top"><strong>Luke Zettlemoyer</strong><br>University of Washington</td>
-  </tr>
-</table>
 
 ## 🙏 Acknowledgements
