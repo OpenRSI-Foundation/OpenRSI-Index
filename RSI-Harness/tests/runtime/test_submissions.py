@@ -53,6 +53,7 @@ def registered_service(
     clock: FakeClock | None = None,
     max_submissions: int | None = None,
     cooldown_seconds: float = 0.0,
+    judge_timeout_seconds: float | None = None,
 ) -> tuple[SubmissionService, str, FakeEvaluator, FakeArtifactWriter]:
     writer = FakeArtifactWriter()
     selected_evaluator = evaluator or FakeEvaluator(
@@ -65,9 +66,17 @@ def registered_service(
         artifact_writer=writer,
         clock=clock or FakeClock(),
     )
+    run_plan = make_run_plan(tmp_path)
+    if judge_timeout_seconds is not None:
+        verifier = run_plan.task.verifier.model_copy(
+            update={"timeout_seconds": judge_timeout_seconds}
+        )
+        run_plan = run_plan.model_copy(
+            update={"task": run_plan.task.model_copy(update={"verifier": verifier})}
+        )
     token = service.register(
         run_id="run-a",
-        run_plan=make_run_plan(tmp_path),
+        run_plan=run_plan,
         work_container=ContainerRef(container_id="work-a", role="work"),
         max_submissions=max_submissions,
         cooldown_seconds=cooldown_seconds,
@@ -612,10 +621,33 @@ def test_close_rejects_new_submissions_and_drains_current_round(tmp_path) -> Non
         service.submit(token)
 
 
+def test_close_lets_an_accepted_round_finish_within_the_judge_timeout(
+    tmp_path,
+) -> None:
+    # An Agent timeout can land mid-Judge; that round outlives the shutdown
+    # bound but not its own Judge timeout, and must be recorded, not abandoned.
+    evaluator = FakeEvaluator(make_report(), delay_seconds=0.3)
+    service, token, _, writer = registered_service(
+        tmp_path, evaluator=evaluator, judge_timeout_seconds=5
+    )
+    worker = threading.Thread(target=service.submit, args=(token,))
+    worker.start()
+    assert evaluator.started.wait(timeout=1)
+
+    service.close(timeout_seconds=0.01)
+    worker.join(timeout=1)
+
+    assert not worker.is_alive()
+    assert len(writer.reports) == 1
+    assert len(service.reports) == 1
+
+
 def test_close_timeout_is_typed_without_corrupting_inflight_report(tmp_path) -> None:
     release = threading.Event()
     evaluator = FakeEvaluator(make_report(), release=release)
-    service, token, _, writer = registered_service(tmp_path, evaluator=evaluator)
+    service, token, _, writer = registered_service(
+        tmp_path, evaluator=evaluator, judge_timeout_seconds=0.01
+    )
     worker = threading.Thread(target=service.submit, args=(token,))
     worker.start()
     assert evaluator.started.wait(timeout=1)
