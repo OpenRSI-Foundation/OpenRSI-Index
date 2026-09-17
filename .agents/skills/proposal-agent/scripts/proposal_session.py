@@ -14,7 +14,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import NoReturn
+from typing import NoReturn, Optional
 
 
 _SUPPORTED_PLATFORMS = frozenset({"codex", "claude-code"})
@@ -148,7 +148,7 @@ class UploadResult:
 
 
 CommandRunner = Callable[
-    [Sequence[str], Path | None], subprocess.CompletedProcess[str]
+    [Sequence[str], Optional[Path]], subprocess.CompletedProcess[str]
 ]
 
 
