@@ -30,11 +30,11 @@ Open Codex or Claude Code (app or CLI), start a fresh session, and paste:
 Use the proposal-agent skill at .agents/skills/proposal-agent/SKILL.md in my local OpenRSI-Index repository. Locate the repository if needed, then follow the skill to complete setup and guide me step by step through creating and submitting an RSI proposal.
 ```
 
-## 💥 Why RSI's First Exam?
+## 💥 Why OpenRSI Index?
 
 We are witnessing the dawn of a new era: AI is entering a recursive self-improvement loop. The central question is whether this loop can move beyond the best-known human-designed method and reliably extend the scientific frontier. Answering it requires careful measurement, and building that measurement is the purpose of this project.
 
-[RSI's First Exam](https://rsi-first-exam.rsi-anything.workers.dev/) is an ongoing effort to evaluate whether AI agents can drive genuine recursive self-improvement and advance scientific discovery through real-world research at scales ranging from a single node to thousands of GPUs—not merely reproduce existing results, sweep parameters, or succeed on toy-scale tasks.
+[OpenRSI Index](https://rsi-first-exam.rsi-anything.workers.dev/) is an ongoing effort to evaluate whether AI agents can drive genuine recursive self-improvement and advance scientific discovery through real-world research at scales ranging from a single node to thousands of GPUs—not merely reproduce existing results, sweep parameters, or succeed on toy-scale tasks.
 
 ### Task taxonomy
 
@@ -60,10 +60,37 @@ We are actively developing this project and welcome [contributions](https://gith
 
 ### How an evaluation works: RSI-Harness
 
-[RSI-Harness](RSI-Harness/) powers RSI's First Exam for ultra-long-horizon RSI runs, natively supporting [Harbor-format tasks](rsi-tasks) from single-node local Docker to multi-node clusters.
+[RSI-Harness](RSI-Harness/) powers OpenRSI Index for ultra-long-horizon RSI runs, natively supporting [Harbor-format tasks](rsi-tasks) from single-node local Docker to multi-node clusters.
 
 ## 🤝 Contributors
 
+### Advisors (in alphabetical order)
 
+<table>
+  <tr>
+    <td width="25%" valign="top"><strong>Wenhu Chen</strong><br>University of Waterloo</td>
+    <td width="25%" valign="top"><strong>Yejin Choi</strong><br>Stanford University</td>
+    <td width="25%" valign="top"><strong>Jianfeng Gao</strong><br>Microsoft Research</td>
+    <td width="25%" valign="top"><strong>Hannaneh Hajishirzi</strong><br>University of Washington</td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong>Pang Wei Koh</strong><br>University of Washington</td>
+    <td width="25%" valign="top"><strong>Ranjay Krishna</strong><br>University of Washington</td>
+    <td width="25%" valign="top"><strong>Karthik Narasimhan</strong><br>Princeton University</td>
+    <td width="25%" valign="top"><strong>Rameswar Panda</strong><br>MIT-IBM Watson AI Lab</td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong>Radha Poovendran</strong><br>University of Washington</td>
+    <td width="25%" valign="top"><strong>Dawn Song</strong><br>UC Berkeley</td>
+    <td width="25%" valign="top"><strong>Yu Su</strong><br>The Ohio State University</td>
+    <td width="25%" valign="top"><strong>Huan Sun</strong><br>The Ohio State University</td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong>Diyi Yang</strong><br>Stanford University</td>
+    <td width="25%" valign="top"><strong>Ming‑Hsuan Yang</strong><br>UC Merced</td>
+    <td width="25%" valign="top"><strong>Xiang Yue</strong><br>Independent Researcher</td>
+    <td width="25%" valign="top"><strong>Luke Zettlemoyer</strong><br>University of Washington</td>
+  </tr>
+</table>
 
 ## 🙏 Acknowledgements
