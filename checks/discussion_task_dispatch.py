@@ -7,7 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-_SOURCE_REPOSITORY = "RSI-Index/RSIs-First-Exam"
+_SOURCE_REPOSITORY = "OpenRSI-Foundation/OpenRSI-Index"
 _TASK_PREFIX = "/task"
 _RESET_COMMAND = "/reset"
 _GITHUB_LOGIN = re.compile(

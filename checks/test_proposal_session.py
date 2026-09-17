@@ -63,7 +63,7 @@ def bind_discussion(checkout: Path) -> module.DiscussionRef:
     ref = module.DiscussionRef(
         node_id="D_1",
         number=41,
-        url="https://github.com/RSI-Index/RSIs-First-Exam/discussions/41",
+        url="https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/41",
     )
     state_dir = module._state_dir(checkout)
     state_dir.mkdir(exist_ok=True)
@@ -74,21 +74,35 @@ def bind_discussion(checkout: Path) -> module.DiscussionRef:
     return ref
 
 
-def test_legacy_discussion_survives_without_hooks_or_original_log(tmp_path):
+@pytest.mark.parametrize("state_filename", ["binding.json", "discussion.json"])
+@pytest.mark.parametrize(
+    "legacy_repository",
+    [
+        "RSI-Index/RSI-Index-Public",
+        "RSI-Index/RSIs-First-Exam",
+        "OpenRSI-Foundation/RSI-Index-Public",
+        "OpenRSI-Foundation/RSIs-First-Exam",
+    ],
+)
+def test_saved_discussion_survives_repository_renames(
+    tmp_path, state_filename, legacy_repository
+):
     checkout = init_git_checkout(tmp_path)
     state = module._state_dir(checkout)
     state.mkdir()
-    module._atomic_json(state / "binding.json", {
+    discussion = {
+        "node_id": "D_1", "number": 41,
+        "url": f"https://github.com/{legacy_repository}/discussions/41",
+    }
+    saved = {
         "schema": 1, "platform": "codex", "session_id": "old-session",
         "transcript_path": "/missing/native.jsonl", "checkout_root": str(checkout),
-        "discussion": {
-            "node_id": "D_1", "number": 41,
-            "url": "https://github.com/RSI-Index/RSI-Index-Public/discussions/41",
-        },
-    })
+        "discussion": discussion,
+    } if state_filename == "binding.json" else discussion
+    module._atomic_json(state / state_filename, saved)
 
     ref = module.load_discussion(checkout)
-    assert ref.url == "https://github.com/RSI-Index/RSIs-First-Exam/discussions/41"
+    assert ref.url == "https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/41"
     assert module.discussion_status(checkout, run=PublishingRunner()).ref == ref
 
 
@@ -159,7 +173,7 @@ class LifecycleRunner:
                         "discussion": {
                             "id": self.created_id,
                             "number": 41,
-                            "url": "https://github.com/RSI-Index/RSIs-First-Exam/discussions/41",
+                            "url": "https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/41",
                         }
                     }
                 }
@@ -171,7 +185,7 @@ class LifecycleRunner:
                         "discussion": {
                             "id": self.updated_id,
                             "number": 41,
-                            "url": "https://github.com/RSI-Index/RSIs-First-Exam/discussions/41",
+                            "url": "https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/41",
                         }
                     }
                 }
@@ -187,7 +201,7 @@ def discussion_payload(
     publication_author: str = "rsi-index-task-dispatcher[bot]",
 ) -> dict[str, object]:
     publication = publication_body or (
-        "Task repository: https://github.com/RSI-Index/example-d41\n\n"
+        "Task repository: https://github.com/OpenRSI-Foundation/example-d41\n\n"
         "<!-- rsi-task-bot:discussion=D_1;kind=publication;version=2;trigger=DC_9 -->"
     )
     return {
@@ -196,7 +210,7 @@ def discussion_payload(
                 "__typename": "Discussion",
                 "id": "D_1",
                 "number": 41,
-                "url": "https://github.com/RSI-Index/RSIs-First-Exam/discussions/41",
+                "url": "https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/41",
                 "title": "Fixed proposal",
                 "body": "initial body",
                 "createdAt": "2026-09-01T10:00:00Z",
@@ -244,7 +258,7 @@ class PublishingRunner:
         *,
         visibility: str = "PRIVATE",
         viewer_permission: str = "WRITE",
-        repository: str = "RSI-Index/example-d41",
+        repository: str = "OpenRSI-Foundation/example-d41",
         publication_body: str | None = None,
         publication_author: str = "rsi-index-task-dispatcher[bot]",
         second_directory: bool = False,
@@ -419,7 +433,7 @@ def test_create_discussion_uses_confirmed_file_and_persists_identity(
     assert ref == module.DiscussionRef(
         node_id="D_1",
         number=41,
-        url="https://github.com/RSI-Index/RSIs-First-Exam/discussions/41",
+        url="https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/41",
     )
     assert module.load_discussion(checkout, required=False) == ref
     assert runner.calls[0] == (["gh", "auth", "status"], None)
@@ -430,9 +444,9 @@ def test_create_discussion_uses_confirmed_file_and_persists_identity(
         "-f",
         f"query={module.PUBLIC_REPOSITORY_QUERY}",
         "-f",
-        "owner=RSI-Index",
+        "owner=OpenRSI-Foundation",
         "-f",
-        "name=RSIs-First-Exam",
+        "name=OpenRSI-Index",
     ]
     assert runner.calls[2][0] == [
         "gh",
@@ -575,7 +589,7 @@ def test_fetch_discussion_paginates_replies_and_renders_timestamp_order() -> Non
     ref = module.DiscussionRef(
         node_id="D_1",
         number=41,
-        url="https://github.com/RSI-Index/RSIs-First-Exam/discussions/41",
+        url="https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/41",
     )
     runner = PublishingRunner(paginate_comments=True)
 
@@ -620,7 +634,7 @@ def test_interleaved_replies_keep_global_order_and_name_their_parent() -> None:
     ref = module.DiscussionRef(
         node_id="D_1",
         number=41,
-        url="https://github.com/RSI-Index/RSIs-First-Exam/discussions/41",
+        url="https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/41",
     )
     snapshot = module.DiscussionSnapshot(
         ref=ref,
@@ -692,15 +706,15 @@ def test_upload_preserves_native_bytes_and_complete_discussion(tmp_path: Path) -
     )
     assert metadata == {
         "discussion_number": 41,
-        "discussion_url": "https://github.com/RSI-Index/RSIs-First-Exam/discussions/41",
+        "discussion_url": "https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/41",
         "platform": "codex",
         "session_id": "session_exact",
-        "source_repository": "RSI-Index/RSIs-First-Exam",
-        "target_repository": "RSI-Index/example-d41",
+        "source_repository": "OpenRSI-Foundation/OpenRSI-Index",
+        "target_repository": "OpenRSI-Foundation/example-d41",
         "uploaded_at": metadata["uploaded_at"],
     }
     assert "transcript" not in json.dumps(metadata)
-    assert result.repository == "RSI-Index/example-d41"
+    assert result.repository == "OpenRSI-Foundation/example-d41"
     assert result.commit_sha == "abc123"
 
 
@@ -714,8 +728,27 @@ def test_upload_accepts_graphql_app_login_without_bot_suffix(tmp_path: Path) -> 
         transcript_path=checkout.parent / "codex.jsonl", run=runner,
     )
 
-    assert result.repository == "RSI-Index/example-d41"
+    assert result.repository == "OpenRSI-Foundation/example-d41"
     assert result.commit_sha == "abc123"
+    assert runner.pushed
+
+
+def test_upload_resolves_publication_from_before_the_organization_rename(tmp_path):
+    checkout, _ = proposal_checkout(tmp_path)
+    bind_discussion(checkout)
+    runner = PublishingRunner(
+        publication_body=(
+            "Task repository: https://github.com/RSI-Index/example-d41\n\n"
+            "<!-- rsi-task-bot:discussion=D_1;kind=publication;version=2 -->"
+        )
+    )
+
+    result = module.upload_trajectory(
+        checkout, platform="codex", session_id="session_exact",
+        transcript_path=checkout.parent / "codex.jsonl", run=runner,
+    )
+
+    assert result.repository == "OpenRSI-Foundation/example-d41"
     assert runner.pushed
 
 
@@ -724,6 +757,15 @@ def test_upload_accepts_graphql_app_login_without_bot_suffix(tmp_path: Path) -> 
     [
         (PublishingRunner(visibility="PUBLIC"), "private"),
         (PublishingRunner(viewer_permission="READ"), "write"),
+        (
+            PublishingRunner(
+                publication_body=(
+                    "https://github.com/unrelated-owner/example-d41\n\n"
+                    "<!-- rsi-task-bot:discussion=D_1;kind=publication;version=2 -->"
+                )
+            ),
+            "repository URL",
+        ),
         (
             PublishingRunner(
                 publication_body=(
@@ -736,7 +778,7 @@ def test_upload_accepts_graphql_app_login_without_bot_suffix(tmp_path: Path) -> 
         (
             PublishingRunner(
                 publication_body=(
-                    "Issue: https://github.com/RSI-Index/example-d41/issues/1\n\n"
+                    "Issue: https://github.com/OpenRSI-Foundation/example-d41/issues/1\n\n"
                     "<!-- rsi-task-bot:discussion=D_1;kind=publication;version=2 -->"
                 )
             ),
@@ -745,7 +787,7 @@ def test_upload_accepts_graphql_app_login_without_bot_suffix(tmp_path: Path) -> 
         (
             PublishingRunner(
                 publication_body=(
-                    "https://github.com/RSI-Index/example-d41\n\n"
+                    "https://github.com/OpenRSI-Foundation/example-d41\n\n"
                     "<!-- rsi-task-bot:discussion=D_OTHER;kind=publication;version=2 -->"
                 )
             ),
@@ -818,7 +860,7 @@ def test_explicit_native_upload_without_hooks_from_other_directory(
     state.mkdir()
     (state / "discussion.json").write_text(json.dumps({
         "node_id": "D_1", "number": 41,
-        "url": "https://github.com/RSI-Index/RSIs-First-Exam/discussions/41",
+        "url": "https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/41",
     }), encoding="utf-8")
     native = b'{"sessionId":"original-session","message":"full original text"}\n'
     transcript = write_transcript(tmp_path / "original.jsonl", native)

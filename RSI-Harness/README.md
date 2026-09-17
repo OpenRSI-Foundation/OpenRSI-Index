@@ -1,6 +1,6 @@
 # RSI Harness
 
-RSI Harness powers RSI's First Exam for ultra-long-horizon RSI runs, natively
+RSI Harness powers OpenRSI Index for ultra-long-horizon RSI runs, natively
 supporting [Harbor-format tasks](../rsi-tasks/) with or without GPUs on local
 Docker, and GPU tasks on multi-node clusters.
 

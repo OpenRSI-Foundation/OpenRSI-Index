@@ -9,7 +9,7 @@ This task studies iterative optimization of a hand-written row-major fp16 GEMM k
 
 | Item | Evidence |
 | --- | --- |
-| Original task | [`RSI-Index/RSI-Index-Public`](https://github.com/RSI-Index/RSI-Index-Public) path `task_collect/zy_tasks/gemm-h100-kernel-lab` at `f01bebc2b917f45461a8a49a309602419dcb7974` |
+| Original task | [`OpenRSI-Foundation/OpenRSI-Index`](https://github.com/OpenRSI-Foundation/OpenRSI-Index) path `task_collect/zy_tasks/gemm-h100-kernel-lab` at `f01bebc2b917f45461a8a49a309602419dcb7974` |
 | EdgeBench semantic source | [`deepebe952/edgebench_format_task`](https://github.com/deepebe952/edgebench_format_task) path `tasks/archive/gemm-h100-edgebench` at `4017832fc9e7d6f38f8c8d70f2b2de657982d3f5` |
 | License | Apache-2.0 in both source repositories |
 | Reference artifact | Original clean-room WMMA source in `solution/baseline/gemm_v001_wmma.cu` |

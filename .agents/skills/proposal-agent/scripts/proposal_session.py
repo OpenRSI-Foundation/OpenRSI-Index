@@ -18,7 +18,7 @@ from typing import NoReturn
 
 
 _SUPPORTED_PLATFORMS = frozenset({"codex", "claude-code"})
-PUBLIC_REPOSITORY = "RSI-Index/RSIs-First-Exam"
+PUBLIC_REPOSITORY = "OpenRSI-Foundation/OpenRSI-Index"
 DISCUSSION_CATEGORY = "Task Ideas"
 _DISPATCHER_LOGINS = frozenset(
     {"rsi-index-task-dispatcher", "rsi-index-task-dispatcher[bot]"}
@@ -26,7 +26,7 @@ _DISPATCHER_LOGINS = frozenset(
 _WRITE_PERMISSIONS = frozenset({"WRITE", "MAINTAIN", "ADMIN"})
 _REPOSITORY_URL = re.compile(
     r"(?<![A-Za-z0-9_.-])https://github\.com/"
-    r"(RSI-Index/[A-Za-z0-9_-](?:[A-Za-z0-9_.-]*[A-Za-z0-9_-])?)"
+    r"((?:OpenRSI-Foundation|RSI-Index)/[A-Za-z0-9_-](?:[A-Za-z0-9_.-]*[A-Za-z0-9_-])?)"
     r"(?=$|[\s<>()\[\]{},;!?]|\.(?=\s|$))"
 )
 _NODE_ID = r"[A-Za-z0-9_-]+"
@@ -258,7 +258,16 @@ def _read_discussion(value: object) -> DiscussionRef | None:
         _fail("saved Discussion has invalid values")
     # Keep sessions bound before the repository rename usable with GitHub's
     # canonical URL, without changing the bound Discussion node or number.
-    if url == f"https://github.com/RSI-Index/RSI-Index-Public/discussions/{number}":
+    legacy_repositories = (
+        "RSI-Index/RSI-Index-Public",
+        "RSI-Index/RSIs-First-Exam",
+        "OpenRSI-Foundation/RSI-Index-Public",
+        "OpenRSI-Foundation/RSIs-First-Exam",
+    )
+    if url in {
+        f"https://github.com/{repository}/discussions/{number}"
+        for repository in legacy_repositories
+    }:
         url = f"https://github.com/{PUBLIC_REPOSITORY}/discussions/{number}"
     return DiscussionRef(node_id=node_id, number=number, url=url)
 
@@ -447,7 +456,7 @@ def _repository_and_category(run: CommandRunner) -> tuple[str, str]:
     categories: list[str] = []
     seen_cursors: set[str] = set()
     while True:
-        variables = {"owner": "RSI-Index", "name": "RSIs-First-Exam"}
+        variables = {"owner": "OpenRSI-Foundation", "name": "OpenRSI-Index"}
         if after is not None:
             variables["after"] = after
         payload = _graphql(
@@ -746,10 +755,13 @@ def _publication_repository(snapshot: DiscussionSnapshot) -> tuple[str, str]:
         if len(urls) != 1:
             scoped_without_url = True
             continue
-        candidates.append((urls[0], f"https://github.com/{urls[0]}"))
+        # Publication comments created before the organization rename retain
+        # their old URLs. Verify and use the repository under its current owner.
+        repository = "OpenRSI-Foundation/" + urls[0].split("/", 1)[1]
+        candidates.append((repository, f"https://github.com/{repository}"))
     if len(candidates) != 1:
         if scoped_without_url and not candidates:
-            _fail("publication comment must contain exactly one RSI-Index repository URL")
+            _fail("publication comment must contain exactly one OpenRSI-Foundation repository URL")
         _fail("exactly one verified publication comment is required")
     return candidates[0]
 

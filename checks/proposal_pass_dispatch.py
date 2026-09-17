@@ -7,7 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-_SOURCE_REPOSITORY = "RSI-Index/RSIs-First-Exam"
+_SOURCE_REPOSITORY = "OpenRSI-Foundation/OpenRSI-Index"
 _DISCUSSION_ACTIONS = frozenset({"created", "edited"})
 _NODE_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
 
