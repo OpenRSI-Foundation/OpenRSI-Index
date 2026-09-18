@@ -1,0 +1,22 @@
+{
+  "files": {
+    "1_Pooling/config.json": "e67b6fce4749590dcfa7c34b6ecf82f82fb9437c637124cd0386aa7063a38b17",
+    "README.md": "972f71102fb2b603322fafbd470863fb4880da3f173f843454c3987a6940b596",
+    "config.json": "b0f55e28ce36d77c3d01469171fc4f3d47e770de1fe6df9d977ad41dc0105ca9",
+    "config_sentence_transformers.json": "ccc49b64176f097caf94ee0441fa141985add3b806cccee2ba52e1b4dad5dcba",
+    "model-00001-of-00004.safetensors": "88423f543709672c3fb67b1f1e0a2bd9ad974668620ebb79c03748a51e37941c",
+    "model-00002-of-00004.safetensors": "2df5a07920cb43273f20f3944eeb0d1dcfae94b57e124f8a88715563895b25df",
+    "model-00003-of-00004.safetensors": "a5c538338fe73649a6b2d2e1872b271513a2f2f307b3d88067cac1ef0aa692a6",
+    "model-00004-of-00004.safetensors": "fb23fe24cd4ac97ceb0627051f990bd935ee79b0c5fd183b852840d3d55af731",
+    "model.safetensors.index.json": "c46becf7b0b10e2effaeef5c1ba82acb7e48270d6667fd5018f72743511ebae8",
+    "modeling_reasonir_8b.py": "45eaa9add6f9c202151d8811c96ab0748ccce722256f7f40f3b9e14a7b880c9f",
+    "modules.json": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf",
+    "sentence_bert_config.json": "edd097645ed1ba6452a1224df6b8d0fa648d0db7d9865e716906e20db36d3ae7",
+    "special_tokens_map.json": "849070cae53bd45439e64ce5b1ddd650a66081b1bd47895c5a58939a05055579",
+    "tokenizer.json": "6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b",
+    "tokenizer_config.json": "9253ef2e31b5fbdf0856a7185aee92e368ef0083137750b00527e68112a6f226"
+  },
+  "repo_id": "reasonir/ReasonIR-8B",
+  "revision": "c3d0690370ff4a8c3d3882d8dfa85c43650034fa",
+  "schema_version": 1
+}
