@@ -1,0 +1,14 @@
+{
+  "agent": "codex",
+  "best_rewards": {
+    "reward": 0.705
+  },
+  "best_round": "agent-10",
+  "best_score": 0.705,
+  "model": "gpt-5.6-sol",
+  "runtime_seconds": 86416.49838863686,
+  "status": "failed",
+  "timed_out": true,
+  "timeout_seconds": 86400.0,
+  "total_rounds": 18
+}
