@@ -61,6 +61,9 @@ We are actively developing this project and welcome [contributions](https://gith
 | [`minference-sparse-prefill`](rsi-tasks/minference-sparse-prefill/) | Public Task    | MLSys         | Optimize Triton sparse-prefill attention on H100.                     | 1× H100         |
 | [`molmo2-pointing-refined`](rsi-tasks/molmo2-pointing-refined/)     | Public Task    | Vision        | Optimize Molmo2 video-pointing at inference time.                     | 1× H100         |
 | [`datacomp-small-filtering`](rsi-tasks/datacomp-small-filtering/)   | Public Task    | Vision        | Curate DataComp-small data for fixed ViT-B/32 training.               | 32× H100        |
+| [`ace-playbook-repair`](rsi-tasks/ace-playbook-repair/)             | Public Task    | Agents        | Inspect and repair ACE playbooks for a frozen Qwen model.            | 1× H100         |
+| [`molmoweb-interaction-context`](rsi-tasks/molmoweb-interaction-context/) | Public Task | Vision        | Allocate inference-time context for frozen MolmoWeb replay.          | 2× H100 minimum |
+| [`reasonir-difficulty-curriculum`](rsi-tasks/reasonir-difficulty-curriculum/) | Public Task | Post-training | Optimize a fixed-budget retrieval LoRA through difficulty-aware curricula. | 4× H100 minimum |
 
 </details>
 

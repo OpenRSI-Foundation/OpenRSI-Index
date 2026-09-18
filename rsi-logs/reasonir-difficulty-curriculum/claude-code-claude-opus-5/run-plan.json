@@ -1,0 +1,172 @@
+{
+  "gpu_plan": {
+    "authorized_pool": {
+      "devices": [
+        {
+          "index": 4,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0004"
+        },
+        {
+          "index": 5,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0005"
+        },
+        {
+          "index": 6,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0002"
+        },
+        {
+          "index": 7,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0008"
+        }
+      ]
+    },
+    "judge": {
+      "devices": [
+        {
+          "index": 4,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0004"
+        },
+        {
+          "index": 5,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0005"
+        },
+        {
+          "index": 6,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0002"
+        },
+        {
+          "index": 7,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0008"
+        }
+      ]
+    },
+    "judge_mode": "release-all",
+    "work": {
+      "devices": [
+        {
+          "index": 4,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0004"
+        },
+        {
+          "index": 5,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0005"
+        },
+        {
+          "index": 6,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0002"
+        },
+        {
+          "index": 7,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0008"
+        }
+      ]
+    }
+  },
+  "images": {
+    "base_digest": "sha256:8098c319de3f0f68e546cdf2bc6e31ed2a870c8df9d9f7732a85c97970f46ca7",
+    "base_ref": "sha256:8098c319de3f0f68e546cdf2bc6e31ed2a870c8df9d9f7732a85c97970f46ca7",
+    "judge_digest": "sha256:8098c319de3f0f68e546cdf2bc6e31ed2a870c8df9d9f7732a85c97970f46ca7",
+    "judge_ref": "sha256:8098c319de3f0f68e546cdf2bc6e31ed2a870c8df9d9f7732a85c97970f46ca7",
+    "judge_user": "0",
+    "rootfs_snapshot_mode": "split-workdir",
+    "work_digest": "sha256:05116413414ab0230d9cc8654e39446322db411c3398faee7dbc94358a304d4a",
+    "work_ref": "sha256:05116413414ab0230d9cc8654e39446322db411c3398faee7dbc94358a304d4a",
+    "work_user": "0",
+    "workdir": "/workspace"
+  },
+  "paths": {
+    "logs": "/rsi-runner/logs/reasonir-difficulty-curriculum",
+    "root": "/rsi-runner/runs/57e663c2f4a74e04a877e2e343a68ab0",
+    "workspace": "/rsi-runner/runs/57e663c2f4a74e04a877e2e343a68ab0/workspace"
+  },
+  "rootfs_snapshot_mode": "split-workdir",
+  "schema_version": 2,
+  "snapshot_kind": "docker-rootfs",
+  "task": {
+    "agent": {
+      "environment": [],
+      "install_stop_hook": true,
+      "model": "claude-opus-5",
+      "name": "claude-code",
+      "network": {
+        "allowlist": [],
+        "mode": "no-network"
+      },
+      "reasoning_effort": "max",
+      "secret_env_names": [],
+      "timeout_seconds": 86400.0,
+      "user": null
+    },
+    "assets": [],
+    "environment_digest": "a0ecf93b293ab045f8c1c3b6d9eb0900b9925297a2de7164ae095b626ad16aac",
+    "gpu_requirement": {
+      "count": 4,
+      "name": null
+    },
+    "instruction": "# ReasonIR difficulty-conditioned curriculum research\n\nTest whether offline query-difficulty policies improve fixed-budget ReasonIR-8B post-training without regressing general retrieval.\n\n## Goal\n\n- Form a mechanism-level hypothesis about difficulty scoring, filtering, weighting, sampling, or curriculum order over the fixed HQ/VL pool.\n- Compare fixed-schema LoRA candidates trained for exactly 1,000 completed optimizer updates and 64,000 attempted triplet exposures.\n- Complete at least two matched policy trials before making a curriculum-mechanism claim; this is a scientific reporting requirement, not a Judge input or reward gate.\n\n## Workspace\n\n| Item | Value |\n| --- | --- |\n| Working directory | `/workspace` |\n| Starting state | Pristine ReasonIR source, the fixed offline base at `/opt/reasonir-task/base/ReasonIR-8B`, fixed HQ/VL assets, a policy compiler and fixed four-process trainer, plus a canonical baseline materializer. |\n| Deliverable | `/workspace/submission/adapter/**` and `/workspace/submission/manifest.json` |\n\n## Reference baseline\n\n| Item | Value |\n| --- | --- |\n| Baseline | The pinned immutable ungated `reasonir/ReasonIR-8B` artifact with the canonical all-zero adapter. |\n| Reported result | The source reports 24.4 nDCG@10 points on full original-query BRIGHT. That is not the baseline of this three-subject task; no matched four-dataset general-retrieval result is reported. |\n| Status | The task validator measures a fresh baseline on this exact three-subject plus four-dataset protocol and the same frozen encoding policy as candidate evaluation. |\n| Comparison | Baseline and candidate use the same adapter-plus-manifest ingestion and fixed candidate-only evaluation. Judge does not retrain or rerun a live baseline. |\n\n## Research loop\n\n1. Inspect `/workspace/policy`, prior Work diagnostics under `/workspace/trials`, and prior safe submission feedback.\n2. State one falsifiable mechanism hypothesis and change only the permitted policy surface.\n3. Run `python /opt/reasonir-task/runtime/run_fixed.py --policy /workspace/policy/policy.json --trial /workspace/trials/<trial-name>`; wait for all four processes and artifact finalization.\n4. Select a completed trial with `python /opt/reasonir-task/runtime/select_trial.py --trial /workspace/trials/<trial-name>`, run `/usr/local/bin/validate-reasonir-candidate --json`, and submit.\n5. Compare aggregate reasoning and general-retrieval evidence, then retain, revise, or reject the hypothesis.\n\n## What you may change\n\n- Files under `/workspace/policy/**`: offline difficulty scores, buckets, filters, nonnegative weights, deterministic schedules, ordering, and policy metadata derived only from the fixed pool.\n- Files under `/workspace/trials/**`: completed fixed-trainer outputs and Work-owned diagnostics.\n- The selected adapter under `/workspace/submission/adapter/**` and `/workspace/submission/manifest.json` through the fixed selection tool.\n\n## What stays fixed\n\n- Base model/tokenizer, model architecture, seven-target LoRA schema and hyperparameters, objective, seed policy, optimizer schedule, training text/labels, row identities, and exposure/update accounting.\n- Exactly 1,000 completed updates and exactly 64,000 admitted triplet exposures per scoreable trial; failed post-forward attempts keep their exposures.\n- ReasonIR source, `/opt/reasonir-task/**`, all paths outside the candidate-owned allowlist, evaluation protocol, metrics, evaluator, and Judge assets.\n- No additional or generated data, runtime network, external service, evaluator access, candidate scoring code/cache, benchmark hard-coding, or routine mixture-ratio sweep.\n\n## Evaluation and feedback\n\n| Item | Value |\n| --- | --- |\n| Fixed workload | BRIGHT Biology (`biology`), Pony (`pony`), and TheoremQA-theorems (`theoremqa_theorems`), plus NFCorpus, SciFact, FiQA-2018, and ArguAna test splits. Every selected dataset retains its complete queries, candidate corpus, relevance judgments and exclusions; one complete deterministic pass per submission. |\n| Interpretation | `R` is a fixed three-subject reasoning proxy, not full BRIGHT or a proven substitute for its ranking. No per-round resampling or candidate-dependent dataset selection is allowed. |\n| Execution | Four Judge GPUs perform real parallel encoding; Work training also uses four GPUs. The encoding policy is fixed by the task and shared by calibration and candidate evaluation. Text limits and BF16 precision are unchanged. |\n| Reward | Let `R` and `G` be equal-weight means of the three selected BRIGHT and four BEIR nDCG@10 values. After five-decimal rounding, `S = R` when `G >= G0`; otherwise `S = G - G0`. Higher is better. |\n| Scoreable candidate | One closed PEFT safetensors adapter and bounded manifest for the fixed base/schema, produced in Work with exactly 1,000 updates and 64,000 exposures. Candidate-invalid and attributable failed artifacts are unscored. |\n| Visible feedback | `S`, `R`, `G`, non-regression, deltas from baseline, all subject/dataset aggregates, artifact status, runtime, peak memory, actionable candidate validation errors, and the Harness footer. |\n| Hidden | Evaluation examples, corpora, qrels, per-query values, rankings, relevant IDs, embeddings, evaluator traces, and task-owned implementation details. |\n\nUse `rsi-submit --list` to inspect prior submission summaries. Complete verifier output is available in the durable Agent log; every printed evaluator line is safe under this contract.\n\n## Submission checklist\n\n- Adapter and manifest are complete, closed, and flushed below `/workspace/submission`.\n- The fixed Work training command and selection command finished; no process, GPU state, socket, or cache is required by Judge.\n- `/usr/local/bin/validate-reasonir-candidate --json` succeeds without changing the candidate.\n- Nothing outside `/workspace/policy`, `/workspace/trials`, and `/workspace/submission` was changed.\n- The next submission tests a stated hypothesis, and mechanism claims rely on at least two completed matched policies.\n",
+    "instruction_digest": "c4d82fcbe0dddd4584484497443d6b7195331f974ddeb7a95e9f282c6b1bb82a",
+    "require_disjoint_phase_nodes": false,
+    "score_direction": "maximize",
+    "service": {
+      "build_context": null,
+      "build_timeout_seconds": 7200.0,
+      "cpus": 64,
+      "environment": [],
+      "gpu_requirement": null,
+      "image": "sha256:8098c319de3f0f68e546cdf2bc6e31ed2a870c8df9d9f7732a85c97970f46ca7",
+      "memory_mb": 524288,
+      "network_mode": "no-network",
+      "shm_size": "64g",
+      "storage_mb": 153600,
+      "user": null,
+      "workdir": "/workspace"
+    },
+    "source_digest": "324b76b1a39a994b52ab91bc7fdff18415e3a797f7c0d7487c7d7882a8443a66",
+    "source_dir": "/rsi-runner/tasks/reasonir-difficulty-curriculum",
+    "task_id": "reasonir-difficulty-curriculum",
+    "tests_digest": "274f6b4c94952d77610dabc264d4bd3d2d8013b9199b1c83d18e794a268cbb41",
+    "verifier": {
+      "command": [
+        "/bin/bash",
+        "/tests/test.sh"
+      ],
+      "environment": [
+        [
+          "REASONIR_BASELINE_G0",
+          "${REASONIR_BASELINE_G0}"
+        ],
+        [
+          "REASONIR_BASELINE_R0",
+          "${REASONIR_BASELINE_R0}"
+        ]
+      ],
+      "gpu_count": 4,
+      "network": {
+        "allowlist": [],
+        "mode": "no-network"
+      },
+      "output_limit_bytes": 1000000,
+      "primary_reward": null,
+      "secret_env_names": [
+        "REASONIR_BASELINE_G0",
+        "REASONIR_BASELINE_R0"
+      ],
+      "timeout_seconds": 4500.0,
+      "user": null
+    },
+    "workdir": "/workspace"
+  },
+  "workdir": "/workspace"
+}

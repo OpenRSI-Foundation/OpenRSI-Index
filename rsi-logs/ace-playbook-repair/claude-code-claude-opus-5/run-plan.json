@@ -1,0 +1,115 @@
+{
+  "gpu_plan": {
+    "authorized_pool": {
+      "devices": [
+        {
+          "index": 2,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0006"
+        }
+      ]
+    },
+    "judge": {
+      "devices": [
+        {
+          "index": 2,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0006"
+        }
+      ]
+    },
+    "judge_mode": "release-all",
+    "work": {
+      "devices": [
+        {
+          "index": 2,
+          "name": "NVIDIA H100 NVL",
+          "uuid": "GPU-ANON-0006"
+        }
+      ]
+    }
+  },
+  "images": {
+    "base_digest": "sha256:3efa6d062428a3e71daf0c5860766eb1310b69d516ae656200c14c16836f5bc5",
+    "base_ref": "sha256:3efa6d062428a3e71daf0c5860766eb1310b69d516ae656200c14c16836f5bc5",
+    "judge_digest": "sha256:3efa6d062428a3e71daf0c5860766eb1310b69d516ae656200c14c16836f5bc5",
+    "judge_ref": "sha256:3efa6d062428a3e71daf0c5860766eb1310b69d516ae656200c14c16836f5bc5",
+    "judge_user": "0",
+    "rootfs_snapshot_mode": "split-workdir",
+    "work_digest": "sha256:014b07d2b058d6f82016393644fdccfd0e69011cbeb75e2fafc10c763039fad7",
+    "work_ref": "sha256:014b07d2b058d6f82016393644fdccfd0e69011cbeb75e2fafc10c763039fad7",
+    "work_user": "0",
+    "workdir": "/workspace"
+  },
+  "paths": {
+    "logs": "/rsi-runner/logs/ace-playbook-repair",
+    "root": "/rsi-runner/runs/28cae229954b4e039732b2686a4b2d6e",
+    "workspace": "/rsi-runner/runs/28cae229954b4e039732b2686a4b2d6e/workspace"
+  },
+  "rootfs_snapshot_mode": "split-workdir",
+  "schema_version": 2,
+  "snapshot_kind": "docker-rootfs",
+  "task": {
+    "agent": {
+      "environment": [],
+      "install_stop_hook": true,
+      "model": "claude-opus-5",
+      "name": "claude-code",
+      "network": {
+        "allowlist": [],
+        "mode": "no-network"
+      },
+      "reasoning_effort": "max",
+      "secret_env_names": [],
+      "timeout_seconds": 86400.0,
+      "user": null
+    },
+    "assets": [],
+    "environment_digest": "297bd555bbde00e9e0cd9cae25e4236a06bf099d4c81471fa6ebb740900fb08c",
+    "gpu_requirement": {
+      "count": 1,
+      "name": null
+    },
+    "instruction": "# Repair ACE playbooks\n\nTest whether periodic intrinsic inspection and repair of weak ACE playbook bullets improves held-out Formula exact-answer accuracy under a fixed local Qwen protocol. This is the lightweight, single-seed protocol (task version 1.1.0).\n\n## Goal\n\n- Improve over stock sequential ACE by identifying inaccurate, contradictory, redundant, stale, or weakly supported bullets during adaptation.\n- Keep the model, data order, single-seed adaptation budget, generator protocol, and hidden evaluation fixed.\n- Use aggregate evidence from submissions to decide which inspection and repair hypotheses generalize.\n\n## Workspace\n\n| Item | Value |\n| --- | --- |\n| Working directory | `/workspace` |\n| Starting state | Pinned ACE source, the original public data files (500 training and 300 validation examples), a local Qwen checkpoint, fixed runners, and a scoreable single-repeat unadapted no-op with one canonical empty playbook. The fixed runner uses only the first 200 training and first 100 validation examples in their pinned order. Hidden test data is absent. |\n| Deliverable | One closed playbook at `/workspace/submission/runs/repeat-1/best_playbook.txt`, its required audit and adaptation log, and permitted source/configuration changes. Extra repeat directories are invalid. |\n\n## Reference baseline\n\n| Item | Value |\n| --- | --- |\n| Baseline | Stock sequential ACE from a canonical empty seven-section playbook; seed 0, one epoch over the first 200 training examples, batch size 1, up to three reflection rounds, curator frequency 1, validation on the same first 100 validation examples every 50 training examples, 4,096 output tokens, and an 80,000-token playbook budget. |\n| Reported result | Not reported for the fixed local-Qwen Formula protocol. The repository's `+8.6%` is an aggregate FiNER/Formula result under a different protocol. |\n| Status | A fully adapted baseline for this lightweight protocol has not yet been measured; the nearby aggregate is source-reported and protocol-mismatched. |\n| Comparison | `/usr/local/bin/run-stock-baseline` produces a separate Work-side reference candidate using exactly the same lightweight budget as `/usr/local/bin/run-ace-candidate`. Each Judge submission evaluates only its submitted playbook; no live baseline is run. Do not treat scores from the old three-seed, 500-example protocol as matched comparisons. |\n\n## Research loop\n\n1. Inspect stock source, public data, and prior safe submission feedback.\n2. Form one falsifiable inspection/repair hypothesis and change only the allowed candidate surface.\n3. Run `/usr/local/bin/run-ace-candidate --output-root /workspace/submission`; the complete 200-example adaptation must finish before submission.\n4. Run `/usr/local/bin/validate-ace-candidate --json`, submit the complete snapshot, and compare aggregate evidence.\n5. Keep, revise, or reject the hypothesis without using hidden cases or per-example outcomes.\n\n## What you may change\n\n- `/workspace/playbook_utils.py`\n- `/workspace/ace/ace.py`, `/workspace/ace/core/reflector.py`, and `/workspace/ace/core/curator.py`\n- `/workspace/ace/prompts/reflector.py` and `/workspace/ace/prompts/curator.py`\n- New files below `/workspace/ace/inspectors/` and `/workspace/candidate_configs/`\n- Research logs and the complete `/workspace/submission/` tree\n\nInspection is limited to one combined inspect/repair event at each of the four validation checkpoints (50, 100, 150, and 200). The audit manifest is self-reported evidence and must describe every event.\n\nThe `adaptation.jsonl` file is bounded self-reported audit evidence, not scoring authority. It must be either the single exact `unadapted_noop` run row with seed 0, zero examples, and no checkpoints, or the fixed 205-row completed schema: one run row, exactly 200 ordered `processed` example rows indexed `0..199`, and exactly four ordered `complete` checkpoint rows for `50,100,150,200`. Every row carries schema version 1 and seed 0.\n\n## What stays fixed\n\n- The baked Qwen 2.5 7B Instruct BF16 model at its fixed revision, static YaRN factor 4, 131,072 context, and 4,096 reserved output tokens.\n- Formula training and validation selection and order (fixed first 200/100 rows), seed `0`, one epoch, batch size 1, reflection, curation, and validation budgets, local serving settings, the task-owned maximum-three-attempt request layer, and the generator implementation and prompt.\n- Formula processing/scoring, hidden test data, dependency/runtime files, aggregation, and every undeclared workspace path.\n- Do not fetch data, use network services, alter fixed assets, read `/tests`, or rely on processes, sockets, caches, or GPU state after `rsi-submit`.\n\n## Evaluation and feedback\n\n| Item | Value |\n| --- | --- |\n| Fixed workload | The single playbook answers all of the same 200 hidden Formula examples: 200 logical temperature-zero generations, with at most three infrastructure attempts per call and no resampling. The hidden dataset is not reduced. |\n| Reward | `correct / 200`, a finite scalar in `[0,1]`, maximized. `mean_accuracy` reports this single accuracy; `sample_standard_deviation` is `null` because there is only one repeat, not evidence of zero variance. |\n| Scoreable candidate | One regular, non-symlink UTF-8 playbook with canonical sections and valid bullets, plus complete bounded audit material under `repeat-1`. Judge treats only playbook bytes as prompt data. |\n| Visible feedback | Single-repeat accuracy; unavailable sample standard deviation (`null`); separately labeled ACE-budget `cl100k_base` and Qwen model-context playbook token counts; bullet counts; section aggregates; helpful, harmful, and unused aggregates; total unparsable answers; artifact validity; actionable candidate-owned validation errors; and the Harness footer. |\n| Hidden | Test inputs/targets, predictions, per-example correctness, raw responses/server logs, detailed Judge logs, evaluator source, and internals. |\n\nCandidate-invalid, timeout, incomplete, infrastructure, and ambiguous failures are unscored and leave no reward. Completed unparsable outputs count as incorrect in the fixed denominator. Use `rsi-submit --list` to inspect prior submission summaries.\n\nThis lightweight protocol supports faster iteration but does not measure across-seed robustness. Its shorter adaptation may expose fewer late-stage stale or contradictory bullets than the old protocol; interpret improvements within this budget.\n\n## Submission checklist\n\n- The playbook, `audit.json`, and `adaptation.jsonl` files are complete and flushed below `/workspace/submission/runs/repeat-1/`; there are no other repeat directories.\n- All candidate-producing Work commands have finished; Judge performs no adaptation and needs no Work process state.\n- `/usr/local/bin/validate-ace-candidate --json` passes; it is advisory and Judge independently checks the snapshot.\n- No prohibited state or live process is required by Judge.\n- The next submission tests a stated hypothesis.\n",
+    "instruction_digest": "f72a6306c99e1d3db3dee7b0a28e7f69a7142ede11d13acf4aa04b4f3a9476b9",
+    "require_disjoint_phase_nodes": false,
+    "score_direction": "maximize",
+    "service": {
+      "build_context": null,
+      "build_timeout_seconds": 10800.0,
+      "cpus": 16,
+      "environment": [],
+      "gpu_requirement": null,
+      "image": "sha256:3efa6d062428a3e71daf0c5860766eb1310b69d516ae656200c14c16836f5bc5",
+      "memory_mb": 98304,
+      "network_mode": "no-network",
+      "shm_size": "16g",
+      "storage_mb": 122880,
+      "user": null,
+      "workdir": "/workspace"
+    },
+    "source_digest": "9dd1aa166e159a5b2bb9e79ed0e96c4aecc2407628d901392a0547a31a65f0d9",
+    "source_dir": "/rsi-runner/tasks/ace-playbook-repair",
+    "task_id": "ace-playbook-repair",
+    "tests_digest": "7b732fbd1848472e9b49c65960ca11243826a2f607f26acef1fb71896603cfd3",
+    "verifier": {
+      "command": [
+        "/bin/bash",
+        "/tests/test.sh"
+      ],
+      "environment": [],
+      "gpu_count": 1,
+      "network": {
+        "allowlist": [],
+        "mode": "no-network"
+      },
+      "output_limit_bytes": 1000000,
+      "primary_reward": null,
+      "secret_env_names": [],
+      "timeout_seconds": 9000.0,
+      "user": null
+    },
+    "workdir": "/workspace"
+  },
+  "workdir": "/workspace"
+}
