@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "name": "uniform-reference",
+  "method": "uniform",
+  "include_sources": ["hq", "vl"],
+  "replacement": true,
+  "seed": 42
+}

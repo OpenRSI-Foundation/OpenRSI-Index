@@ -1,0 +1,41 @@
+{
+  "beir_commit": "6ef8c9097ebfb203ad360bd64e0cfb93e64f4a44",
+  "bright_revision": "3066d29c9651a576c8aba4832d249807b181ecae",
+  "files": {
+    "beir/arguana.zip": "cfdf79adce27a401b3cd3ea267903134dbfab2c6afeb95d7fe5724a00bf7557b",
+    "beir/fiqa.zip": "32c7df99ed21252fdfb2cf3f5673502a8d245ee0c44c4a133570d92ce2b3ad02",
+    "beir/nfcorpus.zip": "efe5be03f8c5b86a5870102d0599d227c8c6e2484328e68c6522560385671b0b",
+    "beir/scifact.zip": "536e14446a0ba56ed1398ab1055f39fe852686ecad24a6306c80c490fa8e0165",
+    "bright/documents/aops.parquet": "751ece1ee01b37adb6016aeba0ac0fb40a1697145e58c640eafa178306ff84ee",
+    "bright/documents/biology.parquet": "8516d0c233f9c34e9eb6922b56e8a1698e5a6f6e504a9499fcd511cdd5741670",
+    "bright/documents/earth_science.parquet": "abcb2cd130d7d333b364bf5c89b7ff3829e0f88eb6a2de8232c3df1173eeb8a2",
+    "bright/documents/economics.parquet": "f3ba8a0fbc9a9aed07b4970cc686e32cfefcd06d6922402587adf871f006394c",
+    "bright/documents/leetcode-00000.parquet": "d1d6764bba6b45159943e517a558a68b91370fe54ffd85209a5a969290c0d206",
+    "bright/documents/leetcode-00001.parquet": "10aaea37434508e27277e77351df001597fd94c4dfef0e53916ea163c13a3d73",
+    "bright/documents/leetcode-00002.parquet": "ca1a06fe8b12b260df52a3dd7d3cb137267944e73ec56a186ad7c17af919213f",
+    "bright/documents/leetcode-00003.parquet": "9de06d991933d85b9873bbcb92059e3cfa6037bf59376df2e7e681e2d4b79031",
+    "bright/documents/pony.parquet": "afc23dc0a1db170b2e86364b85cbc0bc17a713b583d360668cdce0135a173fc3",
+    "bright/documents/psychology.parquet": "085d381739cb24b4227dfaf577f39d0adcad8b7b1ae74be028ac239d37be3c1d",
+    "bright/documents/robotics.parquet": "2c83f286006a3b2e11a677abe88f382009c5ee79f97c1f43f6a571f3f94e6d15",
+    "bright/documents/stackoverflow.parquet": "d54559692f925666c3c6b1d33a696a64ef324cf5aaeff9d6f4d11fba5cd5ac8b",
+    "bright/documents/sustainable_living.parquet": "474628623cf9de252bd80a7d1b667aa5070e21b87e1dd33f6723db4d24121fdf",
+    "bright/documents/theoremqa_theorems.parquet": "450dc6c107f42c4e4fc4c12cae3ffc29ba1d5ff62c34f0040bb84f37c35f2033",
+    "bright/examples/aops.parquet": "e079c1dcc39e4ed54486d4ab8a9166427a9149cbdc4a27a52893c0b252038557",
+    "bright/examples/biology.parquet": "6e105c4f09d9a70b8a20ed6a4d0e386823a5545151df41b3f0e64eb5c5987829",
+    "bright/examples/earth_science.parquet": "5d29f108701111984eb91c93d3e340a784a99df47dc11f43783d1b994010a91d",
+    "bright/examples/economics.parquet": "2a79f0f3a881c7c03a258cf8ef8ac2db1ca9080963252d9a020bb45a264aa037",
+    "bright/examples/leetcode.parquet": "3c4aa60809c396ae806252f3713f636ebf808a235a27b382cdaf5978894f7fd0",
+    "bright/examples/pony.parquet": "0c0718d3e0ef05da42f75b7c03e755d3e03d9fcdbd32b67dddd221768a8377d7",
+    "bright/examples/psychology.parquet": "404e7dff2a4528419df0bdc162541e92138e35b78918d82d3a04ade5b8f7876b",
+    "bright/examples/robotics.parquet": "621484c87c9ebae12f81e32a0a8c5d085af4b95cbe1b575ab40ae4b659adb53a",
+    "bright/examples/stackoverflow.parquet": "97d417ba449ef70c9c9ae2937e9df106654a2554ce1533b090cb64b998a077e1",
+    "bright/examples/sustainable_living.parquet": "61f97837a16b47a0d9953039cf0b6a53d0fc5deae96a34f839b7cb5e798eb117",
+    "bright/examples/theoremqa_questions.parquet": "cc31b6e1fea17624a9a0fbe6e5e4e7a98b8f338c0034ecca966166adfb51fbb0",
+    "bright/examples/theoremqa_theorems.parquet": "d11177052447457c45b73a9270ac4003d479d5264343d494f045af14325b88a3"
+  },
+  "leetcode_sharding": {
+    "method": "four contiguous row slices, ceil(total_rows/4), PyArrow 18.1.0 zstd row groups of 4096",
+    "source_sha256": "a31aa55116b5ea9e31cd5ca6117a5822a9ba64d1e63dda463b0908859cbba240"
+  },
+  "schema_version": 1
+}

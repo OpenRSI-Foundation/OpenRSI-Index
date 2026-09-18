@@ -1,0 +1,86 @@
+{
+  "best_round": "agent-5",
+  "best_score": 0.21811,
+  "submissions": [
+    {
+      "at": 1789558998.00554,
+      "kind": "agent",
+      "rewards": {
+        "reward": 0.2002
+      },
+      "round": "agent-1",
+      "score": 0.2002,
+      "status": "completed"
+    },
+    {
+      "at": 1789568233.335118,
+      "kind": "agent",
+      "rewards": {
+        "reward": 0.21536
+      },
+      "round": "agent-2",
+      "score": 0.21536,
+      "status": "completed"
+    },
+    {
+      "at": 1789577638.095441,
+      "kind": "agent",
+      "rewards": {
+        "reward": -0.01126
+      },
+      "round": "agent-3",
+      "score": -0.01126,
+      "status": "completed"
+    },
+    {
+      "at": 1789586699.013776,
+      "kind": "agent",
+      "rewards": {
+        "reward": -0.00368
+      },
+      "round": "agent-4",
+      "score": -0.00368,
+      "status": "completed"
+    },
+    {
+      "at": 1789595986.078653,
+      "kind": "agent",
+      "rewards": {
+        "reward": 0.21811
+      },
+      "round": "agent-5",
+      "score": 0.21811,
+      "status": "completed"
+    },
+    {
+      "at": 1789605562.121768,
+      "kind": "agent",
+      "rewards": {
+        "reward": 0.2126
+      },
+      "round": "agent-6",
+      "score": 0.2126,
+      "status": "completed"
+    },
+    {
+      "at": 1789614948.804296,
+      "kind": "agent",
+      "rewards": {
+        "reward": 0.21794
+      },
+      "round": "agent-7",
+      "score": 0.21794,
+      "status": "completed"
+    },
+    {
+      "at": 1789624449.299603,
+      "kind": "agent",
+      "rewards": {
+        "reward": -0.01372
+      },
+      "round": "agent-8",
+      "score": -0.01372,
+      "status": "completed"
+    }
+  ]
+}
