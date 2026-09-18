@@ -278,6 +278,12 @@ def _allowlist_contains_endpoint(
 
 _MOUNTINFO_ESCAPE = re.compile(r"\\([0-7]{3})")
 
+# Per-response read timeout for the Docker API. The SDK default of 60 seconds
+# is shorter than a rootfs commit of a Work container that wrote tens of GB
+# (each Judge round commits the Work rootfs), which surfaced as a spurious
+# infrastructure_error while the daemon kept committing and leaked the image.
+DOCKER_API_TIMEOUT_SECONDS = 3600
+
 
 def _decode_mountinfo_field(value: str) -> str:
     return _MOUNTINFO_ESCAPE.sub(
@@ -1435,7 +1441,7 @@ class ProductionRuntimeServices:
 
     def _client(self) -> Any:
         if self.client is None:
-            self.client = docker.from_env()
+            self.client = docker.from_env(timeout=DOCKER_API_TIMEOUT_SECONDS)
             self.client.ping()
         return self.client
 
