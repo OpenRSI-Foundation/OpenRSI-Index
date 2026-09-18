@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "model": {
+    "repo_id": "reasonir/ReasonIR-8B",
+    "repo_type": "model",
+    "revision": "c3d0690370ff4a8c3d3882d8dfa85c43650034fa",
+    "files": {
+      "1_Pooling/config.json": "e67b6fce4749590dcfa7c34b6ecf82f82fb9437c637124cd0386aa7063a38b17",
+      "README.md": "972f71102fb2b603322fafbd470863fb4880da3f173f843454c3987a6940b596",
+      "config.json": "b0f55e28ce36d77c3d01469171fc4f3d47e770de1fe6df9d977ad41dc0105ca9",
+      "config_sentence_transformers.json": "ccc49b64176f097caf94ee0441fa141985add3b806cccee2ba52e1b4dad5dcba",
+      "model-00001-of-00004.safetensors": "88423f543709672c3fb67b1f1e0a2bd9ad974668620ebb79c03748a51e37941c",
+      "model-00002-of-00004.safetensors": "2df5a07920cb43273f20f3944eeb0d1dcfae94b57e124f8a88715563895b25df",
+      "model-00003-of-00004.safetensors": "a5c538338fe73649a6b2d2e1872b271513a2f2f307b3d88067cac1ef0aa692a6",
+      "model-00004-of-00004.safetensors": "fb23fe24cd4ac97ceb0627051f990bd935ee79b0c5fd183b852840d3d55af731",
+      "model.safetensors.index.json": "c46becf7b0b10e2effaeef5c1ba82acb7e48270d6667fd5018f72743511ebae8",
+      "modeling_reasonir_8b.py": "45eaa9add6f9c202151d8811c96ab0748ccce722256f7f40f3b9e14a7b880c9f",
+      "modules.json": "84e40c8e006c9b1d6c122e02cba9b02458120b5fb0c87b746c41e0207cf642cf",
+      "sentence_bert_config.json": "edd097645ed1ba6452a1224df6b8d0fa648d0db7d9865e716906e20db36d3ae7",
+      "special_tokens_map.json": "849070cae53bd45439e64ce5b1ddd650a66081b1bd47895c5a58939a05055579",
+      "tokenizer.json": "6b9e4e7fb171f92fd137b777cc2714bf87d11576700a1dcd7a399e7bbe39537b",
+      "tokenizer_config.json": "9253ef2e31b5fbdf0856a7185aee92e368ef0083137750b00527e68112a6f226"
+    }
+  },
+  "training": {
+    "repo_id": "reasonir/reasonir-data",
+    "repo_type": "dataset",
+    "revision": "0275f825929b206d4ead23d34b4f8a50d4eddbc8",
+    "files": {
+      "hq/train-00000-of-00001.parquet": "86f8a5162d8fc10c47789b3ad40d0e8d67e036effcfccf8e35e20695982173ee",
+      "vl/train-00000-of-00001.parquet": "8b45494814f0843e44a1adc75722e56ab055b390134a0ba02605f85ae1070537"
+    }
+  },
+  "bright_documents": {
+    "repo_id": "xlangai/BRIGHT",
+    "repo_type": "dataset",
+    "revision": "3066d29c9651a576c8aba4832d249807b181ecae",
+    "files": {
+      "documents/aops-00000-of-00001.parquet": "751ece1ee01b37adb6016aeba0ac0fb40a1697145e58c640eafa178306ff84ee",
+      "documents/biology-00000-of-00001.parquet": "8516d0c233f9c34e9eb6922b56e8a1698e5a6f6e504a9499fcd511cdd5741670",
+      "documents/earth_science-00000-of-00001.parquet": "abcb2cd130d7d333b364bf5c89b7ff3829e0f88eb6a2de8232c3df1173eeb8a2",
+      "documents/economics-00000-of-00001.parquet": "f3ba8a0fbc9a9aed07b4970cc686e32cfefcd06d6922402587adf871f006394c",
+      "documents/leetcode-00000-of-00001.parquet": "a31aa55116b5ea9e31cd5ca6117a5822a9ba64d1e63dda463b0908859cbba240",
+      "documents/pony-00000-of-00001.parquet": "afc23dc0a1db170b2e86364b85cbc0bc17a713b583d360668cdce0135a173fc3",
+      "documents/psychology-00000-of-00001.parquet": "085d381739cb24b4227dfaf577f39d0adcad8b7b1ae74be028ac239d37be3c1d",
+      "documents/robotics-00000-of-00001.parquet": "2c83f286006a3b2e11a677abe88f382009c5ee79f97c1f43f6a571f3f94e6d15",
+      "documents/stackoverflow-00000-of-00001.parquet": "d54559692f925666c3c6b1d33a696a64ef324cf5aaeff9d6f4d11fba5cd5ac8b",
+      "documents/sustainable_living-00000-of-00001.parquet": "474628623cf9de252bd80a7d1b667aa5070e21b87e1dd33f6723db4d24121fdf",
+      "documents/theoremqa_theorems-00000-of-00001.parquet": "450dc6c107f42c4e4fc4c12cae3ffc29ba1d5ff62c34f0040bb84f37c35f2033"
+    }
+  }
+}
