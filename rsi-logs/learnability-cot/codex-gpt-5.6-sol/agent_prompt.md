@@ -88,4 +88,4 @@ Each submission stores complete Judge stdout and stderr in
 `/run/rsi-harness/feedback/agent-N.log`, where N is the submission number.
 Judge submissions are unlimited during this run.
 
-Judge uses 4 separate GPUs; Work GPU release is not required.
+Every Work GPU process must exit before rsi-submit. A rejected preflight does not consume a submission.
