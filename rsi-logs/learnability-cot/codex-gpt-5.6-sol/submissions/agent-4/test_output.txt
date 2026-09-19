@@ -1,3 +1,1 @@
-WARNING: Overriding HOME environment variable with APPTAINERENV_HOME is not permitted
-INFO:    gocryptfs not found, will not be able to use gocryptfs
-{"correctness": "failed", "mode": "candidate", "reason": "missing_artifact", "reward": 0.0}
+{"correctness": "failed", "mode": "candidate", "reason": "trainer_state", "reward": 0.0}

@@ -3,13 +3,13 @@
   "exit_code": 0,
   "full_output_captured": true,
   "metrics": {
-    "reward": 0.0
+    "reward": 43.53765703535226
   },
   "round": "agent-11",
-  "runtime_seconds": 5.24207553640008,
-  "score": 0.0,
+  "runtime_seconds": 699.7373134074733,
+  "score": 43.53765703535226,
   "status": "completed",
-  "submitted_at": 1787528510.814781,
+  "submitted_at": 1789764966.748509,
   "timed_out": false,
   "verifier_output_required": true
 }

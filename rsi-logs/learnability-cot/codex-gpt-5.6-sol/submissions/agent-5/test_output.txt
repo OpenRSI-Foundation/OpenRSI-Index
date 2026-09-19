@@ -1,3 +1,436 @@
-WARNING: Overriding HOME environment variable with APPTAINERENV_HOME is not permitted
-INFO:    gocryptfs not found, will not be able to use gocryptfs
-{"correctness": "failed", "mode": "candidate", "reason": "missing_artifact", "reward": 0.0}
+/usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
+  warnings.warn(
+2026-09-18:18:49:12,185 INFO     [config.py:54] PyTorch version 2.4.0+cu121 available.
+/usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+No module named 'vllm._version'
+  from vllm.version import __version__ as VLLM_VERSION
+Generating train split: 0 examples [00:00, ? examples/s]Generating train split: 30 examples [00:00, 1907.17 examples/s]
+Generating validation split: 0 examples [00:00, ? examples/s]Generating validation split: 30 examples [00:00, 7817.42 examples/s]
+Generating test split: 0 examples [00:00, ? examples/s]Generating test split: 30 examples [00:00, 12327.73 examples/s]
+Map:   0%|          | 0/30 [00:00<?, ? examples/s]Map: 100%|██████████| 30/30 [00:00<00:00, 744.71 examples/s]
+Map:   0%|          | 0/30 [00:00<?, ? examples/s]Map: 100%|██████████| 30/30 [00:00<00:00, 8016.13 examples/s]
+Generating train split: 0 examples [00:00, ? examples/s]Generating train split: 40 examples [00:00, 6101.03 examples/s]
+Generating validation split: 0 examples [00:00, ? examples/s]Generating validation split: 40 examples [00:00, 25850.87 examples/s]
+Generating test split: 0 examples [00:00, ? examples/s]Generating test split: 40 examples [00:00, 25958.87 examples/s]
+Map:   0%|          | 0/40 [00:00<?, ? examples/s]Map: 100%|██████████| 40/40 [00:00<00:00, 5774.69 examples/s]
+Map:   0%|          | 0/40 [00:00<?, ? examples/s]Map: 100%|██████████| 40/40 [00:00<00:00, 10648.82 examples/s]
+Generating train split: 0 examples [00:00, ? examples/s]Generating train split: 675 examples [00:00, 22288.88 examples/s]
+Generating validation split: 0 examples [00:00, ? examples/s]Generating validation split: 675 examples [00:00, 29492.43 examples/s]
+Generating test split: 0 examples [00:00, ? examples/s]Generating test split: 675 examples [00:00, 63917.35 examples/s]
+Map:   0%|          | 0/675 [00:00<?, ? examples/s]Map: 100%|██████████| 675/675 [00:00<00:00, 18258.33 examples/s]
+Map:   0%|          | 0/675 [00:00<?, ? examples/s]Map: 100%|██████████| 675/675 [00:00<00:00, 20505.07 examples/s]
+Generating test split: 0 examples [00:00, ? examples/s]Generating test split: 1319 examples [00:00, 42371.25 examples/s]
+Generating train split: 0 examples [00:00, ? examples/s]Generating train split: 500 examples [00:00, 33365.98 examples/s]
+Generating validation split: 0 examples [00:00, ? examples/s]Generating validation split: 500 examples [00:00, 112701.63 examples/s]
+Generating test split: 0 examples [00:00, ? examples/s]Generating test split: 500 examples [00:00, 94658.18 examples/s]
+Map:   0%|          | 0/500 [00:00<?, ? examples/s]Map: 100%|██████████| 500/500 [00:00<00:00, 11697.37 examples/s]
+Map:   0%|          | 0/500 [00:00<?, ? examples/s]Map: 100%|██████████| 500/500 [00:00<00:00, 30619.38 examples/s]
+  0%|          | 0/500 [00:00<?, ?it/s] 76%|███████▌  | 380/500 [00:00<00:00, 3791.68it/s]100%|██████████| 500/500 [00:00<00:00, 3850.59it/s]
+  0%|          | 0/1319 [00:00<?, ?it/s] 37%|███▋      | 483/1319 [00:00<00:00, 4820.29it/s] 73%|███████▎  | 966/1319 [00:00<00:00, 4777.98it/s]100%|██████████| 1319/1319 [00:00<00:00, 4785.39it/s]
+  0%|          | 0/675 [00:00<?, ?it/s] 59%|█████▉    | 399/675 [00:00<00:00, 3984.94it/s]100%|██████████| 675/675 [00:00<00:00, 3990.83it/s]
+  0%|          | 0/40 [00:00<?, ?it/s]100%|██████████| 40/40 [00:00<00:00, 3793.18it/s]
+  0%|          | 0/30 [00:00<?, ?it/s]100%|██████████| 30/30 [00:00<00:00, 3777.06it/s]
+Running generate_until requests:   0%|          | 0/2564 [00:00<?, ?it/s]2026-09-18 18:49:18,025	WARNING utils.py:580 -- Detecting docker specified CPUs. In previous versions of Ray, CPU detection in containers was incorrect. Please ensure that Ray has enough CPUs allocated. As a temporary workaround to revert to the prior behavior, set `RAY_USE_MULTIPROCESSING_CPU_COUNT=1` as an env var before starting Ray. Set the env var: `RAY_DISABLE_DOCKER_CPU_WARNING=1` to mute this warning.
+2026-09-18 18:49:18,569	INFO worker.py:1786 -- Started a local Ray instance.
+[36m(pid=691)[0m /usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
+[36m(pid=691)[0m   warnings.warn(
+[36m(pid=691)[0m /usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+[36m(pid=691)[0m No module named 'vllm._version'
+[36m(pid=691)[0m   from vllm.version import __version__ as VLLM_VERSION
+[36m(run_inference_one_model pid=691)[0m Calling ray.init() again after it has already been called.
+[36m(pid=682)[0m /usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.[32m [repeated 3x across cluster] (Ray deduplicates logs by default. Set RAY_DEDUP_LOGS=0 to disable log deduplication, or see https://docs.ray.io/en/master/ray-observability/user-guides/configure-logging.html#log-deduplication for more options.)[0m
+[36m(pid=682)[0m   warnings.warn([32m [repeated 3x across cluster][0m
+[36m(pid=687)[0m /usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:[32m [repeated 3x across cluster][0m
+[36m(pid=687)[0m No module named 'vllm._version'[32m [repeated 3x across cluster][0m
+[36m(pid=687)[0m   from vllm.version import __version__ as VLLM_VERSION[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=691)[0m Loading safetensors checkpoint shards:   0% Completed | 0/2 [00:00<?, ?it/s]
+[36m(run_inference_one_model pid=682)[0m Calling ray.init() again after it has already been called.[32m [repeated 3x across cluster][0m
+[36m(pid=708)[0m /usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.[32m [repeated 4x across cluster][0m
+[36m(pid=708)[0m   warnings.warn([32m [repeated 4x across cluster][0m
+[36m(pid=734)[0m /usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:[32m [repeated 4x across cluster][0m
+[36m(pid=734)[0m No module named 'vllm._version'[32m [repeated 4x across cluster][0m
+[36m(pid=734)[0m   from vllm.version import __version__ as VLLM_VERSION[32m [repeated 4x across cluster][0m
+[36m(run_inference_one_model pid=691)[0m Loading safetensors checkpoint shards:  50% Completed | 1/2 [00:19<00:19, 19.31s/it]
+[36m(run_inference_one_model pid=687)[0m Loading safetensors checkpoint shards:   0% Completed | 0/2 [00:00<?, ?it/s][32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=691)[0m 
+[36m(run_inference_one_model pid=687)[0m 
+[36m(run_inference_one_model pid=683)[0m 
+[36m(run_inference_one_model pid=682)[0m 
+[36m(run_inference_one_model pid=682)[0m Processed prompts:   0%|          | 0/312 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]
+[36m(run_inference_one_model pid=682)[0m Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:24<00:00, 12.09s/it][32m [repeated 11x across cluster][0m
+[36m(run_inference_one_model pid=687)[0m Processed prompts:   0%|          | 1/311 [00:01<05:16,  1.02s/it, est. speed input: 197.83 toks/s, output: 25.46 toks/s]
+[36m(run_inference_one_model pid=683)[0m Processed prompts:   0%|          | 0/311 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s][32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=687)[0m Processed prompts:   5%|▌         | 16/311 [00:06<00:58,  5.06it/s, est. speed input: 535.40 toks/s, output: 597.72 toks/s][32m [repeated 44x across cluster][0m
+[36m(run_inference_one_model pid=691)[0m Processed prompts:  33%|███▎      | 103/311 [00:11<00:09, 22.27it/s, est. speed input: 1345.65 toks/s, output: 3366.42 toks/s][32m [repeated 117x across cluster][0m
+[36m(run_inference_one_model pid=691)[0m Processed prompts:  70%|███████   | 218/311 [00:16<00:06, 15.21it/s, est. speed input: 1814.54 toks/s, output: 6542.74 toks/s][32m [repeated 127x across cluster][0m
+[36m(run_inference_one_model pid=687)[0m Processed prompts:  84%|████████▎ | 260/311 [00:21<00:09,  5.53it/s, est. speed input: 1747.91 toks/s, output: 7224.54 toks/s][32m [repeated 66x across cluster][0m
+[36m(run_inference_one_model pid=683)[0m Processed prompts:  85%|████████▍ | 263/311 [00:26<00:24,  1.98it/s, est. speed input: 1445.22 toks/s, output: 6426.46 toks/s][32m [repeated 32x across cluster][0m
+[36m(run_inference_one_model pid=691)[0m Processed prompts:  84%|████████▍ | 262/311 [00:32<01:04,  1.31s/it, est. speed input: 1099.42 toks/s, output: 5070.82 toks/s][32m [repeated 11x across cluster][0m
+[36m(run_inference_one_model pid=683)[0m Processed prompts:  86%|████████▌ | 267/311 [00:37<01:34,  2.15s/it, est. speed input: 1024.03 toks/s, output: 4781.51 toks/s][32m [repeated 4x across cluster][0m
+[36m(run_inference_one_model pid=683)[0m Processed prompts:  86%|████████▋ | 269/311 [00:44<02:00,  2.86s/it, est. speed input: 865.06 toks/s, output: 4188.12 toks/s][32m [repeated 2x across cluster][0m
+[36m(run_inference_one_model pid=691)[0m Processed prompts:  85%|████████▍ | 263/311 [00:59<06:56,  8.68s/it, est. speed input: 602.97 toks/s, output: 2861.68 toks/s] 
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  91%|█████████ | 284/312 [01:08<04:42, 10.08s/it, est. speed input: 596.17 toks/s, output: 2784.49 toks/s] 
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  91%|█████████▏| 285/312 [01:10<03:32,  7.88s/it, est. speed input: 589.95 toks/s, output: 2846.14 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  92%|█████████▏| 286/312 [01:10<02:33,  5.90s/it, est. speed input: 591.01 toks/s, output: 2945.42 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  92%|█████████▏| 287/312 [01:10<01:48,  4.36s/it, est. speed input: 592.38 toks/s, output: 3046.62 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  93%|█████████▎| 290/312 [01:11<00:44,  2.04s/it, est. speed input: 601.97 toks/s, output: 3374.92 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  94%|█████████▎| 292/312 [01:11<00:28,  1.44s/it, est. speed input: 602.87 toks/s, output: 3574.72 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  94%|█████████▍| 293/312 [01:11<00:22,  1.19s/it, est. speed input: 603.24 toks/s, output: 3679.18 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  95%|█████████▌| 297/312 [01:11<00:08,  1.74it/s, est. speed input: 610.06 toks/s, output: 4123.82 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  96%|█████████▌| 299/312 [01:11<00:05,  2.26it/s, est. speed input: 613.05 toks/s, output: 4338.76 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  96%|█████████▋| 301/312 [01:12<00:03,  3.01it/s, est. speed input: 615.65 toks/s, output: 4557.79 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  97%|█████████▋| 303/312 [01:12<00:02,  3.73it/s, est. speed input: 617.15 toks/s, output: 4769.55 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  98%|█████████▊| 305/312 [01:12<00:01,  4.43it/s, est. speed input: 620.19 toks/s, output: 4979.42 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  98%|█████████▊| 307/312 [01:12<00:01,  4.60it/s, est. speed input: 620.53 toks/s, output: 5176.04 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  99%|█████████▉| 309/312 [01:15<00:01,  1.92it/s, est. speed input: 602.45 toks/s, output: 5230.04 toks/s]
+[36m(run_inference_one_model pid=691)[0m Processed prompts:  85%|████████▍ | 264/311 [01:15<08:27, 10.80s/it, est. speed input: 481.47 toks/s, output: 2347.39 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts:  99%|█████████▉| 310/312 [01:15<00:01,  1.94it/s, est. speed input: 599.99 toks/s, output: 5312.58 toks/s]
+[36m(run_inference_one_model pid=682)[0m Processed prompts: 100%|█████████▉| 311/312 [01:18<00:00,  1.15it/s, est. speed input: 583.99 toks/s, output: 5273.42 toks/s]
+[36m(run_inference_one_model pid=687)[0m Processed prompts:  91%|█████████ | 282/311 [01:20<00:42,  1.45s/it, est. speed input: 509.31 toks/s, output: 3208.64 toks/s][32m [repeated 6x across cluster][0m
+[36m(run_inference_one_model pid=687)[0m Processed prompts:  95%|█████████▍| 295/311 [01:20<00:04,  3.91it/s, est. speed input: 526.98 toks/s, output: 4489.99 toks/s][32m [repeated 4x across cluster][0m
+[36m(run_inference_one_model pid=682)[0m Processed prompts: 100%|██████████| 312/312 [01:23<00:00,  1.94s/it, est. speed input: 545.56 toks/s, output: 5037.52 toks/s]Processed prompts: 100%|██████████| 312/312 [01:23<00:00,  3.72it/s, est. speed input: 545.56 toks/s, output: 5037.52 toks/s]
+[36m(run_inference_one_model pid=683)[0m Processed prompts:  89%|████████▊ | 276/311 [01:25<01:19,  2.26s/it, est. speed input: 472.56 toks/s, output: 2837.92 toks/s][32m [repeated 7x across cluster][0m
+[36m(run_inference_one_model pid=687)[0m Processed prompts:  98%|█████████▊| 305/311 [01:22<00:01,  4.80it/s, est. speed input: 529.49 toks/s, output: 5381.97 toks/s][32m [repeated 5x across cluster][0m
+[36m(run_inference_one_model pid=691)[0m Processed prompts:  90%|█████████ | 280/311 [01:29<00:12,  2.51it/s, est. speed input: 451.39 toks/s, output: 3401.39 toks/s][32m [repeated 9x across cluster][0m
+[36m(run_inference_one_model pid=691)[0m Processed prompts:  96%|█████████▌| 298/311 [01:31<00:01,  7.35it/s, est. speed input: 471.97 toks/s, output: 4953.06 toks/s][32m [repeated 17x across cluster][0m
+[36m(run_inference_one_model pid=687)[0m Processed prompts:  99%|█████████▉| 308/311 [01:36<00:08,  2.68s/it, est. speed input: 461.47 toks/s, output: 4930.64 toks/s][32m [repeated 9x across cluster][0m
+[36m(run_inference_one_model pid=691)[0m Processed prompts:  99%|█████████▉| 309/311 [01:48<00:07,  3.90s/it, est. speed input: 410.46 toks/s, output: 5042.45 toks/s][32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=687)[0m Processed prompts: 100%|█████████▉| 310/311 [01:53<00:05,  5.73s/it, est. speed input: 394.34 toks/s, output: 4406.33 toks/s]
+[36m(run_inference_one_model pid=683)[0m Processed prompts: 100%|██████████| 311/311 [01:56<00:00,  4.46s/it, est. speed input: 391.02 toks/s, output: 4624.84 toks/s]Processed prompts: 100%|██████████| 311/311 [01:56<00:00,  2.67it/s, est. speed input: 391.02 toks/s, output: 4624.84 toks/s]
+[36m(run_inference_one_model pid=687)[0m Processed prompts: 100%|██████████| 311/311 [02:03<00:00,  6.90s/it, est. speed input: 363.41 toks/s, output: 4177.04 toks/s]Processed prompts: 100%|██████████| 311/311 [02:03<00:00,  2.52it/s, est. speed input: 363.41 toks/s, output: 4177.04 toks/s]
+[36m(run_inference_one_model pid=691)[0m Processed prompts: 100%|█████████▉| 310/311 [02:03<00:06,  7.00s/it, est. speed input: 359.06 toks/s, output: 4515.00 toks/s]
+[36m(run_inference_one_model pid=691)[0m Processed prompts: 100%|██████████| 311/311 [02:07<00:00,  6.01s/it, est. speed input: 350.51 toks/s, output: 4512.19 toks/s]Processed prompts: 100%|██████████| 311/311 [02:07<00:00,  2.44it/s, est. speed input: 350.51 toks/s, output: 4512.19 toks/s]
+Running generate_until requests:   0%|          | 1/2564 [03:11<136:25:53, 191.63s/it]2026-09-18 18:52:29,592	WARNING utils.py:580 -- Detecting docker specified CPUs. In previous versions of Ray, CPU detection in containers was incorrect. Please ensure that Ray has enough CPUs allocated. As a temporary workaround to revert to the prior behavior, set `RAY_USE_MULTIPROCESSING_CPU_COUNT=1` as an env var before starting Ray. Set the env var: `RAY_DISABLE_DOCKER_CPU_WARNING=1` to mute this warning.
+2026-09-18 18:52:30,954	INFO worker.py:1786 -- Started a local Ray instance.
+[36m(pid=5336)[0m /usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
+[36m(pid=5336)[0m   warnings.warn(
+[36m(pid=5336)[0m /usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+[36m(pid=5336)[0m No module named 'vllm._version'
+[36m(pid=5336)[0m   from vllm.version import __version__ as VLLM_VERSION
+[36m(run_inference_one_model pid=5336)[0m Calling ray.init() again after it has already been called.
+[36m(pid=5316)[0m /usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.[32m [repeated 3x across cluster][0m
+[36m(pid=5316)[0m   warnings.warn([32m [repeated 3x across cluster][0m
+[36m(pid=5316)[0m /usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:[32m [repeated 3x across cluster][0m
+[36m(pid=5316)[0m No module named 'vllm._version'[32m [repeated 3x across cluster][0m
+[36m(pid=5316)[0m   from vllm.version import __version__ as VLLM_VERSION[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=691)[0m WARNING 09-18 18:49:23 config.py:1674] Casting torch.float16 to torch.bfloat16.
+[36m(run_inference_one_model pid=687)[0m INFO 09-18 18:49:28 llm_engine.py:237] Initializing an LLM engine (vdev) with config: model='/opt/rsi-assets/models/mix-long', speculative_config=None, tokenizer='/opt/rsi-assets/models/mix-long', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=16000, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=/opt/rsi-assets/models/mix-long, use_v2_block_manager=True, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+[36m(run_inference_one_model pid=687)[0m WARNING 09-18 18:49:23 config.py:1674] Casting torch.float16 to torch.bfloat16.[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=687)[0m INFO 09-18 18:49:29 ray_gpu_executor.py:134] use_ray_spmd_worker: False
+[36m(run_inference_one_model pid=691)[0m INFO 09-18 18:49:37 model_runner.py:1060] Starting to load model /opt/rsi-assets/models/mix-long...
+[36m(run_inference_one_model pid=682)[0m INFO 09-18 18:49:28 llm_engine.py:237] Initializing an LLM engine (vdev) with config: model='/opt/rsi-assets/models/mix-long', speculative_config=None, tokenizer='/opt/rsi-assets/models/mix-long', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=16000, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=/opt/rsi-assets/models/mix-long, use_v2_block_manager=True, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=682)[0m INFO 09-18 18:49:29 ray_gpu_executor.py:134] use_ray_spmd_worker: False[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=687)[0m INFO 09-18 18:50:02 model_runner.py:1071] Loading model weights took 5.7915 GB
+[36m(run_inference_one_model pid=687)[0m INFO 09-18 18:49:37 model_runner.py:1060] Starting to load model /opt/rsi-assets/models/mix-long...[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=687)[0m INFO 09-18 18:50:02 distributed_gpu_executor.py:57] # GPU blocks: 121336, # CPU blocks: 7281
+[36m(run_inference_one_model pid=687)[0m INFO 09-18 18:50:02 distributed_gpu_executor.py:61] Maximum concurrency for 16000 tokens per request: 121.34x
+[36m(run_inference_one_model pid=687)[0m INFO 09-18 18:50:05 model_runner.py:1402] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+[36m(run_inference_one_model pid=687)[0m INFO 09-18 18:50:05 model_runner.py:1406] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+[36m(run_inference_one_model pid=682)[0m INFO 09-18 18:50:17 model_runner.py:1530] Graph capturing finished in 11 secs.
+[36m(run_inference_one_model pid=682)[0m INFO 09-18 18:50:02 model_runner.py:1071] Loading model weights took 5.7915 GB[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=682)[0m INFO 09-18 18:50:02 distributed_gpu_executor.py:57] # GPU blocks: 121336, # CPU blocks: 7281[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=682)[0m INFO 09-18 18:50:02 distributed_gpu_executor.py:61] Maximum concurrency for 16000 tokens per request: 121.34x[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=682)[0m INFO 09-18 18:50:05 model_runner.py:1402] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=682)[0m INFO 09-18 18:50:05 model_runner.py:1406] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=683)[0m INFO 09-18 18:50:17 model_runner.py:1530] Graph capturing finished in 11 secs.[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=5336)[0m WARNING 09-18 18:52:36 config.py:1674] Casting torch.float16 to torch.bfloat16.
+[36m(run_inference_one_model pid=5336)[0m INFO 09-18 18:52:41 llm_engine.py:237] Initializing an LLM engine (vdev) with config: model='/opt/rsi-assets/models/mix-long', speculative_config=None, tokenizer='/opt/rsi-assets/models/mix-long', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=16000, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=/opt/rsi-assets/models/mix-long, use_v2_block_manager=True, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+[36m(run_inference_one_model pid=5316)[0m WARNING 09-18 18:52:36 config.py:1674] Casting torch.float16 to torch.bfloat16.[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=5336)[0m INFO 09-18 18:52:41 ray_gpu_executor.py:134] use_ray_spmd_worker: False
+[36m(run_inference_one_model pid=5336)[0m INFO 09-18 18:52:51 model_runner.py:1060] Starting to load model /opt/rsi-assets/models/mix-long...
+[36m(run_inference_one_model pid=5336)[0m Loading safetensors checkpoint shards:   0% Completed | 0/2 [00:00<?, ?it/s]
+[36m(run_inference_one_model pid=5318)[0m Calling ray.init() again after it has already been called.[32m [repeated 3x across cluster][0m
+[36m(pid=5319)[0m /usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.[32m [repeated 4x across cluster][0m
+[36m(pid=5319)[0m   warnings.warn([32m [repeated 4x across cluster][0m
+[36m(pid=5344)[0m /usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:[32m [repeated 4x across cluster][0m
+[36m(pid=5344)[0m No module named 'vllm._version'[32m [repeated 4x across cluster][0m
+[36m(pid=5344)[0m   from vllm.version import __version__ as VLLM_VERSION[32m [repeated 4x across cluster][0m
+[36m(run_inference_one_model pid=5336)[0m Loading safetensors checkpoint shards:  50% Completed | 1/2 [00:05<00:05,  5.29s/it]
+[36m(run_inference_one_model pid=5318)[0m Loading safetensors checkpoint shards:   0% Completed | 0/2 [00:00<?, ?it/s][32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=5314)[0m 
+[36m(run_inference_one_model pid=5336)[0m 
+[36m(run_inference_one_model pid=5316)[0m 
+[36m(run_inference_one_model pid=5318)[0m 
+[36m(run_inference_one_model pid=5314)[0m Processed prompts:   0%|          | 0/330 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]
+[36m(run_inference_one_model pid=5318)[0m Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:07<00:00,  3.55s/it][32m [repeated 11x across cluster][0m
+[36m(run_inference_one_model pid=5314)[0m Processed prompts:   0%|          | 1/330 [00:02<14:39,  2.67s/it, est. speed input: 36.68 toks/s, output: 52.77 toks/s]
+[36m(run_inference_one_model pid=5316)[0m Processed prompts:   0%|          | 1/330 [00:02<15:05,  2.75s/it, est. speed input: 36.68 toks/s, output: 52.67 toks/s]Processed prompts:   1%|          | 2/330 [00:02<06:31,  1.20s/it, est. speed input: 63.34 toks/s, output: 103.23 toks/s]
+[36m(run_inference_one_model pid=5318)[0m Processed prompts:   0%|          | 0/330 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s][32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=5336)[0m Processed prompts:  69%|██████▊   | 226/329 [00:07<00:01, 90.20it/s, est. speed input: 2923.50 toks/s, output: 7836.51 toks/s][32m [repeated 135x across cluster][0m
+[36m(run_inference_one_model pid=5314)[0m Processed prompts:  94%|█████████▍| 310/330 [00:08<00:00, 85.28it/s, est. speed input: 3470.83 toks/s, output: 10239.79 toks/s]
+[36m(run_inference_one_model pid=5314)[0m Processed prompts:  97%|█████████▋| 319/330 [00:08<00:00, 58.29it/s, est. speed input: 3428.51 toks/s, output: 10238.39 toks/s]
+[36m(run_inference_one_model pid=5318)[0m Processed prompts:  90%|█████████ | 297/330 [00:08<00:00, 92.04it/s, est. speed input: 3176.92 toks/s, output: 9200.77 toks/s][32m [repeated 27x across cluster][0m
+[36m(run_inference_one_model pid=5314)[0m Processed prompts:  99%|█████████▉| 327/330 [00:20<00:00, 21.14it/s, est. speed input: 3084.92 toks/s, output: 9385.26 toks/s][32m [repeated 10x across cluster][0m
+[36m(run_inference_one_model pid=5318)[0m Processed prompts: 100%|██████████| 330/330 [00:46<00:00,  1.36s/it, est. speed input: 640.68 toks/s, output: 2134.13 toks/s] Processed prompts: 100%|██████████| 330/330 [00:46<00:00,  7.09it/s, est. speed input: 640.68 toks/s, output: 2134.13 toks/s]
+[36m(run_inference_one_model pid=5318)[0m Processed prompts: 100%|█████████▉| 329/330 [00:20<00:00, 43.72it/s, est. speed input: 3061.43 toks/s, output: 9400.65 toks/s][32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=5336)[0m Processed prompts: 100%|██████████| 329/329 [00:49<00:00,  1.25s/it, est. speed input: 602.21 toks/s, output: 2317.28 toks/s]Processed prompts: 100%|██████████| 329/329 [00:49<00:00,  6.67it/s, est. speed input: 602.21 toks/s, output: 2317.28 toks/s][32m [repeated 2x across cluster][0m
+[36m(run_inference_one_model pid=5314)[0m Processed prompts: 100%|██████████| 330/330 [00:50<00:00,  6.54it/s, est. speed input: 590.06 toks/s, output: 2267.05 toks/s][32m [repeated 5x across cluster][0m
+Running generate_until requests:  49%|████▊     | 1246/2564 [04:50<04:06,  5.35it/s]  Running generate_until requests: 100%|██████████| 2564/2564 [04:50<00:00,  8.83it/s]
+fatal: not a git repository (or any of the parent directories): .git
+  0%|          | 0/500 [00:00<?, ?it/s][36m(run_inference_one_model pid=5318)[0m INFO 09-18 18:52:41 llm_engine.py:237] Initializing an LLM engine (vdev) with config: model='/opt/rsi-assets/models/mix-long', speculative_config=None, tokenizer='/opt/rsi-assets/models/mix-long', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=16000, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=/opt/rsi-assets/models/mix-long, use_v2_block_manager=True, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=5318)[0m INFO 09-18 18:52:41 ray_gpu_executor.py:134] use_ray_spmd_worker: False[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=5314)[0m INFO 09-18 18:52:58 model_runner.py:1071] Loading model weights took 5.7915 GB
+[36m(run_inference_one_model pid=5318)[0m INFO 09-18 18:52:51 model_runner.py:1060] Starting to load model /opt/rsi-assets/models/mix-long...[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=5314)[0m INFO 09-18 18:52:58 distributed_gpu_executor.py:57] # GPU blocks: 121336, # CPU blocks: 7281
+[36m(run_inference_one_model pid=5314)[0m INFO 09-18 18:52:58 distributed_gpu_executor.py:61] Maximum concurrency for 16000 tokens per request: 121.34x
+[36m(run_inference_one_model pid=5314)[0m INFO 09-18 18:53:01 model_runner.py:1402] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+[36m(run_inference_one_model pid=5314)[0m INFO 09-18 18:53:01 model_runner.py:1406] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+[36m(run_inference_one_model pid=5314)[0m INFO 09-18 18:53:13 model_runner.py:1530] Graph capturing finished in 12 secs.
+[36m(run_inference_one_model pid=5318)[0m INFO 09-18 18:52:58 model_runner.py:1071] Loading model weights took 5.7915 GB[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=5318)[0m INFO 09-18 18:52:59 distributed_gpu_executor.py:57] # GPU blocks: 121336, # CPU blocks: 7281[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=5318)[0m INFO 09-18 18:52:59 distributed_gpu_executor.py:61] Maximum concurrency for 16000 tokens per request: 121.34x[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=5318)[0m INFO 09-18 18:53:02 model_runner.py:1402] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=5318)[0m INFO 09-18 18:53:02 model_runner.py:1406] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=5318)[0m INFO 09-18 18:53:13 model_runner.py:1530] Graph capturing finished in 11 secs.[32m [repeated 3x across cluster][0m
+ 80%|████████  | 401/500 [00:00<00:00, 4002.31it/s]100%|██████████| 500/500 [00:00<00:00, 4003.38it/s]
+  0%|          | 0/1319 [00:00<?, ?it/s] 36%|███▋      | 480/1319 [00:00<00:00, 4799.16it/s] 73%|███████▎  | 968/1319 [00:00<00:00, 4843.05it/s]100%|██████████| 1319/1319 [00:00<00:00, 4842.01it/s]
+  0%|          | 0/675 [00:00<?, ?it/s] 59%|█████▉    | 399/675 [00:00<00:00, 3979.24it/s]100%|██████████| 675/675 [00:00<00:00, 3988.90it/s]
+  0%|          | 0/40 [00:00<?, ?it/s]100%|██████████| 40/40 [00:00<00:00, 3752.96it/s]
+  0%|          | 0/30 [00:00<?, ?it/s]100%|██████████| 30/30 [00:00<00:00, 3809.19it/s]
+Running generate_until requests:   0%|          | 0/2564 [00:00<?, ?it/s]2026-09-18 18:54:14,196	WARNING utils.py:580 -- Detecting docker specified CPUs. In previous versions of Ray, CPU detection in containers was incorrect. Please ensure that Ray has enough CPUs allocated. As a temporary workaround to revert to the prior behavior, set `RAY_USE_MULTIPROCESSING_CPU_COUNT=1` as an env var before starting Ray. Set the env var: `RAY_DISABLE_DOCKER_CPU_WARNING=1` to mute this warning.
+2026-09-18 18:54:15,349	INFO worker.py:1786 -- Started a local Ray instance.
+[36m(pid=9981)[0m /usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
+[36m(pid=9981)[0m   warnings.warn(
+[36m(pid=9962)[0m /usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+[36m(pid=9962)[0m No module named 'vllm._version'
+[36m(pid=9962)[0m   from vllm.version import __version__ as VLLM_VERSION
+[36m(run_inference_one_model pid=9981)[0m Calling ray.init() again after it has already been called.
+[36m(pid=9941)[0m /usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.[32m [repeated 3x across cluster][0m
+[36m(pid=9941)[0m   warnings.warn([32m [repeated 3x across cluster][0m
+[36m(pid=9941)[0m /usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:[32m [repeated 3x across cluster][0m
+[36m(pid=9941)[0m No module named 'vllm._version'[32m [repeated 3x across cluster][0m
+[36m(pid=9941)[0m   from vllm.version import __version__ as VLLM_VERSION[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=9962)[0m Loading safetensors checkpoint shards:   0% Completed | 0/2 [00:00<?, ?it/s]
+[36m(run_inference_one_model pid=9941)[0m Calling ray.init() again after it has already been called.[32m [repeated 3x across cluster][0m
+[36m(pid=9947)[0m /usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.[32m [repeated 4x across cluster][0m
+[36m(pid=9947)[0m   warnings.warn([32m [repeated 4x across cluster][0m
+[36m(pid=9984)[0m /usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:[32m [repeated 4x across cluster][0m
+[36m(pid=9984)[0m No module named 'vllm._version'[32m [repeated 4x across cluster][0m
+[36m(pid=9984)[0m   from vllm.version import __version__ as VLLM_VERSION[32m [repeated 4x across cluster][0m
+[36m(run_inference_one_model pid=9981)[0m Loading safetensors checkpoint shards:  50% Completed | 1/2 [00:03<00:03,  3.37s/it]
+[36m(run_inference_one_model pid=9981)[0m 
+[36m(run_inference_one_model pid=9941)[0m Loading safetensors checkpoint shards:   0% Completed | 0/2 [00:00<?, ?it/s][32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=9981)[0m Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:18<00:00,  9.08s/it][32m [repeated 5x across cluster][0m
+[36m(run_inference_one_model pid=9962)[0m 
+[36m(run_inference_one_model pid=9958)[0m 
+[36m(run_inference_one_model pid=9941)[0m 
+[36m(run_inference_one_model pid=9962)[0m Processed prompts:   0%|          | 0/311 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]
+[36m(run_inference_one_model pid=9941)[0m Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:18<00:00,  9.08s/it][32m [repeated 6x across cluster][0m
+[36m(run_inference_one_model pid=9962)[0m Processed prompts:   0%|          | 1/311 [00:01<05:15,  1.02s/it, est. speed input: 198.28 toks/s, output: 25.52 toks/s]
+[36m(run_inference_one_model pid=9941)[0m Processed prompts:   0%|          | 0/312 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s][32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:   5%|▌         | 16/311 [00:05<01:02,  4.74it/s, est. speed input: 405.18 toks/s, output: 586.24 toks/s][32m [repeated 42x across cluster][0m
+[36m(run_inference_one_model pid=9962)[0m Processed prompts:  19%|█▉        | 60/311 [00:09<00:19, 12.69it/s, est. speed input: 1086.88 toks/s, output: 2088.05 toks/s]Processed prompts:  21%|██        | 66/311 [00:09<00:11, 20.94it/s, est. speed input: 1144.74 toks/s, output: 2303.38 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  26%|██▋       | 82/311 [00:10<00:11, 19.68it/s, est. speed input: 1155.52 toks/s, output: 2627.33 toks/s][32m [repeated 104x across cluster][0m
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  68%|██████▊   | 213/311 [00:15<00:05, 18.87it/s, est. speed input: 1897.40 toks/s, output: 6455.60 toks/s][32m [repeated 120x across cluster][0m
+[36m(run_inference_one_model pid=9962)[0m Processed prompts:  76%|███████▌  | 236/311 [00:21<00:15,  4.75it/s, est. speed input: 1583.37 toks/s, output: 6287.13 toks/s][32m [repeated 66x across cluster][0m
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  78%|███████▊  | 242/311 [00:25<00:24,  2.81it/s, est. speed input: 1309.38 toks/s, output: 5685.91 toks/s][32m [repeated 44x across cluster][0m
+[36m(run_inference_one_model pid=9941)[0m Processed prompts:  85%|████████▍ | 265/312 [00:30<00:34,  1.38it/s, est. speed input: 1254.17 toks/s, output: 5571.78 toks/s][32m [repeated 24x across cluster][0m
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  80%|████████  | 249/311 [00:38<02:44,  2.65s/it, est. speed input: 928.91 toks/s, output: 4266.88 toks/s] [32m [repeated 7x across cluster][0m
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  81%|████████  | 252/311 [00:43<02:15,  2.30s/it, est. speed input: 829.19 toks/s, output: 3992.18 toks/s][32m [repeated 4x across cluster][0m
+[36m(run_inference_one_model pid=9941)[0m Processed prompts:  86%|████████▌ | 267/312 [00:48<04:04,  5.43s/it, est. speed input: 803.67 toks/s, output: 3695.59 toks/s] [32m [repeated 4x across cluster][0m
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  87%|████████▋ | 271/311 [01:05<05:51,  8.80s/it, est. speed input: 599.82 toks/s, output: 2854.24 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  82%|████████▏ | 255/311 [01:14<07:57,  8.53s/it, est. speed input: 486.88 toks/s, output: 2499.37 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  87%|████████▋ | 272/311 [01:20<06:57, 10.71s/it, est. speed input: 492.22 toks/s, output: 2412.58 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  88%|████████▊ | 273/311 [01:22<05:10,  8.18s/it, est. speed input: 481.70 toks/s, output: 2443.49 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  88%|████████▊ | 274/311 [01:23<03:35,  5.82s/it, est. speed input: 482.14 toks/s, output: 2530.24 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  89%|████████▊ | 276/311 [01:23<01:51,  3.17s/it, est. speed input: 485.98 toks/s, output: 2717.90 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  90%|████████▉ | 279/311 [01:23<00:51,  1.61s/it, est. speed input: 491.73 toks/s, output: 3002.39 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  90%|█████████ | 281/311 [01:23<00:33,  1.12s/it, est. speed input: 494.93 toks/s, output: 3188.75 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  91%|█████████ | 283/311 [01:23<00:22,  1.26it/s, est. speed input: 497.36 toks/s, output: 3374.34 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  92%|█████████▏| 285/311 [01:24<00:15,  1.72it/s, est. speed input: 499.04 toks/s, output: 3558.53 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  93%|█████████▎| 288/311 [01:24<00:08,  2.76it/s, est. speed input: 502.40 toks/s, output: 3842.58 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  94%|█████████▍| 293/311 [01:24<00:03,  4.59it/s, est. speed input: 508.72 toks/s, output: 4307.57 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  95%|█████████▍| 295/311 [01:25<00:03,  4.34it/s, est. speed input: 510.78 toks/s, output: 4472.02 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  95%|█████████▌| 297/311 [01:25<00:03,  4.06it/s, est. speed input: 509.46 toks/s, output: 4633.67 toks/s]
+[36m(run_inference_one_model pid=9941)[0m Processed prompts:  90%|████████▉ | 280/312 [01:27<00:29,  1.08it/s, est. speed input: 471.62 toks/s, output: 3230.45 toks/s][32m [repeated 14x across cluster][0m
+[36m(run_inference_one_model pid=9962)[0m Processed prompts:  96%|█████████▋| 300/311 [01:29<00:03,  2.88it/s, est. speed input: 485.39 toks/s, output: 4954.54 toks/s][32m [repeated 17x across cluster][0m
+[36m(run_inference_one_model pid=9941)[0m Processed prompts:  91%|█████████ | 284/312 [01:27<00:14,  1.89it/s, est. speed input: 476.96 toks/s, output: 3593.45 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  82%|████████▏ | 256/311 [01:34<10:25, 11.38s/it, est. speed input: 390.66 toks/s, output: 2066.23 toks/s]
+[36m(run_inference_one_model pid=9941)[0m Processed prompts:  98%|█████████▊| 306/312 [01:33<00:02,  2.62it/s, est. speed input: 483.79 toks/s, output: 5356.81 toks/s][32m [repeated 14x across cluster][0m
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  83%|████████▎ | 257/311 [01:35<07:47,  8.66s/it, est. speed input: 388.30 toks/s, output: 2119.66 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  83%|████████▎ | 258/311 [01:36<05:44,  6.51s/it, est. speed input: 387.22 toks/s, output: 2180.99 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  83%|████████▎ | 259/311 [01:36<04:04,  4.70s/it, est. speed input: 387.54 toks/s, output: 2259.94 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  84%|████████▍ | 261/311 [01:36<02:11,  2.63s/it, est. speed input: 391.18 toks/s, output: 2420.27 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  84%|████████▍ | 262/311 [01:37<01:40,  2.04s/it, est. speed input: 392.40 toks/s, output: 2497.56 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  85%|████████▍ | 264/311 [01:37<00:59,  1.27s/it, est. speed input: 394.59 toks/s, output: 2654.32 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  86%|████████▌ | 266/311 [01:37<00:37,  1.22it/s, est. speed input: 397.20 toks/s, output: 2816.27 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  86%|████████▌ | 268/311 [01:37<00:24,  1.79it/s, est. speed input: 399.55 toks/s, output: 2977.71 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  87%|████████▋ | 271/311 [01:37<00:14,  2.85it/s, est. speed input: 404.48 toks/s, output: 3218.82 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  89%|████████▊ | 276/311 [01:37<00:06,  5.32it/s, est. speed input: 410.37 toks/s, output: 3626.82 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  90%|█████████ | 280/311 [01:38<00:04,  7.61it/s, est. speed input: 414.90 toks/s, output: 3951.85 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts:  95%|█████████▍| 294/311 [01:39<00:02,  7.74it/s, est. speed input: 429.42 toks/s, output: 5044.97 toks/s][32m [repeated 7x across cluster][0m
+[36m(run_inference_one_model pid=9962)[0m Processed prompts:  99%|█████████▉| 309/311 [01:46<00:07,  4.00s/it, est. speed input: 419.08 toks/s, output: 4932.97 toks/s][32m [repeated 10x across cluster][0m
+[36m(run_inference_one_model pid=9941)[0m Processed prompts: 100%|██████████| 312/312 [01:48<00:00,  2.01s/it, est. speed input: 423.63 toks/s, output: 5193.94 toks/s]Processed prompts: 100%|██████████| 312/312 [01:48<00:00,  2.89it/s, est. speed input: 423.63 toks/s, output: 5193.94 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts: 100%|█████████▉| 310/311 [01:52<00:01,  1.00s/it, est. speed input: 395.79 toks/s, output: 5740.84 toks/s][32m [repeated 9x across cluster][0m
+[36m(run_inference_one_model pid=9962)[0m Processed prompts: 100%|█████████▉| 310/311 [01:54<00:05,  5.07s/it, est. speed input: 391.72 toks/s, output: 4714.11 toks/s]Processed prompts: 100%|██████████| 311/311 [01:54<00:00,  2.72it/s, est. speed input: 393.18 toks/s, output: 4827.63 toks/s]
+[36m(run_inference_one_model pid=9981)[0m Processed prompts: 100%|██████████| 311/311 [02:08<00:00,  5.32s/it, est. speed input: 347.64 toks/s, output: 5124.10 toks/s]Processed prompts: 100%|██████████| 311/311 [02:08<00:00,  2.42it/s, est. speed input: 347.64 toks/s, output: 5124.10 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  99%|█████████▉| 308/311 [01:53<00:10,  3.62s/it, est. speed input: 398.47 toks/s, output: 4450.36 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts:  99%|█████████▉| 309/311 [02:09<00:14,  7.34s/it, est. speed input: 348.23 toks/s, output: 3995.47 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts: 100%|█████████▉| 310/311 [02:10<00:05,  5.27s/it, est. speed input: 349.12 toks/s, output: 4113.59 toks/s]
+[36m(run_inference_one_model pid=9958)[0m Processed prompts: 100%|██████████| 311/311 [02:10<00:00,  3.79s/it, est. speed input: 349.51 toks/s, output: 4229.30 toks/s]Processed prompts: 100%|██████████| 311/311 [02:10<00:00,  2.39it/s, est. speed input: 349.51 toks/s, output: 4229.30 toks/s]
+Running generate_until requests:   0%|          | 1/2564 [03:07<133:27:46, 187.46s/it]2026-09-18 18:57:21,717	WARNING utils.py:580 -- Detecting docker specified CPUs. In previous versions of Ray, CPU detection in containers was incorrect. Please ensure that Ray has enough CPUs allocated. As a temporary workaround to revert to the prior behavior, set `RAY_USE_MULTIPROCESSING_CPU_COUNT=1` as an env var before starting Ray. Set the env var: `RAY_DISABLE_DOCKER_CPU_WARNING=1` to mute this warning.
+2026-09-18 18:57:21,857	INFO worker.py:1786 -- Started a local Ray instance.
+[36m(pid=14548)[0m /usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
+[36m(pid=14548)[0m   warnings.warn(
+[36m(pid=14548)[0m /usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+[36m(pid=14548)[0m No module named 'vllm._version'
+[36m(pid=14548)[0m   from vllm.version import __version__ as VLLM_VERSION
+[36m(run_inference_one_model pid=14548)[0m Calling ray.init() again after it has already been called.
+[36m(pid=14543)[0m /usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.[32m [repeated 3x across cluster][0m
+[36m(pid=14543)[0m   warnings.warn([32m [repeated 3x across cluster][0m
+[36m(pid=14543)[0m /usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:[32m [repeated 3x across cluster][0m
+[36m(pid=14543)[0m No module named 'vllm._version'[32m [repeated 3x across cluster][0m
+[36m(pid=14543)[0m   from vllm.version import __version__ as VLLM_VERSION[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=9981)[0m INFO 09-18 18:54:25 llm_engine.py:237] Initializing an LLM engine (vdev) with config: model='/workspace/candidate/checkpoint', speculative_config=None, tokenizer='/workspace/candidate/checkpoint', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=16000, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=/workspace/candidate/checkpoint, use_v2_block_manager=True, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+[36m(run_inference_one_model pid=9981)[0m INFO 09-18 18:54:25 ray_gpu_executor.py:134] use_ray_spmd_worker: False
+[36m(run_inference_one_model pid=9962)[0m INFO 09-18 18:54:32 model_runner.py:1060] Starting to load model /workspace/candidate/checkpoint...
+[36m(run_inference_one_model pid=9958)[0m INFO 09-18 18:54:25 llm_engine.py:237] Initializing an LLM engine (vdev) with config: model='/workspace/candidate/checkpoint', speculative_config=None, tokenizer='/workspace/candidate/checkpoint', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=16000, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=/workspace/candidate/checkpoint, use_v2_block_manager=True, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=9941)[0m INFO 09-18 18:54:25 ray_gpu_executor.py:134] use_ray_spmd_worker: False[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=9958)[0m INFO 09-18 18:54:51 model_runner.py:1071] Loading model weights took 5.7915 GB
+[36m(run_inference_one_model pid=9958)[0m INFO 09-18 18:54:33 model_runner.py:1060] Starting to load model /workspace/candidate/checkpoint...[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=9958)[0m INFO 09-18 18:54:52 distributed_gpu_executor.py:57] # GPU blocks: 121336, # CPU blocks: 7281
+[36m(run_inference_one_model pid=9958)[0m INFO 09-18 18:54:52 distributed_gpu_executor.py:61] Maximum concurrency for 16000 tokens per request: 121.34x
+[36m(run_inference_one_model pid=9962)[0m INFO 09-18 18:54:55 model_runner.py:1402] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+[36m(run_inference_one_model pid=9962)[0m INFO 09-18 18:54:55 model_runner.py:1406] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+[36m(run_inference_one_model pid=9962)[0m INFO 09-18 18:55:06 model_runner.py:1530] Graph capturing finished in 11 secs.
+[36m(run_inference_one_model pid=9941)[0m INFO 09-18 18:54:51 model_runner.py:1071] Loading model weights took 5.7915 GB[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=9941)[0m INFO 09-18 18:54:52 distributed_gpu_executor.py:57] # GPU blocks: 121336, # CPU blocks: 7281[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=9941)[0m INFO 09-18 18:54:52 distributed_gpu_executor.py:61] Maximum concurrency for 16000 tokens per request: 121.34x[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=9941)[0m INFO 09-18 18:54:55 model_runner.py:1402] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=9941)[0m INFO 09-18 18:54:55 model_runner.py:1406] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=9941)[0m INFO 09-18 18:55:06 model_runner.py:1530] Graph capturing finished in 11 secs.[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=14538)[0m INFO 09-18 18:57:32 llm_engine.py:237] Initializing an LLM engine (vdev) with config: model='/workspace/candidate/checkpoint', speculative_config=None, tokenizer='/workspace/candidate/checkpoint', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=16000, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=/workspace/candidate/checkpoint, use_v2_block_manager=True, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+[36m(run_inference_one_model pid=14538)[0m INFO 09-18 18:57:32 ray_gpu_executor.py:134] use_ray_spmd_worker: False
+[36m(run_inference_one_model pid=14538)[0m INFO 09-18 18:57:39 model_runner.py:1060] Starting to load model /workspace/candidate/checkpoint...
+[36m(run_inference_one_model pid=14538)[0m Loading safetensors checkpoint shards:   0% Completed | 0/2 [00:00<?, ?it/s]
+[36m(run_inference_one_model pid=14543)[0m Calling ray.init() again after it has already been called.[32m [repeated 3x across cluster][0m
+[36m(pid=14562)[0m /usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.[32m [repeated 4x across cluster][0m
+[36m(pid=14562)[0m   warnings.warn([32m [repeated 4x across cluster][0m
+[36m(pid=14562)[0m /usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:[32m [repeated 4x across cluster][0m
+[36m(pid=14562)[0m No module named 'vllm._version'[32m [repeated 4x across cluster][0m
+[36m(pid=14562)[0m   from vllm.version import __version__ as VLLM_VERSION[32m [repeated 4x across cluster][0m
+[36m(run_inference_one_model pid=14538)[0m Loading safetensors checkpoint shards:  50% Completed | 1/2 [00:00<00:00,  7.14it/s]
+[36m(run_inference_one_model pid=14548)[0m 
+[36m(run_inference_one_model pid=14538)[0m 
+[36m(run_inference_one_model pid=14541)[0m 
+[36m(run_inference_one_model pid=14543)[0m 
+[36m(run_inference_one_model pid=14538)[0m Processed prompts:   0%|          | 0/330 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]
+[36m(run_inference_one_model pid=14543)[0m Loading safetensors checkpoint shards:   0% Completed | 0/2 [00:00<?, ?it/s][32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=14543)[0m Loading safetensors checkpoint shards: 100% Completed | 2/2 [00:00<00:00,  2.65it/s][32m [repeated 11x across cluster][0m
+[36m(run_inference_one_model pid=14538)[0m Processed prompts:   0%|          | 1/330 [00:02<13:40,  2.49s/it, est. speed input: 30.07 toks/s, output: 51.71 toks/s]
+[36m(run_inference_one_model pid=14541)[0m Processed prompts:   0%|          | 0/330 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s][32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=14538)[0m Processed prompts:  73%|███████▎  | 241/330 [00:07<00:00, 97.70it/s, est. speed input: 3113.02 toks/s, output: 8478.66 toks/s] Processed prompts:  76%|███████▋  | 252/330 [00:07<00:00, 99.42it/s, est. speed input: 3201.42 toks/s, output: 8786.71 toks/s]
+[36m(run_inference_one_model pid=14538)[0m Processed prompts:  80%|███████▉  | 263/330 [00:07<00:00, 94.20it/s, est. speed input: 3254.12 toks/s, output: 9008.77 toks/s]Processed prompts:  84%|████████▎ | 276/330 [00:07<00:00, 103.13it/s, est. speed input: 3332.52 toks/s, output: 9336.33 toks/s]
+[36m(run_inference_one_model pid=14548)[0m Processed prompts:  75%|███████▌  | 247/329 [00:07<00:00, 111.38it/s, est. speed input: 3224.65 toks/s, output: 8694.28 toks/s][32m [repeated 131x across cluster][0m
+[36m(run_inference_one_model pid=14538)[0m Processed prompts:  92%|█████████▏| 302/330 [00:07<00:00, 102.40it/s, est. speed input: 3504.80 toks/s, output: 10054.28 toks/s]
+[36m(run_inference_one_model pid=14538)[0m Processed prompts:  95%|█████████▍| 313/330 [00:08<00:00, 91.12it/s, est. speed input: 3540.13 toks/s, output: 10269.18 toks/s] 
+[36m(run_inference_one_model pid=14541)[0m Processed prompts:  82%|████████▏ | 272/330 [00:07<00:00, 109.48it/s, est. speed input: 3261.44 toks/s, output: 9062.27 toks/s]Processed prompts:  86%|████████▌ | 284/330 [00:07<00:00, 112.01it/s, est. speed input: 3330.81 toks/s, output: 9310.86 toks/s][32m [repeated 2x across cluster][0m
+[36m(run_inference_one_model pid=14541)[0m Processed prompts:  90%|████████▉ | 296/330 [00:07<00:00, 87.00it/s, est. speed input: 3367.64 toks/s, output: 9528.77 toks/s] [32m [repeated 14x across cluster][0m
+[36m(run_inference_one_model pid=14538)[0m Processed prompts: 100%|█████████▉| 329/330 [00:20<00:00, 65.73it/s, est. speed input: 3305.52 toks/s, output: 9840.15 toks/s] [32m [repeated 9x across cluster][0m
+[36m(run_inference_one_model pid=14543)[0m Processed prompts: 100%|██████████| 330/330 [00:45<00:00,  1.05s/it, est. speed input: 650.05 toks/s, output: 2072.22 toks/s] Processed prompts: 100%|██████████| 330/330 [00:45<00:00,  7.19it/s, est. speed input: 650.05 toks/s, output: 2072.22 toks/s]
+[36m(run_inference_one_model pid=14541)[0m Processed prompts:  99%|█████████▉| 328/330 [00:20<00:00, 91.88it/s, est. speed input: 2696.89 toks/s, output: 8094.39 toks/s] [32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=14541)[0m Processed prompts: 100%|██████████| 330/330 [00:49<00:00,  1.05s/it, est. speed input: 601.85 toks/s, output: 2127.22 toks/s]Processed prompts: 100%|██████████| 330/330 [00:49<00:00,  6.66it/s, est. speed input: 601.85 toks/s, output: 2127.22 toks/s][32m [repeated 2x across cluster][0m
+[36m(run_inference_one_model pid=14541)[0m Processed prompts: 100%|█████████▉| 329/330 [00:49<00:01,  1.07s/it, est. speed input: 603.55 toks/s, output: 1972.27 toks/s] [32m [repeated 4x across cluster][0m
+Running generate_until requests:  49%|████▊     | 1246/2564 [04:36<03:52,  5.67it/s]  Running generate_until requests: 100%|██████████| 2564/2564 [04:36<00:00,  9.29it/s]
+fatal: not a git repository (or any of the parent directories): .git
+[36m(run_inference_one_model pid=14541)[0m INFO 09-18 18:57:32 llm_engine.py:237] Initializing an LLM engine (vdev) with config: model='/workspace/candidate/checkpoint', speculative_config=None, tokenizer='/workspace/candidate/checkpoint', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.bfloat16, max_seq_len=16000, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=1, pipeline_parallel_size=1, disable_custom_all_reduce=False, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=1234, served_model_name=/workspace/candidate/checkpoint, use_v2_block_manager=True, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=14541)[0m INFO 09-18 18:57:32 ray_gpu_executor.py:134] use_ray_spmd_worker: False[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=14538)[0m INFO 09-18 18:57:40 model_runner.py:1071] Loading model weights took 5.7915 GB
+[36m(run_inference_one_model pid=14538)[0m INFO 09-18 18:57:41 distributed_gpu_executor.py:57] # GPU blocks: 121336, # CPU blocks: 7281
+[36m(run_inference_one_model pid=14538)[0m INFO 09-18 18:57:41 distributed_gpu_executor.py:61] Maximum concurrency for 16000 tokens per request: 121.34x
+[36m(run_inference_one_model pid=14538)[0m INFO 09-18 18:57:44 model_runner.py:1402] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+[36m(run_inference_one_model pid=14538)[0m INFO 09-18 18:57:44 model_runner.py:1406] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+[36m(run_inference_one_model pid=14543)[0m INFO 09-18 18:57:39 model_runner.py:1060] Starting to load model /workspace/candidate/checkpoint...[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=14538)[0m INFO 09-18 18:57:55 model_runner.py:1530] Graph capturing finished in 11 secs.
+[36m(run_inference_one_model pid=14543)[0m INFO 09-18 18:57:41 model_runner.py:1071] Loading model weights took 5.7915 GB[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=14543)[0m INFO 09-18 18:57:41 distributed_gpu_executor.py:57] # GPU blocks: 121336, # CPU blocks: 7281[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=14543)[0m INFO 09-18 18:57:41 distributed_gpu_executor.py:61] Maximum concurrency for 16000 tokens per request: 121.34x[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=14541)[0m INFO 09-18 18:57:44 model_runner.py:1402] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=14541)[0m INFO 09-18 18:57:44 model_runner.py:1406] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.[32m [repeated 3x across cluster][0m
+[36m(run_inference_one_model pid=14541)[0m INFO 09-18 18:57:56 model_runner.py:1530] Graph capturing finished in 11 secs.[32m [repeated 3x across cluster][0m
+WARNING 09-18 18:58:52 config.py:1674] Casting torch.bfloat16 to torch.float16.
+INFO 09-18 18:58:56 config.py:887] Defaulting to use mp for distributed inference
+INFO 09-18 18:58:56 llm_engine.py:237] Initializing an LLM engine (vdev) with config: model='/opt/rsi-assets/models/judge', speculative_config=None, tokenizer='/opt/rsi-assets/models/judge', skip_tokenizer_init=False, tokenizer_mode=auto, revision=None, override_neuron_config=None, rope_scaling=None, rope_theta=None, tokenizer_revision=None, trust_remote_code=False, dtype=torch.float16, max_seq_len=32768, download_dir=None, load_format=LoadFormat.AUTO, tensor_parallel_size=4, pipeline_parallel_size=1, disable_custom_all_reduce=True, quantization=None, enforce_eager=False, kv_cache_dtype=auto, quantization_param_path=None, device_config=cuda, decoding_config=DecodingConfig(guided_decoding_backend='outlines'), observability_config=ObservabilityConfig(otlp_traces_endpoint=None, collect_model_forward_time=False, collect_model_execute_time=False), seed=0, served_model_name=/opt/rsi-assets/models/judge, use_v2_block_manager=True, num_scheduler_steps=1, chunked_prefill_enabled=False multi_step_stream_outputs=True, enable_prefix_caching=False, use_async_output_proc=True, use_cached_outputs=False, mm_processor_kwargs=None)
+WARNING 09-18 18:58:56 multiproc_gpu_executor.py:53] Reducing Torch parallelism from 64 threads to 1 to avoid unnecessary CPU contention. Set OMP_NUM_THREADS in the external environment to tune this value as needed.
+INFO 09-18 18:58:56 custom_cache_manager.py:17] Setting Triton cache manager to: vllm.triton_utils.custom_cache_manager:CustomCacheManager
+/usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
+  warnings.warn(
+/usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
+  warnings.warn(
+/usr/local/lib/python3.10/dist-packages/transformers/utils/hub.py:128: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated and will be removed in v5 of Transformers. Use `HF_HOME` instead.
+  warnings.warn(
+/usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+No module named 'vllm._version'
+  from vllm.version import __version__ as VLLM_VERSION
+/usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+No module named 'vllm._version'
+  from vllm.version import __version__ as VLLM_VERSION
+/usr/local/lib/python3.10/dist-packages/vllm/connections.py:8: RuntimeWarning: Failed to read commit hash:
+No module named 'vllm._version'
+  from vllm.version import __version__ as VLLM_VERSION
+[1;36m(VllmWorkerProcess pid=18940)[0;0m INFO 09-18 18:59:01 multiproc_worker_utils.py:216] Worker ready; awaiting tasks
+[1;36m(VllmWorkerProcess pid=18939)[0;0m INFO 09-18 18:59:01 multiproc_worker_utils.py:216] Worker ready; awaiting tasks
+[1;36m(VllmWorkerProcess pid=18941)[0;0m INFO 09-18 18:59:01 multiproc_worker_utils.py:216] Worker ready; awaiting tasks
+[1;36m(VllmWorkerProcess pid=18940)[0;0m INFO 09-18 18:59:03 utils.py:1008] Found nccl from library libnccl.so.2
+[1;36m(VllmWorkerProcess pid=18941)[0;0m INFO 09-18 18:59:03 utils.py:1008] Found nccl from library libnccl.so.2
+[1;36m(VllmWorkerProcess pid=18940)[0;0m INFO 09-18 18:59:03 pynccl.py:63] vLLM is using nccl==2.20.5
+INFO 09-18 18:59:03 utils.py:1008] Found nccl from library libnccl.so.2
+[1;36m(VllmWorkerProcess pid=18941)[0;0m INFO 09-18 18:59:03 pynccl.py:63] vLLM is using nccl==2.20.5
+INFO 09-18 18:59:03 pynccl.py:63] vLLM is using nccl==2.20.5
+[1;36m(VllmWorkerProcess pid=18939)[0;0m INFO 09-18 18:59:03 utils.py:1008] Found nccl from library libnccl.so.2
+[1;36m(VllmWorkerProcess pid=18939)[0;0m INFO 09-18 18:59:03 pynccl.py:63] vLLM is using nccl==2.20.5
+INFO 09-18 18:59:05 shm_broadcast.py:241] vLLM message queue communication handle: Handle(connect_ip='127.0.0.1', local_reader_ranks=[1, 2, 3], buffer=<vllm.distributed.device_communicators.shm_broadcast.ShmRingBuffer object at 0x73d18399b820>, local_subscribe_port=54017, remote_subscribe_port=None)
+[1;36m(VllmWorkerProcess pid=18939)[0;0m INFO 09-18 18:59:05 model_runner.py:1060] Starting to load model /opt/rsi-assets/models/judge...
+INFO 09-18 18:59:05 model_runner.py:1060] Starting to load model /opt/rsi-assets/models/judge...
+[1;36m(VllmWorkerProcess pid=18940)[0;0m INFO 09-18 18:59:05 model_runner.py:1060] Starting to load model /opt/rsi-assets/models/judge...
+[1;36m(VllmWorkerProcess pid=18941)[0;0m INFO 09-18 18:59:05 model_runner.py:1060] Starting to load model /opt/rsi-assets/models/judge...
+Loading safetensors checkpoint shards:   0% Completed | 0/17 [00:00<?, ?it/s]
+Loading safetensors checkpoint shards:   6% Completed | 1/17 [00:03<01:02,  3.92s/it]
+Loading safetensors checkpoint shards:  12% Completed | 2/17 [00:07<00:58,  3.92s/it]
+Loading safetensors checkpoint shards:  18% Completed | 3/17 [00:11<00:54,  3.88s/it]
+Loading safetensors checkpoint shards:  24% Completed | 4/17 [00:15<00:51,  3.97s/it]
+Loading safetensors checkpoint shards:  29% Completed | 5/17 [00:19<00:47,  3.95s/it]
+Loading safetensors checkpoint shards:  35% Completed | 6/17 [00:23<00:43,  4.00s/it]
+Loading safetensors checkpoint shards:  41% Completed | 7/17 [00:27<00:40,  4.05s/it]
+Loading safetensors checkpoint shards:  47% Completed | 8/17 [00:32<00:36,  4.07s/it]
+Loading safetensors checkpoint shards:  53% Completed | 9/17 [00:36<00:32,  4.08s/it]
+Loading safetensors checkpoint shards:  59% Completed | 10/17 [00:40<00:28,  4.08s/it]
+Loading safetensors checkpoint shards:  65% Completed | 11/17 [00:44<00:24,  4.01s/it]
+Loading safetensors checkpoint shards:  71% Completed | 12/17 [00:48<00:20,  4.00s/it]
+Loading safetensors checkpoint shards:  76% Completed | 13/17 [00:52<00:16,  4.02s/it]
+Loading safetensors checkpoint shards:  82% Completed | 14/17 [00:56<00:12,  4.16s/it]
+Loading safetensors checkpoint shards:  88% Completed | 15/17 [01:00<00:08,  4.12s/it]
+Loading safetensors checkpoint shards:  94% Completed | 16/17 [01:04<00:04,  4.13s/it]
+Loading safetensors checkpoint shards: 100% Completed | 17/17 [01:08<00:00,  3.88s/it]
+Loading safetensors checkpoint shards: 100% Completed | 17/17 [01:08<00:00,  4.01s/it]
+
+[1;36m(VllmWorkerProcess pid=18940)[0;0m INFO 09-18 19:00:13 model_runner.py:1071] Loading model weights took 15.3916 GB
+[1;36m(VllmWorkerProcess pid=18941)[0;0m INFO 09-18 19:00:13 model_runner.py:1071] Loading model weights took 15.3916 GB
+[1;36m(VllmWorkerProcess pid=18939)[0;0m INFO 09-18 19:00:13 model_runner.py:1071] Loading model weights took 15.3916 GB
+INFO 09-18 19:00:13 model_runner.py:1071] Loading model weights took 15.3916 GB
+INFO 09-18 19:00:17 distributed_gpu_executor.py:57] # GPU blocks: 66167, # CPU blocks: 4096
+INFO 09-18 19:00:17 distributed_gpu_executor.py:61] Maximum concurrency for 32768 tokens per request: 32.31x
+[1;36m(VllmWorkerProcess pid=18941)[0;0m INFO 09-18 19:00:20 model_runner.py:1402] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+[1;36m(VllmWorkerProcess pid=18941)[0;0m INFO 09-18 19:00:20 model_runner.py:1406] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+INFO 09-18 19:00:20 model_runner.py:1402] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+INFO 09-18 19:00:20 model_runner.py:1406] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+[1;36m(VllmWorkerProcess pid=18940)[0;0m INFO 09-18 19:00:20 model_runner.py:1402] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+[1;36m(VllmWorkerProcess pid=18940)[0;0m INFO 09-18 19:00:20 model_runner.py:1406] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+[1;36m(VllmWorkerProcess pid=18939)[0;0m INFO 09-18 19:00:20 model_runner.py:1402] Capturing the model for CUDA graphs. This may lead to unexpected consequences if the model is not static. To run the model in eager mode, set 'enforce_eager=True' or use '--enforce-eager' in the CLI.
+[1;36m(VllmWorkerProcess pid=18939)[0;0m INFO 09-18 19:00:20 model_runner.py:1406] CUDA graphs can take additional 1~3 GiB memory per GPU. If you are running out of memory, consider decreasing `gpu_memory_utilization` or enforcing eager mode. You can also reduce the `max_num_seqs` as needed to decrease memory usage.
+[1;36m(VllmWorkerProcess pid=18940)[0;0m INFO 09-18 19:00:39 model_runner.py:1530] Graph capturing finished in 19 secs.
+[1;36m(VllmWorkerProcess pid=18939)[0;0m INFO 09-18 19:00:39 model_runner.py:1530] Graph capturing finished in 19 secs.
+[1;36m(VllmWorkerProcess pid=18941)[0;0m INFO 09-18 19:00:39 model_runner.py:1530] Graph capturing finished in 19 secs.
+INFO 09-18 19:00:39 model_runner.py:1530] Graph capturing finished in 19 secs.
+Processed prompts:   0%|          | 0/256 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]Processed prompts:   0%|          | 1/256 [00:03<14:08,  3.33s/it, est. speed input: 74.20 toks/s, output: 0.60 toks/s]Processed prompts: 100%|██████████| 256/256 [00:03<00:00, 76.84it/s, est. speed input: 17533.66 toks/s, output: 153.69 toks/s]
+Processed prompts:   0%|          | 0/256 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]Processed prompts:   0%|          | 1/256 [00:03<13:45,  3.24s/it, est. speed input: 77.25 toks/s, output: 0.62 toks/s]Processed prompts: 100%|██████████| 256/256 [00:03<00:00, 79.04it/s, est. speed input: 17422.38 toks/s, output: 158.09 toks/s]
+Processed prompts:   0%|          | 0/256 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]Processed prompts:   0%|          | 1/256 [00:03<13:57,  3.28s/it, est. speed input: 45.37 toks/s, output: 0.61 toks/s]Processed prompts: 100%|██████████| 256/256 [00:03<00:00, 77.89it/s, est. speed input: 17456.61 toks/s, output: 155.77 toks/s]
+Processed prompts:   0%|          | 0/256 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]Processed prompts:   0%|          | 1/256 [00:03<14:35,  3.43s/it, est. speed input: 103.69 toks/s, output: 0.58 toks/s]Processed prompts: 100%|██████████| 256/256 [00:03<00:00, 74.51it/s, est. speed input: 17493.27 toks/s, output: 149.02 toks/s]
+Processed prompts:   0%|          | 0/255 [00:00<?, ?it/s, est. speed input: 0.00 toks/s, output: 0.00 toks/s]Processed prompts:   0%|          | 1/255 [00:03<15:24,  3.64s/it, est. speed input: 55.24 toks/s, output: 0.55 toks/s]Processed prompts: 100%|██████████| 255/255 [00:03<00:00, 70.03it/s, est. speed input: 15675.44 toks/s, output: 140.06 toks/s]
+INFO 09-18 19:00:57 multiproc_worker_utils.py:134] Terminating local vLLM worker processes
+[1;36m(VllmWorkerProcess pid=18939)[0;0m INFO 09-18 19:00:57 multiproc_worker_utils.py:242] Worker exiting
+[1;36m(VllmWorkerProcess pid=18941)[0;0m INFO 09-18 19:00:57 multiproc_worker_utils.py:242] Worker exiting
+[1;36m(VllmWorkerProcess pid=18940)[0;0m INFO 09-18 19:00:57 multiproc_worker_utils.py:242] Worker exiting
+{"reward": 45.54441243366186, "summary": {"baseline": {"AIME": 10.0, "AMC": 47.5, "GSM8K": 81.50113722517058, "MATH-500": 64.4, "Olympiad": 26.962962962962962, "macro": 46.072820037626705}, "candidate": {"AIME": 6.666666666666667, "AMC": 45.0, "GSM8K": 81.12206216830933, "MATH-500": 65.6, "Olympiad": 29.333333333333332, "macro": 45.54441243366186}, "candidate_minus_baseline": -0.528407603964844, "correctness": "passed", "loss": {"train": 0.2518456435451905, "validation": 0.2601379156112671}, "mode": "candidate", "provenance": {"long": 991, "records": 5383, "rewritten": 0, "short": 4392}}}
+/usr/lib/python3.10/multiprocessing/resource_tracker.py:224: UserWarning: resource_tracker: There appear to be 1 leaked shared_memory objects to clean up at shutdown
+  warnings.warn('resource_tracker: There appear to be %d '

@@ -6,10 +6,10 @@
     "reward": 0.0
   },
   "round": "agent-1",
-  "runtime_seconds": 11.271696398966014,
+  "runtime_seconds": 5.766682479530573,
   "score": 0.0,
   "status": "completed",
-  "submitted_at": 1787527989.166807,
+  "submitted_at": 1789756535.870341,
   "timed_out": false,
   "verifier_output_required": true
 }
