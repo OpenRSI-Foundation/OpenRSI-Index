@@ -1,2 +1,0 @@
-INFO:    gocryptfs not found, will not be able to use gocryptfs
-{"forward_flops": 2005325053952, "loss_aggregates": 100, "mean_loss": 3.416087074279785, "parameters": 233461504, "processed_tokens": 10003415040, "reward": -3.416087074279785, "status": "scored", "training_flops": 14692455179291197440}
