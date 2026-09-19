@@ -33,7 +33,7 @@ runtime, or final verifier behavior.
 | Workspace | May the agent construct or collect additional data? | [State whether additional-data access is disabled, or define the allowed operations and scope separately from web and service access; contributor decides] |
 | Workspace | Leakage and reward-hacking safeguards | [Concrete safeguards for every enabled access or data path; proposal agent drafts, contributor confirms] |
 | Compute Feasibility | Compute resources per single experiment run | [Contributor estimate: physical-node count, CPU cores (if applicable), RAM (if applicable), GPU count (explicitly zero when unused), and GPU type when needed; when Work candidate production and Judge evaluation differ, give each phase's peak hardware as well as the end-to-end peak for one fixed candidate] |
-| Compute Feasibility | Estimated runtime per single experiment run | [Contributor estimate; when Work candidate production and Judge evaluation differ, give each phase's wall time and the end-to-end wall time; distinguish all of them from full trajectory time] |
+| Compute Feasibility | Estimated runtime per single experiment run | [Contributor estimate; when Work candidate production and Judge evaluation differ, give each phase's wall time and the end-to-end wall time; distinguish all of them from full trajectory time. Include the estimate's basis, total research budget, and estimated complete loops in 48 hours; record any budget Flag and the contributor's decision to retain it, or Estimate incomplete when unknown] |
 | Compute Feasibility | Early-stopping signals / lower-cost proxy experiments | [For significantly over-reference runs, repository-supported plan chosen by contributor; for ordinary runs, N/A or clear failure termination only] |
 
 The admitted lane must fit on a single physical node and use at most 8 GPUs at
@@ -42,6 +42,10 @@ research and evaluation standards. For GPU lanes, H100 is the budgeting referenc
 not a required model: compatible A100, B100, or other GPUs are allowed unless the
 task genuinely requires a specific GPU model. Multi-node or larger-peak lanes are rejected unless
 the contributor selects a faithful repository-supported eligible lane.
-Runtime over 12 hours remains a non-blocking resource-review flag after baseline
-reproduction. Early-stop or proxy advice is reserved for long-runtime or
-comparably material repository-supported cost.
+Default to a 24-hour total research budget, normally extendable to 48 hours,
+with capacity for at least 10 complete research loops plus operational margin.
+Estimate each loop from required Work computation plus full Judge time and
+mandatory overhead. Fewer than 10 loops in 48 hours triggers a non-blocking
+`Flag`; unknown capacity is `Estimate incomplete`. Parallel candidates do not
+multiply adaptive loops. Early-stop or proxy advice is reserved for flagged or
+comparably material repository-supported cost. Execution validation is separate.
