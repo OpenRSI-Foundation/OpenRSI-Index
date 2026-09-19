@@ -49,7 +49,7 @@ Use the official open-source repository when available and pin an immutable comm
 
 ## Compute orientation
 
-One candidate experiment means taking one fixed idea and configuration from launch through any required training or optimization and evaluation until it produces a valid score. Work and Judge may each use zero GPUs; CPU-only tasks are eligible under the same research and evaluation standards. The selected lane must fit on a single physical node and use at most 8 GPUs at peak. For GPU lanes, H100 is the budgeting reference, not a required model: compatible A100, B100, or other GPUs are allowed unless the task genuinely requires a specific GPU model. A lane that inherently requires multi-node execution or a larger peak is not admitted; a faithful repository-supported eligible lane may be selected instead. Runtime over 12 wall-clock hours remains a non-blocking compute flag for later resource review. This applies to one experiment, not the full multi-experiment AutoResearch trajectory.
+One candidate experiment means taking one fixed idea and configuration from launch through any required training or optimization and evaluation until it produces a valid score. Work and Judge may each use zero GPUs; CPU-only tasks are eligible under the same research and evaluation standards. The selected lane must fit on a single physical node and use at most 8 GPUs at peak. For GPU lanes, H100 is the budgeting reference, not a required model: compatible A100, B100, or other GPUs are allowed unless the task genuinely requires a specific GPU model. A lane that inherently requires multi-node execution or a larger peak is not admitted; a faithful repository-supported eligible lane may be selected instead. Plan for at least 10 complete research loops, with a 24-hour total budget by default and normal extension to 48 hours. If estimates indicate that 48 hours cannot accommodate 10 loops, we flag the compute cost rather than reject the proposal on runtime alone. You may explicitly retain that heavier design. Estimates are not measurements; execution validation comes later.
 (END)
 
 ## What to provide in Round 0
@@ -64,6 +64,6 @@ Ask only one item at a time. Wait for the contributor's answer before asking the
 4. the exact commit or tag, if already known;
 5. a few sentences describing the initial research question;
 6. why the underlying area is foundational or frontier-relevant currently; and
-7. whether the task uses CPUs only or GPUs, and whether one candidate experiment likely needs multiple physical nodes, more than 8 GPUs at peak, or more than 12 wall-clock hours.
+7. whether the task uses CPUs only or GPUs, and whether it likely needs multiple physical nodes, more than 8 GPUs at peak, or more than 48 hours for 10 complete research loops.
 
 Do not request exact compute details yet. The proposal agent investigates repository facts and current frontier evidence; the contributor supplies expert judgment and explicit decisions.

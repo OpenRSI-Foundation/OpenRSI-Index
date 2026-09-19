@@ -60,12 +60,15 @@ them to select a decision tier.
   explains why direct evaluation cannot answer the scientific question, it may
   instead use evaluation-time retraining under a fixed protocol from a submitted
   declarative configuration or manifest.
-- **Normal compute reference:** the end-to-end lane uses at most 8 GPUs on one
-  physical node and at most 12 hours for one single experiment run. Work and
-  Judge may each use zero GPUs. For GPU lanes, H100 is the budgeting reference,
-  not a required model: compatible A100, B100, or other GPUs are allowed unless
-  the task genuinely requires a specific GPU model. Runtime over 12 hours
-  remains non-blocking at proposal stage.
+- **Normal compute reference:** plan at least 10 complete research loops, with
+  a 24-hour total budget by default and normal extension to 48 hours. Estimate
+  each cycle from necessary Work computation plus full Judge time and mandatory
+  overhead; Work and Judge are serial. Fewer than 10 loops in 48 hours is a
+  non-blocking compute flag. This is a proposal estimate, not execution
+  acceptance. The lane uses at most 8 GPUs on one physical node; Work and Judge
+  may each use zero GPUs. H100 is the budgeting reference, not a required
+  model: compatible A100, B100, or other GPUs are allowed unless the task
+  genuinely requires a specific GPU model.
 - **Execution-lane eligibility:** one single experiment run must fit on one
   physical node with at most 8 GPUs at peak. CPU-only tasks are eligible under
   the same research and evaluation standards. Multi-node lanes and lanes using
@@ -324,18 +327,27 @@ topology and peak-count eligibility are handled by the Source Repository gate.
   comparably material cost. Do not treat an absent proxy plan as a concern for
   an ordinary run; clear failure termination such as divergence, NaN, OOM, or
   execution failure is sufficient when relevant.
-- If runtime exceeds 12 hours, write a clear `Flag` and state the estimate. The
-  runtime flag is retained for resource review after baseline reproduction.
+- Compute `48 hours / (required Work time + full Judge time + mandatory
+  per-round overhead)` without counting overhead twice. This is an optimistic
+  estimate; state its basis and allow margin for research and operations.
+  Parallel candidate evaluations do not multiply adaptive research loops.
+- Write `Flag` when that estimate is fewer than 10 complete loops in 48 hours.
+  Extending the total budget from 24 to 48 hours alone does not trigger it.
+  For example, a four-hour cycle permits 12 loops before research overhead and
+  is not flagged; a six-hour cycle permits only eight and is flagged. Do not
+  introduce another per-run runtime cutoff at proposal stage.
 - Multi-node execution or more than 8 GPUs is not a non-blocking compute flag;
   it fails the Source Repository gate as an ineligible execution lane.
-- If the estimate is absent or still approximate, write `Estimate incomplete`
-  and state what is missing.
-- Runtime over 12 hours remains non-blocking, as does an incomplete runtime
-  estimate when single-node and peak-GPU eligibility are already known. When a
-  runtime flag is the proposal's only concern, the final decision must still be
-  `Pass`.
-- The actual CPU/GPU compute budget, concurrency approval, and strict feasibility
-  gate are set after baseline reproduction and the first representative trial.
+- If the estimate is missing or its range straddles the threshold, write
+  `Estimate incomplete` and state what is missing. A usable estimate need not
+  already be measured.
+- Runtime flags and incomplete runtime estimates remain non-blocking when
+  single-node and peak-GPU eligibility are already known. When a runtime flag
+  is the proposal's only concern, the final decision must still be `Pass`.
+  Record a contributor's explicit decision to retain the flagged workload in
+  the existing Compute fields; no additional approval stage is needed.
+- Actual resource approval and measured iteration-budget acceptance occur in
+  execution validation, not this proposal review.
 
 ## Proposal-specific Quality Observations
 
@@ -393,7 +405,7 @@ Pass: all nine gates pass; compute flags remain non-blocking unless another gate
 Decision: Reject | Pass
 ```
 
-A material ambiguity or policy exception fails its affected gate. Proposal-specific
+A material non-compute ambiguity or hard-gate policy exception fails its affected gate. Proposal-specific
 quality observations may remain in the review prose but never select a canonical
 decision tier.
 
@@ -426,7 +438,8 @@ Hard gate review:
 Compute note:
 [Write one of: Within normal reference | Flag | Estimate incomplete.
 Include the known CPU/RAM needs (if applicable), GPU count (zero when unused), physical-node
-count, and single-run time.
+count, Work/Judge cycle time, planned total budget, and estimated complete loops
+in 48 hours with the estimate's basis or missing evidence.
 Runtime Flags and incomplete runtime estimates are explicitly non-blocking at
 proposal stage; hardware eligibility violations belong in the Source Repository
 gate.]
