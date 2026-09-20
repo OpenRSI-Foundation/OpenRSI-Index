@@ -6,8 +6,8 @@ version = "1.1.0"
 description = "Research difficulty-conditioned curricula for fixed-budget ReasonIR retrieval post-training."
 
 [metadata]
-author_name = "Yichen Feng"
-author_email = "contributor-10@example.invalid"
+author_name = "Rulin Shao"
+author_email = "contributor-13@example.invalid"
 difficulty_explanation = "Each scoreable candidate requires a fixed 1,000-update four-GPU LoRA run and a complete evaluation of three fixed BRIGHT subjects plus four BEIR datasets; useful conclusions require matched policy trials."
 verification_explanation = "A four-GPU Judge validates the adapter, fixed-budget provenance and workspace scope, then recomputes the three-subject reasoning proxy and four-dataset general retrieval scores from complete task-owned corpora. This is not a full-BRIGHT score."
 category = "ML"
