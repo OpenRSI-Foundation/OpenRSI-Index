@@ -1,0 +1,24 @@
+{
+  "version": 1,
+  "artifact_kind": "sanitized historical trajectory derivatives",
+  "redactions": [
+    "private identifiers",
+    "site-specific paths and network addresses",
+    "credential-shaped strings"
+  ],
+  "preserved": "JSON numeric values, message order, and trajectory structure",
+  "files": [
+    {
+      "path": "claude-opus-5-high/trajectory/trajectory.json",
+      "sha256": "3e7fc9e51ba96396c00ea00e6912e7b1af31fa639a93db666829fab7cd9042b0",
+      "bytes": 10047306,
+      "steps": 2297
+    },
+    {
+      "path": "codex-5.6-sol-xhigh/trajectory/trajectory.json",
+      "sha256": "2cd7b5549c1e245a1f2050c59e2a7299cc374721565549c1eeef6b628fe2727d",
+      "bytes": 24969399,
+      "steps": 9147
+    }
+  ]
+}
