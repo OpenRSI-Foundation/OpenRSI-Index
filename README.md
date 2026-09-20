@@ -74,32 +74,107 @@ We are actively developing this project and welcome [contributions](https://gith
 
 ## 🤝 Contributors
 
-### Advisors (in alphabetical order)
+We are still actively expanding the team. We really appreciate the efforts of all our excellent members.
 
 <table>
   <tr>
-    <td width="25%" valign="top"><strong><a href="https://wenhuchen.github.io/">Wenhu Chen</a></strong><br>University of Waterloo</td>
-    <td width="25%" valign="top"><strong><a href="https://yejinc.github.io/">Yejin Choi</a></strong><br>Stanford University</td>
-    <td width="25%" valign="top"><strong><a href="https://www.microsoft.com/en-us/research/people/jfgao/">Jianfeng Gao</a></strong><br>Microsoft Research</td>
-    <td width="25%" valign="top"><strong><a href="https://hannaneh.ai/">Hannaneh Hajishirzi</a></strong><br>University of Washington</td>
+    <th colspan="4" align="left">PROJECT INITIATORS</th>
   </tr>
   <tr>
-    <td width="25%" valign="top"><strong><a href="https://koh.pw/">Pang Wei Koh</a></strong><br>University of Washington</td>
-    <td width="25%" valign="top"><strong><a href="https://ranjaykrishna.com/index.html">Ranjay Krishna</a></strong><br>University of Washington</td>
-    <td width="25%" valign="top"><strong><a href="https://www.cs.princeton.edu/people/profile/karthikn">Karthik Narasimhan</a></strong><br>Princeton University</td>
-    <td width="25%" valign="top"><strong><a href="https://mitibm.mit.edu/people/rameswar-panda/">Rameswar Panda</a></strong><br>MIT-IBM Watson AI Lab</td>
+    <td width="25%" valign="top"><strong><a href="https://yuetl9.github.io/">Yuetai Li</a></strong><br><a href="mailto:yuetaili@uw.edu">yuetaili@uw.edu</a></td>
+    <td width="25%" valign="top"><strong><a href="https://zhuofeng-li.github.io/">Zhuofeng Li</a></strong><br><a href="mailto:zhuofengli12345@gmail.com">zhuofengli12345@gmail.com</a></td>
+    <td width="25%" valign="top"><strong><a href="https://yichenfeng.me/">Yichen Feng</a></strong><br><a href="mailto:yfeng42@uw.edu">yfeng42@uw.edu</a></td>
+    <td width="25%" valign="top"><strong><a href="https://davidhanx.github.io/">Xinyang Han</a></strong><br><a href="mailto:hanxinyang@berkeley.edu">hanxinyang@berkeley.edu</a></td>
   </tr>
   <tr>
-    <td width="25%" valign="top"><strong><a href="https://people.ece.uw.edu/radha/">Radha Poovendran</a></strong><br>University of Washington</td>
-    <td width="25%" valign="top"><strong><a href="https://dawnsong.io/">Dawn Song</a></strong><br>UC Berkeley</td>
-    <td width="25%" valign="top"><strong><a href="https://ysu1989.github.io/">Yu Su</a></strong><br>The Ohio State University</td>
-    <td width="25%" valign="top"><strong><a href="https://engineering.osu.edu/people/sun.397">Huan Sun</a></strong><br>The Ohio State University</td>
+    <td width="25%" valign="top"><strong><a href="https://wenhaochai.com/">Wenhao Chai</a></strong><br><a href="mailto:wenhao.chai@princeton.edu">wenhao.chai@princeton.edu</a></td>
+    <td width="25%" valign="top"><strong><a href="https://noviscl.github.io/">Chenglei Si</a></strong><br><a href="mailto:sichenglei1125@gmail.com">sichenglei1125@gmail.com</a></td>
+    <td width="25%"></td>
+    <td width="25%"></td>
   </tr>
   <tr>
-    <td width="25%" valign="top"><strong><a href="https://cs.stanford.edu/~diyiy/">Diyi Yang</a></strong><br>Stanford University</td>
-    <td width="25%" valign="top"><strong><a href="https://faculty.ucmerced.edu/mhyang/">Ming‑Hsuan Yang</a></strong><br>UC Merced</td>
-    <td width="25%" valign="top"><strong><a href="https://xiangyue9607.github.io/">Xiang Yue</a></strong><br>Independent Researcher</td>
-    <td width="25%" valign="top"><strong><a href="https://homes.cs.washington.edu/~lsz/">Luke Zettlemoyer</a></strong><br>University of Washington</td>
+    <th colspan="4" align="left">ORGANIZERS (in alphabetical order)</th>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://shangdinggu.net/">Shangding Gu</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://rilynhan.com/">Rilyn Han</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://dblp.org/pid/270/4119.html">Zhengyu Hu</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://hanghuacs.notion.site/">Hang Hua</a></strong></td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://howiehwong.github.io/">Yue Huang</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://caralinotes.com/">Cara Li</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://hanchenli.github.io/">Hanchen Li</a></strong></td>
+    <td width="25%" valign="top"><strong>Shujia Liang</strong></td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong>Xiang Liu</strong></td>
+    <td width="25%" valign="top"><strong><a href="https://lupantech.github.io/">Pan Lu</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://bohanlyu.com/">Bohan Lyu</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://zixianma.github.io/">Zixian Ma</a></strong></td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://joyemang33.github.io/">Qiuyang Mang</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://rulinshao.github.io/">Rulin Shao</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://huggingface.co/venkat-srinivasan-nvidia">Venkat Srinivasan</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://sunyiyou.github.io/">Yiyou Sun</a></strong></td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong>Guan Wang</strong></td>
+    <td width="25%" valign="top"><strong>Ning Wang</strong></td>
+    <td width="25%" valign="top"><strong><a href="https://hsaest.github.io/">Jian Xie</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://github.com/bri25yu">Brian Yu</a></strong></td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://mitibm.mit.edu/people/gaoyuan-zhang/">Gaoyuan Zhang</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://alex-q-z.github.io/">Qizheng Zhang</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://openreview.net/profile?id=~Weichen_Zhang8">Weichen Zhang</a></strong></td>
+    <td width="25%"></td>
+  </tr>
+  <tr>
+    <th colspan="4" align="left">ADVISORS (in alphabetical order)</th>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://wenhuchen.github.io/">Wenhu Chen</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://people.eecs.berkeley.edu/~akcheung/">Alvin Cheung</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://yejinc.github.io/">Yejin Choi</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://www.microsoft.com/en-us/research/people/jfgao/">Jianfeng Gao</a></strong></td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://hannaneh.ai/">Hannaneh Hajishirzi</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://koh.pw/">Pang Wei Koh</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://ranjaykrishna.com/index.html">Ranjay Krishna</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://hanqinglu.github.io/">Hanqing Lu</a></strong></td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://www.cs.princeton.edu/people/profile/karthikn">Karthik Narasimhan</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://arsenalfc.stanford.edu/kunle/">Kunle Olukotun</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://mitibm.mit.edu/people/rameswar-panda/">Rameswar Panda</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://people.ece.uw.edu/radha/">Radha Poovendran</a></strong></td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://dawnsong.io/">Dawn Song</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://ysu1989.github.io/">Yu Su</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://engineering.osu.edu/people/sun.397">Huan Sun</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://cs.stanford.edu/~diyiy/">Diyi Yang</a></strong></td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://faculty.ucmerced.edu/mhyang/">Ming-Hsuan Yang</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://xiangyue9607.github.io/">Xiang Yue</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://www.linkedin.com/in/jian-zhang-10383a98/">Jian Zhang</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://yuzhimanhua.github.io/">Yu Zhang</a></strong></td>
+  </tr>
+  <tr>
+    <td width="25%" valign="top"><strong><a href="https://homes.cs.washington.edu/~lsz/">Luke Zettlemoyer</a></strong></td>
+    <td width="25%"></td>
+    <td width="25%"></td>
+    <td width="25%"></td>
+  </tr>
+  <tr>
+    <th colspan="4" align="left">TASK CONTRIBUTORS</th>
+  </tr>
+  <tr>
+    <td colspan="4">Coming soon.</td>
   </tr>
 </table>
 
