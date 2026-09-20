@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "selected_epoch": 50,
+  "memory_size": 0,
+  "nodes": [
+    {"id": "kp_baseline", "op": "keypoint_squash", "args": ["keypoint_distance"], "a": 5.0, "b": 4.0},
+    {"id": "kp_coarse", "op": "keypoint_squash", "args": ["keypoint_distance"], "a": 50.0, "b": 2.0},
+    {"id": "kp_fine", "op": "keypoint_squash", "args": ["keypoint_distance"], "a": 100.0, "b": 0.0},
+    {"id": "shaping", "op": "add", "args": ["kp_baseline", "kp_coarse", "kp_fine"]},
+    {"id": "bonuses", "op": "add", "args": ["engaged", "success"]},
+    {"id": "reward", "op": "add", "args": ["shaping", "bonuses"]}
+  ],
+  "output": "reward",
+  "memory_updates": []
+}

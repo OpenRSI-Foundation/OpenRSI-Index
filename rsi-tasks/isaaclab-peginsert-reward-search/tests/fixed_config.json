@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "isaaclab_commit": "b0542fe2d45bf91c4e1d9ef6952b9c709c80b4e8",
+  "rl_games_commit": "6b3534f29568158e9e29ec8bf83cc88fce5f0cae",
+  "task": "Isaac-Factory-PegInsert-Direct-v0",
+  "train_seed": 0,
+  "evaluation_seeds": [91420261, 91420279, 91420303, 91420317, 91420339, 91420351, 91420373, 91420387],
+  "num_envs": 128,
+  "horizon": 128,
+  "epochs": 50,
+  "vector_steps": 6400,
+  "transitions": 819200,
+  "evaluation_episodes": 1024,
+  "max_candidates": 2,
+  "judge_gpus": 2,
+  "requirements_lock_sha256": "7afb9d0b3e1dddb52aeaa89b9aa0358cc51eac905c451078a2e378211451e903",
+  "local_packages": {
+    "isaaclab": "0.54.4",
+    "isaaclab-assets": "0.2.4",
+    "isaaclab-rl": "0.5.2",
+    "isaaclab-tasks": "0.11.16",
+    "rl-games": "1.6.1"
+  },
+  "asset_roots": [
+    "Isaac/Environments/Grid/default_environment.usd",
+    "Isaac/IsaacLab/Factory/factory_hole_8mm.usd",
+    "Isaac/IsaacLab/Factory/factory_peg_8mm.usd",
+    "Isaac/IsaacLab/Factory/franka_mimic.usd",
+    "Isaac/Props/Mounts/SeattleLabTable/table_instanceable.usd"
+  ],
+  "public_files": {
+    "/opt/peginsert_public/baseline_reward.json": "eff670289f38b62092d8ed93df397405c0a5692bc74f3a88e4ff25a0c0bb2c8e",
+    "/opt/peginsert_public/fixed_env.json": "0fd01012846d8454ef229b126482fe8238ef46b3ad380b272bf19baa947741e8",
+    "/opt/peginsert_public/driver_common.py": "7d41dade7d8b7d60dbffc45487a5891e6b29b4494999be70da439f3b59efacc6",
+    "/opt/peginsert_public/reward_graph.py": "1fd9176d498337b4cee15ae71370d66409bcf6007dea7c2f3e18328aa4edc3aa",
+    "/opt/peginsert_public/work_train.py": "663e84a146910aaa907331a9bba737fbfff099e9724d1f7d5a295767eef50e55"
+  },
+  "checkpoint_size": 212889115,
+  "checkpoint_sha256": "1a1388408d119959a19d28efd1e56c3d498cd6eed1d259c48e9319c756081496"
+}
