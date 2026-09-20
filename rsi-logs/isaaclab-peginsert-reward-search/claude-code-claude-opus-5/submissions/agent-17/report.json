@@ -1,0 +1,13 @@
+{
+  "error": "Harbor reward file is missing",
+  "exit_code": 2,
+  "full_output_captured": true,
+  "metrics": {},
+  "round": "agent-17",
+  "runtime_seconds": 4.029640179127455,
+  "score": null,
+  "status": "verifier_error",
+  "submitted_at": 1789841568.116566,
+  "timed_out": false,
+  "verifier_output_required": true
+}

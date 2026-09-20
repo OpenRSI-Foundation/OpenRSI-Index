@@ -1,0 +1,17 @@
+{
+  "error": "cleanup failure: Work unpause: failed to inspect Work container 880d6f45c64213c6cf124e306ebc381fac113d1ddb553b80a1f08a0e69496cb8 before unpause: 404 Client Error for http+docker://localhost/v1.53/containers/880d6f45c64213c6cf124e306ebc381fac113d1ddb553b80a1f08a0e69496cb8/json: Not Found (\"No such container: 880d6f45c64213c6cf124e306ebc381fac113d1ddb553b80a1f08a0e69496cb8\"); Work recovery inspection: failed to inspect exact Work container 880d6f45c64213c6cf124e306ebc381fac113d1ddb553b80a1f08a0e69496cb8 quiescence; Work recovery pause: failed to pause Work container 880d6f45c64213c6cf124e306ebc381fac113d1ddb553b80a1f08a0e69496cb8: 404 Client Error for http+docker://localhost/v1.53/containers/880d6f45c64213c6cf124e306ebc381fac113d1ddb553b80a1f08a0e69496cb8/json: Not Found (\"No such container: 880d6f45c64213c6cf124e306ebc381fac113d1ddb553b80a1f08a0e69496cb8\"); Work recovery attestation: failed to inspect exact Work container 880d6f45c64213c6cf124e306ebc381fac113d1ddb553b80a1f08a0e69496cb8 quiescence; recovery_required: exact Work quiescence remains unproven; work_container_id=880d6f45c64213c6cf124e306ebc381fac113d1ddb553b80a1f08a0e69496cb8; recovery_required: Work unpause is unproven; work_container_id=880d6f45c64213c6cf124e306ebc381fac113d1ddb553b80a1f08a0e69496cb8",
+  "exit_code": 0,
+  "full_output_captured": true,
+  "metrics": {
+    "candidate_0": 0.6015625,
+    "candidate_1": 0.484375,
+    "reward": 0.6015625
+  },
+  "round": "agent-32",
+  "runtime_seconds": 2714.091062553227,
+  "score": null,
+  "status": "infrastructure_error",
+  "submitted_at": 1789883152.187857,
+  "timed_out": false,
+  "verifier_output_required": true
+}

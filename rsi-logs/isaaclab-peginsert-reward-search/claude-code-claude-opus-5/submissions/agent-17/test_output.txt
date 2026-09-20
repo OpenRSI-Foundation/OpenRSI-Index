@@ -1,0 +1,1 @@
+{"actual": [], "code": "candidates_scope", "condition": "entries", "expected": ["reward_1.json"], "field": "/workspace/candidates", "hint": "Keep only reward_1.json under candidates.", "path": "/workspace/candidates", "status": "candidate_invalid"}

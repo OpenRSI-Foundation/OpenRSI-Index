@@ -1,0 +1,286 @@
+{"candidate": 0, "device": "cuda:0", "event": "worker_started", "path": "/workspace/reward.json"}
+{"candidate": 1, "device": "cuda:1", "event": "worker_started", "path": "/workspace/candidates/reward_1.json"}
+[INFO][AppLauncher]: Using device: cuda:1[INFO][AppLauncher]: Using device: cuda:0
+
+[INFO][AppLauncher]: Loading experience file: /opt/isaaclab/apps/isaaclab.python.headless.kit
+[INFO][AppLauncher]: Loading experience file: /opt/isaaclab/apps/isaaclab.python.headless.kit
+[Info] [carb] Logging to file: /usr/local/lib/python3.11/site-packages/isaacsim/kit/logs/Kit/Isaac-Sim/5.1/kit_20260919_100719.log
+[Info] [carb] Logging to file: /usr/local/lib/python3.11/site-packages/isaacsim/kit/logs/Kit/Isaac-Sim/5.1/kit_20260919_100719.log
+2026-09-19T10:07:19Z [238ms] [Warning] [omni.usd_config.extension] Enable omni.materialx.libs extension to use MaterialX
+2026-09-19T10:07:19Z [238ms] [Warning] [omni.usd_config.extension] Enable omni.materialx.libs extension to use MaterialX
+2026-09-19T10:07:20Z [680ms] [Warning] [omni.platforminfo.plugin] failed to open the default display.  Can't verify X Server version.
+2026-09-19T10:07:20Z [680ms] [Warning] [omni.platforminfo.plugin] failed to open the default display.  Can't verify X Server version.
+2026-09-19T10:07:20Z [811ms] [Warning] [carb] Acquiring non optional plugin interface which is not listed as dependency: [omni::physx::IPhysxBenchmarks v1.0] (plugin: <default plugin>), by client: omni.physics.physx.plugin. Add it to CARB_PLUGIN_IMPL_DEPS() macro of a client.
+2026-09-19T10:07:20Z [811ms] [Warning] [carb] Acquiring non optional plugin interface which is not listed as dependency: [omni::physx::IPhysxBenchmarks v1.0] (plugin: <default plugin>), by client: omni.physics.physx.plugin. Add it to CARB_PLUGIN_IMPL_DEPS() macro of a client.
+2026-09-19T10:07:20Z [825ms] [Warning] [omni.isaac.dynamic_control] omni.isaac.dynamic_control is deprecated as of Isaac Sim 4.5. No action is needed from end-users.
+2026-09-19T10:07:20Z [826ms] [Warning] [omni.isaac.dynamic_control] omni.isaac.dynamic_control is deprecated as of Isaac Sim 4.5. No action is needed from end-users.
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 580.159.03    | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|---------------------------------------------------------------------------------------------|
+| 0   | NVIDIA H100 NVL                  | Yes: 0 |     | 95830   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2321      | 28477bec.. |
+|     |                                  |        |     |            | 1         |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | NVIDIA H100 NVL                  |        |     | 95830   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2321      | 9904d50f.. |
+|     |                                  |        |     |            | 21        |            |
+|=============================================================================================|
+| OS: 12 (bookworm) debian, Version: 12.30600.1543595520, Kernel: 6.8.0-101-generic
+| Processor: AMD EPYC 9354 32-Core Processor
+| Bare Metal Cores: 64 | Bare Metal Logical Cores: 128
+| Core Usage Quota: 32
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 131072 | Free Memory: 129470
+| Total Page/Swap (MB): 65535 | Free Page/Swap: 65535
+|---------------------------------------------------------------------------------------------|
+
+|---------------------------------------------------------------------------------------------|
+| Driver Version: 580.159.03    | Graphics API: Vulkan
+|=============================================================================================|
+| GPU | Name                             | Active | LDA | GPU Memory | Vendor-ID | LUID       |
+|     |                                  |        |     |            | Device-ID | UUID       |
+|     |                                  |        |     |            | Bus-ID    |            |
+|---------------------------------------------------------------------------------------------|
+| 0   | NVIDIA H100 NVL                  |        |     | 95830   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2321      | 28477bec.. |
+|     |                                  |        |     |            | 1         |            |
+|---------------------------------------------------------------------------------------------|
+| 1   | NVIDIA H100 NVL                  | Yes: 0 |     | 95830   MB | 10de      | 0          |
+|     |                                  |        |     |            | 2321      | 9904d50f.. |
+|     |                                  |        |     |            | 21        |            |
+|=============================================================================================|
+| OS: 12 (bookworm) debian, Version: 12.00.0, Kernel: 6.8.0-101-generic
+| Processor: AMD EPYC 9354 32-Core Processor
+| Bare Metal Cores: 64 | Bare Metal Logical Cores: 128
+| Core Usage Quota: 32
+|---------------------------------------------------------------------------------------------|
+| Total Memory (MB): 131072 | Free Memory: 129470
+| Total Page/Swap (MB): 65535 | Free Page/Swap: 65535
+|---------------------------------------------------------------------------------------------|
+2026-09-19T10:07:26Z [6,806ms] [Warning] [gpu.foundation.plugin] ECC is enabled on physical device 0
+2026-09-19T10:07:26Z [6,810ms] [Warning] [gpu.foundation.plugin] IOMMU is enabled.
+2026-09-19T10:07:26Z [6,810ms] [Warning] [gpu.foundation.plugin] Detected IOMMU is enabled. Running CUDA peer-to-peer bandwidth and latency validation.
+Cuda failure ../../../source/plugins/carb.cudainterop/p2pBandwidthLatencyTest/p2pBandwidthLatencyTest.cu:681: 'peer access is already enabled'
+2026-09-19T10:07:26Z [6,811ms] [Warning] [gpu.foundation.plugin] ECC is enabled on physical device 1
+2026-09-19T10:07:26Z [6,815ms] [Warning] [gpu.foundation.plugin] IOMMU is enabled.
+2026-09-19T10:07:26Z [6,815ms] [Warning] [gpu.foundation.plugin] Detected IOMMU is enabled. Running CUDA peer-to-peer bandwidth and latency validation.
+Cuda failure ../../../source/plugins/carb.cudainterop/p2pBandwidthLatencyTest/p2pBandwidthLatencyTest.cu:681: 'peer access is already enabled'
+2026-09-19T10:07:26Z [6,848ms] [Warning] [omni.kvdb.plugin] Disabling key-value database because another kit process is locking it
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+Gym has been unmaintained since 2022 and does not support NumPy 2.0 amongst other critical functionality.
+Please upgrade to Gymnasium, the maintained drop-in replacement of Gym, or contact the authors of your software and request that they upgrade.
+Users of this version of Gym should be able to simply replace 'import gym' with 'import gymnasium as gym' in the vast majority of cases.
+See the migration guide at https://gymnasium.farama.org/introduction/migration_guide/ for additional information.
+[INFO]: Parsing configuration from: isaaclab_tasks.direct.factory.factory_env_cfg:FactoryTaskPegInsertCfg
+[INFO]: Parsing configuration from: isaaclab_tasks.direct.factory.factory_env_cfg:FactoryTaskPegInsertCfg
+[INFO]: Parsing configuration from: /opt/isaaclab/source/isaaclab_tasks/isaaclab_tasks/direct/factory/agents/rl_games_ppo_cfg.yaml
+[INFO]: Parsing configuration from: /opt/isaaclab/source/isaaclab_tasks/isaaclab_tasks/direct/factory/agents/rl_games_ppo_cfg.yaml
+
+[36m======================================================================================[0m
+[36m[1m[INFO][IsaacLab]: Logging to file: /tmp/isaaclab/logs/isaaclab_2026-09-19_10-07-30.log[0m
+[36m======================================================================================[0m
+
+
+[36m======================================================================================[0m
+[36m[1m[INFO][IsaacLab]: Logging to file: /tmp/isaaclab/logs/isaaclab_2026-09-19_10-07-30.log[0m
+[36m======================================================================================[0m
+
+[33m10:07:30 [simulation_context.py] WARNING: The `enable_external_forces_every_iteration` parameter in the PhysxCfg is set to False. If you are experiencing noisy velocities, consider enabling this flag. You may need to slightly increase the number of velocity iterations (setting it to 1 or 2 rather than 0), together with this flag, to improve the accuracy of velocity updates.[0m
+[33m10:07:30 [simulation_context.py] WARNING: The `enable_external_forces_every_iteration` parameter in the PhysxCfg is set to False. If you are experiencing noisy velocities, consider enabling this flag. You may need to slightly increase the number of velocity iterations (setting it to 1 or 2 rather than 0), together with this flag, to improve the accuracy of velocity updates.[0m
+[INFO]: Base environment:
+	Environment device    : cuda:1
+	Environment seed      : 0
+	Physics step-size     : 0.008333333333333333
+	Rendering step-size   : 0.008333333333333333
+	Environment step-size : 0.06666666666666667
+[33m10:07:30 [direct_rl_env.py] WARNING: The render interval (1) is smaller than the decimation (8). Multiple render calls will happen for each environment step.If this is not intended, set the render interval to be equal to the decimation.[0m
+[INFO]: Base environment:
+	Environment device    : cuda:0
+	Environment seed      : 0
+	Physics step-size     : 0.008333333333333333
+	Rendering step-size   : 0.008333333333333333
+	Environment step-size : 0.06666666666666667
+[33m10:07:30 [direct_rl_env.py] WARNING: The render interval (1) is smaller than the decimation (8). Multiple render calls will happen for each environment step.If this is not intended, set the render interval to be equal to the decimation.[0m
+2026-09-19T10:07:30Z [11,034ms] [Warning] [omni.fabric.plugin] Warning: input prim:attr `/World/envs/env_0:omni:rtx:skip` has no valid data.
+
+2026-09-19T10:07:30Z [11,065ms] [Warning] [omni.fabric.plugin] Warning: input prim:attr `/World/envs/env_0:omni:rtx:skip` has no valid data.
+
+[INFO]: Time taken for scene creation : 1.371118 seconds
+[INFO]: Scene manager:  <class InteractiveScene>
+	Number of environments: 128
+	Environment spacing   : 2.0
+	Source prim name      : /World/envs/env_0
+	Global prim paths     : []
+	Replicate physics     : True
+[INFO]: Starting the simulation. This may take a few seconds. Please wait...
+[INFO]: Time taken for scene creation : 1.370975 seconds
+[INFO]: Scene manager:  <class InteractiveScene>
+	Number of environments: 128
+	Environment spacing   : 2.0
+	Source prim name      : /World/envs/env_0
+	Global prim paths     : []
+	Replicate physics     : True
+[INFO]: Starting the simulation. This may take a few seconds. Please wait...
+[INFO]: Time taken for simulation start : 2.127304 seconds
+[INFO]: Completed setting up the environment...
+self.seed = 0
+Started to train
+Exact experiment name requested from command line: judge
+Adding Central Value Network
+seq_length: 128
+current training device: cuda:1
+/usr/local/lib/python3.11/site-packages/rl_games/common/a2c_common.py:261: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = torch.cuda.amp.GradScaler(enabled=self.mixed_precision)
+[INFO]: Time taken for simulation start : 2.154044 seconds
+[INFO]: Completed setting up the environment...
+self.seed = 0
+Started to train
+Exact experiment name requested from command line: judge
+Adding Central Value Network
+seq_length: 128
+current training device: cuda:0
+/usr/local/lib/python3.11/site-packages/rl_games/common/a2c_common.py:261: FutureWarning: `torch.cuda.amp.GradScaler(args...)` is deprecated. Please use `torch.amp.GradScaler('cuda', args...)` instead.
+  self.scaler = torch.cuda.amp.GradScaler(enabled=self.mixed_precision)
+build mlp: 1024
+RunningMeanStd:  (1,)
+RunningMeanStd:  (19,)
+build mlp: 1024
+RunningMeanStd:  (1,)
+RunningMeanStd:  (19,)
+build mlp: 1024
+RunningMeanStd:  (1,)
+RunningMeanStd:  (43,)
+build mlp: 1024
+RunningMeanStd:  (1,)
+RunningMeanStd:  (43,)
+/usr/local/lib/python3.11/site-packages/rl_games/algos_torch/a2c_continuous.py:130: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=self.mixed_precision):
+/usr/local/lib/python3.11/site-packages/rl_games/algos_torch/a2c_continuous.py:130: FutureWarning: `torch.cuda.amp.autocast(args...)` is deprecated. Please use `torch.amp.autocast('cuda', args...)` instead.
+  with torch.cuda.amp.autocast(enabled=self.mixed_precision):
+fps step: 435 fps step and policy inference: 426 fps total: 385 epoch: 1/50 frames: 0
+fps step: 429 fps step and policy inference: 421 fps total: 379 epoch: 1/50 frames: 0
+fps step: 417 fps step and policy inference: 410 fps total: 366 epoch: 2/50 frames: 16384
+fps step: 416 fps step and policy inference: 409 fps total: 364 epoch: 2/50 frames: 16384
+fps step: 403 fps step and policy inference: 397 fps total: 358 epoch: 3/50 frames: 32768
+fps step: 399 fps step and policy inference: 393 fps total: 353 epoch: 3/50 frames: 32768
+fps step: 410 fps step and policy inference: 404 fps total: 364 epoch: 4/50 frames: 49152
+fps step: 407 fps step and policy inference: 401 fps total: 350 epoch: 4/50 frames: 49152
+fps step: 392 fps step and policy inference: 386 fps total: 347 epoch: 5/50 frames: 65536
+fps step: 392 fps step and policy inference: 387 fps total: 347 epoch: 5/50 frames: 65536
+fps step: 401 fps step and policy inference: 395 fps total: 362 epoch: 6/50 frames: 81920
+fps step: 403 fps step and policy inference: 396 fps total: 359 epoch: 6/50 frames: 81920
+fps step: 383 fps step and policy inference: 378 fps total: 341 epoch: 7/50 frames: 98304
+fps step: 385 fps step and policy inference: 379 fps total: 340 epoch: 7/50 frames: 98304
+fps step: 395 fps step and policy inference: 389 fps total: 358 epoch: 8/50 frames: 114688
+fps step: 398 fps step and policy inference: 392 fps total: 363 epoch: 8/50 frames: 114688
+fps step: 418 fps step and policy inference: 413 fps total: 363 epoch: 9/50 frames: 131072
+fps step: 409 fps step and policy inference: 403 fps total: 370 epoch: 9/50 frames: 131072
+fps step: 382 fps step and policy inference: 377 fps total: 341 epoch: 10/50 frames: 147456
+fps step: 380 fps step and policy inference: 374 fps total: 335 epoch: 10/50 frames: 147456
+fps step: 399 fps step and policy inference: 393 fps total: 357 epoch: 11/50 frames: 163840
+fps step: 395 fps step and policy inference: 389 fps total: 348 epoch: 11/50 frames: 163840
+fps step: 335 fps step and policy inference: 330 fps total: 300 epoch: 12/50 frames: 180224
+fps step: 327 fps step and policy inference: 323 fps total: 297 epoch: 12/50 frames: 180224
+fps step: 394 fps step and policy inference: 388 fps total: 351 epoch: 13/50 frames: 196608
+fps step: 393 fps step and policy inference: 387 fps total: 350 epoch: 13/50 frames: 196608
+fps step: 383 fps step and policy inference: 378 fps total: 341 epoch: 14/50 frames: 212992
+fps step: 380 fps step and policy inference: 374 fps total: 341 epoch: 14/50 frames: 212992
+fps step: 399 fps step and policy inference: 393 fps total: 361 epoch: 15/50 frames: 229376
+fps step: 396 fps step and policy inference: 390 fps total: 352 epoch: 15/50 frames: 229376
+fps step: 384 fps step and policy inference: 379 fps total: 341 epoch: 16/50 frames: 245760
+fps step: 376 fps step and policy inference: 371 fps total: 333 epoch: 16/50 frames: 245760
+fps step: 406 fps step and policy inference: 400 fps total: 355 epoch: 17/50 frames: 262144
+fps step: 398 fps step and policy inference: 392 fps total: 361 epoch: 17/50 frames: 262144
+fps step: 402 fps step and policy inference: 396 fps total: 355 epoch: 18/50 frames: 278528
+fps step: 391 fps step and policy inference: 385 fps total: 351 epoch: 18/50 frames: 278528
+fps step: 380 fps step and policy inference: 375 fps total: 331 epoch: 19/50 frames: 294912
+fps step: 381 fps step and policy inference: 375 fps total: 339 epoch: 19/50 frames: 294912
+fps step: 398 fps step and policy inference: 392 fps total: 354 epoch: 20/50 frames: 311296
+fps step: 395 fps step and policy inference: 389 fps total: 348 epoch: 20/50 frames: 311296
+fps step: 385 fps step and policy inference: 380 fps total: 337 epoch: 21/50 frames: 327680
+fps step: 378 fps step and policy inference: 373 fps total: 335 epoch: 21/50 frames: 327680
+fps step: 395 fps step and policy inference: 389 fps total: 352 epoch: 22/50 frames: 344064
+fps step: 396 fps step and policy inference: 390 fps total: 353 epoch: 22/50 frames: 344064
+fps step: 344 fps step and policy inference: 340 fps total: 310 epoch: 23/50 frames: 360448
+fps step: 352 fps step and policy inference: 348 fps total: 315 epoch: 23/50 frames: 360448
+fps step: 404 fps step and policy inference: 398 fps total: 359 epoch: 24/50 frames: 376832
+fps step: 399 fps step and policy inference: 393 fps total: 357 epoch: 24/50 frames: 376832
+fps step: 396 fps step and policy inference: 390 fps total: 353 epoch: 25/50 frames: 393216
+fps step: 391 fps step and policy inference: 385 fps total: 350 epoch: 25/50 frames: 393216
+fps step: 380 fps step and policy inference: 374 fps total: 339 epoch: 26/50 frames: 409600
+fps step: 380 fps step and policy inference: 375 fps total: 339 epoch: 26/50 frames: 409600
+fps step: 391 fps step and policy inference: 385 fps total: 344 epoch: 27/50 frames: 425984
+fps step: 386 fps step and policy inference: 380 fps total: 345 epoch: 27/50 frames: 425984
+fps step: 384 fps step and policy inference: 378 fps total: 344 epoch: 28/50 frames: 442368
+fps step: 380 fps step and policy inference: 375 fps total: 338 epoch: 28/50 frames: 442368
+fps step: 396 fps step and policy inference: 389 fps total: 351 epoch: 29/50 frames: 458752
+fps step: 394 fps step and policy inference: 388 fps total: 351 epoch: 29/50 frames: 458752
+fps step: 370 fps step and policy inference: 364 fps total: 325 epoch: 30/50 frames: 475136
+fps step: 371 fps step and policy inference: 366 fps total: 331 epoch: 30/50 frames: 475136
+fps step: 388 fps step and policy inference: 382 fps total: 344 epoch: 31/50 frames: 491520
+fps step: 388 fps step and policy inference: 383 fps total: 347 epoch: 31/50 frames: 491520
+fps step: 369 fps step and policy inference: 364 fps total: 328 epoch: 32/50 frames: 507904
+fps step: 368 fps step and policy inference: 363 fps total: 328 epoch: 32/50 frames: 507904
+fps step: 391 fps step and policy inference: 384 fps total: 347 epoch: 33/50 frames: 524288
+fps step: 397 fps step and policy inference: 391 fps total: 355 epoch: 33/50 frames: 524288
+fps step: 391 fps step and policy inference: 385 fps total: 348 epoch: 34/50 frames: 540672
+fps step: 395 fps step and policy inference: 389 fps total: 355 epoch: 34/50 frames: 540672
+fps step: 379 fps step and policy inference: 374 fps total: 337 epoch: 35/50 frames: 557056
+fps step: 382 fps step and policy inference: 377 fps total: 341 epoch: 35/50 frames: 557056
+fps step: 371 fps step and policy inference: 365 fps total: 329 epoch: 36/50 frames: 573440
+fps step: 364 fps step and policy inference: 359 fps total: 329 epoch: 36/50 frames: 573440
+fps step: 377 fps step and policy inference: 371 fps total: 335 epoch: 37/50 frames: 589824
+fps step: 379 fps step and policy inference: 374 fps total: 337 epoch: 37/50 frames: 589824
+fps step: 392 fps step and policy inference: 386 fps total: 351 epoch: 38/50 frames: 606208
+fps step: 397 fps step and policy inference: 391 fps total: 354 epoch: 38/50 frames: 606208
+fps step: 374 fps step and policy inference: 368 fps total: 334 epoch: 39/50 frames: 622592
+fps step: 380 fps step and policy inference: 375 fps total: 344 epoch: 39/50 frames: 622592
+fps step: 396 fps step and policy inference: 390 fps total: 342 epoch: 40/50 frames: 638976
+fps step: 396 fps step and policy inference: 390 fps total: 354 epoch: 40/50 frames: 638976
+fps step: 389 fps step and policy inference: 383 fps total: 351 epoch: 41/50 frames: 655360
+fps step: 384 fps step and policy inference: 378 fps total: 345 epoch: 41/50 frames: 655360
+fps step: 383 fps step and policy inference: 377 fps total: 339 epoch: 42/50 frames: 671744
+fps step: 378 fps step and policy inference: 372 fps total: 335 epoch: 42/50 frames: 671744
+fps step: 387 fps step and policy inference: 381 fps total: 347 epoch: 43/50 frames: 688128
+fps step: 385 fps step and policy inference: 380 fps total: 346 epoch: 43/50 frames: 688128
+fps step: 382 fps step and policy inference: 377 fps total: 340 epoch: 44/50 frames: 704512
+fps step: 377 fps step and policy inference: 371 fps total: 338 epoch: 44/50 frames: 704512
+fps step: 393 fps step and policy inference: 387 fps total: 357 epoch: 45/50 frames: 720896
+fps step: 389 fps step and policy inference: 383 fps total: 347 epoch: 45/50 frames: 720896
+fps step: 378 fps step and policy inference: 372 fps total: 337 epoch: 46/50 frames: 737280
+fps step: 375 fps step and policy inference: 370 fps total: 334 epoch: 46/50 frames: 737280
+fps step: 394 fps step and policy inference: 389 fps total: 355 epoch: 47/50 frames: 753664
+fps step: 390 fps step and policy inference: 384 fps total: 347 epoch: 47/50 frames: 753664
+fps step: 371 fps step and policy inference: 366 fps total: 333 epoch: 48/50 frames: 770048
+fps step: 368 fps step and policy inference: 363 fps total: 326 epoch: 48/50 frames: 770048
+fps step: 397 fps step and policy inference: 392 fps total: 346 epoch: 49/50 frames: 786432
+fps step: 394 fps step and policy inference: 388 fps total: 354 epoch: 49/50 frames: 786432
+fps step: 362 fps step and policy inference: 357 fps total: 321 epoch: 50/50 frames: 802816
+=> saving checkpoint '/tmp/peginsert-judge-2qtel_tf/judge/nn/last_Factory_ep_50_rew__200.10976_.pth'
+MAX EPOCHS NUM!
+[BasePlayer] Creating regular env:  rlgpu
+{'observation_space': Box(-inf, inf, (19,), float32), 'action_space': Box(-1.0, 1.0, (6,), float32), 'agents': 1, 'value_size': 1}
+build mlp: 1024
+RunningMeanStd:  (1,)
+RunningMeanStd:  (19,)
+fps step: 361 fps step and policy inference: 356 fps total: 316 epoch: 50/50 frames: 802816
+=> saving checkpoint '/tmp/peginsert-judge-m7li1fyu/judge/nn/last_Factory_ep_50_rew__204.20926_.pth'
+MAX EPOCHS NUM!
+[BasePlayer] Creating regular env:  rlgpu
+{'observation_space': Box(-inf, inf, (19,), float32), 'action_space': Box(-1.0, 1.0, (6,), float32), 'agents': 1, 'value_size': 1}
+build mlp: 1024
+RunningMeanStd:  (1,)
+RunningMeanStd:  (19,)
+2026-09-19T10:51:29Z [2,650,341ms] [Warning] [omni.usd] Unexpected reference count of 2 for UsdStage 'anon:0x588ec9051f90:World0.usd' while being closed in UsdContext (this may indicate it is still resident in memory).
+2026-09-19T10:51:37Z [2,657,589ms] [Warning] [omni.usd] Unexpected reference count of 2 for UsdStage 'anon:0x5a8857fd5a90:World0.usd' while being closed in UsdContext (this may indicate it is still resident in memory).
+{"candidate": 0, "charged_transitions": 819200, "charged_vector_steps": 6400, "completed_transitions": 819200, "completed_vector_steps": 6400, "device": "cuda:0", "elapsed_sec": 2648.212, "episodes": 1024, "evaluation_batches": 8, "evaluation_policy_steps": 712, "failures": 443, "ik_calls": 16, "ik_rejections": 0, "path": "/workspace/reward.json", "reset_batches": 16, "reset_environments": 2048, "reward": 0.5673828125, "selected_epoch": 50, "status": "complete", "successes": 581}
+{"candidate": 1, "charged_transitions": 819200, "charged_vector_steps": 6400, "completed_transitions": 819200, "completed_vector_steps": 6400, "device": "cuda:1", "elapsed_sec": 2655.601, "episodes": 1024, "evaluation_batches": 8, "evaluation_policy_steps": 712, "failures": 562, "ik_calls": 16, "ik_rejections": 0, "path": "/workspace/candidates/reward_1.json", "reset_batches": 16, "reset_environments": 2048, "reward": 0.451171875, "selected_epoch": 50, "status": "complete", "successes": 462}
+{"best_candidate": 0, "best_path": "/workspace/reward.json", "candidate_rewards": {"candidate_0": 0.5673828125, "candidate_1": 0.451171875}, "candidates": 2, "elapsed_sec": 2709.925, "reward": 0.5673828125, "status": "complete"}
