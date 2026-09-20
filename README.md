@@ -64,6 +64,7 @@ We are actively developing this project and welcome [contributions](https://gith
 | [`ace-playbook-repair`](rsi-tasks/ace-playbook-repair/)             | Public Task    | Agents        | Inspect and repair ACE playbooks for a frozen Qwen model.            | 1× H100         |
 | [`molmoweb-interaction-context`](rsi-tasks/molmoweb-interaction-context/) | Public Task | Vision        | Allocate inference-time context for frozen MolmoWeb replay.          | 2× H100 minimum |
 | [`reasonir-difficulty-curriculum`](rsi-tasks/reasonir-difficulty-curriculum/) | Public Task | Post-training | Optimize a fixed-budget retrieval LoRA through difficulty-aware curricula. | 4× H100 minimum |
+| [`isaaclab-peginsert-reward-search`](rsi-tasks/isaaclab-peginsert-reward-search/) | Public Task | Robotics      | Design bounded reward graphs for fixed-budget Isaac Lab peg insertion. | 4× H100         |
 
 </details>
 

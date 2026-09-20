@@ -1,0 +1,5 @@
+services:
+  main:
+    build: .
+    working_dir: /workspace
+    shm_size: 32g

@@ -1,0 +1,13 @@
+{
+  "error": "failed to start Judge container: 404 Client Error for http+docker://localhost/v1.53/containers/6dea0b6ec6075e21e7cef1c12c40ea59ccd8d498a0e7785fa264087941aea76f/start: Not Found (\"failed to set up container networking: network rsi-b4eeaf15485d45edba394ca342118fc7-isaaclab-peginsert-reward-search-judge-agent-2 not found\")",
+  "exit_code": null,
+  "full_output_captured": false,
+  "metrics": {},
+  "round": "agent-2",
+  "runtime_seconds": 3.4253349006175995,
+  "score": null,
+  "status": "infrastructure_error",
+  "submitted_at": 1789798447.532524,
+  "timed_out": false,
+  "verifier_output_required": false
+}

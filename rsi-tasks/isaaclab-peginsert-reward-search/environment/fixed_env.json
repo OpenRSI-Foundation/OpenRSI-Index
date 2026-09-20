@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "episode_length_s": 6.0,
+  "task": {
+    "hand_init_pos_noise": [
+      0.05,
+      0.05,
+      0.02
+    ],
+    "hand_init_orn_noise": [
+      0.0,
+      0.0,
+      1.57
+    ],
+    "held_asset_pos_noise": [
+      0.006,
+      0.003,
+      0.006
+    ]
+  }
+}
