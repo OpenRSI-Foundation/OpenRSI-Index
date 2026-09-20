@@ -7,8 +7,8 @@ version = "1.0.0"
 description = "Adapt long and short mathematical reasoning traces for a fixed small-model SFT protocol."
 
 [metadata]
-author_name = "yichen-f"
-author_email = "contributor-01@example.invalid"
+author_name = "Yuetai Li"
+author_email = "contributor-03@example.invalid"
 difficulty_explanation = "Each trial requires provenance-preserving data adaptation, a two-epoch full-parameter 3B-model training run, and a long fixed five-benchmark evaluation."
 verification_explanation = "Judge validates the candidate data, manifest, fixed training configuration, and reloadable checkpoint before scoring the fixed aggregate workload against the official baseline."
 category = "ML"
