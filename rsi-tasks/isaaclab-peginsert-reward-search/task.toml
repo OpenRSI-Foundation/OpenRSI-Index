@@ -1,0 +1,39 @@
+schema_version = "1.4"
+
+[task]
+name = "rsi/isaaclab-peginsert-reward-search"
+version = "1.0.0"
+description = "Search bounded reward graphs for fixed-budget Isaac Lab PegInsert PPO training."
+
+[metadata]
+author_name = "Kaiyuan Zheng"
+author_email = "contributor-11@example.invalid"
+difficulty_explanation = "Each candidate requires long-horizon GPU PPO training, contact-rich simulation, and hypothesis-driven reward design under a fixed transition budget."
+verification_explanation = "Judge validates up to two declarative reward graphs, trains one fresh fixed single-GPU PPO run per graph in parallel on its two GPUs, measures each retained policy on 1,024 private-reset episodes, and scores the best; candidate code and checkpoints are never scoring inputs."
+category = "ML"
+subcategory = "Training"
+tags = ["autoresearch", "reinforcement-learning", "robotics", "reward-design", "isaac-lab"]
+expert_time_estimate_hours = 9.0
+relevant_experience = "Embodied robot learning and Isaac Sim research."
+
+[metadata.rsi_harness.verifier]
+gpus = 2
+
+[environment]
+os = "linux"
+cpus = 32
+memory_mb = 131072
+storage_mb = 153600
+build_timeout_sec = 7200
+workdir = "/workspace"
+gpus = 2
+network_mode = "no-network"
+
+[agent]
+timeout_sec = 75600
+network_mode = "no-network"
+
+[verifier]
+timeout_sec = 19800
+network_mode = "no-network"
+environment_mode = "shared"
