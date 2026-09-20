@@ -63,3 +63,5 @@ docs
 !/assets/docs/quick-start.md
 
 AGENTS.md
+.agents/
+.claude
