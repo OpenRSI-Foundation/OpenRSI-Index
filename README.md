@@ -120,7 +120,7 @@ We are still actively expanding the team. We really appreciate the efforts of al
     <td width="25%" valign="top"><strong><a href="https://sunyiyou.github.io/">Yiyou Sun</a></strong></td>
   </tr>
   <tr>
-    <td width="25%" valign="top"><strong><a href="https://www.linkedin.com/in/guan-wang-3b5a09183/">Guan Wang</a></strong></td>
+    <td width="25%" valign="top"><strong>Guan Wang</strong></td>
     <td width="25%" valign="top"><strong><a href="https://www.linkedin.com/in/nwangucla/">Ning Wang</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://hsaest.github.io/">Jian Xie</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://github.com/bri25yu">Brian Yu</a></strong></td>
