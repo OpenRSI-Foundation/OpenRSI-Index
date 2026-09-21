@@ -105,10 +105,10 @@ We are still actively expanding the team. We really appreciate the efforts of al
     <td width="25%" valign="top"><strong><a href="https://howiehwong.github.io/">Yue Huang</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://caralinotes.com/">Cara Li</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://hanchenli.github.io/">Hanchen Li</a></strong></td>
-    <td width="25%" valign="top"><strong>Shujia Liang</strong></td>
+    <td width="25%" valign="top"><strong><a href="https://www.linkedin.com/in/shujia-liang/">Shujia Liang</a></strong></td>
   </tr>
   <tr>
-    <td width="25%" valign="top"><strong>Xiang Liu</strong></td>
+    <td width="25%" valign="top"><strong><a href="https://scholar.google.com/citations?user=Dj9s3oEAAAAJ">Xiang Liu</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://lupantech.github.io/">Pan Lu</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://bohanlyu.com/">Bohan Lyu</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://zixianma.github.io/">Zixian Ma</a></strong></td>
@@ -120,8 +120,8 @@ We are still actively expanding the team. We really appreciate the efforts of al
     <td width="25%" valign="top"><strong><a href="https://sunyiyou.github.io/">Yiyou Sun</a></strong></td>
   </tr>
   <tr>
-    <td width="25%" valign="top"><strong>Guan Wang</strong></td>
-    <td width="25%" valign="top"><strong>Ning Wang</strong></td>
+    <td width="25%" valign="top"><strong><a href="https://www.linkedin.com/in/guan-wang-3b5a09183/">Guan Wang</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://www.linkedin.com/in/nwangucla/">Ning Wang</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://hsaest.github.io/">Jian Xie</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://github.com/bri25yu">Brian Yu</a></strong></td>
   </tr>
