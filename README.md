@@ -3,14 +3,14 @@
 </p>
 
 <div align="center">
-  <a href="https://rsi-first-exam.rsi-anything.workers.dev/"><img src="https://img.shields.io/badge/Website-2563EB?style=for-the-badge&logo=googleearth&logoColor=white" alt="Website"></a>&nbsp;&nbsp;
+  <a href="https://index.openrsi.foundation/index.html"><img src="https://img.shields.io/badge/Website-2563EB?style=for-the-badge&logo=googleearth&logoColor=white" alt="Website"></a>&nbsp;&nbsp;
   <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index"><img src="https://img.shields.io/badge/GitHub-181717?style=for-the-badge&logo=github&logoColor=white" alt="GitHub"></a>&nbsp;&nbsp;
   <!-- TODO: Replace the X placeholder with the project profile or announcement URL. -->
   <!-- <a href="#"><img src="https://img.shields.io/badge/Twitter-000000?style=for-the-badge&logo=X&logoColor=white" alt="X"></a> -->
   <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md"><img src="assets/figures/contribution-call.svg" alt="Contribution Call"></a>&nbsp;&nbsp;
   <!-- TODO: Replace the Discord placeholder with the project invite URL. -->
   <a href="https://discord.gg/3EG8Qhmfsa"><img src="https://img.shields.io/badge/Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>&nbsp;&nbsp;
-  <a href="assets/figures/wechat.png"><img src="https://img.shields.io/badge/WeChat-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat Group"></a>
+  <a href="assets/figures/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-07C160?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat Group"></a>
 </div>
 
 ## 📣 Call for Contributors
@@ -40,7 +40,7 @@ If you have compute resources to run experiments and want to build frontier RSI 
 
 We are witnessing the dawn of a new era: AI is entering a recursive self-improvement loop. The central question is whether this loop can move beyond the best-known human-designed method and reliably extend the scientific frontier. Answering it requires careful measurement, and building that measurement is the purpose of this project.
 
-[OpenRSI Index](https://rsi-first-exam.rsi-anything.workers.dev/) is an ongoing effort to evaluate whether AI agents can drive genuine recursive self-improvement and advance scientific discovery through real-world research at scales ranging from a single node to thousands of GPUs—not merely reproduce existing results, sweep parameters, or succeed on toy-scale tasks.
+[OpenRSI Index](https://index.openrsi.foundation/index.html) is an ongoing effort to evaluate whether AI agents can drive genuine recursive self-improvement and advance scientific discovery through real-world research at scales ranging from a single node to thousands of GPUs—not merely reproduce existing results, sweep parameters, or succeed on toy-scale tasks.
 
 ### Task taxonomy
 
@@ -177,5 +177,3 @@ We are still actively expanding the team. We really appreciate the efforts of al
     <td colspan="4">Coming soon.</td>
   </tr>
 </table>
-
-## 🙏 Acknowledgements
