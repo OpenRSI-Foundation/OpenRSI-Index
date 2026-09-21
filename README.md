@@ -51,7 +51,7 @@ We are actively developing this project and welcome [contributions](https://gith
 
 | Task                                                                | Track          | Category      | Description                                                           | GPU requirement |
 | ------------------------------------------------------------------- | -------------- | ------------- | --------------------------------------------------------------------- | --------------- |
-| `Qwen-122B-RL`                                                      | Signature Task | Post-training | Optimize a full post-training stack under one fixed budget.           | 256× H100       |
+| [`Qwen-122B-RL`](rsi-tasks/signature-tasks/post-training-qwen-122B-rl/) · [Research report](rsi-logs/signature-tasks/post-training-qwen-122B-rl/) | Signature Task | Post-training | Optimize a full post-training stack under one fixed budget.           | 256× H100       |
 | [`marin-optimizer-update-geometry`](rsi-tasks/signature-tasks/pre-training-optimizer-update-geometry/) | Signature Task | Pre-training  | Design a scale-general optimizer for the Marin scaling ladder.        | 256× H100       |
 | [`gpic-text-to-image`](rsi-tasks/signature-tasks/gpic_generation/)     | Signature Task | Vision        | Train a text-to-image model on one epoch of GPIC.                     | 256× H100       |
 | [`depth-width-allocation`](rsi-tasks/depth-width-allocation/)       | Public Task    | Pre-training  | Optimize decoder-width allocation under a fixed 200M training budget. | 8× H100         |
