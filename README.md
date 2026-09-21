@@ -96,7 +96,7 @@ We are still actively expanding the team. We really appreciate the efforts of al
     <th colspan="4" align="left">ORGANIZERS (in alphabetical order)</th>
   </tr>
   <tr>
-    <td width="25%" valign="top"><strong><a href="https://shangdinggu.net/">Shangding Gu</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://scholar.google.com/citations?user=E1GCDXUAAAAJ">Shangding Gu</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://rilynhan.com/">Rilyn Han</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://dblp.org/pid/270/4119.html">Zhengyu Hu</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://hanghuacs.notion.site/">Hang Hua</a></strong></td>
