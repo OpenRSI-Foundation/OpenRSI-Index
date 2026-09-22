@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "artifact": "agent_output.txt.gz",
+  "encoding": "utf-8",
+  "compression": "gzip",
+  "gzip_mtime": 0,
+  "restored_name": "agent_output.txt",
+  "sanitized_uncompressed_size": 141252595,
+  "sanitized_uncompressed_sha256": "aca7cd3078fa93e93fdcf3d750250beaf8c03219153f5b599287aaa4385ff02f",
+  "sanitized_uncompressed_line_feeds": 2564733,
+  "compressed_size": 33516924,
+  "compressed_sha256": "7f33b15cdc631196d455d0247d968fc384f7c0908ef8ad545b4b6e355a4b2a22"
+}
