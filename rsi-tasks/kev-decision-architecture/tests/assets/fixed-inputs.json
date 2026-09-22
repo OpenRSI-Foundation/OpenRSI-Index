@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "base_model": "Qwen/Qwen2.5-0.5B",
+  "base_revision": "060db6499f32faf8b98477b0a26969ef7d8b9987",
+  "training_dataset": "jaredpalmer/kev-suites",
+  "training_revision": "a957287d1c502a4e2e3b9d9d1325c2c6f27f181c",
+  "training_suite": "decision-v7",
+  "files": {
+    "/opt/kev-assets/base/LICENSE": "832dd9e00a68dd83b3c3fb9f5588dad7dcf337a0db50f7d9483f310cd292e92e",
+    "/opt/kev-assets/base/config.json": "479dcf0c5286339e41ad3992cd08ae88a467c4187587936248e2b7c96283484b",
+    "/opt/kev-assets/base/generation_config.json": "8c970692323e3ea0e9b8b0a4dca79388d31226e41f83c9fd6014804280ebf6e8",
+    "/opt/kev-assets/base/merges.txt": "599bab54075088774b1733fde865d5bd747cbcc7a547c5bc12610e874e26f5e3",
+    "/opt/kev-assets/base/model.safetensors": "88c142557820ccad55bb59756bfcfcf891de9cc6202816bd346445188a0ed342",
+    "/opt/kev-assets/base/tokenizer.json": "c0382117ea329cdf097041132f6d735924b697924d6f6fc3945713e96ce87539",
+    "/opt/kev-assets/base/tokenizer_config.json": "c91efca15ceff6e9ee9424db58a6f59cd41294e550a86cbd07e3c1fb500b34f9",
+    "/opt/kev-assets/base/vocab.json": "ca10d7e9fb3ed18575dd1e277a2579c16d108e32f27439684afa0e10b1440910",
+    "/opt/kev-assets/train/manifest.json": "a8f50e481b7d90b97da049e0ff6a01cee2f1ed204aed61a8265af0edbb5514d2",
+    "/opt/kev-assets/train/train.jsonl": "7ed5254b5cb5291baefaceb09edf7e13110258211518c8038f4a12c11bd628ad"
+  }
+}

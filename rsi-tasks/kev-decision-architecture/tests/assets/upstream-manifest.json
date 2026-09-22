@@ -1,0 +1,171 @@
+{
+  "version": 5,
+  "parent": "evals/v4/transfer-v4",
+  "parent_files": {
+    "train.jsonl": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "records": 0,
+      "questions": 0
+    },
+    "calibration.jsonl": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "records": 0,
+      "questions": 0
+    },
+    "development.jsonl": {
+      "sha256": "ff374c49c6c9f15f8a56fb274b4a4857d20497eb8dd1ac07ce01560e682a5f2e",
+      "records": 764,
+      "questions": 764
+    },
+    "test.jsonl": {
+      "sha256": "c30a91274f9b483aac9e4f02ada5dea953b3f1a2829456e0bc07806c4e73b517",
+      "records": 764,
+      "questions": 764
+    }
+  },
+  "base_revisions": {
+    "Qwen/Qwen3-0.6B-Base": "da87bfb608c14b7cf20ba1ce41287e8de496c0cd",
+    "Qwen/Qwen3-4B-Base": "906bfd4b4dc7f14ee4320094d8b41684abff8539",
+    "Qwen/Qwen3.5-4B-Base": "1001bb4d826a52d1f399e183466143f4da7b741b",
+    "Qwen/Qwen3.5-9B-Base": "68c46c4b3498877f3ef123c856ecfde50c39f404",
+    "Qwen/Qwen3.5-0.8B-Base": "dc7cdfe2ee4154fa7e30f5b51ca41bfa40174e68"
+  },
+  "dataset_revisions": {
+    "CogComp/trec": "65752bf53af25bc935a0dce92fb5b6c930728450",
+    "legacy-datasets/banking77": "f54121560de48f2852f90be299010d1d6dc612ec",
+    "stanfordnlp/imdb": "e6281661ce1c48d982bc483cf8a173c1bbeb5d31",
+    "fancyzhx/ag_news": "eb185aade064a813bc0b7f42de02595523103ca4",
+    "SetFit/amazon_reviews_multi_en": "ec73b665e4be0f567b69d39425355401cfe0d29b",
+    "fancyzhx/dbpedia_14": "9abd46cf7fc8b4c64290f26993c540b92aa145ac",
+    "google/boolq": "35b264d03638db9f4ce671b711558bf7ff0f80d5",
+    "SetFit/sst5": "e51bdcd8cd3a30da231967c1a249ba59361279a3",
+    "nyu-mll/multi_nli": "da70db2af9d09693783c3320c4249840212ee221",
+    "Yelp/yelp_review_full": "c1f9ee939b7d05667af864ee1cb066393154bf85",
+    "TIGER-Lab/MMLU-Pro": "b189ec765aa7ed75c8acfea42df31fdae71f97be"
+  },
+  "holdout_sources": [
+    "mmlu",
+    "emotion",
+    "tweet_offensive",
+    "qnli",
+    "paws",
+    "sciq",
+    "contrastive",
+    "legacy_holdout",
+    "composition_holdout"
+  ],
+  "trainable_sources": [],
+  "eval_only_sources": [
+    "mmlu",
+    "emotion",
+    "tweet_offensive",
+    "qnli",
+    "paws",
+    "sciq",
+    "contrastive",
+    "legacy_holdout",
+    "composition_holdout",
+    "mmlu_pro",
+    "buried",
+    "unknowable",
+    "unknowable_control"
+  ],
+  "context": {
+    "max_state": 384,
+    "max_branch": 1024,
+    "max_packed": 2048,
+    "truncate": false
+  },
+  "protocol": {
+    "train_shapes": [
+      "atom",
+      "negation",
+      "conjunction",
+      "disjunction",
+      "exception",
+      "conditional",
+      "nested_and",
+      "nested_or"
+    ],
+    "transfer_shapes": [
+      "held_and_or",
+      "held_or_not",
+      "held_conditional"
+    ],
+    "locked_shapes": [
+      "final_combination",
+      "final_negation",
+      "final_exception"
+    ],
+    "train_render_styles": [
+      0,
+      1
+    ],
+    "locked_render_styles": [
+      2
+    ],
+    "public_train_records": 10000,
+    "public_train_pool": "evals/public-pool-v4",
+    "synthetic_records_per_arm": 448,
+    "calibration": "shared; stratified by family and group",
+    "arm_selection": "train_sources selects public sources plus exactly one synthetic arm",
+    "primary": "macro development NLL; transfer and confident-error checks required; no automatic release",
+    "legacy_test": "Inherited v2 locked test bytes retained without inspecting examples; only new structures added to transfer test",
+    "contamination": "Exact semantic checks among new groups, not fuzzy or pretraining decontamination. Inherited legacy test overlap with new synthetic controls is not certified.",
+    "v5": "v4 items byte-identical (same ids); mmlu_pro 10-way knowledge; buried = state among three unrelated same-source records; unknowable = deciding evidence removed, scored on confidence (mean max-probability, share >= 0.9) against the intact control"
+  },
+  "files": {
+    "development.jsonl": {
+      "sha256": "53872ba045564315cf3c3dd8fb656e76441c6c514b1a7ff985ff0db3955710cf",
+      "records": 1264
+    },
+    "test.jsonl": {
+      "sha256": "048abea5e12c73c3a622ce5836898c00fa43766e0bf48fb2459e77ee9873497f",
+      "records": 1264
+    },
+    "train.jsonl": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "records": 0
+    },
+    "calibration.jsonl": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "records": 0
+    }
+  },
+  "counts": {
+    "development": {
+      "buried": 80,
+      "composition_holdout": 96,
+      "emotion": 116,
+      "legacy_holdout": 80,
+      "mmlu": 116,
+      "mmlu_pro": 200,
+      "paws": 80,
+      "qnli": 80,
+      "sciq": 116,
+      "tweet_offensive": 80,
+      "unknowable": 110,
+      "unknowable_control": 110
+    },
+    "test": {
+      "buried": 80,
+      "composition_holdout": 96,
+      "contrastive": 80,
+      "emotion": 116,
+      "mmlu": 116,
+      "mmlu_pro": 200,
+      "paws": 80,
+      "qnli": 80,
+      "sciq": 116,
+      "tweet_offensive": 80,
+      "unknowable": 110,
+      "unknowable_control": 110
+    }
+  },
+  "eval_only": true,
+  "code_hashes": {
+    "transfer_v9.py": "588aa2ff3ec0823c2e31733bef9a3748b263849c966ef6a80ebd686539c605e9",
+    "contrastive.py": "cbb979aa5d40265ad0e64695f94b281d91751fa405811ddfa8212fede111edcf",
+    "data.py": "9729f8f497b02aca542915d6f1bea3ff55956629d7d9610370aea91ee66efd23"
+  }
+}
