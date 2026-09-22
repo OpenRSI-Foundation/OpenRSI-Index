@@ -1,4 +1,16 @@
-# Train any text-to-image model on GPIC in one epoch, scored by FD-DINOv2 at guidance 1
+# Legacy Harbor prompt: from-scratch GPIC 100M training
+
+> **Protocol version:** The prompt below belongs to the original 100M-image,
+> 1×8-H100 Harbor runtime retained in this directory. The published
+> [GPIC 10M trajectories](../../../rsi-logs/signature-tasks/gpic-10m-autoresearch/)
+> instead continue from a common step-39060 checkpoint on a fixed 802-shard
+> subset, with global batch 256, 1×4 H100 per job, and a 6,144-H100-hour
+> budget per trajectory. Their FD measurements are validation screens with
+> trajectory-specific caption sets and sample counts. See the current
+> [task description](README.md) for those settings and source logs. This
+> historical prompt does not describe the later Slurm continuation runs.
+
+Train any text-to-image model on GPIC in one epoch, scored by FD-DINOv2 at guidance 1.
 
 ## Research Question
 
