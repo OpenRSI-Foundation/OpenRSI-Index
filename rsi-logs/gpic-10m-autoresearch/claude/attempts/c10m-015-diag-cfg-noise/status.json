@@ -1,0 +1,32 @@
+{
+  "attempt_id": "c10m-015-diag-cfg-noise",
+  "state": "completed",
+  "slurm_state": "COMPLETED",
+  "slurm_job_id": "2417065",
+  "sbatch_script": "/workspace/gpic-worktrees/claude/claude10m/job.sbatch",
+  "sbatch_args": [
+    "/shared/gpic-autoresearch-10m/claude/attempts/c10m-015-diag-cfg-noise/plan.sh"
+  ],
+  "workdir": "/workspace/gpic-worktrees/claude",
+  "submit_utc": "2026-09-21T19:37:45Z",
+  "gpu_hours_cap": 30.0,
+  "trajectory_gpu_hours_at_submit": 2.08,
+  "trajectory_gpu_hours_cap": 6144.0,
+  "trajectory_gpu_hours_remaining_at_submit": 6141.92,
+  "topology_gpus": 4,
+  "poll_seconds": 1800,
+  "run_kind": "screening",
+  "charged_gpu_hours": 3.2022,
+  "cumulative_read_bytes": 0.0,
+  "data_overread_flag": false,
+  "node_list": "gpu-node-26",
+  "queue_reason": "gpu-node-26",
+  "heartbeat_utc": "2026-09-21T21:08:08Z",
+  "trajectory_gpu_hours": 29.4523,
+  "trajectory_gpu_hours_remaining": 6114.5477,
+  "exit_code": "0:0",
+  "elapsed_raw": 2882,
+  "start_slurm": "2026-09-21T20:19:46",
+  "end_slurm": "2026-09-21T21:07:48",
+  "end_utc": "2026-09-21T21:08:08Z"
+}

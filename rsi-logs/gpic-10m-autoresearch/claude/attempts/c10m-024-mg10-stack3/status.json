@@ -1,0 +1,32 @@
+{
+  "attempt_id": "c10m-024-mg10-stack3",
+  "state": "completed",
+  "slurm_state": "COMPLETED",
+  "slurm_job_id": "2417501",
+  "sbatch_script": "/workspace/gpic-worktrees/claude/claude10m/job.sbatch",
+  "sbatch_args": [
+    "/shared/gpic-autoresearch-10m/claude/attempts/c10m-024-mg10-stack3/plan.sh"
+  ],
+  "workdir": "/workspace/gpic-worktrees/claude",
+  "submit_utc": "2026-09-21T22:58:42Z",
+  "gpu_hours_cap": 40.0,
+  "trajectory_gpu_hours_at_submit": 37.1711,
+  "trajectory_gpu_hours_cap": 6144.0,
+  "trajectory_gpu_hours_remaining_at_submit": 6106.8289,
+  "topology_gpus": 4,
+  "poll_seconds": 1800,
+  "run_kind": "screening",
+  "charged_gpu_hours": 5.1278,
+  "cumulative_read_bytes": 0.0,
+  "data_overread_flag": false,
+  "node_list": "gpu-node-13",
+  "queue_reason": "gpu-node-13",
+  "heartbeat_utc": "2026-09-22T05:16:16Z",
+  "trajectory_gpu_hours": 60.82,
+  "trajectory_gpu_hours_remaining": 6083.18,
+  "exit_code": "0:0",
+  "elapsed_raw": 4615,
+  "start_slurm": "2026-09-22T03:59:09",
+  "end_slurm": "2026-09-22T05:16:04",
+  "end_utc": "2026-09-22T05:16:16Z"
+}
