@@ -130,7 +130,7 @@ We are still actively expanding the team. We really appreciate the efforts of al
     <td width="25%" valign="top"><strong><a href="https://mitibm.mit.edu/people/gaoyuan-zhang/">Gaoyuan Zhang</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://alex-q-z.github.io/">Qizheng Zhang</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://openreview.net/profile?id=~Weichen_Zhang8">Weichen Zhang</a></strong></td>
-    <td width="25%"></td>
+    <td width="25%" valign="top"><strong><a href="https://scholar.google.com/citations?user=6kkyR1wAAAAJ">Kaiyuan Zheng</a></strong></td>
   </tr>
   <tr>
     <th colspan="4" align="left">ADVISORS (in alphabetical order)</th>
