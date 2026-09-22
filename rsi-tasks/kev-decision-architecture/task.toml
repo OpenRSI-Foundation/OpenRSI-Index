@@ -1,0 +1,38 @@
+schema_version = "1.4"
+
+[task]
+name = "rsi/kev-decision-architecture"
+version = "1.1.0"
+description = "Improve small-model structured decisions through joint architecture and training research on fixed decision-v7 data."
+
+[metadata]
+author_name = "Yichen Feng"
+author_email = "contributor-10@example.invalid"
+difficulty_explanation = "Transfer from fixed training sources to unseen decision types requires better representations, option reasoning, and calibrated probabilities under a small-model budget."
+verification_explanation = "A fresh Judge loads a Work-trained checkpoint and scores label-free predictions with 50% knowledge and 50% other source-macro NLL; fixed-input checks, question isolation and process restrictions precede reward publication."
+category = "ML"
+subcategory = "Training"
+tags = ["autoresearch", "architecture", "structured-decisions", "transfer", "qwen"]
+expert_time_estimate_hours = 24
+
+[metadata.rsi_harness.verifier]
+gpus = 1
+
+[environment]
+os = "linux"
+cpus = 8
+memory_mb = 32768
+storage_mb = 32768
+build_timeout_sec = 7200
+workdir = "/workspace"
+gpus = 2
+network_mode = "no-network"
+
+[agent]
+timeout_sec = 43200
+network_mode = "no-network"
+
+[verifier]
+timeout_sec = 1800
+network_mode = "no-network"
+environment_mode = "shared"
