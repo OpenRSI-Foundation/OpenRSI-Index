@@ -65,8 +65,9 @@ has a 4-hour timeout. The scientific research clock is 66 hours. Harness sizes
 the outer allocation with its own margin. Work and Judge have no network.
 
 The old Apptainer definition, LSF launcher, host leasing helper, and site paths
-are not copied into the task. Cluster configuration belongs to the Harness
-profile.
+are not part of the portable task; cluster configuration belongs to the Harness
+profile. A sanitized copy of that as-run environment is archived for provenance
+under `environment/as-run-lsf/` (not used by the Dockerfile).
 
 ## Operator asset preparation
 
