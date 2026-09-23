@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RSI Logs · OpenRSI Index</title>
+  <meta name="description" content="Explore the public OpenRSI research archive: agent trajectories, evaluation scores, tool calls, and experiment records.">
+  <meta name="theme-color" content="#f7f9fc">
+  <link rel="icon" type="image/png" href="assets/favicon.png?v=20260922-rounded">
+  <link rel="stylesheet" href="assets/logs.css?v=20260923-tasks">
+  <script src="assets/logs.js?v=20260923-tasks" defer></script>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to logs</a>
+  <header class="topbar">
+    <a class="brand" href="index.html"><img src="assets/openrsi-mark.png?v=20260922-rounded" alt="" width="32" height="32"><strong>OpenRSI Index</strong><span class="divider">/</span><span>RSI Logs</span></a>
+    <nav aria-label="Main navigation"><a href="index.html" aria-current="page">Dashboard</a><a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index/tree/main/rsi-tasks" target="_blank" rel="noopener">Tasks ↗</a><a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index/tree/main/rsi-logs" target="_blank" rel="noopener">Source logs ↗</a></nav>
+  </header>
+  <main id="main" class="workspace">
+    <div id="loading" class="empty" role="status">Loading the research archive…</div>
+    <div id="load-error" class="card empty" role="alert" hidden><h1>The archive could not be loaded.</h1><p>Try again, or browse the original logs on GitHub.</p><button id="retry" class="button primary" type="button">Try again</button> <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index/tree/main/rsi-logs">View source logs ↗</a></div>
+    <section id="overview" hidden aria-labelledby="overview-title">
+      <div class="page-heading"><div><p class="eyebrow">THE RESEARCH ARCHIVE</p><h1 id="overview-title">Every run. Every iteration.</h1><p class="muted">Explore the experiments behind OpenRSI, from the first idea to the final evaluation.</p></div><a class="button" href="https://github.com/OpenRSI-Foundation/OpenRSI-Index/tree/main/rsi-logs" target="_blank" rel="noopener">Browse source logs <span aria-hidden="true">↗</span></a></div>
+      <div id="stats" class="stats"></div>
+      <div class="section-heading"><div><h2>Research logs by task</h2><p class="muted">Expand a task to compare its agent runs and explore their logs.</p></div><span class="archive-tag"><i></i> Public archive</span></div>
+      <div class="toolbar"><div class="filters" role="group" aria-label="Task track"><button class="filter active" data-track="all" aria-pressed="true">All tasks</button><button class="filter" data-track="Public" aria-pressed="false">Public tasks</button><button class="filter" data-track="Signature" aria-pressed="false">Signature tasks</button></div><label class="search"><span class="sr-only">Search tasks or models</span><input id="search" type="search" placeholder="Search tasks or models…" autocomplete="off"></label></div>
+      <div class="filter-row"><label>Domain <select id="domain"><option value="all">All domains</option></select></label><label>Agent <select id="agent"><option value="all">All agents</option></select></label><label>Outcome <select id="outcome"><option value="all">All outcomes</option></select></label><button class="text-button" id="clear">Reset filters</button><span id="result-count" role="status"></span></div>
+      <div class="group-controls"><label>Sort tasks <select id="task-sort"><option value="task">Task name</option><option value="submissions">Most submissions</option><option value="events">Most log events</option></select></label><div><button class="text-button" id="expand-tasks" type="button">Expand all</button><button class="text-button" id="collapse-tasks" type="button">Collapse all</button></div></div>
+      <div id="runs" class="task-groups"></div>
+      <div id="empty-filter" class="card empty" hidden><h3>No matching records</h3><p>Try another task, model, or filter.</p><button id="empty-reset" class="button">Reset filters</button></div>
+      <div class="table-footer grouped-footer"><span>Scores use each task’s native metric; compare within the same task.</span><span id="record-count"></span></div>
+    </section>
+    <section id="detail" hidden aria-labelledby="detail-title"></section>
+    <footer class="footer"><span>OpenRSI Index <span class="footer-dot">·</span> Open research, step by step.</span><span id="snapshot"></span></footer>
+    <noscript><p>This dashboard needs JavaScript. <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index/tree/main/rsi-logs">Browse the original research logs on GitHub.</a></p></noscript>
+  </main>
+</body>
+</html>
