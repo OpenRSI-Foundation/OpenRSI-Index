@@ -21,6 +21,7 @@ import re
 import sys
 import unicodedata
 from datetime import datetime, timezone
+from functools import partial
 from pathlib import Path
 from typing import NamedTuple
 from urllib.parse import quote, unquote, urlsplit
@@ -29,6 +30,7 @@ import httpx
 from openai import AsyncOpenAI, OpenAI
 
 if __name__ == "__main__":
+    from openai_retry import async_retry_openai, retry_openai
     from github_retry import (
         GitHubTransientError,
         emit_retry_diagnostic,
@@ -36,6 +38,7 @@ if __name__ == "__main__":
         transient_http_error,
     )
 else:
+    from checks.openai_retry import async_retry_openai, retry_openai
     from checks.github_retry import (
         GitHubTransientError,
         emit_retry_diagnostic,
@@ -742,8 +745,9 @@ def finalize_judge_output(output_text: str) -> str:
 
 def call_openai(instructions: str, user_input, *, client=None) -> str:
     """Call the fixed OpenAI Responses API judge."""
-    client = client or OpenAI()
-    response = client.responses.create(
+    client = client or OpenAI(max_retries=0)
+    response = retry_openai(partial(
+        client.responses.create,
         model=JUDGE_MODEL,
         reasoning={"effort": JUDGE_REASONING_EFFORT},
         instructions=build_judge_instructions(instructions),
@@ -753,7 +757,7 @@ def call_openai(instructions: str, user_input, *, client=None) -> str:
         text={"format": JUDGE_RESPONSE_FORMAT},
         max_output_tokens=JUDGE_MAX_OUTPUT_TOKENS,
         store=False,
-    )
+    ))
     if getattr(response, "status", None) != "completed":
         details = getattr(response, "incomplete_details", None)
         raise RuntimeError(
@@ -768,8 +772,9 @@ def call_openai(instructions: str, user_input, *, client=None) -> str:
 
 async def async_call_openai(instructions: str, user_input, *, client=None) -> str:
     """Async form of :func:`call_openai`, with the same fixed judge settings."""
-    client = client or AsyncOpenAI()
-    response = await client.responses.create(
+    client = client or AsyncOpenAI(max_retries=0)
+    response = await async_retry_openai(partial(
+        client.responses.create,
         model=JUDGE_MODEL,
         reasoning={"effort": JUDGE_REASONING_EFFORT},
         instructions=build_judge_instructions(instructions),
@@ -779,7 +784,7 @@ async def async_call_openai(instructions: str, user_input, *, client=None) -> st
         text={"format": JUDGE_RESPONSE_FORMAT},
         max_output_tokens=JUDGE_MAX_OUTPUT_TOKENS,
         store=False,
-    )
+    ))
     if getattr(response, "status", None) != "completed":
         details = getattr(response, "incomplete_details", None)
         raise RuntimeError(
