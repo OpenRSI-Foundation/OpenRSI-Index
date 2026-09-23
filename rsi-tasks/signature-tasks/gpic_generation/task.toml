@@ -1,3 +1,6 @@
+# The task description and metadata.logged_protocol document the published
+# GPIC 10M continuation runs. Other metadata and all runtime/verifier settings
+# retain the legacy 100M, from-scratch, 1x8 Harbor package; see README.md.
 schema_version = "1.3"
 source = "keshik6/gpic@afa82daab73cfeab4ef9fbd174ff62b68bffc456"
 artifacts = [
@@ -11,9 +14,9 @@ artifacts = [
 
 [task]
 name = "scale-autoresearch/gpic-generation"
-description = "Design and train ANY text-to-image model from scratch on the GPIC 100M training corpus for at most one full epoch at 256x256, then generate one image per caption for the frozen 50k GPIC test-caption set with pure conditional sampling (guidance = 1.0); the scored metric is FD-DINOv2 against the sealed GPIC test reference (lower is better), normalized against the sealed PixelGen JiT_T2I baseline trained under the identical contract."
+description = "Improve text-to-image generation by continuing from the shared PixelGen JiT_T2I step-39060 checkpoint on the fixed GPIC train10m_seed20260921 subset (802 shards), with at most one pass per candidate, global batch 256, and 1 node x 4 H100 per job. Generate 256x256 images with pure conditional sampling (guidance 1.0) and compare matched validation FD-DINOv2 screens within a 6144-H100-hour budget per trajectory. Published logs use different screening caption sets and sample counts; no sealed final 50k test score is reported. The bundled Harbor runtime retains the original 100M/from-scratch/1x8 settings; see README.md."
 authors = [{ name = "Scale AutoResearch" }]
-keywords = ["text-to-image", "generative", "diffusion", "flow-matching", "gpic", "fd-dinov2", "single-epoch", "webdataset", "from-scratch"]
+keywords = ["text-to-image", "generative", "diffusion", "flow-matching", "gpic", "fd-dinov2", "single-epoch", "webdataset", "checkpoint-continuation", "10m-subset"]
 
 [metadata]
 difficulty = "hard"
@@ -21,6 +24,7 @@ category = "model_development"
 upstream_commit = "afa82daab73cfeab4ef9fbd174ff62b68bffc456"
 license = "gpic repo: MIT; GPIC dataset: MIT release, images permissively licensed (CC BY / CC0 / Public Domain) for research and commercial use"
 
+# Legacy Harbor scientific metadata, through metadata.run_contract.
 [metadata.optimization]
 metric = "FD-DINOv2 of 50k generated 256x256 images (one per frozen test caption, guidance 1.0) against the sealed GPIC test reference statistics; lower is better; reward normalizes by the sealed baseline FD"
 direction = "lower"
@@ -62,6 +66,29 @@ topology_mapping = "released 1x8-GPU topology retained exactly; /task-tools/laun
 measured_single_run = "pending author reproduction (estimate: ~60-80 h wall on 1x8 H100 = ~500-650 H100-hours for the pristine baseline epoch)"
 default_agent_session = "async submit wrapper; 30-minute status.json polling with the agent offline; interrupted runs resume in place from the trainer's own checkpointing without rewinding the data stream; judge resumed attempts by real status/checkpoint/log evidence"
 
+# Descriptive metadata only; these values do not override the legacy runtime.
+[metadata.logged_protocol]
+source_logs = "../../../rsi-logs/signature-tasks/gpic-10m-autoresearch"
+initialization = "common step-39060 PixelGen checkpoint; weights-only continuation with fresh optimizer and scheduler"
+root_checkpoint = "/shared/gpic-output/baseline_16x8/exp_pretraining_jit_256_gpic_full/epoch=0-step=39060.ckpt"
+denoiser_parameters = 1122396928
+root_training_images_seen = 9999360
+training_subset = "train10m_seed20260921"
+training_shards = 802
+manifest_sha256 = "e496f9541370423a50d5448da202f26901986a4a19a4ad8ee43895754406ab55"
+data_budget = "at most one pass over the fixed approximately 10M-image subset per continuation attempt; no resampling or resume replay; record actual exposures"
+effective_global_batch = 256
+nodes_per_job = 1
+h100_gpus_per_job = 4
+trajectory_gpu_hours_cap = 6144.0
+job_gpu_hours_cap = "attempt-specific; recorded in each status.json"
+research_window = "96 hours documented in Claude research notes; Codex wall-clock deadline not specified in the published notes"
+sampling = "256x256 RGB; default 50-step Euler, EMA weights, guidance 1.0, deterministic per-caption noise"
+screening = "FD-DINOv2 against val_stats.npz; Claude uses 10000 sampled validation captions (seed 20260921), Codex uses 4096/16384 frozen evaluation prompts; compare matched protocols only"
+root_fd_val_10k = 1286.4504  # Claude EMA, seed 0, 50 Euler steps, guidance 1.0; not a final-test reward anchor
+final_score_status = "screening_snapshot_only_no_sealed_50k_test_score"
+
+# Legacy Harbor runtime and verifier; not the logged 10M Slurm deployment.
 [agent]
 network_mode = "none"
 

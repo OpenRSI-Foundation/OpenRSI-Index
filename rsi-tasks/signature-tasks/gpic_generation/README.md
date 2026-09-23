@@ -1,91 +1,132 @@
-# gpic_generation
+# GPIC 10M continuation autoresearch
 
-**The task.** Start from nothing but the [GPIC corpus][gpic] — 100M
-permissively-licensed captioned images — and train, from scratch, any
-text-to-image model that beats the pinned [PixelGen][pixelgen] baseline on
-FD-DINOv2 over the frozen 50k GPIC test captions. Architecture, parameter
-count, and training objective are all free; the data (one full pass, no
-more), the 256×256 output resolution, pure conditional sampling
-(guidance = 1.0), the per-attempt compute cap (1000 H100-hours,
-provisional), and the frozen evaluator are not. Optimizing the evaluation
-representation is banned outright: no DINO-family weights or features as
-losses, teachers, filters, or initializations, and no DINO-distilled
-encoders.
+**The task.** Improve a text-to-image model by continuing from a shared
+PixelGen JiT_T2I checkpoint on a fixed, approximately 10M-image GPIC training
+subset. Each candidate may consume the subset at most once. Run matched
+experiments on **1 node × 4 H100**, generate 256×256 images with pure
+conditional sampling (guidance 1.0), and measure FD-DINOv2 against the
+validation reference. The research question is which changes to the
+continuation objective and training recipe improve quality at equal data
+exposure from the same starting weights.
 
-- [`instruction.md`](instruction.md) — the runtime prompt for the research
-  agent: what it starts from, what it may change, how it is scored.
-- [`task.toml`](task.toml) / [`policy.yaml`](policy.yaml) /
-  [`environment/`](environment/) / [`tests/`](tests/) — the Harbor package.
-- [`tests/cheat/`](tests/cheat/) — the anti-cheat battery and its recorded
-  13/13 result (`battery_results.json`).
+This description follows the published [GPIC 10M research logs][logs],
+covering the trajectories started on September 21, 2026. Those runs use
+checkpoint continuation, a shared subset, and a smaller per-run topology
+than the original 100M-image, from-scratch Harbor task.
 
-**Status: implemented and smoke-tested end-to-end on 1×8 H100
-(train → guidance-1.0 sampling → FD-DINOv2); verifier hardened and
-adversarially verified — a 13-case cheat battery penalizes every hack vector
-0/0 while an honest submission scores (`tests/cheat/battery_results.json`);
-baseline unsealed.** The reward anchors (`GPIC_B_FD`, `r_ref`, `r_floor`,
-spot-gate thresholds) are provisional until the pristine PixelGen config is
-reproduced once under this exact contract (~500–650 H100-hours, one run).
+## Settings recorded in the logs
 
-## Task card — why this setting
+| Setting | Logged protocol |
+|---|---|
+| Source | `keshik6/gpic@afa82daab73cfeab4ef9fbd174ff62b68bffc456`; PixelGen and the pinned `gpic_eval` toolkit |
+| Initialization | Common immutable `epoch=0-step=39060.ckpt`, loaded weights-only; fresh optimizer and scheduler for each new candidate |
+| Root model | Pixel-space JiT_T2I, **1,122,396,928 denoiser parameters**, with Qwen3-1.7B text conditioning; checkpoint contains live and EMA denoiser weights |
+| Root training | 39,060 updates × global batch 256 = **9,999,360 image exposures**; 4,000-step warmup, then flat AdamW LR 1e-4; EMA 0.9999 |
+| Continuation data | Shared `train10m_seed20260921` subset, **802 shards**; one pass at most per candidate, no resampling or replay on resume |
+| Batch | Effective global batch **256**; Claude records microbatch 32/GPU × accumulation 2 × 4 GPUs |
+| Topology | **1 node × 4 H100 on P3 per job**, including training, generation, and evaluation; independent jobs may run concurrently |
+| Compute accounting | **6,144 H100-hours per trajectory**, plus a per-job cap recorded in each `status.json`; charge actual GPU time for training, generation, and screening |
+| Research window | Claude's research notes specify **96 hours**; the published Codex notes do not specify a wall-clock deadline |
+| Output and sampling | 256×256 RGB; default 50-step Euler with EMA weights; guidance **1.0**, one conditional stream per solver stage, deterministic per-caption noise |
+| Screening metric | FD-DINOv2 against `val_stats.npz` via `/task-tools/gpic_local_eval.py`, lower is better; caption source and image count differ by trajectory as detailed below |
+| Final-generation target | One image per frozen 50k evaluation caption; the published snapshot contains screening results and ongoing runs, not a sealed final 50k test score |
 
-**Fixed data, fixed epochs, free model.** This task deliberately inverts
-the usual benchmark design: instead of fixing the model family and scaling
-data, it freezes the data budget (100M images, exactly one pass) and frees
-everything else. Two consequences make this scientifically interesting.
-First, *scale stops being free lunch*: in the fixed-small-data regime,
-unregularized bigger models lose — [NanoGPT Slowrun][slowrun], the closest
-LM analogue (100M FineWeb tokens, unlimited compute), found a 1.4B model
-beating a 2.7B one outright, saw its leaderboard migrate from 2.7B down to
-1.4B across twenty records, and measured a strict size-ordering *inversion*
-at the lowest data budgets. An agent cannot win here by requesting a bigger
-model; it must find modeling mechanisms that convert one data pass into
-quality. Second, *one epoch is the production regime*: real generative
-pretraining is effectively single-epoch, and results earned by looping
-ImageNet for hundreds of epochs — the dominant academic diffusion setting —
-are known not to transfer. A recipe that wins at one pass over 100M images
-is a recipe about data efficiency, not memorization.
+The shared starting checkpoint is recorded as:
 
-**Open objective, pixel space.** Unlike LLM pretraining (where
-next-token prediction is fixed), the generative objective here is a free
-variable — flow matching, diffusion, autoregression, masked prediction,
-GANs, hybrids — which is exactly the axis where text-to-image research has
-the most unexplored freedom. The pinned baseline is *pixel-space* flow
-matching by design: many scientific domains where generative pretraining
-matters (astrophysics, microscopy, embryo imaging, world models for
-robotics) have no pretrained latent space to lean on, so pixel-space
-recipes generalize where VAE-latent recipes do not. Agents may still build
-latent models — but the autoencoder must be trained inside the same
-data/compute budget, which prices the latent honestly.
+```text
+/shared/gpic-output/baseline_16x8/exp_pretraining_jit_256_gpic_full/epoch=0-step=39060.ckpt
+```
 
-**Why FD-DINOv2 and guidance = 1.** FD-DINOv2 over 50k captions is the
-GPIC paper's own protocol and the field's current best distribution-level
-metric. Guidance is fixed to 1.0 because CFG scale is a sampling-time knob
-that moves FD substantially without changing the model; freezing it makes
-the metric measure the *model*, and pure conditional quality is also the
-honest measure of how well the model learned the conditional distribution.
-Both are enforced, not requested: the verifier recomputes FD on the
-submitted images against reference statistics the agent never sees, and a
-hidden-subset spot regeneration through the agent's own frozen
-`generate.py` binds the submitted images to the submitted checkpoint —
-images sampled with guidance off-line, cherry-picked, or copied from the
-training set fail the gate mechanically.
+The continuation shards are staged at:
 
-**Why the DINO ban.** FD-DINOv2 is trivially hackable by optimizing DINO
-features directly (perceptual losses, DINO teachers, DINO-initialized
-encoders — the pinned repo itself ships an unused DINO-perceptual-loss
-trainer). The ban (policy RH-004) covers weights, features, surrogates,
-and DINO-distilled encoders, and is enforced by a mechanical pretrained
-allowlist (Qwen3-1.7B text encoder only), an LLM policy judge over the
-source diff, and no network access; DINOv2 hub weights are staged solely
-for the val-screening tool, with any other use a hard-zero violation (an
-open alternative is to keep them out entirely and screen with Inception-FID).
+```text
+/shared/gpic-data/gpic/subsets/train10m_seed20260921/shards
+```
 
-**Budgets.** One attempt ≤ 1000 H100-hours (provisional; the pristine
-baseline epoch is ~500–650, so the cap admits models a few times larger —
-or many times faster). The total iteration budget across attempts is set
-by the operators after the first agent trajectories, per the org's SOP.
+The manifest SHA-256 recorded in the [Codex ledger][codex-ledger] is:
 
-[gpic]: https://github.com/keshik6/gpic
-[pixelgen]: https://github.com/keshik6/gpic/tree/main/baselines/PixelGen
-[slowrun]: https://github.com/qlabs-eng/slowrun
+```text
+e496f9541370423a50d5448da202f26901986a4a19a4ad8ee43895754406ab55
+```
+
+These are paths on the logged Slurm deployment; the checkpoint, shards,
+manifest, and deployment-specific launch scripts are not bundled here.
+The root's pretraining exposures and each candidate's continuation
+exposures are separate quantities. The one-pass constraint applies within
+each continuation attempt; independent ablations reuse the common subset.
+Count actual exposures rather than assuming that the nominal “10M” subset
+or a run named “full” proves an exact completed pass.
+
+## Evaluation and baseline interpretation
+
+The [Claude notes][claude-notes] use validation captions paired with the
+50k-image validation reference: `common/val_captions_ref50k.jsonl` contains
+49,990 matched captions, and `common/val_captions_screen10k.jsonl` is a
+10,000-caption subset selected with seed 20260921. The measured common-root
+anchor is **FD 1286.4504** for EMA weights (raw weights: approximately
+1276.86), using 10k captions, generation seed 0, 50 Euler steps, and
+guidance 1.0. This is a validation screening baseline.
+
+The [Codex notes][codex-notes] and [ledger][codex-ledger] instead record
+screens using the first **4,096** or **16,384** prompts from
+`/shared/gpic-verifier/gpic_eval_50k.jsonl`, also evaluated against the
+validation reference. They use paired candidate/control generation seeds,
+followed by seed replication or a larger sample count before promotion.
+This caption usage differs from Claude's validation-caption protocol and
+the original Harbor prompt's restriction on evaluation-caption tuning.
+
+Compare candidate and control with the same caption set, image count,
+reference statistics, seed, and sampling settings. The [trajectory
+summary][summary] reports best observed screening FD of 1043.3926 for Codex
+and 729.3343 for Claude, but these use different screening protocols and
+are not a matched cross-agent comparison. Claude also logged CFG > 1
+diagnostics explicitly marked as never submitted; those are not
+guidance-1.0 candidate results.
+
+The old Harbor `GPIC_B_FD = 200.0` is a provisional placeholder for a
+different, unsealed 100M/50k-test contract. It must not be presented as the
+measured baseline of these trajectories, and the 10k validation root FD
+must not be substituted into that final-test reward formula.
+
+## Research loop and boundaries
+
+Both trajectories start independently from the common root and shared
+subset. Establish a matched continuation control, change an interpretable
+variable group, screen quality, and promote only with measured evidence.
+The logs explore conditioning dropout, EMA decay, LR schedules, cropping,
+training duration, and guidance-target distillation during training.
+Training-time teacher use is distinct from sampling-time guidance:
+candidate images still use a single conditional stream at guidance 1.0.
+DINO weights and features remain reserved for the evaluation tool, with
+no use as training losses, teachers, filters, or initializations.
+
+Record initialization, manifest, source revision, actual images seen,
+resume state, GPU-hours, caption selection, generation seed, sample count,
+FD, and the next decision in `experiments.jsonl`. Keep training loss as a
+systems diagnostic; it is not evidence of generation quality. For example,
+Claude's promoted “full” runs target 38,000 × 256 = **9,728,000 exposures**
+and are still marked `running` in the published snapshot; their names do
+not establish completion or a final submission.
+
+## Packaged Harbor implementation
+
+The checked-in [`instruction.md`](instruction.md), legacy metadata and
+runtime sections of [`task.toml`](task.toml), [`policy.yaml`](policy.yaml),
+[`environment/`](environment/), and [`tests/`](tests/) preserve the original
+**100M, from-scratch, 1×8 H100** Harbor implementation. The manifest's task
+description and `metadata.logged_protocol` describe the published 10M
+trajectories; its legacy sections are explicitly marked. The original
+1000-H100-hour per-attempt cap, Qwen-only pretrained allowlist, and
+provisional reward anchors are not the settings of the logged continuation
+deployment. Its [13-case anti-cheat battery](tests/cheat/) validates that
+original package, not the later 10M runs.
+
+This is a task-description update from the logs, not a migration of that
+runtime. Reproducing the logged runs also requires their common checkpoint,
+subset manifest, host launchers, and matching policy/evaluation setup.
+
+[logs]: ../../../rsi-logs/signature-tasks/gpic-10m-autoresearch/
+[codex-notes]: ../../../rsi-logs/signature-tasks/gpic-10m-autoresearch/codex-gpt-5.6-sol/RESEARCH_NOTES.md
+[codex-ledger]: ../../../rsi-logs/signature-tasks/gpic-10m-autoresearch/codex-gpt-5.6-sol/experiments.jsonl
+[claude-notes]: ../../../rsi-logs/signature-tasks/gpic-10m-autoresearch/claude-code-claude-opus-5/RESEARCH_NOTES.md
+[summary]: ../../../rsi-logs/signature-tasks/gpic-10m-autoresearch/summary/traj_progress_summary.md
