@@ -27,6 +27,9 @@ _BLOCKED_PREFIXES = (
     "APPTAINER_",
     "LSB_",
     "LSF_",
+    "SLURM_",
+    "SBATCH_",
+    "SRUN_",
     "SINGULARITY_",
 )
 _BLOCKED_NAMES = {

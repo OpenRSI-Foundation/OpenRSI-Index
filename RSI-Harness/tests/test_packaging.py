@@ -58,5 +58,6 @@ def test_rsi_harness_distribution_owns_complete_rsi_loop_package() -> None:
         "visualizer", "templates", "trajectory.html"
     ).is_file()
 
-    cluster_package = resources.files("rsi_harness.cluster.bluevela")
-    assert cluster_package.joinpath("profile.toml").is_file()
+    for adapter in ("bluevela", "slurm"):
+        cluster_package = resources.files(f"rsi_harness.cluster.{adapter}")
+        assert cluster_package.joinpath("profile.toml").is_file()

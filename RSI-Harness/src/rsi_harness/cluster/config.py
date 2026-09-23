@@ -11,6 +11,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Literal, Self
 
 from pydantic import (
+    AliasChoices,
     BaseModel,
     ConfigDict,
     Field,
@@ -36,6 +37,7 @@ class SchedulerProfile(_ProfileModel):
     cancel_binary: str = "bkill"
     remote_binary: str = "blaunch"
     remote_host_flag: str = "-z"
+    remote_args: tuple[str, ...] = ()
     queue: str
     group: str
     exclusive: bool = True
@@ -55,6 +57,13 @@ class SchedulerProfile(_ProfileModel):
             raise ValueError("scheduler command values must be non-empty")
         return value
 
+    @field_validator("remote_args")
+    @classmethod
+    def _safe_remote_args(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if any(not item or "\0" in item for item in value):
+            raise ValueError("scheduler remote_args must be non-empty arguments")
+        return value
+
     @field_validator("excluded_hosts")
     @classmethod
     def _safe_excluded_hosts(cls, value: tuple[str, ...]) -> tuple[str, ...]:
@@ -63,6 +72,33 @@ class SchedulerProfile(_ProfileModel):
         if any(_SCHEDULER_HOST.fullmatch(host) is None for host in value):
             raise ValueError("scheduler excluded_hosts contains an unsafe host")
         return value
+
+
+class SlurmSchedulerProfile(SchedulerProfile):
+    kind: Literal["slurm"]
+    submit_binary: str = "sbatch"
+    status_binary: str = "squeue"
+    cancel_binary: str = "scancel"
+    accounting_binary: str = "sacct"
+    control_binary: str = "scontrol"
+    remote_binary: str = "srun"
+    remote_host_flag: str = "--nodelist"
+    # Controllers and cleanup steps must coexist with their rank workers.
+    remote_args: tuple[str, ...] = (
+        "--overlap", "--exact", "--nodes=1", "--ntasks=1", "--cpu-bind=none",
+        "--export=ALL",
+    )
+    queue: str = Field(validation_alias=AliasChoices("partition", "queue"))
+    group: str = Field(
+        default="", validation_alias=AliasChoices("account", "group")
+    )
+    qos: str | None = None
+    constraint: str | None = None
+
+    @field_validator("accounting_binary", "control_binary")
+    @classmethod
+    def _nonempty_slurm_binary(cls, value: str) -> str:
+        return cls._nonempty_binary_argument(value)
 
 
 class StorageProfile(_ProfileModel):
@@ -212,13 +248,20 @@ class ResourceProfile(_ProfileModel):
 
 class ClusterProfile(_ProfileModel):
     name: str
-    adapter: Literal["bluevela"]
+    adapter: Literal["bluevela", "slurm"]
     owner: str
-    scheduler: SchedulerProfile
+    scheduler: SchedulerProfile | SlurmSchedulerProfile = Field(discriminator="kind")
     storage: StorageProfile
     builder: BuilderProfile
     apptainer: ApptainerProfile
     resources: ResourceProfile
+
+    @model_validator(mode="after")
+    def _matching_scheduler(self) -> Self:
+        expected = "lsf" if self.adapter == "bluevela" else "slurm"
+        if self.scheduler.kind != expected:
+            raise ValueError(f"{self.adapter} adapter requires {expected} scheduler")
+        return self
 
 
 def _expand(value: Any, environ: Mapping[str, str]) -> Any:
@@ -243,9 +286,9 @@ def _profile_bytes(name_or_path: str | Path) -> bytes:
     candidate = Path(name_or_path).expanduser()
     if candidate.is_file():
         return candidate.read_bytes()
-    if str(name_or_path) == "bluevela":
+    if str(name_or_path) in {"bluevela", "slurm"}:
         return (
-            resources.files("rsi_harness.cluster.bluevela")
+            resources.files(f"rsi_harness.cluster.{name_or_path}")
             .joinpath("profile.toml")
             .read_bytes()
         )
