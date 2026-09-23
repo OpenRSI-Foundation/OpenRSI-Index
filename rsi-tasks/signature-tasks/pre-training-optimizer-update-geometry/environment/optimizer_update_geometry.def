@@ -1,0 +1,112 @@
+Bootstrap: localimage
+From: @BASE_RUNTIME_SIF@
+
+%labels
+    org.opencontainers.image.title "Six-scale optimizer encoding Harbor environment"
+    org.opencontainers.image.source "NVIDIA-NeMo/Megatron-Bridge@accefd7b3a448ab45b015edc04c9d3b70f7cb3b7"
+    org.opencontainers.image.description "Optimizer mechanism transfer from 550M through 2.545B in one 256-GPU allocation"
+
+%files
+    optimizer-project/ /opt/optimizer-project
+    task-tools/ /task-tools
+
+%post
+    set -eux
+
+    # Reuse the prepared CUDA/PyTorch/Bridge environment, but replace its
+    # source checkout with the isolated working-tree snapshot. The agent never
+    # sees or modifies the host checkout.
+    rm -rf /opt/Megatron-Bridge /opt/project /app/project
+    mv /opt/optimizer-project /opt/Megatron-Bridge
+
+    # Apptainer's %files stage dereferences repository symlinks. Reconstruct
+    # every mode-120000 entry from the pinned synthetic Git commit before
+    # cloning the clean and writable project trees. Source inventories include
+    # entry kinds, so flattened links would otherwise make the first frozen
+    # candidate impossible to materialize from /opt/project.
+    /opt/venv/bin/python - <<'PY'
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+root = Path("/opt/Megatron-Bridge")
+entries = subprocess.check_output(
+    ["git", "-C", str(root), "ls-files", "-s", "-z"]
+).split(b"\0")
+for entry in entries:
+    if not entry:
+        continue
+    metadata, raw_relative = entry.split(b"\t", 1)
+    if metadata.split()[0] != b"120000":
+        continue
+    relative = os.fsdecode(raw_relative)
+    target = subprocess.check_output(
+        ["git", "-C", str(root), "show", f"HEAD:{relative}"]
+    ).decode()
+    destination = root / relative
+    if destination.is_dir() and not destination.is_symlink():
+        shutil.rmtree(destination)
+    else:
+        destination.unlink(missing_ok=True)
+    destination.symlink_to(target)
+PY
+    chmod -R a+rX /opt/Megatron-Bridge /task-tools
+    chmod a+x /task-tools/run_optimizer_scaling_ladder.sh /task-tools/run_optimizer_candidate_ladder.sh
+    chmod a+x /task-tools/optimizer_scaling_task.py
+
+    mkdir -p /app/output /logs/verifier
+    cp -a /opt/Megatron-Bridge /opt/project
+    cp -a /opt/project /app/project
+
+    test -x /opt/venv/bin/python
+    test -L /opt/Megatron-Bridge/CLAUDE.md
+    test -L /opt/Megatron-Bridge/3rdparty/Megatron-LM/CLAUDE.md
+    test -L /app/project/CLAUDE.md
+    test -L /app/project/3rdparty/Megatron-LM/CLAUDE.md
+    test -f /app/project/examples/training/optimizer/runtime/pretrain_gpt_marin_adamh.py
+    test -f /app/project/examples/training/optimizer/runtime/optimizer_candidate.py
+    grep -F 'container_script="$container_repo_dir/examples/training/optimizer"' \
+        /app/project/examples/training/optimizer/run_marin_<CLUSTER>.sh
+    ! grep -F 'container_script="$container_repo_dir/examples/training/baseline"' \
+        /app/project/examples/training/optimizer/run_marin_<CLUSTER>.sh
+    test -z "$(find /app/project/examples/training -mindepth 1 -maxdepth 1 ! -name optimizer -print -quit)"
+
+%environment
+    export PATH="/opt/venv/bin:/root/.local/bin:$PATH"
+    export UV_PROJECT_ENVIRONMENT=/opt/venv
+    export VIRTUAL_ENV=/opt/venv
+    export UV_LINK_MODE=copy
+    export UV_HTTP_TIMEOUT=120
+    export PYTHONNOUSERSITE=1
+    export PYTHONDONTWRITEBYTECODE=1
+    export PYTHONUNBUFFERED=1
+    export WANDB_MODE=offline
+    export HF_HUB_OFFLINE=1
+    export TRANSFORMERS_OFFLINE=1
+    export NVTE_BUILD_NUM_PHILOX_ROUNDS=3
+    export HYBRID_EP_MULTINODE=1
+    export LD_LIBRARY_PATH="/usr/local/cuda/lib64:${LD_LIBRARY_PATH:-}"
+
+%test
+    set -eu
+    test -x /opt/venv/bin/python
+    test -x /usr/local/bin/uv
+    test -L /opt/Megatron-Bridge/CLAUDE.md
+    test -L /opt/Megatron-Bridge/3rdparty/Megatron-LM/CLAUDE.md
+    test -L /app/project/CLAUDE.md
+    test -L /app/project/3rdparty/Megatron-LM/CLAUDE.md
+    test -f /opt/Megatron-Bridge/examples/training/optimizer/runtime/lm_eval_runner.py
+    test -z "$(find /opt/Megatron-Bridge/examples/training -mindepth 1 -maxdepth 1 ! -name optimizer -print -quit)"
+    test -z "$(find /app/project/examples/training -mindepth 1 -maxdepth 1 ! -name optimizer -print -quit)"
+    test -x /task-tools/run_optimizer_scaling_ladder.sh
+    test -x /task-tools/run_optimizer_candidate_ladder.sh
+    test -f /opt/Megatron-Bridge/examples/training/optimizer/runtime/optimizer_candidate.py
+    grep -F 'container_script="$container_repo_dir/examples/training/optimizer"' \
+        /opt/Megatron-Bridge/examples/training/optimizer/run_marin_<CLUSTER>.sh
+    ! grep -F 'container_script="$container_repo_dir/examples/training/baseline"' \
+        /opt/Megatron-Bridge/examples/training/optimizer/run_marin_<CLUSTER>.sh
+    /opt/venv/bin/python -c "import importlib.util, lm_eval, yaml; assert importlib.util.find_spec('megatron.core')"
+
+%runscript
+    exec "$@"
