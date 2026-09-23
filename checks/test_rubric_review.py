@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 import httpx
+from openai import RateLimitError
 
 from checks.github_retry import GitHubTransientError, retry_call
 
@@ -822,6 +823,77 @@ def test_async_call_openai_enables_high_context_web_search(review):
     assert calls[0]["tools"] == [{"type": "web_search", "search_context_size": "high"}]
     assert calls[0]["tool_choice"] == "required"
     assert calls[0]["max_output_tokens"] == 32768
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_rubric_disables_nested_sdk_retries(review, monkeypatch, asynchronous):
+    options = []
+
+    def create(**kwargs):
+        return SimpleNamespace(status="completed", output_text=structured_judge_output())
+
+    async def async_create(**kwargs):
+        return create(**kwargs)
+
+    def factory(**kwargs):
+        options.append(kwargs)
+        return SimpleNamespace(
+            responses=SimpleNamespace(create=async_create if asynchronous else create)
+        )
+
+    monkeypatch.setattr(review, "AsyncOpenAI" if asynchronous else "OpenAI", factory)
+    result = (
+        asyncio.run(review.async_call_openai("rubric", "proposal"))
+        if asynchronous
+        else review.call_openai("rubric", "proposal")
+    )
+
+    assert result.endswith("Decision: Pass")
+    assert options == [{"max_retries": 0}]
+
+
+@pytest.mark.parametrize("asynchronous", [False, True])
+def test_rubric_recovers_from_openai_rate_limit(review, monkeypatch, asynchronous):
+    calls = []
+
+    def create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise RateLimitError(
+                "Rate limit reached. Please try again in 0s.",
+                response=httpx.Response(
+                    429, request=httpx.Request("POST", "https://api.openai.com/v1/responses")
+                ),
+                body={"code": "rate_limit_exceeded"},
+            )
+        return SimpleNamespace(status="completed", output_text=structured_judge_output())
+
+    async def async_create(**kwargs):
+        return create(**kwargs)
+
+    from checks import openai_retry
+
+    monkeypatch.setattr(openai_retry.time, "sleep", lambda _: None)
+
+    async def sleep(_):
+        pass
+
+    monkeypatch.setattr(openai_retry.asyncio, "sleep", sleep)
+
+    client = SimpleNamespace(
+        responses=SimpleNamespace(create=async_create if asynchronous else create)
+    )
+    result = (
+        asyncio.run(review.async_call_openai("rubric", "proposal", client=client))
+        if asynchronous
+        else review.call_openai("rubric", "proposal", client=client)
+    )
+
+    assert result.endswith("Decision: Pass")
+    assert len(calls) == 2
+    assert calls[0] == calls[1]
+    assert calls[1]["model"] == "gpt-6-luna"
+    assert calls[1]["reasoning"] == {"effort": "high"}
 
 
 def test_call_openai_publishes_structured_output_that_repeats_rubric_text(review):
