@@ -767,7 +767,7 @@ def test_build_judge_input_uses_json_for_all_untrusted_input(review):
     assert content[1] == image
 
 
-def test_call_openai_always_uses_fixed_luna_model_and_high_reasoning(review):
+def test_call_openai_always_uses_fixed_terra_model_and_medium_reasoning(review):
     calls = []
 
     class FakeResponses:
@@ -785,8 +785,8 @@ def test_call_openai_always_uses_fixed_luna_model_and_high_reasoning(review):
     assert "Proposal summary:" in result
     assert len(calls) == 1
     call = calls[0]
-    assert call["model"] == "gpt-6-luna"
-    assert call["reasoning"] == {"effort": "high"}
+    assert call["model"] == "gpt-5.6-terra"
+    assert call["reasoning"] == {"effort": "medium"}
     assert "rubric" in call["instructions"]
     assert "confidential" in call["instructions"].lower()
     assert "never quote" in call["instructions"].lower()
@@ -818,8 +818,8 @@ def test_async_call_openai_enables_high_context_web_search(review):
     result = asyncio.run(review.async_call_openai("rubric", "proposal", client=client))
 
     assert result.endswith("Decision: Pass")
-    assert calls[0]["model"] == "gpt-6-luna"
-    assert calls[0]["reasoning"] == {"effort": "high"}
+    assert calls[0]["model"] == "gpt-5.6-terra"
+    assert calls[0]["reasoning"] == {"effort": "medium"}
     assert calls[0]["tools"] == [{"type": "web_search", "search_context_size": "high"}]
     assert calls[0]["tool_choice"] == "required"
     assert calls[0]["max_output_tokens"] == 32768
@@ -892,8 +892,8 @@ def test_rubric_recovers_from_openai_rate_limit(review, monkeypatch, asynchronou
     assert result.endswith("Decision: Pass")
     assert len(calls) == 2
     assert calls[0] == calls[1]
-    assert calls[1]["model"] == "gpt-6-luna"
-    assert calls[1]["reasoning"] == {"effort": "high"}
+    assert calls[1]["model"] == "gpt-5.6-terra"
+    assert calls[1]["reasoning"] == {"effort": "medium"}
 
 
 def test_call_openai_publishes_structured_output_that_repeats_rubric_text(review):
