@@ -1,5 +1,8 @@
+import os
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 WORKFLOW = Path(__file__).parent.parent / ".github/workflows/discussion-review.yml"
@@ -34,6 +37,33 @@ def test_review_workflow_serializes_each_discussion_and_restarts_on_edit():
         "group": "discussion-review-${{ github.event.discussion.node_id }}",
         "cancel-in-progress": "true",
     }
+
+
+@pytest.mark.parametrize(
+    ("missing", "setting"),
+    [("OPENAI_API_KEY", "RUBRIC_API_KEY"), ("OPENAI_BASE_URL", "RUBRIC_BASE_URL")],
+)
+def test_review_requires_dedicated_proxy_config_before_calling_api(tmp_path, missing, setting):
+    review = step_named("Run rubric review")
+    assert review["env"]["OPENAI_API_KEY"] == "${{ secrets.RUBRIC_API_KEY }}"
+    assert review["env"]["OPENAI_BASE_URL"] == (
+        "${{ vars.RUBRIC_BASE_URL || secrets.RUBRIC_BASE_URL }}"
+    )
+    env = {
+        **os.environ,
+        "REUSED_REVIEW_ID": "",
+        "OPENAI_API_KEY": "test-key",
+        "OPENAI_BASE_URL": "https://proxy.example/v1",
+        missing: "",
+    }
+    result = subprocess.run(
+        ["bash", "-e", "-c", review["run"]],
+        cwd=tmp_path, env=env, capture_output=True, text=True,
+    )
+    assert result.returncode != 0
+    assert setting in result.stderr
+    assert not (tmp_path / "result.json").exists()
+    assert not (tmp_path / "review.log").exists()
 
 
 def test_review_workflow_supersedes_only_unfinished_reviews_then_posts_fresh_progress():

@@ -166,7 +166,9 @@ jobs:
         env:
           REUSED_REVIEW_ID: ${{ steps.reuse.outputs.review_comment_id }}
           REUSED_DECISION: ${{ steps.reuse.outputs.decision }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          # Proxy credentials shared with the PR trial workflows.
+          OPENAI_API_KEY: ${{ secrets.RUBRIC_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.RUBRIC_BASE_URL || secrets.RUBRIC_BASE_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RUBRIC_FILE: ${{ github.workspace }}/private-skills/rubrics/task-proposal.md
         run: |
@@ -174,6 +176,8 @@ jobs:
             printf 'decision=%s\n' "$REUSED_DECISION" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          : "${OPENAI_API_KEY:?Set the RUBRIC_API_KEY repository secret}"
+          : "${OPENAI_BASE_URL:?Set the RUBRIC_BASE_URL repository variable or secret including /v1}"
           if ! uv run checks/rubric_review.py proposal.md > result.json 2> review.log; then
             cat review.log
             exit 1
