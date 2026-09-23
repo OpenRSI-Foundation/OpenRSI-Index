@@ -5,7 +5,7 @@
 <div align="center">
   <a href="https://index.openrsi.foundation/index.html"><img src="https://img.shields.io/badge/Website-4F86D8?style=for-the-badge&logo=googleearth&logoColor=white" alt="Website"></a>&nbsp;
   <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index"><img src="https://img.shields.io/badge/GitHub-35434D?style=for-the-badge&logo=github&logoColor=white" alt="GitHub"></a>&nbsp;
-  <a href="#"><img src="https://img.shields.io/badge/Twitter-35434D?style=for-the-badge&logo=X&logoColor=white" alt="X"></a>&nbsp;
+  <!-- <a href="#"><img src="https://img.shields.io/badge/Twitter-35434D?style=for-the-badge&logo=X&logoColor=white" alt="X"></a>&nbsp; -->
   <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md"><img src="assets/figures/contribution-call.svg" alt="Contribution Call"></a>&nbsp;
   <img src="https://img.shields.io/badge/RSI%20Logs-14967F?style=for-the-badge&logo=google-sheets&logoColor=white" alt="RSI Logs">&nbsp;
   <a href="assets/figures/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-24A36F?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat Group"></a>&nbsp;
