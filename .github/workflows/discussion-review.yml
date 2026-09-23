@@ -321,6 +321,36 @@ jobs:
           fi
           printf 'review_comment_id=%s\n' "$REVIEW_COMMENT_ID" >> "$GITHUB_OUTPUT"
 
+      # Publish the queue notice before dispatch so a fast worker cannot post
+      # its building progress before this acknowledgement.
+      - name: Create queue Discussion App token
+        id: queue-token
+        if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != ''
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-discussions: write
+
+      - name: Post task queue notice
+        if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != ''
+        env:
+          GH_TOKEN: ${{ steps.queue-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.queue-token.outputs.app-slug }}
+          TRIGGER_COMMENT_ID: ${{ steps.publish-review.outputs.review_comment_id }}
+          DISCUSSION_ID: ${{ github.event.discussion.node_id }}
+        run: |
+          python3 checks/discussion_recovery.py gh api graphql \
+            -f query='mutation($discussionId: ID!, $body: String!) {
+              addDiscussionComment(input: { discussionId: $discussionId, body: $body }) {
+                comment { id url }
+              }
+            }' \
+            -f discussionId="$DISCUSSION_ID" \
+            -f body='⏳ Your task is queued and will start automatically when a runner is available. No action is needed.'
+
       - name: Create private Skills dispatch token
         id: dispatch-token
         if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != ''
@@ -364,7 +394,7 @@ jobs:
             --input proposal-pass-request.json
 
       - name: Mark failed GitHub setup for external classification
-        if: failure() && (steps.public-checkout.outcome == 'failure' || steps.skills-token.outcome == 'failure' || steps.rubric-checkout.outcome == 'failure' || steps.setup-uv.outcome == 'failure' || steps.comment-token.outcome == 'failure' || steps.dispatch-token.outcome == 'failure')
+        if: failure() && (steps.public-checkout.outcome == 'failure' || steps.skills-token.outcome == 'failure' || steps.rubric-checkout.outcome == 'failure' || steps.setup-uv.outcome == 'failure' || steps.comment-token.outcome == 'failure' || steps.queue-token.outcome == 'failure' || steps.dispatch-token.outcome == 'failure')
         run: |
           printf 'RSI_GITHUB_SETUP_FAILURE operation=discussion.setup\n'
           printf 'RSI_GITHUB_SETUP_FAILURE=true\n' >> "$GITHUB_ENV"
@@ -465,40 +495,3 @@ jobs:
             }' \
             -f id="$DISCUSSION_NODE_ID" \
             -f content="EYES"
-
-  queue-notice:
-    needs: review
-    if: needs.review.outputs.task_dispatched == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout public retry helper
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          persist-credentials: false
-      - name: Create queue Discussion App token
-        id: comment-token
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
-        with:
-          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
-          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
-          owner: ${{ github.repository_owner }}
-          repositories: ${{ github.event.repository.name }}
-          permission-discussions: write
-      - name: Post task queue notice
-        env:
-          GH_TOKEN: ${{ steps.comment-token.outputs.token }}
-          BOT_LOGIN: ${{ steps.comment-token.outputs.app-slug }}
-          TRIGGER_COMMENT_ID: ${{ needs.review.outputs.trigger_comment_id }}
-          DISCUSSION_ID: ${{ github.event.discussion.node_id }}
-        run: |
-          python3 checks/discussion_recovery.py gh api graphql \
-            -f query='mutation($discussionId: ID!, $body: String!) {
-              addDiscussionComment(input: { discussionId: $discussionId, body: $body }) {
-                comment { id url }
-              }
-            }' \
-            -f discussionId="$DISCUSSION_ID" \
-            -f body='⏳ Your task is queued and will start automatically when a runner is available. No action is needed.'

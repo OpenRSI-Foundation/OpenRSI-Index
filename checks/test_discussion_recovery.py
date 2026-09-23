@@ -387,15 +387,11 @@ def test_recovery_workflow_is_dispatch_only_and_names_the_episode():
     "filename,source_job",
     [("discussion-review.yml", "review"), ("discussion-task-dispatch.yml", "dispatch")],
 )
-def test_eyes_outage_fails_only_a_notification_job_and_can_be_recovered(
+def test_eyes_recovery_keeps_review_isolated_and_follows_command_dispatch(
     filename, source_job
 ):
     path = Path(__file__).parent.parent / ".github/workflows" / filename
     workflow = yaml.load(path.read_text(), Loader=yaml.BaseLoader)
-    assert all(
-        "addReaction" not in step.get("run", "")
-        for step in workflow["jobs"][source_job]["steps"]
-    )
     reactions = [
         (job, step)
         for job in workflow["jobs"].values()
@@ -412,15 +408,37 @@ def test_eyes_outage_fails_only_a_notification_job_and_can_be_recovered(
         if step.get("uses", "").startswith("actions/create-github-app-token@")
     )
     if source_job == "dispatch":
+        assert notification is workflow["jobs"][source_job]
         assert (
-            notification["if"] == "needs.dispatch.outputs.command_dispatched == 'true'"
+            reaction["if"] == "steps.task-dispatch.outcome == 'success'"
         )
         queue = next(
             step
             for step in notification["steps"]
             if step.get("name") == "Post task queue notice"
         )
-        assert queue["if"] == "needs.dispatch.outputs.task_dispatched == 'true'"
+        assert queue["if"] == (
+            "steps.gate.outputs.candidate == 'true' && "
+            "(steps.gate.outputs.is_author == 'true' || "
+            "steps.owner-gate.outputs.is_owner == 'true') && "
+            "steps.gate.outputs.command == 'task'"
+        )
+        dispatch = next(
+            step
+            for step in notification["steps"]
+            if step.get("id") == "task-dispatch"
+        )
+        assert (
+            notification["steps"].index(queue)
+            < notification["steps"].index(dispatch)
+            < notification["steps"].index(reaction)
+        )
+    else:
+        assert notification is workflow["jobs"]["reaction-notice"]
+        assert all(
+            "addReaction" not in step.get("run", "")
+            for step in workflow["jobs"][source_job]["steps"]
+        )
 
 
 def test_reused_review_step_does_not_invoke_model_or_require_ephemeral_result(tmp_path):
