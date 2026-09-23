@@ -1,0 +1,1 @@
+{"status": "candidate_invalid", "errors": [{"code": "editable_scope_violation", "path": "/workspace/runs.md", "field": "", "condition": "keep task edits, checkpoints and research notes inside candidate/ or experiments/"}], "reward": 0.0}
