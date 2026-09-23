@@ -1,6 +1,6 @@
 """Apptainer ports for the native RSI-Harness Engine.
 
-The scheduler is deliberately absent here.  This module runs *inside* one LSF
+The scheduler is deliberately absent here.  This module runs *inside* one batch
 allocation and implements only the Work/Judge ports consumed by RunCoordinator.
 """
 
@@ -28,6 +28,7 @@ from rsi_harness.cluster.bluevela.multinode import (
     MultiNodeBroker,
     RemoteWorkerTemplate,
     WorkerBind,
+    stop_command,
 )
 from rsi_harness.cluster.bluevela.network import AgentNetworkBroker
 from rsi_harness.errors import (
@@ -385,6 +386,7 @@ class ApptainerAgentRuntime:
             worker_template=template,
             remote_binary=self.profile.scheduler.remote_binary,
             remote_host_flag=self.profile.scheduler.remote_host_flag,
+            remote_args=self.profile.scheduler.remote_args,
         )
         broker.start()
         self.work_broker = broker
@@ -736,6 +738,7 @@ class ApptainerAgentRuntime:
             worker_template=worker,
             remote_binary=self.profile.scheduler.remote_binary,
             remote_host_flag=self.profile.scheduler.remote_host_flag,
+            remote_args=self.profile.scheduler.remote_args,
         )
         broker.start()
         self.judge_broker = broker
@@ -756,6 +759,7 @@ class ApptainerAgentRuntime:
         self._atomic_control(control_path, control.model_dump_json(indent=2))
         command = (
             self.profile.scheduler.remote_binary,
+            *self.profile.scheduler.remote_args,
             self.profile.scheduler.remote_host_flag,
             pools.verifier[0].host,
             sys.executable,
@@ -800,8 +804,8 @@ class ApptainerAgentRuntime:
         finally:
             temporary.unlink(missing_ok=True)
 
-    @staticmethod
     def _run_host_controller(
+        self,
         command: tuple[str, ...],
         *,
         timeout_seconds: float,
@@ -819,7 +823,13 @@ class ApptainerAgentRuntime:
             output, _stderr = process.communicate(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
             timed_out = True
-            stop = (*command[:6], "stop", *command[7:])
+            stop = stop_command(
+                command,
+                remote_binary=self.profile.scheduler.remote_binary,
+                remote_host_flag=self.profile.scheduler.remote_host_flag,
+                remote_args=self.profile.scheduler.remote_args,
+                module="rsi_harness.cluster.bluevela.judge_controller",
+            )
             subprocess.run(
                 stop,
                 check=False,

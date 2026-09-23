@@ -295,7 +295,7 @@ def run_command(
         str | None,
         typer.Option(
             "--cluster",
-            help="Cluster name (for example bluevela) or a cluster profile TOML",
+            help="Cluster name (bluevela or slurm) or a cluster profile TOML",
         ),
     ] = None,
     dry_run: Annotated[

@@ -141,8 +141,10 @@ Blue Vela's launch path still requires GPUs.
 
 ## Run multi-node tasks on a cluster
 
-The `bluevela` adapter supports LSF clusters. Its packaged profile is a portable
-example: `/srv/rsi` paths and the scheduler group are placeholders, not a working
+The `bluevela` adapter supports LSF clusters; `slurm` uses the same image build,
+Apptainer runtime, Work/Judge node pools, and transparent `torchrun` flow on Slurm.
+Their packaged profiles are portable examples:
+`/srv/rsi` paths and the scheduler account/group are placeholders, not a working
 site configuration. For an existing installation, keep its working profile
 unchanged outside this repository and pass that file with `--cluster`. Profiles
 without `mount_policy` retain the legacy behavior, including single-node mounts,
@@ -161,6 +163,12 @@ Edit that copy to set your storage roots, installed Apptainer/Podman/fakeroot
 tools, and LSF queue/group. Keep only the data binds needed by the task. Profile
 values also accept `${ENV_VAR}` references; missing variables cause a setup error.
 Files ending in `.local.toml` are ignored by Git as an additional safeguard.
+For Slurm, copy `src/rsi_harness/cluster/slurm/profile.toml` instead and set
+`scheduler.partition`, `scheduler.account` (optional), and optionally `qos` and
+`constraint`. Add the task's Work/Judge data binds to the empty lists. Both
+profiles use `builder.walltime` in **HH:MM**; the Slurm adapter converts it to
+minutes for `sbatch`.
+
 Preview the resolved job without submitting it:
 
 ```bash
@@ -175,8 +183,23 @@ uv run rsi-harness run "$TASK" \
 
 Remove `--dry-run` to submit the job. GPU counts come from the task; for
 multi-node tasks, the adapter maps the Work and Judge requirements to full-node
-LSF allocations using the profile's GPUs-per-node setting. `--gpus` is only for
-local runs, and `gpus = "all"` needs a numeric cluster override.
+LSF or Slurm allocations using the profile's GPUs-per-node setting. `--gpus` is
+only for local runs, and `gpus = "all"` needs a numeric cluster override.
+
+Slurm uses `sbatch` for build/run jobs, `squeue` for active status, `sacct` for the
+exact allocation's final state and exit code, and `scancel` on interruption.
+Accounting must be enabled. Multi-node discovery expands `SLURM_JOB_NODELIST`
+with `scontrol show hostnames` and validates `SLURM_JOB_CPUS_PER_NODE`. Per-node
+probes, rank workers, Judge controllers, and cleanup use `srun --overlap` so a
+controller can coexist with its workers. The same ordered Work prefix and Judge
+suffix remain disjoint. See the [Slurm srun reference](https://slurm.schedmd.com/srun.html)
+for step resource sharing.
+
+Like Blue Vela, this transport requires shared run/image/log paths, the same
+host Python environment on every node, Apptainer, and InfiniBand for multi-node
+runs. Each node is probed for allocated GPUs, image digest, shared storage,
+InfiniBand, and scratch space before the Agent starts. Site scheduler binaries
+and remote launch arguments can be overridden in the profile.
 
 The portable example explicitly selects `apptainer.mount_policy = "scoped"`.
 Under that policy, both single-node and multi-node runs use

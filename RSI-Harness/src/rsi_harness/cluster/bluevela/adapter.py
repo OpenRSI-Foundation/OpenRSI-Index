@@ -13,7 +13,7 @@ import subprocess
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Protocol
+from typing import Any, Protocol
 
 from rsi_harness.cluster.base import (
     ClusterAdapter,
@@ -36,8 +36,8 @@ from rsi_harness.cluster.config import (
     ClusterProfile,
     load_cluster_profile,
 )
+from rsi_harness.cluster.schedulers.base import JobResult, JobSpec
 from rsi_harness.cluster.schedulers.lsf import (
-    LSFJobResult,
     LSFJobSpec,
     LSFScheduler,
 )
@@ -62,11 +62,11 @@ from rsi_loop.harness.agent import get_agent_class
 
 
 class SchedulerPort(Protocol):
-    def render_submit(self, spec: LSFJobSpec) -> tuple[str, ...]: ...
+    def render_submit(self, spec: JobSpec) -> tuple[str, ...]: ...
 
     def require_name_available(self, name: str) -> None: ...
 
-    def submit(self, spec: LSFJobSpec) -> str: ...
+    def submit(self, spec: JobSpec) -> str: ...
 
     def wait(
         self,
@@ -74,7 +74,7 @@ class SchedulerPort(Protocol):
         *,
         poll_seconds: float,
         on_state: Callable[[str], None] | None = None,
-    ) -> LSFJobResult: ...
+    ) -> JobResult: ...
 
 
 def _utc_now() -> datetime:
@@ -127,6 +127,8 @@ def _resolve_agent_version(agent_name: str) -> str | None:
 class BlueVelaClusterAdapter(ClusterAdapter):
     """Synchronous LSF/Apptainer transport for the native Harness Engine."""
 
+    scheduler_log_pattern = "lsf.%J"
+
     def __init__(
         self,
         profile: ClusterProfile,
@@ -139,11 +141,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         agent_version_resolver: Callable[[str], str | None] = _resolve_agent_version,
     ) -> None:
         self.profile = profile
-        self.scheduler = scheduler or LSFScheduler(
-            submit_binary=profile.scheduler.submit_binary,
-            status_binary=profile.scheduler.status_binary,
-            cancel_binary=profile.scheduler.cancel_binary,
-        )
+        self.scheduler = scheduler or self._make_scheduler()
         self.compiler = compiler or HarborTaskCompiler()
         self.clock = clock
         self.event_callback = event_callback or (lambda _name, _value: None)
@@ -154,6 +152,16 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         )
         self.agent_version_resolver = agent_version_resolver
 
+    def _make_scheduler(self) -> SchedulerPort:
+        return LSFScheduler(
+            submit_binary=self.profile.scheduler.submit_binary,
+            status_binary=self.profile.scheduler.status_binary,
+            cancel_binary=self.profile.scheduler.cancel_binary,
+        )
+
+    def _job_spec(self, **values: Any) -> JobSpec:
+        return LSFJobSpec(**values)
+
     def run(self, request: ClusterRunRequest) -> ClusterRunResult:
         definition = self._compile(request)
         resource_plan = derive_resource_plan(definition, self.profile)
@@ -161,7 +169,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         assert resources is not None
         build_context = definition.service.build_context
         if build_context is None:
-            raise SetupError("Blue Vela cluster runs require a Docker build context")
+            raise SetupError("cluster runs require a Docker build context")
         self._validate_runtime_inputs(request)
         agent_version = self.agent_version_resolver(definition.agent.name)
         agent_launcher = _agent_launcher(definition.agent.name)
@@ -385,7 +393,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         definition = self.compiler.compile(request.task_dir, request.options)
         if definition.gpu_requirement.count == 0:
             raise SetupError(
-                "Blue Vela cluster runs require Work GPUs; "
+                "cluster runs require Work GPUs; "
                 "use the local Docker backend for environment.gpus = 0"
             )
         updates: dict[str, str] = {}
@@ -434,16 +442,20 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         name: str,
         resources: ClusterResources | MultiNodeResources,
         script: Path,
-    ) -> LSFJobSpec:
-        return LSFJobSpec(
+    ) -> JobSpec:
+        return self._job_spec(
             name=name,
             queue=self.profile.scheduler.queue,
             group=self.profile.scheduler.group,
             cpu_slots=self.profile.builder.cpu_slots,
             memory_mb=self.profile.builder.memory_mb,
             walltime=resources.build_walltime,
-            stdout_path=(run_dir / "build" / "lsf.%J.out").resolve(),
-            stderr_path=(run_dir / "build" / "lsf.%J.err").resolve(),
+            stdout_path=(
+                run_dir / "build" / f"{self.scheduler_log_pattern}.out"
+            ).resolve(),
+            stderr_path=(
+                run_dir / "build" / f"{self.scheduler_log_pattern}.err"
+            ).resolve(),
             script_path=script.resolve(),
             local_tmp_mb=max(
                 self.profile.builder.min_tmp_mb,
@@ -462,9 +474,9 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         name: str,
         resources: ClusterResources | MultiNodeResources,
         script: Path,
-    ) -> LSFJobSpec:
+    ) -> JobSpec:
         if isinstance(resources, MultiNodeResources):
-            return LSFJobSpec(
+            return self._job_spec(
                 name=name,
                 queue=self.profile.scheduler.queue,
                 group=self.profile.scheduler.group,
@@ -473,8 +485,12 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 ),
                 memory_mb=resources.memory_mb_per_node,
                 walltime=resources.run_walltime,
-                stdout_path=(run_dir / "run" / "lsf.%J.out").resolve(),
-                stderr_path=(run_dir / "run" / "lsf.%J.err").resolve(),
+                stdout_path=(
+                    run_dir / "run" / f"{self.scheduler_log_pattern}.out"
+                ).resolve(),
+                stderr_path=(
+                    run_dir / "run" / f"{self.scheduler_log_pattern}.err"
+                ).resolve(),
                 script_path=script.resolve(),
                 gpu_count=resources.gpus_per_node,
                 local_tmp_mb=resources.node_tmp_mb,
@@ -485,15 +501,19 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 exclusive=self.profile.scheduler.exclusive,
                 excluded_hosts=self.profile.scheduler.excluded_hosts,
             )
-        return LSFJobSpec(
+        return self._job_spec(
             name=name,
             queue=self.profile.scheduler.queue,
             group=self.profile.scheduler.group,
             cpu_slots=resources.cpu_slots,
             memory_mb=resources.memory_mb,
             walltime=resources.run_walltime,
-            stdout_path=(run_dir / "run" / "lsf.%J.out").resolve(),
-            stderr_path=(run_dir / "run" / "lsf.%J.err").resolve(),
+            stdout_path=(
+                run_dir / "run" / f"{self.scheduler_log_pattern}.out"
+            ).resolve(),
+            stderr_path=(
+                run_dir / "run" / f"{self.scheduler_log_pattern}.err"
+            ).resolve(),
             script_path=script.resolve(),
             gpu_count=resources.total_gpus,
             local_tmp_mb=resources.local_tmp_mb,
@@ -651,7 +671,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 GPUDevice(
                     index=node_rank * resources.gpus_per_node + local_rank,
                     uuid=f"WORK-{node_rank:03d}:GPU-{local_rank}",
-                    name="planned Blue Vela Work GPU",
+                    name="planned cluster Work GPU",
                 )
                 for node_rank in range(resources.work.node_count)
                 for local_rank in range(resources.gpus_per_node)
@@ -665,7 +685,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                         + local_rank
                     ),
                     uuid=f"JUDGE-{node_rank:03d}:GPU-{local_rank}",
-                    name="planned Blue Vela Judge GPU",
+                    name="planned cluster Judge GPU",
                 )
                 for node_rank in range(resources.verifier.node_count)
                 for local_rank in range(resources.gpus_per_node)
@@ -682,8 +702,8 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             devices = tuple(
                 GPUDevice(
                     index=index,
-                    uuid=f"LSF-{index}",
-                    name="LSF allocated GPU",
+                    uuid=f"{self.profile.scheduler.kind.upper()}-{index}",
+                    name=f"{self.profile.scheduler.kind.upper()} allocated GPU",
                 )
                 for index in range(resources.total_gpus)
             )
@@ -733,7 +753,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 workspace=(run_dir / "workspace").resolve(),
                 logs=self.profile.storage.logs_root.resolve(),
             ),
-            "bluevela-apptainer-engine",
+            f"{self.profile.adapter}-apptainer-engine",
         )
 
     def _manifest(
@@ -799,8 +819,8 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         return hashes
 
     @staticmethod
-    def _require_success(stage: str, result: LSFJobResult) -> None:
-        if result.state != "DONE" or result.exit_code != 0:
+    def _require_success(stage: str, result: JobResult) -> None:
+        if result.state not in {"DONE", "COMPLETED"} or result.exit_code != 0:
             raise InfrastructureError(
                 f"{stage} job {result.job_id} ended in {result.state} "
                 f"with exit {result.exit_code}"
@@ -813,6 +833,8 @@ def build_cluster_adapter(
     event_callback: Callable[[str, object], None] | None = None,
 ) -> ClusterAdapter:
     profile = load_cluster_profile(name_or_path)
-    if profile.adapter != "bluevela":
-        raise SetupError(f"unsupported cluster adapter: {profile.adapter}")
+    if profile.adapter == "slurm":
+        from rsi_harness.cluster.slurm.adapter import SlurmClusterAdapter
+
+        return SlurmClusterAdapter(profile, event_callback=event_callback)
     return BlueVelaClusterAdapter(profile, event_callback=event_callback)

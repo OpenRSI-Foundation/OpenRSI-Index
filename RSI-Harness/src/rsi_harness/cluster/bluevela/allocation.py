@@ -170,7 +170,7 @@ def freeze_pools(
     expected_hosts = tuple(item.host for item in inventory)
     if set(probes) != set(expected_hosts):
         raise InfrastructureError(
-            "node probes must match the exact frozen LSF host inventory"
+            "node probes must match the exact frozen scheduler host inventory"
         )
     nodes = tuple(
         _allocated_node(
@@ -222,6 +222,7 @@ def probe_and_partition(
     expected_sif_sha256: str,
     remote_binary: str = "blaunch",
     remote_host_flag: str = "-z",
+    remote_args: tuple[str, ...] = (),
     runner: CommandRunner = _run,
     probe_attempts: int = 3,
     probe_retry_seconds: float = 2.0,
@@ -236,6 +237,7 @@ def probe_and_partition(
     for item in inventory:
         argv = (
             remote_binary,
+            *remote_args,
             remote_host_flag,
             item.host,
             sys.executable,
@@ -262,14 +264,14 @@ def probe_and_partition(
         if completed.returncode != 0:
             detail = completed.stderr.strip() or completed.stdout.strip()
             raise InfrastructureError(
-                f"Blue Vela node probe failed on {item.host} after "
+                f"cluster node probe failed on {item.host} after "
                 f"{probe_attempts} attempts: {detail}"
             )
         try:
             probes[item.host] = NodeProbe.model_validate_json(completed.stdout)
         except ValueError as error:
             raise InfrastructureError(
-                f"Blue Vela node probe returned invalid JSON on {item.host}"
+                f"cluster node probe returned invalid JSON on {item.host}"
             ) from error
     return freeze_pools(
         run_id=run_id,
@@ -295,7 +297,7 @@ def inspect_current_node(
     run_dir: Path,
     temp_root: Path,
 ) -> NodeProbe:
-    """Collect facts on one blaunch-selected host without fallback values."""
+    """Collect facts on one scheduler-selected host without fallback values."""
     addresses = {
         item[4][0]
         for item in socket.getaddrinfo(host, None, socket.AF_INET)
