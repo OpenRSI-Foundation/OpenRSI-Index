@@ -296,6 +296,7 @@ def test_review_reactions_and_comments_use_just_in_time_scoped_app_tokens():
         "${{ steps.comment-token.outputs.app-slug }}",
         "${{ steps.comment-token.outputs.app-slug }}",
         "${{ steps.comment-token.outputs.app-slug }}",
+        "${{ steps.queue-token.outputs.app-slug }}",
         "${{ steps.failure-token.outputs.app-slug }}",
     ]
     assert all("[bot]" not in login for login in bot_logins)
