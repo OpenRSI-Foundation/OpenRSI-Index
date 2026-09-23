@@ -16,15 +16,16 @@ ENTRIES = (
         "discussion-review.yml",
         "review",
         "Dispatch passed proposal privately",
-        "comment-token",
+        "queue-token",
     ),
 )
 
 
 def notice_steps(filename: str, job: str) -> tuple[list[dict], dict]:
     workflow = yaml.load((WORKFLOWS / filename).read_text(), Loader=yaml.BaseLoader)
-    assert workflow["jobs"]["queue-notice"]["runs-on"] == "ubuntu-latest"
-    steps = workflow["jobs"]["queue-notice"]["steps"]
+    assert "queue-notice" not in workflow["jobs"]
+    assert workflow["jobs"][job]["runs-on"] == "ubuntu-latest"
+    steps = workflow["jobs"][job]["steps"]
     notices = [step for step in steps if step.get("name") == "Post task queue notice"]
     assert len(notices) == 1, (
         "Queued tasks need a notice before a W2 runner is available"
@@ -33,7 +34,7 @@ def notice_steps(filename: str, job: str) -> tuple[list[dict], dict]:
 
 
 @pytest.mark.parametrize("filename,job,dispatch_name,token", ENTRIES)
-def test_queue_notice_is_gated_on_successful_task_dispatch(
+def test_queue_notice_precedes_dispatch_and_requires_an_authorized_task(
     filename, job, dispatch_name, token
 ):
     steps, notice = notice_steps(filename, job)
@@ -43,30 +44,48 @@ def test_queue_notice_is_gated_on_successful_task_dispatch(
         step for step in source["steps"] if step.get("name") == dispatch_name
     )
     assert dispatch["id"] == "task-dispatch"
-    assert workflow["jobs"]["queue-notice"]["needs"] == job
-    notification_gate = "command_dispatched" if job == "dispatch" else "task_dispatched"
-    assert (
-        workflow["jobs"]["queue-notice"]["if"]
-        == f"needs.{job}.outputs.{notification_gate} == 'true'"
-    )
+    queue_token = next(step for step in steps if step.get("id") == token)
+    assert steps.index(queue_token) < steps.index(notice) < steps.index(dispatch)
     if job == "dispatch":
-        assert notice["if"] == "needs.dispatch.outputs.task_dispatched == 'true'"
+        authorization = (
+            "steps.gate.outputs.candidate == 'true' && "
+            "(steps.gate.outputs.is_author == 'true' || "
+            "steps.owner-gate.outputs.is_owner == 'true')"
+        )
+        assert queue_token["if"] == authorization
+        assert notice["if"] == authorization + " && steps.gate.outputs.command == 'task'"
+        assert dispatch["if"] == authorization
+        trigger_comment_id = "${{ github.event.comment.node_id }}"
+    else:
+        authorization = (
+            "steps.review.outputs.decision == 'Pass' && "
+            "steps.publish-review.outcome == 'success' && "
+            "steps.publish-review.outputs.review_comment_id != ''"
+        )
+        assert queue_token["if"] == notice["if"] == authorization
+        dispatch_token = next(
+            step for step in steps if step.get("id") == "dispatch-token"
+        )
+        assert steps.index(queue_token) + 1 == steps.index(notice)
+        assert steps.index(notice) + 1 == steps.index(dispatch_token)
+        assert dispatch["if"] == (
+            authorization + " && steps.dispatch-token.outcome == 'success'"
+        )
+        trigger_comment_id = "${{ steps.publish-review.outputs.review_comment_id }}"
     expected_gate = "steps.task-dispatch.outcome == 'success'"
     if job == "dispatch":
         expected_gate += " && steps.gate.outputs.command == 'task'"
     assert source["outputs"]["task_dispatched"] == "${{ " + expected_gate + " }}"
-    # Only the independent notification job may fail; rerun-failed-jobs must
-    # not rerun the expensive rubric/model or repeat the accepted dispatch.
+    # A failed queue notice must prevent dispatch so the worker cannot post
+    # "building" before the queue acknowledgement exists.
+    assert "continue-on-error" not in queue_token
     assert "continue-on-error" not in notice
-    assert all(
-        "Dispatch privately" != step.get("name")
-        and "Run rubric review" != step.get("name")
-        for step in steps
-    )
+    assert queue_token["with"]["repositories"] == "${{ github.event.repository.name }}"
+    assert queue_token["with"]["permission-discussions"] == "write"
     assert notice["env"] == {
         "GH_TOKEN": "${{ steps." + token + ".outputs.token }}",
         "BOT_LOGIN": "${{ steps." + token + ".outputs.app-slug }}",
-        "TRIGGER_COMMENT_ID": "${{ needs." + job + ".outputs.trigger_comment_id }}",
+        "TRIGGER_COMMENT_ID": trigger_comment_id,
         "DISCUSSION_ID": "${{ github.event.discussion.node_id }}",
     }
 

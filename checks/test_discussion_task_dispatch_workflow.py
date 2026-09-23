@@ -106,8 +106,15 @@ def test_dispatch_workflow_gates_token_and_dispatch_on_author_or_current_owner()
         "(steps.gate.outputs.is_author == 'true' || "
         "steps.owner-gate.outputs.is_owner == 'true')"
     )
-    for name in ("Build dispatch request", "Dispatch privately"):
+    for name in (
+        "Build dispatch request",
+        "Create acknowledgement App token",
+        "Dispatch privately",
+    ):
         assert named_steps[name]["if"] == authorization
+    assert named_steps["Post task queue notice"]["if"] == (
+        authorization + " && steps.gate.outputs.command == 'task'"
+    )
 
     assert gate_index < token_index < steps.index(owner_gate)
 
@@ -153,17 +160,22 @@ def test_manual_dispatch_payload_is_explicitly_a_comment_trigger():
     assert '"client_payload": payload' in named_steps["Build dispatch request"]["run"]
 
 
-def test_authorized_task_command_gets_non_blocking_eyes_acknowledgement():
+def test_accepted_task_and_reset_commands_are_acknowledged_after_dispatch():
     workflow, _ = load_workflow()
-    notification = workflow["jobs"]["queue-notice"]
-    steps = notification["steps"]
-    named_steps = {step["name"]: step for step in steps}
+    dispatch_job = workflow["jobs"]["dispatch"]
+    steps = dispatch_job["steps"]
+    named_steps = steps_by_name(workflow)
     token = named_steps["Create acknowledgement App token"]
     reaction = named_steps["Acknowledge accepted task command"]
 
     assert token == {
         "name": "Create acknowledgement App token",
         "id": "ack-token",
+        "if": (
+            "steps.gate.outputs.candidate == 'true' && "
+            "(steps.gate.outputs.is_author == 'true' || "
+            "steps.owner-gate.outputs.is_owner == 'true')"
+        ),
         "uses": f"actions/create-github-app-token@{APP_TOKEN_SHA}",
         "with": {
             "client-id": "${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}",
@@ -173,9 +185,12 @@ def test_authorized_task_command_gets_non_blocking_eyes_acknowledgement():
             "permission-discussions": "write",
         },
     }
-    assert notification["if"] == "needs.dispatch.outputs.command_dispatched == 'true'"
+    assert dispatch_job["outputs"]["command_dispatched"] == (
+        "${{ steps.task-dispatch.outcome == 'success' }}"
+    )
     assert "continue-on-error" not in reaction
-    assert "if" not in reaction  # Both /task and /reset are acknowledged.
+    # Both /task and /reset are acknowledged after an accepted dispatch.
+    assert reaction["if"] == "steps.task-dispatch.outcome == 'success'"
     assert reaction["env"] == {
         "GH_TOKEN": "${{ steps.ack-token.outputs.token }}",
         "COMMENT_NODE_ID": "${{ github.event.comment.node_id }}",
@@ -183,7 +198,13 @@ def test_authorized_task_command_gets_non_blocking_eyes_acknowledgement():
     assert "addReaction" in reaction["run"]
     assert 'id="$COMMENT_NODE_ID"' in reaction["run"]
     assert 'content="EYES"' in reaction["run"]
-    assert steps.index(reaction) > steps.index(named_steps["Post task queue notice"])
+    assert (
+        steps.index(named_steps["Build dispatch request"])
+        < steps.index(token)
+        < steps.index(named_steps["Post task queue notice"])
+        < steps.index(named_steps["Dispatch privately"])
+        < steps.index(reaction)
+    )
 
 
 def test_dispatch_workflow_never_handles_private_or_untrusted_content():
