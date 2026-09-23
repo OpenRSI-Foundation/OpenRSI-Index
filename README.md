@@ -43,7 +43,7 @@ We are witnessing the dawn of a new era: AI is entering a recursive self-improve
 
 ### Task taxonomy
 
-We are actively developing this project and welcome [contributions](https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md) from the community. Tasks and execution logs are available in [rsi-tasks/](rsi-tasks/) and [rsi-logs/](rsi-logs/), respectively. See [Quick Start](assets/docs/quick-start.md) for instructions on running these tasks.
+We are actively developing this project and welcome [contributions](https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md) from the community. Tasks and execution logs are available in [rsi-tasks/](rsi-tasks/) and [rsi-logs/](rsi-logs/), respectively. Open the [RSI Logs Viewer](https://openrsi-logs.zhuofengli12345.workers.dev/) to explore results visually. See [Quick Start](assets/docs/quick-start.md) for instructions on running these tasks.
 
 <details>
 <summary><strong>View tasks</strong></summary>
