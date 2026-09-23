@@ -47,7 +47,8 @@ We are witnessing the dawn of a new era: AI is entering a recursive self-improve
 We are actively developing this project and welcome [contributions](https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md) from the community. Tasks and execution logs are available in [rsi-tasks/](rsi-tasks/) and [rsi-logs/](rsi-logs/), respectively. See [Quick Start](assets/docs/quick-start.md) for instructions on running these tasks.
 
 Browse the logs by task with the standalone [RSI Logs dashboard](dashboard/):
-run `python3 dashboard/serve.py`, then open `http://127.0.0.1:8000/`.
+visit the [hosted dashboard](https://openrsi-logs.zhuofengli12345.workers.dev/),
+or run `python3 dashboard/serve.py` and open `http://127.0.0.1:8000/`.
 
 <details>
 <summary><strong>View tasks</strong></summary>
