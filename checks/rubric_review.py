@@ -53,8 +53,8 @@ PRIVATE_RUBRIC_REPO = "https://github.com/OpenRSI-Foundation/RSI-Skills"
 DEFAULT_RUBRIC_FILE = (
     Path(__file__).parent.parent.parent / "RSI-Skills" / "rubrics" / "task-proposal.md"
 )
-JUDGE_MODEL = "gpt-6-luna"
-JUDGE_REASONING_EFFORT = "high"
+JUDGE_MODEL = "gpt-5.6-terra"
+JUDGE_REASONING_EFFORT = "medium"
 JUDGE_MAX_OUTPUT_TOKENS = 32_768
 MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_REPOSITORY_FILES = 12
