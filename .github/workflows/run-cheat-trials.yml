@@ -363,7 +363,9 @@ jobs:
         timeout-minutes: 360
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.RUBRIC_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.RUBRIC_BASE_URL || secrets.RUBRIC_BASE_URL }}
+          OPENAI_API_BASE: ${{ vars.RUBRIC_BASE_URL || secrets.RUBRIC_BASE_URL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
@@ -538,7 +540,9 @@ jobs:
       - name: Run harbor job
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.RUBRIC_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.RUBRIC_BASE_URL || secrets.RUBRIC_BASE_URL }}
+          OPENAI_API_BASE: ${{ vars.RUBRIC_BASE_URL || secrets.RUBRIC_BASE_URL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MODAL_TOKEN_ID: ${{ secrets.MODAL_TOKEN_ID }}
           MODAL_TOKEN_SECRET: ${{ secrets.MODAL_TOKEN_SECRET }}
@@ -674,7 +678,9 @@ jobs:
       - name: Run harbor analyze
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.RUBRIC_API_KEY }}
+          OPENAI_BASE_URL: ${{ vars.RUBRIC_BASE_URL || secrets.RUBRIC_BASE_URL }}
+          OPENAI_API_BASE: ${{ vars.RUBRIC_BASE_URL || secrets.RUBRIC_BASE_URL }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANALYZE_MODEL: ${{ needs.parse-config.outputs.analyze_model }}
         run: |
