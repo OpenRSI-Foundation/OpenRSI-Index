@@ -77,32 +77,10 @@ jobs:
               json.dump(request, output, sort_keys=True, separators=(",", ":"))
           PY
 
-      - name: Dispatch privately
-        id: task-dispatch
-        if: steps.gate.outputs.candidate == 'true' && (steps.gate.outputs.is_author == 'true' || steps.owner-gate.outputs.is_owner == 'true')
-        env:
-          GH_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: |
-          python3 checks/discussion_recovery.py gh api --method POST /repos/OpenRSI-Foundation/RSI-Skills/dispatches \
-            --input repository-dispatch.json
-
-      - name: Mark failed GitHub setup for external classification
-        if: failure() && (steps.public-checkout.outcome == 'failure' || steps.app-token.outcome == 'failure')
-        run: printf 'RSI_GITHUB_SETUP_FAILURE operation=discussion.setup\n'
-
-  queue-notice:
-    needs: dispatch
-    if: needs.dispatch.outputs.command_dispatched == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - name: Checkout public retry helper
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          persist-credentials: false
+      # Acknowledge queue entry before the private worker can start building.
       - name: Create acknowledgement App token
         id: ack-token
+        if: steps.gate.outputs.candidate == 'true' && (steps.gate.outputs.is_author == 'true' || steps.owner-gate.outputs.is_owner == 'true')
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
@@ -111,11 +89,11 @@ jobs:
           repositories: ${{ github.event.repository.name }}
           permission-discussions: write
       - name: Post task queue notice
-        if: needs.dispatch.outputs.task_dispatched == 'true'
+        if: steps.gate.outputs.candidate == 'true' && (steps.gate.outputs.is_author == 'true' || steps.owner-gate.outputs.is_owner == 'true') && steps.gate.outputs.command == 'task'
         env:
           GH_TOKEN: ${{ steps.ack-token.outputs.token }}
           BOT_LOGIN: ${{ steps.ack-token.outputs.app-slug }}
-          TRIGGER_COMMENT_ID: ${{ needs.dispatch.outputs.trigger_comment_id }}
+          TRIGGER_COMMENT_ID: ${{ github.event.comment.node_id }}
           DISCUSSION_ID: ${{ github.event.discussion.node_id }}
         run: |
           python3 checks/discussion_recovery.py gh api graphql \
@@ -126,7 +104,17 @@ jobs:
             }' \
             -f discussionId="$DISCUSSION_ID" \
             -f body='⏳ Your task is queued and will start automatically when a runner is available. No action is needed.'
+      - name: Dispatch privately
+        id: task-dispatch
+        if: steps.gate.outputs.candidate == 'true' && (steps.gate.outputs.is_author == 'true' || steps.owner-gate.outputs.is_owner == 'true')
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: |
+          python3 checks/discussion_recovery.py gh api --method POST /repos/OpenRSI-Foundation/RSI-Skills/dispatches \
+            --input repository-dispatch.json
+
       - name: Acknowledge accepted task command
+        if: steps.task-dispatch.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.ack-token.outputs.token }}
           COMMENT_NODE_ID: ${{ github.event.comment.node_id }}
@@ -139,3 +127,7 @@ jobs:
             }' \
             -f id="$COMMENT_NODE_ID" \
             -f content="EYES"
+
+      - name: Mark failed GitHub setup for external classification
+        if: failure() && (steps.public-checkout.outcome == 'failure' || steps.app-token.outcome == 'failure' || steps.ack-token.outcome == 'failure')
+        run: printf 'RSI_GITHUB_SETUP_FAILURE operation=discussion.setup\n'
