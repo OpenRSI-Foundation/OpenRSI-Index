@@ -76,7 +76,8 @@ All learned inference parameters must be registered in `.model`.
   and resampling the fixed records are allowed; the reference uses every record.
 - No released Kev adapter, alternative pretrained base, external API, answer
   lookup, hardcoded solver for evaluation families, or metadata-based answer
-  routing. Predictions must come from the trained neural model.
+  routing. Predictions must come from the trained neural model, and every
+  probability must be produced by the Kev decision head.
 - Edit only `/workspace/candidate/` and `/workspace/experiments/`. Keep `/opt/`,
   runtime dependencies, fixed assets, evaluator and Harness unchanged. Do not
   inspect reserved tests, parent-process memory or hidden outputs.
