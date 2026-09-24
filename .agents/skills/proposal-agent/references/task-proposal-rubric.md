@@ -127,6 +127,11 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
   concrete existing delivery/access interface usable by the current task
   workflow. A vague statement that an operator will pre-provision something
   later is insufficient.
+- Required Work and Judge execution must fit the current Harness. An essential
+  dependency on a host Docker socket, privileged Docker-in-Docker, sidecars, or
+  task-added capabilities/devices fails this gate when no faithful supported
+  route is established. An outer task Dockerfile or a native single-container
+  adaptation preserving the scientific contract is not a rejection reason.
 - The selected execution lane must fit on a single physical node and use at
   most 8 GPUs at peak. Work and Judge may each use zero GPUs; do not fail this
   gate merely because a task is CPU-only. For GPU lanes, H100 is the budgeting
@@ -135,6 +140,12 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
   inherently requires multi-node execution or more than 8 GPUs fails this gate
   unless the proposal already selects a faithful, repository-supported eligible
   lane.
+- A remote sandbox executing candidate code or container workloads is part of
+  the task's execution lane: include its placement and resources in the node
+  and peak-resource check. API access does not exempt that compute. This does
+  not prohibit bounded fixed inference/scoring APIs with an existing access
+  interface; their runtime credentials and live validation may be supplied
+  later. A promised future execution backend is not an existing service.
 
 ### 3. Model-Development AutoResearch Scope
 
@@ -308,6 +319,8 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
   layout, Verifier mechanics, timeout sizing, unavailable reproduced
   measurements, unverified runtime, pending stateful validation, or another
   ordinary implementation decision the Task Agent can resolve conservatively.
+  An essential unsupported or nonexistent execution backend is not an ordinary
+  packaging choice; contributor approval alone does not establish feasibility.
 - A Task-Generation Readiness failure forces `Reject`.
 
 ## Non-blocking Compute Check
