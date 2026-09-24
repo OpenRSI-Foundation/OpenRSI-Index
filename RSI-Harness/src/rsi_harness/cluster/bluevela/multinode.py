@@ -276,6 +276,7 @@ class MultiNodeBroker:
         worker_template: RemoteWorkerTemplate,
         remote_binary: str = "blaunch",
         remote_host_flag: str = "-z",
+        remote_args: tuple[str, ...] = (),
     ) -> None:
         if not run_id:
             raise InfrastructureError("multi-node broker run id is missing")
@@ -293,6 +294,7 @@ class MultiNodeBroker:
         self.worker_template = worker_template
         self.remote_binary = remote_binary
         self.remote_host_flag = remote_host_flag
+        self.remote_args = remote_args
         self.allocator = SubpoolAllocator(nodes)
         self._active: dict[str, ReservedRequest] = {}
         self._lock = threading.RLock()
@@ -396,6 +398,7 @@ class MultiNodeBroker:
                 commands = tuple(
                     (
                         self.remote_binary,
+                        *self.remote_args,
                         self.remote_host_flag,
                         node.host,
                         sys.executable,
@@ -569,6 +572,7 @@ class MultiNodeBroker:
                             command,
                             remote_binary=self.remote_binary,
                             remote_host_flag=self.remote_host_flag,
+                            remote_args=self.remote_args,
                         ),
                         check=False,
                         stdin=subprocess.DEVNULL,
@@ -665,16 +669,21 @@ def stop_command(
     *,
     remote_binary: str = "blaunch",
     remote_host_flag: str = "-z",
+    remote_args: tuple[str, ...] = (),
+    module: str = "rsi_harness.cluster.bluevela.remote_worker",
 ) -> tuple[str, ...]:
     """Change only the frozen remote-worker action from run to stop."""
+    prefix = (remote_binary, *remote_args, remote_host_flag)
+    action = len(prefix) + 4
     if (
-        len(command) < 7
-        or command[:2] != (remote_binary, remote_host_flag)
-        or command[5] != "rsi_harness.cluster.bluevela.remote_worker"
-        or command[6] != "run"
+        len(command) <= action
+        or command[:len(prefix)] != prefix
+        or command[action - 2] != "-m"
+        or command[action - 1] != module
+        or command[action] != "run"
     ):
         raise InfrastructureError("cannot derive cleanup from an unsafe rank command")
-    return (*command[:6], "stop", *command[7:])
+    return (*command[:action], "stop", *command[action + 1:])
 
 
 def rank_environments(
