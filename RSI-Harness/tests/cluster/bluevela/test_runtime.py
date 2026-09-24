@@ -291,9 +291,11 @@ def test_judge_gets_fresh_writable_tmp_without_mutating_preserved_assets(
     assert not any((node_tmp / "judge").iterdir())
 
 
+@pytest.mark.parametrize("cluster_name", ["bluevela", "slurm"])
 def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
     tmp_path: Path,
     monkeypatch,
+    cluster_name,
 ) -> None:
     from rsi_harness.cluster.bluevela import judge_controller
 
@@ -301,6 +303,10 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
     node_tmp.mkdir()
     monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
     profile = load_cluster_profile("bluevela", {"USER": "alice"})
+    profile = profile.model_copy(update={
+        "adapter": cluster_name,
+        "scheduler": load_cluster_profile(cluster_name).scheduler,
+    })
     profile = profile.model_copy(
         update={
             "scheduler": profile.scheduler.model_copy(
@@ -352,6 +358,7 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
         del timeout_seconds
         observed.append(command)
         assert runtime.judge_broker is not None
+        assert runtime.judge_broker.remote_args == profile.scheduler.remote_args
         assert tuple(node.host for node in runtime.judge_broker.nodes) == (
             "judge-a",
         )
@@ -387,8 +394,10 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
     result = runtime.run_judge(snapshot, request, {})
 
     assert result.exit_code == 0
-    assert observed[0][:3] == (
+    prefix_length = 3 + len(profile.scheduler.remote_args)
+    assert observed[0][:prefix_length] == (
         "/site/bin/remote-launch",
+        *profile.scheduler.remote_args,
         "--host",
         "judge-a",
     )
@@ -602,14 +611,20 @@ def test_judge_authority_is_multinode_only_and_never_exposed_to_work(
     assert f"{task_authority}:/run-contract:ro" in judge
 
 
+@pytest.mark.parametrize("cluster_name", ["bluevela", "slurm"])
 def test_multinode_work_runtime_injects_only_current_phase_broker(
     tmp_path: Path,
     monkeypatch,
+    cluster_name,
 ) -> None:
     node_tmp = tmp_path / "node-tmp"
     node_tmp.mkdir()
     monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
     profile = load_cluster_profile("bluevela", {"USER": "alice"})
+    profile = profile.model_copy(update={
+        "adapter": cluster_name,
+        "scheduler": load_cluster_profile(cluster_name).scheduler,
+    })
     profile = profile.model_copy(
         update={
             "apptainer": profile.apptainer.model_copy(
@@ -652,6 +667,8 @@ def test_multinode_work_runtime_injects_only_current_phase_broker(
             f"GPU-work-a-{index}" for index in range(4)
         )
         assert runtime.work_broker is not None
+        assert runtime.work_broker.remote_args == profile.scheduler.remote_args
+        assert runtime.work_broker.remote_binary == profile.scheduler.remote_binary
         assert runtime.work_broker.worker_template.environment[
             "RSI_SHARED_DATA_ROOT"
         ] == profile.apptainer.work_environment["RSI_SHARED_DATA_ROOT"]

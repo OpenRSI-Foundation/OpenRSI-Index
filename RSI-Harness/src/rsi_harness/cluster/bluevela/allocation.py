@@ -222,6 +222,7 @@ def probe_and_partition(
     expected_sif_sha256: str,
     remote_binary: str = "blaunch",
     remote_host_flag: str = "-z",
+    remote_args: tuple[str, ...] = (),
     runner: CommandRunner = _run,
     probe_attempts: int = 3,
     probe_retry_seconds: float = 2.0,
@@ -236,6 +237,7 @@ def probe_and_partition(
     for item in inventory:
         argv = (
             remote_binary,
+            *remote_args,
             remote_host_flag,
             item.host,
             sys.executable,

@@ -5,5 +5,13 @@ from rsi_harness.cluster.schedulers.lsf import (
     LSFJobSpec,
     LSFScheduler,
 )
+from rsi_harness.cluster.schedulers.slurm import (
+    SlurmJobResult,
+    SlurmJobSpec,
+    SlurmScheduler,
+)
 
-__all__ = ["LSFJobResult", "LSFJobSpec", "LSFScheduler"]
+__all__ = [
+    "LSFJobResult", "LSFJobSpec", "LSFScheduler",
+    "SlurmJobResult", "SlurmJobSpec", "SlurmScheduler",
+]

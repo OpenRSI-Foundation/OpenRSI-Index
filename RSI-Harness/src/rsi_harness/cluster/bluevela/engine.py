@@ -21,7 +21,8 @@ from rsi_harness.cluster.bluevela.allocation import (
     probe_and_partition,
 )
 from rsi_harness.cluster.bluevela.resources import MultiNodeResources
-from rsi_harness.cluster.config import ClusterProfile
+from rsi_harness.cluster.config import ClusterProfile, SlurmSchedulerProfile
+from rsi_harness.cluster.slurm.allocation import discover_slurm_inventory
 from rsi_harness.errors import SetupError
 from rsi_harness.models import (
     AgentAuthSource,
@@ -92,6 +93,8 @@ def load_engine_payload(path: Path) -> EnginePayload:
 def bind_lsf_devices(
     plan: RunPlan,
     allocated_devices: tuple[str, ...],
+    *,
+    scheduler_name: str = "LSF",
 ) -> RunPlan:
     """Replace planning placeholders with the exact ordered LSF allocation."""
     expected = len(plan.gpu_plan.authorized_pool.devices)
@@ -101,11 +104,11 @@ def bind_lsf_devices(
         or len(set(allocated_devices)) != len(allocated_devices)
     ):
         raise SetupError(
-            "LSF CUDA_VISIBLE_DEVICES does not match the Engine plan: "
+            f"{scheduler_name} CUDA_VISIBLE_DEVICES does not match the Engine plan: "
             f"expected {expected}, got {allocated_devices!r}"
         )
     devices = tuple(
-        GPUDevice(index=index, uuid=value, name="LSF allocated GPU")
+        GPUDevice(index=index, uuid=value, name=f"{scheduler_name} allocated GPU")
         for index, value in enumerate(allocated_devices)
     )
     mapped_devices = {
@@ -255,11 +258,15 @@ test -s {_quote(leaf / 'final_result.json')}
 """
     else:
         assert payload.multi_node is not None
+        inventory_variable = (
+            "SLURM_JOB_NODELIST" if profile.scheduler.kind == "slurm"
+            else "LSB_MCPU_HOSTS"
+        )
         script = f"""#!/usr/bin/env bash
 set -euo pipefail
 umask 077
 
-test -n "${{LSB_MCPU_HOSTS:-}}"
+test -n "${{{inventory_variable}:-}}"
 export APPTAINER_BIND={_quote(profile.apptainer.dns_bind)}
 export HF_HOME={_quote(profile.storage.hf_home)}
 export HF_DATASETS_CACHE={_quote(profile.storage.hf_datasets_cache)}
@@ -293,20 +300,31 @@ test -s {_quote(leaf / 'final_result.json')}
 
 
 def run_engine_payload(payload: EnginePayload) -> None:
-    """Run the native RSI-Harness Engine inside the current LSF allocation."""
+    """Run the native RSI-Harness Engine inside the current scheduler allocation."""
     allocated_pools: AllocatedPools | None = None
     if payload.resources is not None:
         raw = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         devices = tuple(item.strip() for item in raw.split(",") if item.strip())
-        plan = bind_lsf_devices(payload.run_plan, devices)
+        plan = bind_lsf_devices(
+            payload.run_plan, devices,
+            scheduler_name=payload.profile.scheduler.kind.upper(),
+        )
     else:
         resources = payload.multi_node
         assert resources is not None
-        inventory = parse_lsb_mcpu_hosts(
-            os.environ.get("LSB_MCPU_HOSTS", ""),
-            expected_hosts=resources.total_nodes,
-            expected_slots=resources.cpu_slots_per_node,
-        )
+        scheduler = payload.profile.scheduler
+        if isinstance(scheduler, SlurmSchedulerProfile):
+            inventory = discover_slurm_inventory(
+                expected_hosts=resources.total_nodes,
+                expected_slots=resources.cpu_slots_per_node,
+                control_binary=scheduler.control_binary,
+            )
+        else:
+            inventory = parse_lsb_mcpu_hosts(
+                os.environ.get("LSB_MCPU_HOSTS", ""),
+                expected_hosts=resources.total_nodes,
+                expected_slots=resources.cpu_slots_per_node,
+            )
         try:
             expected_digest = payload.sif_sha256_path.read_text().split()[0]
         except (OSError, IndexError) as error:
@@ -321,13 +339,14 @@ def run_engine_payload(payload: EnginePayload) -> None:
             expected_sif_sha256=expected_digest,
             remote_binary=payload.profile.scheduler.remote_binary,
             remote_host_flag=payload.profile.scheduler.remote_host_flag,
+            remote_args=payload.profile.scheduler.remote_args,
         )
         controller = (
             allocated_pools.work[0]
             if allocated_pools.work
             else allocated_pools.verifier[0]
         )
-        if socket.gethostname().split(".", 1)[0] != controller.host:
+        if socket.gethostname().split(".", 1)[0] != controller.host.split(".", 1)[0]:
             raise SetupError(
                 "multi-node Engine controller is not the first frozen phase host"
             )

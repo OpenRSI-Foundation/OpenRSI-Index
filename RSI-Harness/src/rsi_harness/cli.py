@@ -156,7 +156,8 @@ class _ClusterConsole:
             multi_node = (
                 multi_node if isinstance(multi_node, Mapping) else {}
             )
-            typer.echo("Blue Vela dry-run:")
+            label = "Slurm" if details.get("adapter") == "slurm" else "Blue Vela"
+            typer.echo(f"{label} dry-run:")
             typer.echo(_field("Run ID:", details.get("run_id")))
             typer.echo(_field("Run dir:", details.get("run_dir")))
             typer.echo(_field("Image:", details.get("image")))
@@ -295,7 +296,7 @@ def run_command(
         str | None,
         typer.Option(
             "--cluster",
-            help="Cluster name (for example bluevela) or a cluster profile TOML",
+            help="Cluster name (bluevela or slurm) or a cluster profile TOML",
         ),
     ] = None,
     dry_run: Annotated[
