@@ -20,6 +20,14 @@ For each material claim, retain the repository-relative path and the fact it sup
 
 Verify that every required model, dataset, checkpoint, evaluator asset, image, and external service is public and usable at the resolved revision, or has a contributor-confirmed concrete existing delivery that the current task workflow can consume. Record the actual source or delivery/access interface. A statement that an operator will pre-provision an unspecified asset later is not sufficient evidence. Do not invent a private bundle, cluster, service, image, delivery mechanism, or future platform capability to close a gap.
 
+## Execution compatibility
+
+Inspect the required Work and Judge launch paths during baseline/evaluator research. The task's outer Dockerfile is normal packaging; running processes inside its single container is supported. The standard Harness does not provide a host Docker socket, privileged Docker-in-Docker, sidecars, or task-added capabilities/devices. Check required capabilities, not just mentions of Docker. A repository-grounded native adaptation is valid when it preserves the research and evaluation contract.
+
+For a remote sandbox that executes candidate code or container workloads, establish an existing service/access interface and include its execution placement and resources in the single-node lane check; calling it an API does not exempt that compute. A bounded fixed inference/scoring API remains allowed. Runtime credential injection and live validation may happen later for an existing supported service; inventing a backend or promising future operator provisioning is not equivalent.
+
+When an essential execution dependency has no faithful supported route, report the exact source path, required capability, and incompatibility, and stop before proposal confirmation. Do not defer it as ordinary packaging or keep revising wording without new feasibility evidence. This is a read-only compatibility check, not a requirement to build or run the task.
+
 ## Contributor-project fit
 
 Collect the contributor's full professional name and establish public expertise evidence before leaving Round 0. Use public author lists, papers, project pages, scholarly profiles, and repository profiles to disambiguate the person and assess alignment with the specific proposed research question. Assess task-relevant expertise, not prestige, institution, citation count, or popularity.

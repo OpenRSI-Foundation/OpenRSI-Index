@@ -52,6 +52,8 @@ Inspect the repository before drafting. Produce one focused, falsifiable model-d
 
 ## Round 2 — Reference baseline
 
+Before confirming the baseline and evaluation route, apply the execution-compatibility check in [references/repository-research.md](references/repository-research.md) to their actual launch paths.
+
 Default to an official released checkpoint or other evaluation-ready artifact when it represents the intended reference method and can be scored under the matched protocol. Do not require retraining that baseline. Keep the Solution-materializable reference baseline separate from any newly trained matched control. For direct evaluation, use an existing evaluation-ready artifact. For explicitly confirmed evaluation-time retraining, the baseline input may instead be an existing repository configuration or launch path; in either mode, Solution materializes the traceable baseline without training or evaluation. A newly trained matched control required for a causal comparison is a Work-produced control trial, not an unavailable task-construction prerequisite. Have the contributor choose among multiple scientifically valid baselines without recommending one unless asked. Verify artifact provenance and revision, or implementation and config when retraining is the confirmed evaluation mode, plus the evaluator, evaluation command or launch path, metric, and matched comparison evidence. Label repository results not yet reproduced. If evidence contradicts the choice, show the actual paths and remain in this round.
 
 ## Round 3 — Evaluation
