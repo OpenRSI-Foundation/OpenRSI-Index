@@ -173,6 +173,7 @@ def build_apptainer_command(
         (
             "--nv",
             "--containall",
+            "--no-umask",
             "--cleanenv",
             "--no-eval",
             "--writable-tmpfs",

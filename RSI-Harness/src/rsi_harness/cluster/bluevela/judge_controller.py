@@ -105,6 +105,7 @@ def build_apptainer_command(
     command.extend(
         (
             "--containall",
+            "--no-umask",
             "--cleanenv",
             "--no-eval",
             "--writable-tmpfs",
