@@ -96,8 +96,18 @@ export RSI_AGENT_API_BASE_URL="https://your-api.example/v1"
 export RSI_AGENT_MODEL="your-model"
 ```
 
-These values are passed only to the Agent process and are redacted from Engine
-artifacts. Do not put credentials in the Harbor task directory.
+These values are passed only to the Agent process; credentials are redacted
+from Engine artifacts. Do not put credentials in the Harbor task directory.
+
+Use `RSI_AGENT_EXTRA_ENV="DISABLE_AUTOUPDATER=1,TOKENIZERS_PARALLELISM=false"`
+for additional Agent settings. Ordinary settings are not treated as secrets.
+Common credential names such as `OPENAI_API_KEY`, `HF_TOKEN`, and
+`CUSTOM_PASSWORD`, plus credentials in authenticated URLs, are automatically
+redacted. If a credential uses a nonstandard name, explicitly list that name
+in `RSI_AGENT_SECRET_ENV_NAMES` (comma-separated). For example, a credential
+passed as `CUSTOM_VALUE` in `RSI_AGENT_EXTRA_ENV` requires
+`RSI_AGENT_SECRET_ENV_NAMES="CUSTOM_VALUE"`; its value is still passed to the
+Agent but is redacted from logs. This applies to Docker and cluster runs.
 
 ## Run a Harbor task
 

@@ -337,12 +337,150 @@ def test_claude_agent_environment_marks_work_container_as_sandbox() -> None:
     # refuses --dangerously-skip-permissions unless IS_SANDBOX is exactly "1".
     assert environment["IS_SANDBOX"] == "1"
     # The marker must not join the exact-value redaction set (it would
-    # redact every "1" in the trajectory), unlike RSI_AGENT_EXTRA_ENV values.
+    # redact every "1" in the trajectory).
     assert "1" not in rsi_loop_runtime_secret_values(config)
     codex_environment = rsi_loop_agent_environment(
         config, create_agent("codex", config), None
     )
     assert "IS_SANDBOX" not in codex_environment
+
+
+def test_claude_stop_hook_cap_is_disabled_without_redacting_zeroes() -> None:
+    from rsi_harness.integrations.rsi_loop import (
+        rsi_loop_agent_environment,
+        rsi_loop_runtime_secret_values,
+    )
+    from rsi_harness.runtime.redaction import redact_exact_values
+    from rsi_loop.harness.agent import create_agent
+
+    config = RSILoopConfig(agent_api_key="provider-secret")
+    environment = rsi_loop_agent_environment(
+        config, create_agent("claude-code", config), None
+    )
+
+    assert environment["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"] == "0"
+    assert redact_exact_values(
+        "step 10, loss 0.01, provider-secret",
+        rsi_loop_runtime_secret_values(config),
+    ) == "step 10, loss 0.01, [REDACTED]"
+    codex_environment = rsi_loop_agent_environment(
+        config, create_agent("codex", config), None
+    )
+    assert "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP" not in codex_environment
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "is_credential"),
+    (
+        ("DISABLE_AUTOUPDATER", "1", False),
+        ("CLAUDE_CODE_STOP_HOOK_BLOCK_CAP", "0", False),
+        ("TOKENIZERS_PARALLELISM", "false", False),
+        ("MAX_OUTPUT_TOKENS", "1000", False),
+        ("TOKEN_COUNT", "10", False),
+        ("API_KEY_FILE", "/tmp/key", False),
+        ("HF_HOME", "/tmp/cache", False),
+        ("MODEL_NAME", "some-model", False),
+        ("CACHE_KEY", "shared-cache", False),
+        ("ANTHROPIC_AUTH_TOKEN", "provider-credential", True),
+        ("OPENAI_API_KEY", "provider-credential", True),
+        ("HF_TOKEN", "hub-credential", True),
+        ("AWS_ACCESS_KEY_ID", "access-credential", True),
+        ("AWS_SECRET_ACCESS_KEY", "aws-credential", True),
+        ("AWS_SESSION_TOKEN", "session-credential", True),
+        ("CLIENT_SECRET", "client-credential", True),
+        ("CUSTOM_PASSWORD", "password-credential", True),
+        ("CUSTOM_PRIVATE_KEY", "private-credential", True),
+        ("custom_token", "1", True),
+    ),
+)
+def test_extra_env_redaction_distinguishes_credentials_from_settings(
+    name: str, value: str, is_credential: bool
+) -> None:
+    from rsi_harness.integrations.rsi_loop import rsi_loop_runtime_secret_values
+
+    config = RSILoopConfig(agent_extra_env={name: value})
+
+    assert (value in rsi_loop_runtime_secret_values(config)) is is_credential
+
+
+def test_extra_env_custom_credential_names_are_explicitly_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from rsi_harness.integrations.rsi_loop import rsi_loop_runtime_secret_values
+
+    monkeypatch.setenv(
+        "RSI_AGENT_EXTRA_ENV", "CUSTOM_VALUE=opaque-credential,DISABLE_AUTOUPDATER=1"
+    )
+    monkeypatch.setenv("RSI_AGENT_SECRET_ENV_NAMES", " CUSTOM_VALUE, , MISSING ")
+    config = load_config()
+
+    assert config.agent_secret_env_names == ("CUSTOM_VALUE", "MISSING")
+    secrets = rsi_loop_runtime_secret_values(config)
+    assert "opaque-credential" in secrets
+    assert "1" not in secrets
+    assert config.agent_extra_env["DISABLE_AUTOUPDATER"] == "1"
+
+
+def test_extra_env_authenticated_urls_still_redact_embedded_credentials() -> None:
+    from rsi_harness.integrations.rsi_loop import rsi_loop_runtime_secret_values
+
+    endpoint = "https://proxy-user:p%40ssword@proxy.example:8443"
+    config = RSILoopConfig(
+        agent_extra_env={
+            "HTTPS_PROXY": endpoint,
+            "MODEL_ENDPOINT": "https://model.example/v1",
+            "ORDINARY_TEXT": "http://[unfinished",
+        }
+    )
+
+    assert rsi_loop_runtime_secret_values(config) == {
+        endpoint, "proxy-user", "p%40ssword", "p@ssword",
+    }
+
+
+def test_extra_env_settings_preserve_streamed_trajectory_and_hide_credentials(
+    tmp_path: Path,
+) -> None:
+    from rsi_harness.cluster.bluevela.runtime import _safe_output
+    from rsi_harness.integrations.rsi_loop import rsi_loop_runtime_secret_values
+    from rsi_harness.runtime.docker import _RedactedOutputWriter
+
+    config = RSILoopConfig(
+        agent_api_key="provider-credential",
+        agent_extra_env={
+            "DISABLE_AUTOUPDATER": "1",
+            "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP": "0",
+            "TOKENIZERS_PARALLELISM": "false",
+            "HF_HOME": "/tmp/cache",
+            "HF_TOKEN": "hub-credential",
+            "CUSTOM_VALUE": "custom-credential",
+        },
+        agent_secret_env_names=("CUSTOM_VALUE",),
+    )
+    raw = (
+        '{"type":"assistant","text":"Epoch 1/10 loss 0.01 false /tmp/cache '
+        'provider-credential hub-credential custom-credential",'
+        '"token_count":10,"enabled":true}\n'
+    )
+    expected = {
+        "type": "assistant",
+        "text": "Epoch 1/10 loss 0.01 false /tmp/cache "
+        "[REDACTED] [REDACTED] [REDACTED]",
+        "token_count": 10,
+        "enabled": True,
+    }
+    secrets = rsi_loop_runtime_secret_values(config)
+    output_path = tmp_path / "trajectory.jsonl"
+    chunks: list[str] = []
+    writer = _RedactedOutputWriter(output_path, tuple(secrets), chunks.append)
+    encoded = raw.encode()
+    for offset in range(0, len(encoded), 7):
+        writer.append(encoded[offset:offset + 7])
+    writer.finish()
+
+    assert json.loads(output_path.read_text()) == expected
+    assert "".join(chunks) == output_path.read_text()
+    assert json.loads(_safe_output(raw, secrets)) == expected
 
 
 def test_claude_prompt_is_read_from_stdin_and_never_expanded_into_argv(

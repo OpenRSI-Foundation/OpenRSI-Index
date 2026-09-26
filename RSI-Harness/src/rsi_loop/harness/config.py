@@ -44,6 +44,8 @@ class RSILoopConfig:
     agent_model: str | None = None
     agent_timeout: int | None = None
     agent_extra_env: dict[str, str] = field(default_factory=dict)
+    # Additional EXTRA_ENV names carrying credentials, beyond standard names.
+    agent_secret_env_names: tuple[str, ...] = ()
 
     # Claude Code cache optimization — suppress the random cch attribution
     # header and dynamic system prompt sections that break prompt caching on
@@ -139,6 +141,12 @@ def load_config(cli_overrides: dict | None = None) -> RSILoopConfig:
             if "=" in item:
                 k, v = item.split("=", 1)
                 config.agent_extra_env[k.strip()] = v.strip()
+
+    config.agent_secret_env_names = tuple(
+        name.strip()
+        for name in os.environ.get("RSI_AGENT_SECRET_ENV_NAMES", "").split(",")
+        if name.strip()
+    )
 
     # Parse RSI_JUDGE_EXTRA_ENV: "KEY1=VAL1,KEY2=VAL2"
     judge_env_str = os.environ.get("RSI_JUDGE_EXTRA_ENV", "")

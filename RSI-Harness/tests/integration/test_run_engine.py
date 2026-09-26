@@ -2086,7 +2086,12 @@ def test_production_agent_boundaries_redact_complete_runtime_secret_set(
             https_proxy=(
                 f"http://proxy-user:{proxy_secret}@203.0.113.91:8080"
             ),
-            agent_extra_env={"CUSTOM_RUNTIME_VALUE": custom_secret},
+            agent_extra_env={
+                "CUSTOM_RUNTIME_VALUE": custom_secret,
+                "DISABLE_AUTOUPDATER": "1",
+                "TOKENIZERS_PARALLELISM": "false",
+            },
+            agent_secret_env_names=("CUSTOM_RUNTIME_VALUE",),
         ),
         coordinator_factory=Coordinator,
         bridge_gateway="127.0.0.1",
@@ -2125,7 +2130,10 @@ def test_production_agent_boundaries_redact_complete_runtime_secret_set(
     )
 
     def stage_error() -> RuntimeError:
-        return RuntimeError("boundary failed: " + "::".join(sorted(all_secrets)))
+        return RuntimeError(
+            "boundary failed: Epoch 1/10 loss 0.01 false "
+            + "::".join(sorted(all_secrets))
+        )
 
     class WorkRuntime:
         def create(self, _spec, *, planned_name):
@@ -2202,6 +2210,7 @@ def test_production_agent_boundaries_redact_complete_runtime_secret_set(
         assert secret not in str(caught.value)
         assert secret not in formatted_error
     assert "[REDACTED]" in str(caught.value)
+    assert "Epoch 1/10 loss 0.01 false" in str(caught.value)
     assert composition.agent_output_secrets == set()
     assert agent.clear_count >= 1
     if clear_fails:
