@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import signal
+import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
@@ -17,6 +19,7 @@ from rsi_harness.errors import (
     InfrastructureError,
     RetryableSubmissionError,
     SetupError,
+    SubmissionError,
 )
 from rsi_harness.models import (
     AgentAuthSource,
@@ -24,6 +27,10 @@ from rsi_harness.models import (
     ContainerRef,
     ContainerTmpfs,
     EvaluationRequest,
+    GPUAllocation,
+    GPUDevice,
+    JudgeGPUMode,
+    RunGPUPlan,
 )
 from rsi_harness.runtime.artifacts import RunArtifactWriter
 from rsi_harness.runtime.local_auth import (
@@ -233,6 +240,200 @@ def test_active_remote_work_makes_submission_retryable_before_snapshot(
     assert runtime.events == ["pause", "idle", "unpause"]
     assert not (runtime.rounds / "agent-1").exists()
     assert not (writer.root / "submissions/agent-1/report.json").exists()
+
+
+def _single_node_gpu_runtime(
+    tmp_path, monkeypatch, *, mode=JudgeGPUMode.RELEASE_ALL, selector="2",
+):
+    monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(tmp_path / "node-tmp"))
+    plan = make_run_plan(tmp_path)
+    work = GPUDevice(index=0, uuid=selector, name="allocated GPU")
+    spare = GPUDevice(index=1, uuid="3", name="allocated GPU")
+    gpu_plan = RunGPUPlan(
+        authorized_pool=GPUAllocation(devices=(work, spare)),
+        work=GPUAllocation(devices=(work,)),
+        judge=GPUAllocation(
+            devices=(() if mode is JudgeGPUMode.FREEZE_ONLY else
+                     (spare,) if mode is JudgeGPUMode.DISJOINT else (work,))
+        ),
+        judge_mode=mode,
+    )
+    runtime = ApptainerAgentRuntime(
+        SimpleNamespace(
+            profile=load_cluster_profile("bluevela"),
+            run_id="native-run",
+            sif_path=tmp_path / "task.sif",
+        ),
+        plan.model_copy(update={"gpu_plan": gpu_plan}),
+    )
+    runtime._process = SimpleNamespace(pid=100, poll=lambda: None)
+    return runtime
+
+
+def _gpu_preflight_commands(
+    monkeypatch, *, compute="", graphics_pid=999, ps=None, failure=None,
+    inventory="2, GPU-owned, NVIDIA H100\n3, GPU-other, NVIDIA H100\n",
+):
+    # Child 102 is a grandchild; 103 has a separate session; 104 is reparented
+    # but still belongs to Work's dedicated session. PID 999 is unrelated.
+    process_table = ps if ps is not None else (
+        "100 1 100\n101 100 100\n102 101 100\n"
+        "103 101 103\n104 1 100\n999 1 999\n"
+    )
+    responses = {
+        ("ps", "-eo", "pid=,ppid=,sid="): process_table,
+        ("nvidia-smi", "--query-gpu=index,uuid,name", "--format=csv,noheader,nounits"):
+            inventory,
+        (
+            "nvidia-smi", "--query-compute-apps=gpu_uuid,pid",
+            "--format=csv,noheader,nounits",
+        ): compute,
+        ("nvidia-smi", "-q", "-x"):
+            "<nvidia_smi_log><gpu><uuid>GPU-owned</uuid><processes>"
+            f"<process_info><pid>{graphics_pid}</pid><process_type>G</process_type>"
+            "</process_info></processes></gpu></nvidia_smi_log>",
+    }
+
+    def run(command, **options):
+        assert 0 < options["timeout"] <= 30
+        if failure is not None:
+            raise failure
+        return subprocess.CompletedProcess(command, 0, responses[tuple(command)], "")
+
+    monkeypatch.setattr(subprocess, "run", run)
+
+
+@pytest.mark.parametrize(
+    ("pid", "selector"),
+    [(100, "2"), (101, "2"), (102, "2"), (103, "2"), (104, "2"), (102, "GPU-owned")],
+)
+def test_release_all_rejects_work_processes_and_descendants(
+    tmp_path: Path, monkeypatch, pid: int, selector: str,
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch, selector=selector)
+    _gpu_preflight_commands(monkeypatch, compute=f"GPU-owned, {pid}\n")
+
+    with pytest.raises(SubmissionError, match=f"PID {pid}"):
+        runtime.require_work_idle()
+
+
+def test_release_all_rejects_work_graphics_process(tmp_path: Path, monkeypatch) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    _gpu_preflight_commands(monkeypatch, graphics_pid=102)
+
+    with pytest.raises(SubmissionError, match="PID 102"):
+        runtime.require_work_idle()
+
+
+def test_release_all_ignores_unrelated_processes_and_unallocated_gpus(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    _gpu_preflight_commands(monkeypatch, compute="GPU-owned, 999\nGPU-other, 102\n")
+
+    runtime.require_work_idle()
+
+
+@pytest.mark.parametrize("mode", [JudgeGPUMode.FREEZE_ONLY, JudgeGPUMode.DISJOINT])
+def test_nonsharing_modes_do_not_query_work_gpu_processes(
+    tmp_path: Path, monkeypatch, mode,
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch, mode=mode)
+
+    def unexpected_query(*_args, **_kwargs):
+        pytest.fail("GPU release is not required in this mode")
+
+    monkeypatch.setattr(subprocess, "run", unexpected_query)
+    runtime.require_work_idle()
+
+
+def test_cpu_work_does_not_query_gpu_processes(tmp_path: Path, monkeypatch) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    runtime.plan = make_run_plan(tmp_path)
+
+    def unexpected_query(*_args, **_kwargs):
+        pytest.fail("CPU-only Work must not require nvidia-smi")
+
+    monkeypatch.setattr(subprocess, "run", unexpected_query)
+    runtime.require_work_idle()
+
+
+@pytest.mark.parametrize(
+    ("ps", "failure"),
+    [
+        ("999 1 999\n", None),
+        ("invalid process table\n", None),
+        (None, subprocess.TimeoutExpired("ps", 15)),
+        (None, FileNotFoundError("nvidia-smi unavailable")),
+    ],
+)
+def test_unproven_work_gpu_release_rejects_submission(
+    tmp_path: Path, monkeypatch, ps, failure,
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    _gpu_preflight_commands(monkeypatch, ps=ps, failure=failure)
+
+    with pytest.raises(SubmissionError):
+        runtime.require_work_idle()
+
+
+@pytest.mark.parametrize("inventory", ["malformed\n", "3, GPU-other, NVIDIA H100\n"])
+def test_unresolved_work_gpu_allocation_rejects_submission(
+    tmp_path: Path, monkeypatch, inventory,
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    _gpu_preflight_commands(monkeypatch, inventory=inventory)
+
+    with pytest.raises(SubmissionError, match="cannot resolve Work GPU allocation"):
+        runtime.require_work_idle()
+
+
+def test_busy_single_node_submission_is_retryable_before_snapshot(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    runtime.workspace.mkdir()
+    runtime.task_assets.mkdir(parents=True)
+    _gpu_preflight_commands(monkeypatch, compute="GPU-owned, 102\n")
+
+    def unexpected_judge(*_args, **_kwargs):
+        pytest.fail("Judge launched before Work GPU release")
+
+    monkeypatch.setattr(subprocess, "Popen", unexpected_judge)
+    signals = []
+    monkeypatch.setattr("os.killpg", lambda pid, signum: signals.append((pid, signum)))
+    writer = RunArtifactWriter(runtime.plan, run_id="native-run")
+    writer.start()
+    request = EvaluationRequest(
+        run_plan=runtime.plan,
+        work_container=runtime.work_ref,
+        round_id="agent-1",
+        verifier_logs=writer.root / "verifier/agent-1",
+        verifier_output=writer.feedback_root / "agent-1.log",
+    )
+    observer = _Observer()
+
+    with pytest.raises(RetryableSubmissionError, match="PID 102"):
+        NativeJudgeEvaluator(runtime, writer).evaluate(request, observer)
+
+    assert signals == [(100, signal.SIGSTOP), (100, signal.SIGCONT)]
+    assert not (runtime.rounds / "agent-1").exists()
+    assert not request.verifier_logs.exists()
+    assert "judge_planned" not in dict(observer.events)
+    assert not (writer.root / "submissions/agent-1/report.json").exists()
+
+
+@pytest.mark.parametrize("phase", ["work", "judge"])
+def test_task_runtime_resets_private_controller_umask(
+    tmp_path: Path, monkeypatch, phase,
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    command = runtime._base_command(
+        devices=(), environment=None, extra_binds=(), mount_workspace=False,
+        mount_agent_home=False, containall=True, network_mode="public", phase=phase,
+    )
+
+    assert "--no-umask" in command
 
 
 def test_judge_gets_fresh_writable_tmp_without_mutating_preserved_assets(

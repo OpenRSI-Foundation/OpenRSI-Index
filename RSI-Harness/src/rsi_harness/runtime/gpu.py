@@ -313,6 +313,16 @@ def assert_work_gpu_quiescent(
 ) -> None:
     """Reject only allocated-GPU processes owned by the Work container."""
     work_pids = _container_pids(work_container)
+    assert_gpu_processes_quiescent(allocation, work_pids, runner=runner)
+
+
+def assert_gpu_processes_quiescent(
+    allocation: GPUAllocation,
+    work_pids: frozenset[int],
+    *,
+    runner: CommandRunner = _run,
+) -> None:
+    """Check an explicitly attributed host PID set against allocated GPUs."""
     allocated = frozenset(allocation.uuids)
     processes = _gpu_processes(runner, allocated)
     for uuid, pid in processes:
@@ -326,6 +336,7 @@ __all__ = [
     "NVIDIA_VISIBLE_DEVICES_ENV",
     "NVIDIA_VISIBLE_DEVICES_VOID",
     "NvidiaSmiInventory",
+    "assert_gpu_processes_quiescent",
     "assert_work_gpu_quiescent",
     "nvidia_visible_devices_value",
     "resolve_allocation",

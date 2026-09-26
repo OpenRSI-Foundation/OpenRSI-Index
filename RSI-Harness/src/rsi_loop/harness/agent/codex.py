@@ -95,8 +95,28 @@ fi''',
         hook_script = _generate_codex_stop_hook()
         local_hook = log_dir / "_codex-stop-hook.sh"
         local_hook.write_text(hook_script)
+        # Apptainer binds this source read-only, so set its mode before copying.
+        local_hook.chmod(0o755)
         backend.copy_to_container(handle, local_hook, PurePosixPath(hook_path))
-        backend.exec_run(handle, f"chmod a+x {hook_path}", user="root")
+        # Docker copies reset the mode to 0644; executable read-only binds need
+        # no mutation. Check both setup and access as the actual Agent user.
+        result = backend.exec_run(
+            handle,
+            ["/bin/sh", "-c", f"test -x {hook_path} || chmod a+rx {hook_path}"],
+            user="root",
+        )
+        if result.exit_code != 0:
+            raise RuntimeError(
+                f"Failed to set Codex stop hook permissions: {result.output}"
+            )
+        result = backend.exec_run(
+            handle,
+            ["/bin/sh", "-c", f"test -r {hook_path} && test -x {hook_path}"],
+        )
+        if result.exit_code != 0:
+            raise RuntimeError(
+                f"Codex stop hook is not accessible to the Agent: {result.output}"
+            )
         logger.info("Installed Codex stop hook")
 
         hooks_content = _generate_codex_hooks(hook_path)
