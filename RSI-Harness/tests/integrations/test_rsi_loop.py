@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import json
+import os
+import shlex
+import shutil
+import subprocess
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
@@ -443,11 +448,134 @@ def test_install_hooks_uses_rsi_loop_hook_through_engine_runtime(
     targets = tuple(target for _, _, target in runtime.copies)
     assert PurePosixPath("/tmp/rsi-loop-codex-stop-hook.sh") in targets
     assert PurePosixPath("/etc/codex/hooks.json") in targets
-    assert any("chmod a+x" in str(call["command"]) for call in runtime.executions)
     assert all(
         "runtime-only-token" not in source.read_text()
         for _, source, _ in runtime.copies
     )
+
+
+@pytest.mark.parametrize("agent_name,settings_path", [
+    ("claude-code", "/home/agent/.claude/settings.json"),
+    ("codex", "/etc/codex/hooks.json"),
+])
+@pytest.mark.parametrize("read_only_copy", [True, False])
+def test_stop_hook_runs_after_read_only_or_mode_reset_copy(
+    tmp_path: Path, read_only_copy: bool, agent_name: str, settings_path: str,
+) -> None:
+    """Apptainer binds the source read-only; Docker installs a 0644 copy."""
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    chmod_attempt = tmp_path / "chmod-attempt"
+    if read_only_copy:
+        chmod = binaries / "chmod"
+        chmod.write_text(
+            "#!/bin/sh\n"
+            f"touch {shlex.quote(str(chmod_attempt))}\n"
+            "echo 'Read-only file system' >&2\nexit 1\n"
+        )
+        chmod.chmod(0o755)
+
+    class LocalRuntime(RecordingAgentRuntime):
+        def __init__(self) -> None:
+            super().__init__()
+            self.targets: dict[PurePosixPath, Path] = {}
+
+        def copy_to(self, container, source, target):
+            super().copy_to(container, source, target)
+            destination = tmp_path / "container" / str(target).lstrip("/")
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            if not read_only_copy:
+                destination.chmod(0o644)
+            self.targets[target] = destination
+
+        def exec(self, container, command, **kwargs):
+            super().exec(container, command, **kwargs)
+            if not any(
+                str(target) in str(command) and str(target).endswith("-stop-hook.sh")
+                for target in self.targets
+            ):
+                # The existing Codex configuration setup is outside this test.
+                return AgentRunResult(exit_code=0)
+            argv = (
+                ["/bin/sh", "-c", command]
+                if isinstance(command, str)
+                else list(command)
+            )
+            for target, destination in self.targets.items():
+                argv = [part.replace(str(target), str(destination)) for part in argv]
+            result = subprocess.run(
+                argv, capture_output=True, text=True,
+                env={**os.environ, "PATH": f"{binaries}:{os.environ['PATH']}"},
+            )
+            return AgentRunResult(
+                exit_code=result.returncode, output=result.stdout + result.stderr,
+            )
+
+    plan = make_run_plan(tmp_path)
+    plan = plan.model_copy(update={"task": plan.task.model_copy(update={
+        "agent": plan.task.agent.model_copy(update={"name": agent_name}),
+    })})
+    runtime = LocalRuntime()
+    previous_umask = os.umask(0o077)
+    try:
+        RSILoopAgentAdapter(RSILoopConfig(), runtime=runtime).install_hooks(
+            AgentHookRequest(
+                run_plan=plan,
+                container=ContainerRef(container_id="work-1", role="work"),
+                submit_url="http://control.internal",
+                token="runtime-only-token",
+            )
+        )
+    finally:
+        os.umask(previous_umask)
+
+    assert runtime.executions[1]["user"] is None
+    settings = json.loads(runtime.targets[PurePosixPath(settings_path)].read_text())
+    command = settings["hooks"]["Stop"][0]["hooks"][0]["command"]
+    hook = runtime.targets[PurePosixPath(command)]
+    completed = subprocess.run(
+        [str(hook)], input="{}", capture_output=True, text=True, check=True,
+    )
+    assert json.loads(completed.stdout) == {
+        "decision": "block",
+        "reason": "Do not stop. Continue working on the implementation.",
+    }
+    assert hook.stat().st_mode & 0o777 == 0o755
+    assert not chmod_attempt.exists()
+
+
+@pytest.mark.parametrize("agent_name,settings_filename", [
+    ("claude-code", "_claude_settings.json"),
+    ("codex", "_codex_hooks.json"),
+])
+@pytest.mark.parametrize("successful_checks", [0, 1])
+def test_stop_hook_setup_failure_does_not_register_hook(
+    tmp_path: Path, successful_checks: int, agent_name: str, settings_filename: str,
+) -> None:
+    class FailingRuntime(RecordingAgentRuntime):
+        def exec(self, container, command, **kwargs):
+            super().exec(container, command, **kwargs)
+            return AgentRunResult(
+                exit_code=0 if len(self.executions) <= successful_checks else 1,
+                output="hook permissions unavailable",
+            )
+
+    plan = make_run_plan(tmp_path)
+    plan = plan.model_copy(update={"task": plan.task.model_copy(update={
+        "agent": plan.task.agent.model_copy(update={"name": agent_name}),
+    })})
+    runtime = FailingRuntime()
+    with pytest.raises(RuntimeError):
+        RSILoopAgentAdapter(RSILoopConfig(), runtime=runtime).install_hooks(
+            AgentHookRequest(
+                run_plan=plan,
+                container=ContainerRef(container_id="work-1", role="work"),
+                submit_url="http://control.internal",
+                token="runtime-only-token",
+            )
+        )
+    assert not (plan.paths.logs / settings_filename).exists()
 
 
 def test_disabled_stop_hook_keeps_control_binding_without_container_mutation(

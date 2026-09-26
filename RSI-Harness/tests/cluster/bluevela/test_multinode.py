@@ -324,6 +324,7 @@ def test_remote_worker_builds_only_the_broker_owned_apptainer_shape(
     assert "--env" not in command
     assert "--nv" in command
     assert "--containall" in command
+    assert "--no-umask" in command
     assert f"{tmp_path / 'workspace'}:/workspace" in command
     assert f"{node_tmp}:/tmp" in command
     monkeypatch.setenv("APPTAINER_BIND", "/host-controlled")
@@ -463,6 +464,7 @@ def test_judge_controller_uses_argv_safe_clean_apptainer_environment(
     )
 
     assert "--cleanenv" in command
+    assert "--no-umask" in command
     assert "--no-eval" in command
     assert "--env" not in command
     monkeypatch.setenv("APPTAINER_BIND", "/host-controlled")
