@@ -238,14 +238,14 @@ def test_judge_emits_exec_progress_and_redacted_output(tmp_path):
     )
     runtime.exec_result = AgentRunResult(
         exit_code=0,
-        output="tests running token=opaque-value\n",
+        output="tests running access_token=opaque-value\n",
     )
 
     evaluate(runner, request)
 
     assert events[0] == ("judge_exec_started", {"round_id": "agent-1"})
     assert events[1][0] == "judge_output"
-    assert events[1][1] == "tests running token=[REDACTED]\n"
+    assert events[1][1] == "tests running access_token=[REDACTED]\n"
 
 
 def test_successful_judge_lifecycle_and_fixed_security_spec(tmp_path):

@@ -54,6 +54,7 @@ def _resolve(home: Path, **overrides):
 def test_resolver_returns_secret_free_validated_in_memory_auth(tmp_path: Path) -> None:
     raw = {
         "auth_mode": "chatgpt",
+        "last_refresh": "2026-09-26",
         "tokens": {
             "access_token": "local-access-secret",
             "refresh_token": "local-refresh-secret",
@@ -68,7 +69,8 @@ def test_resolver_returns_secret_free_validated_in_memory_auth(tmp_path: Path) -
     assert auth_file.read_bytes() == content
     assert "local-access-secret" in auth.secret_values
     assert "local-refresh-secret" in auth.secret_values
-    assert content.decode() in auth.secret_values
+    assert "chatgpt" not in auth.secret_values
+    assert "2026-09-26" not in auth.secret_values
     assert "local-access-secret" not in repr(auth)
     assert str(auth_file) not in repr(auth)
     assert auth.agent_name == "codex"
@@ -166,6 +168,8 @@ def test_claude_provider_reads_standard_login_into_private_work_tmpfs(
         "claudeAiOauth": {
             "accessToken": "claude-local-access-secret",
             "refreshToken": "claude-local-refresh-secret",
+            "subscriptionType": "max",
+            "scopes": ["user:inference"],
         }
     }
     source = _write_claude_auth(tmp_path / ".claude", raw)
@@ -189,6 +193,15 @@ def test_claude_provider_reads_standard_login_into_private_work_tmpfs(
     assert auth.mounts[0].files[0].content == source.read_bytes()
     assert "claude-local-access-secret" in auth.secret_values
     assert "claude-local-refresh-secret" in auth.secret_values
+    from rsi_harness.runtime.redaction import redact_exact_values
+
+    assert redact_exact_values(
+        "softmax(x); max_tokens=2048; user:inference claude-local-access-secret",
+        auth.secret_values,
+    ) == "softmax(x); max_tokens=2048; user:inference [REDACTED]"
+    safe_auth = json.loads(redact_exact_values(source.read_text(), auth.secret_values))
+    assert safe_auth["claudeAiOauth"]["subscriptionType"] == "max"
+    assert safe_auth["claudeAiOauth"]["accessToken"] == "[REDACTED]"
     assert "claude-local-access-secret" not in repr(auth)
     assert auth.provider_endpoints == (
         "https://api.anthropic.com",

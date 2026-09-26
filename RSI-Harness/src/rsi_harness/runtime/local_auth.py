@@ -14,6 +14,7 @@ from typing import Any, Protocol
 
 from rsi_harness.errors import SetupError
 from rsi_harness.models import AgentAuthSource, ContainerTmpfs
+from rsi_harness.runtime.redaction import is_credential_name
 
 _MAX_AUTH_BYTES = 1024 * 1024
 _PRIVATE_TMPFS_OPTIONS = "rw,nosuid,nodev,noexec,mode=0700"
@@ -255,12 +256,15 @@ def _invoking_user(
 
 
 def _secret_strings(value: Any) -> set[str]:
-    if isinstance(value, str):
-        return {value} if value else set()
+    """Collect login credentials, not subscription names, scopes or timestamps."""
     if isinstance(value, dict):
         result: set[str] = set()
-        for child in value.values():
-            result.update(_secret_strings(child))
+        for key, child in value.items():
+            if isinstance(child, str):
+                if child and (is_credential_name(key) or key.casefold() == "token"):
+                    result.add(child)
+            else:
+                result.update(_secret_strings(child))
         return result
     if isinstance(value, list):
         result = set()
@@ -304,7 +308,6 @@ class CodexLocalAuthProvider:
         if not isinstance(parsed, dict):
             raise SetupError("local Codex auth must contain a JSON object")
         secret_values = _secret_strings(parsed)
-        secret_values.add(decoded)
         return AgentAuthMaterial(
             agent_name="codex",
             mounts=(
@@ -398,7 +401,6 @@ class ClaudeCodeLocalAuthProvider:
         if not isinstance(parsed, dict):
             raise SetupError("local Claude Code auth must contain a JSON object")
         secret_values = _secret_strings(parsed)
-        secret_values.add(decoded)
         return AgentAuthMaterial(
             agent_name="claude-code",
             mounts=(
