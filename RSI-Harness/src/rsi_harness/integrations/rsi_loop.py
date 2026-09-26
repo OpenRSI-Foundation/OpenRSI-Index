@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import shlex
 from collections.abc import Callable
 from dataclasses import replace
@@ -22,18 +21,17 @@ from rsi_harness.models import (
     PreparedAgent,
     RunGPUPlan,
 )
-from rsi_harness.runtime.redaction import redact_exact_values, redact_text
+from rsi_harness.runtime.redaction import (
+    is_credential_name,
+    redact_exact_values,
+    redact_text,
+)
 from rsi_loop.harness.agent import Agent, create_agent, list_agent_classes
 from rsi_loop.harness.backend import ExecResult
 from rsi_loop.harness.config import RSILoopConfig
 
 _CONTAINER_PROMPT_PATH = PurePosixPath("/tmp/rsi-agent-prompt.md")
 _CONTROL_ENV_KEYS = ("RSI_JUDGE_URL", "RSI_TOKEN")
-_CREDENTIAL_ENV_NAME = re.compile(
-    r"(?:^|_)(?:(?:API|ACCESS|SECRET|PRIVATE)_?KEY(?:_ID)?|TOKEN|SECRET|"
-    r"PASSWORD|PASSWD|CREDENTIALS?|AUTHORIZATION)$",
-    re.IGNORECASE,
-)
 _CODEX_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
 _CLAUDE_CODE_REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 _REASONING_EFFORTS = {
@@ -93,7 +91,7 @@ def rsi_loop_runtime_secret_values(config: RSILoopConfig) -> set[str]:
         *(
             str(value)
             for name, value in config.agent_extra_env.items()
-            if name in secret_names or _CREDENTIAL_ENV_NAME.search(name)
+            if name in secret_names or is_credential_name(name)
         ),
     }
     # EXTRA_ENV also carries ordinary flags, counts and paths. Globally

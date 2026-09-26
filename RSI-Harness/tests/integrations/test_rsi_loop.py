@@ -381,16 +381,22 @@ def test_claude_stop_hook_cap_is_disabled_without_redacting_zeroes() -> None:
         ("HF_HOME", "/tmp/cache", False),
         ("MODEL_NAME", "some-model", False),
         ("CACHE_KEY", "shared-cache", False),
+        ("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1", False),
+        ("REQUIRE_API_KEY", "1", False),
+        ("EOS_TOKEN", "151643", False),
+        ("CUSTOM_TOKEN", "ordinary-value", False),
         ("ANTHROPIC_AUTH_TOKEN", "provider-credential", True),
         ("OPENAI_API_KEY", "provider-credential", True),
         ("HF_TOKEN", "hub-credential", True),
+        ("NPM_TOKEN", "npm-credential", True),
+        ("PYPI_TOKEN", "pypi-credential", True),
         ("AWS_ACCESS_KEY_ID", "access-credential", True),
         ("AWS_SECRET_ACCESS_KEY", "aws-credential", True),
         ("AWS_SESSION_TOKEN", "session-credential", True),
         ("CLIENT_SECRET", "client-credential", True),
         ("CUSTOM_PASSWORD", "password-credential", True),
         ("CUSTOM_PRIVATE_KEY", "private-credential", True),
-        ("custom_token", "1", True),
+        ("HF_TOKEN", "1", True),
     ),
 )
 def test_extra_env_redaction_distinguishes_credentials_from_settings(
@@ -438,6 +444,16 @@ def test_extra_env_authenticated_urls_still_redact_embedded_credentials() -> Non
     }
 
 
+def test_explicit_secret_names_override_automatic_credential_classification() -> None:
+    from rsi_harness.integrations.rsi_loop import rsi_loop_runtime_secret_values
+
+    config = RSILoopConfig(
+        agent_extra_env={"CUSTOM_TOKEN": "1", "USE_SECRET": "custom-credential"},
+        agent_secret_env_names=("CUSTOM_TOKEN", "USE_SECRET"),
+    )
+    assert rsi_loop_runtime_secret_values(config) == {"1", "custom-credential"}
+
+
 def test_extra_env_settings_preserve_streamed_trajectory_and_hide_credentials(
     tmp_path: Path,
 ) -> None:
@@ -452,6 +468,7 @@ def test_extra_env_settings_preserve_streamed_trajectory_and_hide_credentials(
             "CLAUDE_CODE_STOP_HOOK_BLOCK_CAP": "0",
             "TOKENIZERS_PARALLELISM": "false",
             "HF_HOME": "/tmp/cache",
+            "HF_HUB_DISABLE_IMPLICIT_TOKEN": "1",
             "HF_TOKEN": "hub-credential",
             "CUSTOM_VALUE": "custom-credential",
         },

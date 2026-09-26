@@ -360,7 +360,7 @@ def test_engine_error_artifact_redacts_secret_values(tmp_path: Path) -> None:
     writer.record_engine_error(
         "Engine bug: access_token=LEAKME&safe=yes\n"
         "Authorization: Digest username=admin, response=AUTHLEAK\n"
-        'headers={"X-API-Key": "HEADERLEAK"} token=abc credential hunter2'
+        'headers={"X-API-Key": "HEADERLEAK"} access_token=abc credential=hunter2'
     )
 
     raw = (writer.root / "engine_error.json").read_text()
