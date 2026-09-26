@@ -35,6 +35,7 @@ from rsi_harness.errors import (
     InfrastructureError,
     RetryableSubmissionError,
     SetupError,
+    SubmissionError,
 )
 from rsi_harness.integrations.rsi_loop import (
     RSILoopAgentAdapter,
@@ -48,6 +49,8 @@ from rsi_harness.models import (
     AgentRunResult,
     ContainerRef,
     EvaluationRequest,
+    GPURequirement,
+    JudgeGPUMode,
     ManagedNetwork,
     ManagedWorkdirVolume,
     RootfsSnapshotLease,
@@ -67,6 +70,11 @@ from rsi_harness.runtime.coordinator import (
     RunPreparation,
 )
 from rsi_harness.runtime.environment import resolve_runtime_environment
+from rsi_harness.runtime.gpu import (
+    NvidiaSmiInventory,
+    assert_gpu_processes_quiescent,
+    resolve_allocation,
+)
 from rsi_harness.runtime.local_auth import AgentAuthMaterial, resolve_agent_auth
 from rsi_harness.runtime.network import NetworkPolicyEnforcer
 from rsi_harness.runtime.recovery import LeaseStore
@@ -83,6 +91,17 @@ class _Clock:
 
 def _safe_output(value: str, secrets: set[str]) -> str:
     return redact_text(redact_exact_values(value, secrets))
+
+
+def _gpu_preflight_command(command: list[str]) -> subprocess.CompletedProcess[str]:
+    try:
+        return subprocess.run(
+            command, capture_output=True, check=False, text=True, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise SubmissionError(
+            f"Work GPU preflight {command[0]} query failed: {error}"
+        ) from error
 
 
 def _agent_provider_urls(
@@ -401,6 +420,65 @@ class ApptainerAgentRuntime:
         broker = self.work_broker
         if broker is not None:
             broker.require_idle()
+        if (
+            self.allocated_pools is not None
+            or self.plan.gpu_plan.judge_mode is not JudgeGPUMode.RELEASE_ALL
+            or not self.work_devices
+        ):
+            return
+        work_pids = self._work_process_ids()
+        try:
+            allocation = resolve_allocation(
+                GPURequirement(count=len(self.work_devices)),
+                requested=self.work_devices,
+                inventory=NvidiaSmiInventory(
+                    runner=_gpu_preflight_command,
+                ).list_devices(),
+            )
+        except SetupError as error:
+            raise SubmissionError(
+                f"cannot resolve Work GPU allocation: {error}"
+            ) from error
+        assert_gpu_processes_quiescent(
+            allocation, work_pids, runner=_gpu_preflight_command,
+        )
+
+    def _work_process_ids(self) -> frozenset[int]:
+        """Attribute host PIDs by Work ancestry and its dedicated session."""
+        with self._lock:
+            process = self._process
+            if process is None or process.poll() is not None:
+                raise SubmissionError("Work process disappeared before GPU preflight")
+            root_pid = process.pid
+        result = _gpu_preflight_command(["ps", "-eo", "pid=,ppid=,sid="])
+        if result.returncode != 0:
+            raise SubmissionError(
+                f"Work process query failed: {result.stderr.strip()}"
+            )
+        parents: dict[int, tuple[int, int]] = {}
+        try:
+            for row in result.stdout.splitlines():
+                if not row.strip():
+                    continue
+                pid, parent, session = map(int, row.split())
+                if pid <= 0 or parent < 0 or session < 0 or pid in parents:
+                    raise ValueError("invalid or duplicate process identity")
+                parents[pid] = (parent, session)
+            if root_pid not in parents or parents[root_pid][1] != root_pid:
+                raise ValueError("Work session leader is missing or changed")
+        except ValueError as error:
+            raise SubmissionError(f"ambiguous Work process list: {error}") from error
+        # start_new_session=True gives Work its own session. Retain reparented
+        # session members and descendants that started new process groups/sessions.
+        work_pids = {
+            pid for pid, (_, session) in parents.items() if session == root_pid
+        }
+        while descendants := {
+            pid for pid, (parent, _) in parents.items()
+            if parent in work_pids and pid not in work_pids
+        }:
+            work_pids.update(descendants)
+        return frozenset(work_pids)
 
     def _install_auth(self) -> None:
         if self.payload.agent_auth is None:
@@ -919,7 +997,7 @@ class ApptainerAgentRuntime:
             raise SetupError(
                 "Blue Vela Apptainer does not support allowlist network policy"
             )
-        command.append("--nv")
+        command.extend(("--nv", "--no-umask"))
         if containall:
             command.append("--containall")
         else:
@@ -1181,6 +1259,8 @@ class NativeJudgeEvaluator:
         try:
             try:
                 self.runtime.require_work_idle()
+            except SubmissionError as error:
+                raise RetryableSubmissionError(str(error)) from error
             except InfrastructureError as error:
                 raise RetryableSubmissionError(
                     "active remote Work must finish before submission"
