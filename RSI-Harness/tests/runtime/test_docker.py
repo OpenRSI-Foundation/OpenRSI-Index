@@ -1583,7 +1583,7 @@ def test_exec_continuously_drains_and_keeps_bounded_head_and_tail(tmp_path):
 
 def test_exec_streams_complete_redacted_output_while_return_stays_bounded(tmp_path):
     client = FakeDockerClient(
-        chunks=(b"abcd", b"runtime-", b"secret token=opaque\n", b"ijkl"),
+        chunks=(b"abcd", b"runtime-", b"secret access_token=opaque\n", b"ijkl"),
         exit_code=7,
     )
     client.containers.by_id["work"] = FakeDockerContainer("work")
@@ -1603,7 +1603,7 @@ def test_exec_streams_complete_redacted_output_while_return_stays_bounded(tmp_pa
     assert result.output_truncated is True
     assert result.full_output_captured is True
     assert output_path.read_text() == (
-        "abcd[REDACTED] token=[REDACTED]\nijkl"
+        "abcd[REDACTED] access_token=[REDACTED]\nijkl"
     )
     assert "".join(live_output) == output_path.read_text()
 
