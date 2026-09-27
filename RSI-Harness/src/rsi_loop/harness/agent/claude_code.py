@@ -59,6 +59,9 @@ class ClaudeCodeAgent(Agent):
         # --dangerously-skip-permissions as root unless IS_SANDBOX is exactly "1",
         # and task images without a USER run the Agent as root.
         env["IS_SANDBOX"] = "1"
+        # Harness owns the wall-clock budget. Do not let Claude's consecutive
+        # Stop-hook block cap end the Agent early while that budget remains.
+        env["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"] = "0"
         if self._config.claude_cache_opt:
             env["CLAUDE_CODE_ATTRIBUTION_HEADER"] = "0"
         if not self._config.agent_api_base_url and self._config.agent_api_key:

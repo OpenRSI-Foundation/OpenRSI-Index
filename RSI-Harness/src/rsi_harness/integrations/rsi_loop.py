@@ -21,7 +21,11 @@ from rsi_harness.models import (
     PreparedAgent,
     RunGPUPlan,
 )
-from rsi_harness.runtime.redaction import redact_exact_values, redact_text
+from rsi_harness.runtime.redaction import (
+    is_credential_name,
+    redact_exact_values,
+    redact_text,
+)
 from rsi_loop.harness.agent import Agent, create_agent, list_agent_classes
 from rsi_loop.harness.backend import ExecResult
 from rsi_loop.harness.config import RSILoopConfig
@@ -81,18 +85,34 @@ def _apply_reasoning_effort(
 def rsi_loop_runtime_secret_values(config: RSILoopConfig) -> set[str]:
     """Return exact RSI Loop runtime values that must never reach artifacts."""
 
+    secret_names = set(config.agent_secret_env_names)
     values = {
         config.agent_api_key or "",
-        *(str(value) for value in config.agent_extra_env.values()),
+        *(
+            str(value)
+            for name, value in config.agent_extra_env.items()
+            if name in secret_names or is_credential_name(name)
+        ),
     }
+    # EXTRA_ENV also carries ordinary flags, counts and paths. Globally
+    # replacing their values (especially "0"/"1") corrupts the trajectory.
     for endpoint in (
         config.http_proxy,
         config.https_proxy,
         config.agent_api_base_url,
+        *(
+            str(value)
+            for value in config.agent_extra_env.values()
+            if "://" in str(value)
+        ),
     ):
         if not endpoint:
             continue
-        parsed = urlsplit(endpoint)
+        try:
+            parsed = urlsplit(endpoint)
+        except ValueError:
+            # An arbitrary setting resembling a URL is not necessarily one.
+            continue
         if parsed.username is not None or parsed.password is not None:
             values.add(endpoint)
             for credential in (parsed.username, parsed.password):

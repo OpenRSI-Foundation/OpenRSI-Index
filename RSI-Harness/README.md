@@ -96,8 +96,13 @@ export RSI_AGENT_API_BASE_URL="https://your-api.example/v1"
 export RSI_AGENT_MODEL="your-model"
 ```
 
-These values are passed only to the Agent process and are redacted from Engine
-artifacts. Do not put credentials in the Harbor task directory.
+These values are passed only to the Agent process; credentials are redacted
+from Engine artifacts. Do not put credentials in the Harbor task directory.
+
+`RSI_AGENT_EXTRA_ENV` passes extra Agent settings; common credentials are hidden
+from logs, while ordinary settings remain unchanged. For credentials with
+nonstandard names, list the variable names in `RSI_AGENT_SECRET_ENV_NAMES`
+(comma-separated).
 
 ## Run a Harbor task
 

@@ -117,7 +117,7 @@ class ScriptedBackend:
     def compile(self, request: RunRequest):
         self.events.append(("compiler", request.task_dir))
         if self.fail_at == "compile":
-            raise RuntimeError("setup bearer SUPER-SECRET must be redacted")
+            raise RuntimeError("setup Authorization: Bearer SUPER-SECRET")
         return self.plan.task
 
     def allocate(self, definition, selectors):
