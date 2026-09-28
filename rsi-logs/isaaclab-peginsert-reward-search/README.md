@@ -17,7 +17,7 @@ Four persisted submissions have no numeric score and are not interpreted as zero
 - Claude `agent-17` (`verifier_error`): the submission carried an empty `/workspace/candidates/` directory, which the evaluator's candidate-scope check rejects.
 - Codex and Claude `agent-32` (`infrastructure_error`): the Judge round in flight when each run reached its 86,400 s Agent budget. Judge measured both recipes (Codex `0.426` / `0.140`, Claude `0.602` / `0.484`, retained in `metrics`), but the budget shutdown had removed the Work container before Judge cleanup could unpause it, so the round closed with `score: null`.
 
-Thus the 64 persisted submissions contain 60 scored results. RSI-Harness marks a run that reaches its Agent budget as `status: failed, timed_out: true` in `final_result.json`; the scores are complete and publication does not change either outcome.
+Thus the 64 persisted submissions contain 60 scored results.
 
 Run identifiers and original ordering are retained. Sanitization removes operator and infrastructure details, not task content, scores, timings, model identities, or artifact digests; see [the sanitization policy](../SANITIZATION.md).
 

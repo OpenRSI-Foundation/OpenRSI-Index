@@ -497,6 +497,7 @@ class ArtifactRecorder:
         self.fail_finalize = fail_finalize
         self.reports: list[SubmissionReport] = []
         self.engine_errors: list[str] = []
+        self.finalized: dict | None = None
 
     def record_submission(self, report) -> None:
         self.reports.append(report)
@@ -505,6 +506,7 @@ class ArtifactRecorder:
         self.engine_errors.append(error)
 
     def finalize(self, **kwargs) -> None:
+        self.finalized = kwargs
         self.events.append(("artifacts_finalize", kwargs["status"]))
         if self.fail_finalize:
             raise RuntimeError("artifact durability failed")
@@ -1677,7 +1679,7 @@ def test_timeout_and_cancellation_preserve_prior_valid_result(tmp_path) -> None:
         reports=(report,),
         primary_reward=None,
         direction="maximize",
-        terminal=RunStatus.FAILED,
+        terminal=RunStatus.COMPLETED,
     )
     cancelled = timed_out.model_copy(update={"status": RunStatus.CANCELLED})
 
@@ -1688,7 +1690,7 @@ def test_timeout_and_cancellation_preserve_prior_valid_result(tmp_path) -> None:
 @pytest.mark.parametrize(
     ("agent_result", "expected"),
     (
-        (AgentRunResult(exit_code=None, timed_out=True), RunStatus.FAILED),
+        (AgentRunResult(exit_code=None, timed_out=True), RunStatus.COMPLETED),
         (AgentRunResult(exit_code=None, cancelled=True), RunStatus.CANCELLED),
     ),
 )
@@ -1711,6 +1713,37 @@ def test_agent_terminal_paths_stop_new_submissions_before_work_teardown(
     assert names.index("server_stop") < names.index("agent_stop")
     assert names.index("agent_stop") < names.index("work_remove")
     assert names.index("server_stop") < names.index("artifacts_finalize")
+
+
+@pytest.mark.parametrize(
+    ("report_status", "expected"),
+    (
+        (SubmissionStatus.COMPLETED, RunStatus.COMPLETED),
+        (SubmissionStatus.VERIFIER_ERROR, RunStatus.NO_VALID_SUBMISSION),
+    ),
+)
+def test_agent_timeout_outcome_follows_submissions_and_records_timeout(
+    tmp_path, report_status, expected
+) -> None:
+    backend = ScriptedBackend(tmp_path)
+    backend.agent_result = AgentRunResult(exit_code=None, timed_out=True)
+    backend.reports = [
+        report.model_copy(update={"status": report_status})
+        for report in backend.reports
+    ]
+    coordinator = RunCoordinator(
+        backend=backend,
+        lease_store=LeaseStore(tmp_path / "leases"),
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    )
+
+    result = coordinator.run(RunRequest(task_dir=tmp_path))
+
+    assert result.status == expected
+    assert backend.artifacts is not None and backend.artifacts.finalized is not None
+    assert backend.artifacts.finalized["status"] == expected
+    assert backend.artifacts.finalized["timed_out"] is True
 
 
 def test_terminal_work_is_quiesced_retained_and_removed_in_exact_order(
