@@ -11,7 +11,7 @@ Reward is the unweighted mean of the five fixed benchmark accuracies (AIME 2024,
 
 Each run includes `run-plan.json`, `final_result.json`, `evolve_state.json`, the ordered submissions, per-round Judge feedback and verifier rewards, and the complete sanitized agent/runner output. Submissions that failed the candidate correctness gate (Claude: 3, Codex: 4, all early rounds) score `0.0` by protocol and remain in the archive.
 
-The Codex run was recorded on 2026-09-18 with a 27,720 s (7.7 h) Agent budget so that both agents received the same wall-clock allowance. RSI-Harness marks a run that reaches its Agent budget as `status: failed, timed_out: true` in `final_result.json`; the scores are complete and the last Judge round finished before shutdown. This archive replaces an earlier Codex recording that ended after 6,461 s of a 216,000 s budget and therefore did not reflect a comparable allowance.
+The Codex run was recorded on 2026-09-18 with a 27,720 s (7.7 h) Agent budget so that both agents received the same wall-clock allowance. This archive replaces an earlier Codex recording that ended after 6,461 s of a 216,000 s budget and therefore did not reflect a comparable allowance.
 
 Run identifiers and original ordering are retained. Sanitization removes operator and infrastructure details, not task content, scores, timings, model identities, or artifact digests; see [the sanitization policy](../SANITIZATION.md).
 
