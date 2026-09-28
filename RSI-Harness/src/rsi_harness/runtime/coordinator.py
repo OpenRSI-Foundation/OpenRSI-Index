@@ -1475,8 +1475,9 @@ class RunCoordinator:
                     terminal = RunStatus.FAILED
                 elif agent_result is not None and agent_result.cancelled:
                     terminal = RunStatus.CANCELLED
-                elif agent_result is not None and agent_result.timed_out:
-                    terminal = RunStatus.FAILED
+                # The stop hook blocks voluntary exits, so exhausting the Agent
+                # budget is the normal end of a run; timed_out stays recorded
+                # in final_result.json and the outcome follows the submissions.
                 elif any(
                     report.status == SubmissionStatus.COMPLETED
                     for report in reports
