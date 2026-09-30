@@ -29,8 +29,8 @@ class CodexAgent(Agent):
 
     name = "codex"
     install_cmds = [
-        "sudo -E bash -c 'NODE_MIRROR=${RSI_NODEJS_MIRROR_URL:-https://nodejs.org/dist} && curl -fsSL $NODE_MIRROR/v20.18.0/node-v20.18.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1'",
-        "sudo -E npm install -g @openai/codex@0.147.0",
+        "sudo -E bash -c 'NODE_MIRROR=${RSI_NODEJS_MIRROR_URL:-https://nodejs.org/dist} && curl -fsSL $NODE_MIRROR/v22.23.3/node-v22.23.3-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1'",
+        "sudo -E npm install -g @openai/codex@0.159.2",
         '''if [ -n "$OPENAI_BASE_URL" ]; then
     mkdir -p ~/.codex
     cat > ~/.codex/config.toml << EOF
