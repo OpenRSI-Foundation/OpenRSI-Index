@@ -121,8 +121,28 @@ def test_dockerfile_base_uses_only_environment_and_work_is_derived_independently
     assert plan.work_digest != plan.base_digest
     assert "rsi-submit" in work_build["context_files"]["Dockerfile"]
     dockerfile = work_build["context_files"]["Dockerfile"]
-    assert "@openai/codex@0.147.0" in dockerfile
-    assert "@openai/codex@0.143.0" not in dockerfile
+    assert "@openai/codex@0.159.2" in dockerfile
+    assert "@openai/codex@0.147.0" not in dockerfile
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "package"),
+    [
+        ("codex", "@openai/codex@0.159.2"),
+        ("claude-code", "@anthropic-ai/claude-code@2.1.285"),
+    ],
+)
+def test_agent_images_pin_cli_and_compatible_node_versions(agent_name, package):
+    dockerfile = DockerImageBuilder(None)._work_dockerfile(
+        agent=create_agent(agent_name, RSILoopConfig()),
+        base_ref="ubuntu:24.04",
+        workdir=PurePosixPath("/workspace"),
+        final_user="1001",
+    )
+
+    assert f"npm install -g {package}" in dockerfile
+    assert "/v22.23.3/node-v22.23.3-linux-x64.tar.xz" in dockerfile
+    assert "node-v20." not in dockerfile
 
 
 def test_work_cache_identity_uses_rsi_loop_version(

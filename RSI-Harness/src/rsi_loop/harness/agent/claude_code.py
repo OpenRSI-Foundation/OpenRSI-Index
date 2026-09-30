@@ -29,8 +29,8 @@ class ClaudeCodeAgent(Agent):
 
     name = "claude-code"
     install_cmds = [
-        "sudo -E bash -c 'NODE_MIRROR=${RSI_NODEJS_MIRROR_URL:-https://nodejs.org/dist} && curl -fsSL $NODE_MIRROR/v20.18.0/node-v20.18.0-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1'",
-        "sudo -E npm install -g @anthropic-ai/claude-code@2.1.159",
+        "sudo -E bash -c 'NODE_MIRROR=${RSI_NODEJS_MIRROR_URL:-https://nodejs.org/dist} && curl -fsSL $NODE_MIRROR/v22.23.3/node-v22.23.3-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1'",
+        "sudo -E npm install -g @anthropic-ai/claude-code@2.1.285",
     ]
     # The prompt is fed on stdin, not as an argument: with the task text in
     # argv, an Agent running `pkill -f <name mentioned in the task>` matches
