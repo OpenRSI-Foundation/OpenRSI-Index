@@ -1,6 +1,6 @@
 # Workflow API configuration
 
-The Discussion rubric reviewer uses `gpt-6-luna` with `high` reasoning through
+The Discussion rubric reviewer uses `gpt-6.1-sol` with `high` reasoning through
 an OpenAI-compatible proxy, not the official OpenAI endpoint. It runs on a
 GitHub-hosted runner independently of the private task-worker slots.
 OpenAI calls in the PR `/run` and `/cheat` workflows use the same proxy settings.
