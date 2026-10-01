@@ -105,37 +105,37 @@ We are still actively expanding the team. We really appreciate the efforts of al
     <td width="25%" valign="top"><strong><a href="https://dblp.org/pid/270/4119.html">Zhengyu Hu</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://hanghuacs.notion.site/">Hang Hua</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://howiehwong.github.io/">Yue Huang</a></strong></td>
-    <td width="25%" valign="top"><strong><a href="https://caralinotes.com/">Cara Li</a></strong></td>
+    <td width="25%" valign="top"><strong><a href="https://fqjiang.work/">Fengqing Jiang</a></strong></td>
   </tr>
   <tr>
+    <td width="25%" valign="top"><strong><a href="https://caralinotes.com/">Cara Li</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://hanchenli.github.io/">Hanchen Li</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://www.linkedin.com/in/shujia-liang/">Shujia Liang</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://scholar.google.com/citations?user=Dj9s3oEAAAAJ">Xiang Liu</a></strong></td>
-    <td width="25%" valign="top"><strong><a href="https://lupantech.github.io/">Pan Lu</a></strong></td>
   </tr>
   <tr>
+    <td width="25%" valign="top"><strong><a href="https://lupantech.github.io/">Pan Lu</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://bohanlyu.com/">Bohan Lyu</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://zixianma.github.io/">Zixian Ma</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://joyemang33.github.io/">Qiuyang Mang</a></strong></td>
-    <td width="25%" valign="top"><strong><a href="https://rulinshao.github.io/">Rulin Shao</a></strong></td>
   </tr>
   <tr>
+    <td width="25%" valign="top"><strong><a href="https://rulinshao.github.io/">Rulin Shao</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://huggingface.co/venkat-srinivasan-nvidia">Venkat Srinivasan</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://sunyiyou.github.io/">Yiyou Sun</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://scholar.google.com/citations?user=cIRPBeYAAAAJ&amp;hl=en">Guan Wang</a></strong></td>
-    <td width="25%" valign="top"><strong><a href="https://www.linkedin.com/in/nwangucla/">Ning Wang</a></strong></td>
   </tr>
   <tr>
+    <td width="25%" valign="top"><strong><a href="https://www.linkedin.com/in/nwangucla/">Ning Wang</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://x.com/yangzhen04">Yangzhen Wu</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://hsaest.github.io/">Jian Xie</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://github.com/bri25yu">Brian Yu</a></strong></td>
-    <td width="25%" valign="top"><strong><a href="https://mitibm.mit.edu/people/gaoyuan-zhang/">Gaoyuan Zhang</a></strong></td>
   </tr>
   <tr>
+    <td width="25%" valign="top"><strong><a href="https://mitibm.mit.edu/people/gaoyuan-zhang/">Gaoyuan Zhang</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://alex-q-z.github.io/">Qizheng Zhang</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://openreview.net/profile?id=~Weichen_Zhang8">Weichen Zhang</a></strong></td>
     <td width="25%" valign="top"><strong><a href="https://scholar.google.com/citations?user=6kkyR1wAAAAJ">Kaiyuan Zheng</a></strong></td>
-    <td width="25%"></td>
   </tr>
   <tr>
     <th colspan="4" align="left">ADVISORS (in alphabetical order)</th>
