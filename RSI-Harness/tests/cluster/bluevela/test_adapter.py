@@ -220,7 +220,7 @@ def test_dry_run_resolves_four_gpus_without_mutation(tmp_path: Path) -> None:
         "build_walltime": "02:00",
         "run_walltime": "02:15",
     }
-    assert "num=4:mode=exclusive_process" in dry_run["run_argv"]
+    assert "num=4:mode=shared:j_exclusive=yes" in dry_run["run_argv"]
     assert "select[tmp>=15360] span[hosts=1]" in dry_run["run_argv"]
     assert dry_run["binds"]
     assert all(binding.endswith(":ro") for binding in dry_run["binds"])
@@ -277,7 +277,7 @@ def test_dry_run_automatically_dispatches_task_gpu_fields_to_multinode(
     resource = dry_run["run_argv"][dry_run["run_argv"].index("-R") + 1]
     assert "span[ptile=8]" in resource
     assert "span[hosts=1]" not in resource
-    assert "num=8:mode=exclusive_process" in dry_run["run_argv"]
+    assert "num=8:mode=shared:j_exclusive=yes" in dry_run["run_argv"]
     assert "rsi-multinode" not in repr(dry_run)
     assert "legacy-public:/proj" not in dry_run["binds"]
     assert any("/rsi-data" in item for item in dry_run["binds"])

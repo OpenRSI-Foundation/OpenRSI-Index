@@ -147,10 +147,12 @@ class LSFScheduler:
         if resource_terms:
             argv.extend(("-R", " ".join(resource_terms)))
         if spec.gpu_count:
+            # Keep GPUs exclusive to this job, but allow multiple CUDA processes
+            # per GPU (distributed training teardown needs Default compute mode).
             argv.extend(
                 (
                     "-gpu",
-                    f"num={spec.gpu_count}:mode=exclusive_process",
+                    f"num={spec.gpu_count}:mode=shared:j_exclusive=yes",
                 )
             )
         if spec.exclusive:
