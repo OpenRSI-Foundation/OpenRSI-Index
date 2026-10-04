@@ -1,0 +1,13 @@
+[
+  {
+    "distribution": "vllm",
+    "version": "0.12.0",
+    "path": "vllm/model_executor/layers/batch_invariant.py",
+    "source_url": "https://github.com/vllm-project/vllm/blob/v0.12.0/vllm/model_executor/layers/batch_invariant.py",
+    "before_sha256": "44366ccb20477da8fbc7c8317b54609d74a70822543ee7487599df6805ef6535",
+    "after_sha256": "9ae109c729eddebfc81266d9a14b086cb6fadfc12fb40f7431d0efa564ef5604",
+    "old": "if current_platform.is_device_capability(100):",
+    "new": "if current_platform.is_device_capability(100) or current_platform.is_device_capability(120):",
+    "reason": "SM120 on torch 2.9 also needs the existing invariant GEMM implementations; batch-shape probe exposed differences up to 0.5 without this dispatch fix."
+  }
+]
