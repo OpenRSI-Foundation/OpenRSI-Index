@@ -141,8 +141,15 @@ An omitted Work count remains unspecified and must inherit a Compose GPU
 reservation. Explicit Work zero cannot conflict with a positive reservation.
 CPU Work with a GPU Judge is supported when an explicit `--gpus` pool is
 provided. GPU requirements still fail if NVIDIA devices are unavailable.
-CPU-only execution is currently supported by the local Docker backend;
-Blue Vela's launch path still requires GPUs.
+CPU-only execution is supported by the local Docker backend and single-node
+Slurm/Apptainer runs. Blue Vela's launch path still requires Work GPUs.
+Slurm uses the same zero-GPU task declarations above; select a CPU partition
+in a site-owned cluster profile and omit `--gpus`. The scheduler requests CPU
+and memory resources without GPU GRES, and zero-GPU allocations require no
+NVIDIA tools. Mixed CPU/GPU Work and Judge phases retain their declared device
+counts; only phases assigned GPUs enable Apptainer's NVIDIA passthrough.
+The profile's positive `gpus_per_node` remains a GPU capacity bound, not an
+allocation request; a task declaring zero GPUs does not reserve any GPUs.
 
 ## Run multi-node tasks on a cluster
 

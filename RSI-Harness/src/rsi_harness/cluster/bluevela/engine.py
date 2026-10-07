@@ -202,7 +202,7 @@ def render_engine_driver(
     profile: ClusterProfile,
     output_path: Path,
 ) -> Path:
-    """Render a GPU driver that starts the native Engine, never Harbor CLI."""
+    """Render a driver that starts the native Engine, never Harbor CLI."""
     output = Path(output_path).resolve()
     payload_path = output.with_suffix(".json")
     payload_path.write_text(payload.model_dump_json(indent=2))
@@ -219,13 +219,24 @@ def render_engine_driver(
     ]
     bind_args = " ".join(_quote(item) for item in binds)
     if payload.resources is not None:
+        if payload.resources.total_gpus:
+            device_environment = '''test -n "${CUDA_VISIBLE_DEVICES:-}"
+export APPTAINERENV_CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"'''
+            device_preflight = f"""{_quote(profile.apptainer.binary)} \
+  exec --nv --containall --writable-tmpfs \
+  --env "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES" {bind_args} \
+  {_quote(payload.sif_path)} nvidia-smi"""
+        else:
+            # Discard inherited selectors before binding the empty CPU pool.
+            device_environment = '''unset CUDA_VISIBLE_DEVICES
+export APPTAINERENV_CUDA_VISIBLE_DEVICES=""'''
+            device_preflight = ""
         script = f"""#!/usr/bin/env bash
 set -euo pipefail
 umask 077
 
-test -n "${{CUDA_VISIBLE_DEVICES:-}}"
+{device_environment}
 export APPTAINER_BIND={_quote(profile.apptainer.dns_bind)}
-export APPTAINERENV_CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"
 export HF_HOME={_quote(profile.storage.hf_home)}
 export HF_DATASETS_CACHE={_quote(profile.storage.hf_datasets_cache)}
 export PYTHONPATH={_quote(payload.source_root / 'src')}
@@ -248,9 +259,7 @@ trap cleanup EXIT
 
 (cd {_quote(payload.sif_path.parent)} && \
   sha256sum -c {_quote(payload.sif_sha256_path.name)})
-{_quote(profile.apptainer.binary)} exec --nv --containall --writable-tmpfs \
-  --env "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES" {bind_args} \
-  {_quote(payload.sif_path)} nvidia-smi
+{device_preflight}
 
 {_quote(sys.executable)} -m rsi_harness.cluster.bluevela.engine \
   --payload {_quote(payload_path)}
