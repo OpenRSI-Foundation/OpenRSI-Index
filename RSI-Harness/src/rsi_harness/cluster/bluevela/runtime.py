@@ -997,7 +997,9 @@ class ApptainerAgentRuntime:
             raise SetupError(
                 "Blue Vela Apptainer does not support allowlist network policy"
             )
-        command.extend(("--nv", "--no-umask"))
+        if devices:
+            command.append("--nv")
+        command.append("--no-umask")
         if containall:
             command.append("--containall")
         else:

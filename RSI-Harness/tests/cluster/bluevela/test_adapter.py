@@ -114,13 +114,13 @@ class RecordingScheduler:
 
     def submit(self, spec: LSFJobSpec) -> str:
         self.specs.append(spec)
-        stage = "build" if spec.gpu_count == 0 else "run"
+        stage = "build" if "-build-" in spec.name else "run"
         self.events.append(f"submit-{stage}")
         return str(100 + len(self.specs))
 
     def wait(self, job_id: str, **_kwargs) -> LSFJobResult:
         spec = self.specs[int(job_id) - 101]
-        stage = "build" if spec.gpu_count == 0 else "run"
+        stage = "build" if "-build-" in spec.name else "run"
         self.events.append(f"wait-{stage}")
         if stage == "build":
             assignments = {

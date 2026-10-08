@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from rsi_harness.cluster.bluevela.adapter import ClusterResources
 from rsi_harness.cluster.bluevela.allocation import AllocatedNode, AllocatedPools
 from rsi_harness.cluster.bluevela.engine import (
@@ -133,6 +135,123 @@ def test_gpu_driver_invokes_native_engine_without_harbor_run(tmp_path: Path) -> 
     assert "available_tmp_kb" in script
     assert "required_tmp_kb=$((15360 * 1024))" in script
     assert payload_path == output.with_suffix(".json")
+    assert 'test -n "${CUDA_VISIBLE_DEVICES:-}"' in script
+    assert "exec --nv" in script
+    assert "nvidia-smi" in script
+
+
+def _cpu_payload(tmp_path: Path) -> EnginePayload:
+    payload = _payload(tmp_path)
+    plan = make_run_plan(tmp_path)
+    return payload.model_copy(
+        update={
+            "profile": load_cluster_profile("slurm", {"USER": "alice"}),
+            "run_plan": plan,
+            "resources": payload.resources.model_copy(
+                update={"work_gpus": 0, "verifier_gpus": 0, "total_gpus": 0}
+            ),
+        }
+    )
+
+
+def test_cpu_driver_omits_nvidia_preflight_and_clears_inherited_devices(
+    tmp_path: Path,
+) -> None:
+    payload = _cpu_payload(tmp_path)
+    output = tmp_path / "cpu-run.sh"
+
+    render_engine_driver(payload, payload.profile, output)
+
+    script = output.read_text()
+    assert "nvidia-smi" not in script
+    assert "--nv" not in script
+    assert "unset CUDA_VISIBLE_DEVICES" in script
+    assert 'APPTAINERENV_CUDA_VISIBLE_DEVICES=""' in script
+    assert "rsi_harness.cluster.bluevela.engine" in script
+    assert "sha256sum -c" in script
+    assert "required_tmp_kb" in script
+    assert "final_result.json" in script
+
+
+@pytest.mark.parametrize("inherited_devices", [None, "GPU-inherited"])
+def test_cpu_driver_executes_without_nvidia_tools(
+    tmp_path: Path, monkeypatch, inherited_devices,
+) -> None:
+    import hashlib
+    import os
+    import shlex
+    import subprocess
+
+    payload = _cpu_payload(tmp_path)
+    payload.sif_path.write_bytes(b"cpu-image")
+    payload.sif_sha256_path.write_text(
+        f"{hashlib.sha256(b'cpu-image').hexdigest()}  {payload.sif_path.name}\n"
+    )
+    result = (
+        payload.run_plan.paths.logs / "runs" / payload.run_id
+        / payload.run_plan.task.task_id / "final_result.json"
+    )
+    result.parent.mkdir(parents=True)
+    engine = tmp_path / "fake-engine"
+    engine.write_text(
+        '#!/bin/sh\nset -eu\n'
+        'test "${CUDA_VISIBLE_DEVICES-unset}" = unset\n'
+        'test -z "$APPTAINERENV_CUDA_VISIBLE_DEVICES"\n'
+        'test "$1" = -m\n'
+        'test "$2" = rsi_harness.cluster.bluevela.engine\n'
+        f"printf '{{}}' > {shlex.quote(str(result))}\n"
+    )
+    engine.chmod(0o700)
+    # A CPU driver must never invoke the configured Apptainer GPU preflight.
+    apptainer = tmp_path / "forbidden-nvidia-preflight"
+    apptainer.write_text("#!/bin/sh\nexit 99\n")
+    apptainer.chmod(0o700)
+    profile = payload.profile.model_copy(
+        update={"apptainer": payload.profile.apptainer.model_copy(
+            update={"binary": apptainer, "temp_root": tmp_path}
+        )}
+    )
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.engine.sys.executable", str(engine)
+    )
+    output = tmp_path / "cpu-run.sh"
+    render_engine_driver(payload, profile, output)
+    env = dict(os.environ)
+    if inherited_devices is None:
+        env.pop("CUDA_VISIBLE_DEVICES", None)
+    else:
+        env["CUDA_VISIBLE_DEVICES"] = inherited_devices
+
+    completed = subprocess.run(
+        ["/bin/bash", str(output)], env=env, capture_output=True, text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert result.is_file()
+
+
+def test_cpu_engine_binds_an_empty_gpu_pool(tmp_path: Path, monkeypatch) -> None:
+    payload = _cpu_payload(tmp_path)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    captured = []
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.runtime.run_native_engine",
+        lambda _payload, plan, **kwargs: captured.append(plan),
+    )
+
+    run_engine_payload(payload)
+
+    assert len(captured) == 1
+    assert captured[0].gpu_plan.authorized_pool.devices == ()
+    assert captured[0].gpu_plan.work.devices == ()
+    assert captured[0].gpu_plan.judge.devices == ()
+
+
+def test_cpu_device_binding_rejects_an_unexpected_gpu(tmp_path: Path) -> None:
+    from rsi_harness.errors import SetupError
+
+    with pytest.raises(SetupError, match="expected 0"):
+        bind_lsf_devices(_cpu_payload(tmp_path).run_plan, ("GPU-unexpected",))
 
 
 def test_engine_payload_keeps_native_submission_controls(tmp_path: Path) -> None:

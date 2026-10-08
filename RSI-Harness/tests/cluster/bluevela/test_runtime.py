@@ -748,6 +748,45 @@ def test_legacy_single_node_retains_mounts_cache_paths_and_environment(
     )
 
 
+@pytest.mark.parametrize("phase", ["work", "judge"])
+@pytest.mark.parametrize("network_mode", ["public", "no-network"])
+@pytest.mark.parametrize("devices", [(), ("GPU-fixture",)])
+def test_apptainer_enables_nvidia_only_for_the_phase_devices(
+    tmp_path, monkeypatch, phase, network_mode, devices,
+):
+    monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(tmp_path / "node-tmp"))
+    runtime = ApptainerAgentRuntime(
+        SimpleNamespace(
+            profile=load_cluster_profile("slurm"),
+            run_id="cpu-phases",
+            sif_path=tmp_path / "task.sif",
+        ),
+        make_run_plan(tmp_path),
+    )
+
+    command = runtime._base_command(
+        devices=devices,
+        environment={"CUDA_VISIBLE_DEVICES": "GPU-unexpected"},
+        extra_binds=(),
+        mount_workspace=False,
+        mount_agent_home=False,
+        containall=True,
+        network_mode=network_mode,
+        phase=phase,
+    )
+
+    assert ("--nv" in command) is bool(devices)
+    assert "--containall" in command
+    assert "--no-umask" in command
+    pairs = tuple(zip(command, command[1:], strict=False))
+    environment = {
+        value.split("=", 1)[0]: value.split("=", 1)[1]
+        for option, value in pairs if option == "--env"
+    }
+    assert environment["CUDA_VISIBLE_DEVICES"] == ",".join(devices)
+    assert ("--net" in command) is (network_mode == "no-network")
+
+
 def test_judge_authority_is_multinode_only_and_never_exposed_to_work(
     tmp_path: Path, monkeypatch
 ) -> None:

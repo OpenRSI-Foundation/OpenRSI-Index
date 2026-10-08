@@ -128,6 +128,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
     """Synchronous LSF/Apptainer transport for the native Harness Engine."""
 
     scheduler_log_pattern = "lsf.%J"
+    supports_cpu_work = False
 
     def __init__(
         self,
@@ -392,7 +393,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
 
     def _compile(self, request: ClusterRunRequest) -> TaskDefinition:
         definition = self.compiler.compile(request.task_dir, request.options)
-        if definition.gpu_requirement.count == 0:
+        if definition.gpu_requirement.count == 0 and not self.supports_cpu_work:
             raise SetupError(
                 "Blue Vela cluster runs require Work GPUs; "
                 "use the local Docker backend for environment.gpus = 0"
