@@ -16,6 +16,7 @@ from rsi_harness.cluster.slurm.adapter import SlurmClusterAdapter
 from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.models import GPURequirement, RunStatus
 from tests.cluster.bluevela.test_adapter import RecordingScheduler, _profile, _request
+from tests.factories import DEFAULT_TASK_TOML, write_harbor_task
 
 
 class RecordingSlurmScheduler(RecordingScheduler):
@@ -134,6 +135,73 @@ def test_slurm_reuses_build_run_and_artifact_lifecycle(
         assert payload.multi_node.verifier.node_count == 2
 
 
+@pytest.mark.parametrize("work_gpus,judge_gpus", [(0, 0), (0, 1), (1, 0)])
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_slurm_cpu_phases_preserve_resources_and_native_lifecycle(
+    tmp_path, work_gpus, judge_gpus, dry_run,
+):
+    local = _profile(tmp_path)
+    profile = load_cluster_profile("slurm", {"USER": "alice"}).model_copy(
+        update={
+            "storage": local.storage,
+            "apptainer": local.apptainer,
+            "builder": local.builder,
+            "resources": local.resources.model_copy(
+                update={"min_memory_mb": 32768}
+            ),
+        }
+    )
+    task_dir = write_harbor_task(
+        tmp_path / "cpu-phases",
+        task_toml=(
+            DEFAULT_TASK_TOML.replace("gpus = 2", f"gpus = {work_gpus}")
+            + f"\n[metadata.rsi_harness.verifier]\ngpus = {judge_gpus}\n"
+        ),
+    )
+    scheduler = RecordingSlurmScheduler()
+    events = {}
+    adapter = SlurmClusterAdapter(
+        profile,
+        scheduler=scheduler,
+        event_callback=lambda key, value: events.update({key: value}),
+        agent_version_resolver=lambda _: "0.149.0",
+    )
+    request = _request(tmp_path, dry_run=dry_run).model_copy(
+        update={"task_dir": task_dir.resolve()}
+    )
+
+    result = adapter.run(request)
+
+    if dry_run:
+        assert scheduler.events == []
+        assert not profile.storage.run_root.exists()
+        resources = events["dry_run"]["resources"]
+        assert resources["work_gpus"] == work_gpus
+        assert resources["verifier_gpus"] == judge_gpus
+        assert resources["total_gpus"] == work_gpus + judge_gpus
+        argv = events["dry_run"]["run_argv"]
+    else:
+        assert result.status == RunStatus.COMPLETED
+        assert scheduler.events == [
+            "check-build", "submit-build", "wait-build",
+            "check-run", "submit-run", "wait-run",
+        ]
+        spec = scheduler.specs[1]
+        assert spec.gpu_count == work_gpus + judge_gpus
+        payload = load_engine_payload(spec.script_path.with_suffix(".json"))
+        assert len(payload.run_plan.gpu_plan.work.devices) == work_gpus
+        assert len(payload.run_plan.gpu_plan.judge.devices) == judge_gpus
+        assert payload.run_plan.gpu_plan.judge_mode.value == (
+            "disjoint" if judge_gpus else "freeze-only"
+        )
+        argv = scheduler.renderer.render_submit(spec)
+    assert "--cpus-per-task=8" in argv
+    assert "--mem=32768M" in argv
+    assert any(arg.startswith("--gres=") for arg in argv) is bool(
+        work_gpus + judge_gpus
+    )
+
+
 @pytest.mark.parametrize(
     ("state", "code"), [("FAILED", 1), ("CANCELLED", 0), ("COMPLETED", 9)]
 )
@@ -143,3 +211,30 @@ def test_failed_slurm_jobs_cannot_pass_artifact_validation(state, code):
             "run",
             SlurmJobResult(job_id="123", state=state, exit_code=code),
         )
+
+
+@pytest.mark.parametrize("judge_gpus,disjoint_nodes", [(9, False), (0, True)])
+def test_cpu_work_rejects_multinode_before_scheduling(
+    tmp_path, judge_gpus, disjoint_nodes,
+):
+    task_dir = write_harbor_task(
+        tmp_path / "multinode-cpu",
+        task_toml=(
+            DEFAULT_TASK_TOML.replace("gpus = 2", "gpus = 0")
+            + "\n[metadata.rsi_harness]\n"
+            + f"require_disjoint_phase_nodes = {str(disjoint_nodes).lower()}\n"
+            + f"\n[metadata.rsi_harness.verifier]\ngpus = {judge_gpus}\n"
+        ),
+    )
+    scheduler = RecordingSlurmScheduler()
+    adapter = SlurmClusterAdapter(
+        load_cluster_profile("slurm", {"USER": "alice"}), scheduler=scheduler,
+    )
+    request = _request(tmp_path, dry_run=True).model_copy(
+        update={"task_dir": task_dir.resolve()}
+    )
+
+    with pytest.raises(SetupError, match="single-node Slurm"):
+        adapter.run(request)
+
+    assert scheduler.events == []

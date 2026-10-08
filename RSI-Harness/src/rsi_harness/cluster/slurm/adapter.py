@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from rsi_harness.cluster.base import ClusterRunRequest
 from rsi_harness.cluster.bluevela.adapter import BlueVelaClusterAdapter
 from rsi_harness.cluster.config import SlurmSchedulerProfile
 from rsi_harness.cluster.schedulers.slurm import (
@@ -11,13 +12,24 @@ from rsi_harness.cluster.schedulers.slurm import (
     SlurmJobSpec,
     SlurmScheduler,
 )
-from rsi_harness.errors import InfrastructureError
+from rsi_harness.errors import InfrastructureError, SetupError
+from rsi_harness.models import TaskDefinition
 
 
 class SlurmClusterAdapter(BlueVelaClusterAdapter):
     """Reuse Blue Vela orchestration with Slurm job and launch semantics."""
 
     scheduler_log_pattern = "slurm.%j"
+    supports_cpu_work = True
+
+    def _compile(self, request: ClusterRunRequest) -> TaskDefinition:
+        definition = super()._compile(request)
+        if definition.gpu_requirement.count == 0 and (
+            definition.require_disjoint_phase_nodes
+            or definition.verifier.gpu_count > self.profile.resources.gpus_per_node
+        ):
+            raise SetupError("CPU Work requires a single-node Slurm allocation")
+        return definition
 
     def _make_scheduler(self) -> SlurmScheduler:
         scheduler = self.profile.scheduler

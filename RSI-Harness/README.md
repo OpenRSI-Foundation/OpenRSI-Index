@@ -118,7 +118,7 @@ sudo -E "$(command -v rsi-harness)" run /absolute/path/to/task --gpus 0,1
 timeouts, and other runtime settings come from the task. Run
 `rsi-harness run --help` for optional controls.
 
-For CPU-only local tasks, declare Work's count explicitly in `task.toml`:
+For CPU-only tasks, declare Work's count explicitly in `task.toml`:
 
 ```toml
 [environment]
@@ -141,8 +141,12 @@ An omitted Work count remains unspecified and must inherit a Compose GPU
 reservation. Explicit Work zero cannot conflict with a positive reservation.
 CPU Work with a GPU Judge is supported when an explicit `--gpus` pool is
 provided. GPU requirements still fail if NVIDIA devices are unavailable.
-CPU-only execution is currently supported by the local Docker backend;
-Blue Vela's launch path still requires GPUs.
+
+CPU-only tasks run with local Docker or single-node Slurm/Apptainer.
+For Slurm, use a site profile with a CPU partition and omit `--gpus`;
+no GPU allocation or NVIDIA tools are required. Mixed CPU/GPU tasks need a GPU
+partition, and only GPU phases enable NVIDIA passthrough. Blue Vela still
+requires Work GPUs. Multi-node CPU Work is not supported.
 
 ## Run multi-node tasks on a cluster
 
