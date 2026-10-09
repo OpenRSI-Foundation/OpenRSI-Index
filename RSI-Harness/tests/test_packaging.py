@@ -56,9 +56,7 @@ def test_rsi_harness_distribution_owns_complete_rsi_loop_package() -> None:
     package = resources.files("rsi_loop")
     assert package.joinpath("LICENSE").is_file()
     assert package.joinpath("NOTICE").is_file()
-    assert package.joinpath(
-        "visualizer", "templates", "trajectory.html"
-    ).is_file()
+    assert package.joinpath("visualizer", "templates", "trajectory.html").is_file()
 
     for adapter in ("bluevela", "slurm"):
         cluster_package = resources.files(f"rsi_harness.cluster.{adapter}")

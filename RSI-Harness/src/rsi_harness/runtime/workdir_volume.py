@@ -448,9 +448,7 @@ class DockerWorkdirVolumeBackend:
             expected_references=expected_references,
         )
 
-    def _canonical(
-        self, volume: ManagedWorkdirVolume
-    ) -> ManagedWorkdirVolume:
+    def _canonical(self, volume: ManagedWorkdirVolume) -> ManagedWorkdirVolume:
         if not isinstance(volume, ManagedWorkdirVolume):
             raise SetupError("managed WORKDIR volume authority is untyped")
         return self._expected(
@@ -492,8 +490,10 @@ class DockerWorkdirVolumeBackend:
     @staticmethod
     def _validate_ids(*, run_id: str, task_id: str) -> None:
         for field, value in (("run ID", run_id), ("task ID", task_id)):
-            if not isinstance(value, str) or not value or any(
-                character in value for character in ("\0", "\n", "\r")
+            if (
+                not isinstance(value, str)
+                or not value
+                or any(character in value for character in ("\0", "\n", "\r"))
             ):
                 raise SetupError(f"unsafe managed WORKDIR volume {field}")
 

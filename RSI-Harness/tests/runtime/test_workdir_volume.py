@@ -168,9 +168,7 @@ def _create(backend: DockerWorkdirVolumeBackend) -> ManagedWorkdirVolume:
 
 
 def _backend(client: FakeClient) -> DockerWorkdirVolumeBackend:
-    return DockerWorkdirVolumeBackend(
-        client, nonce_factory=lambda: FRESHNESS_NONCE
-    )
+    return DockerWorkdirVolumeBackend(client, nonce_factory=lambda: FRESHNESS_NONCE)
 
 
 def test_plan_mints_snapshot_target_and_freshness_bound_authority() -> None:
@@ -193,8 +191,9 @@ def test_plan_mints_snapshot_target_and_freshness_bound_authority() -> None:
     )
 
 
-def test_create_error_after_possible_mutation_retains_exact_recovery_authority(
-) -> None:
+def test_create_error_after_possible_mutation_retains_exact_recovery_authority() -> (
+    None
+):
     """A lost create response must never be downgraded to proven absence."""
     client = FakeClient()
     client.volumes.create_error = APIError("response lost")
@@ -443,6 +442,7 @@ def test_remove_ambiguity_requires_recovery(failure: str) -> None:
     elif failure == "list":
         client.containers.list_error = APIError("list failed")
     else:
+
         def fail_remove(*, force: bool = False) -> None:
             del force
             raise APIError("remove failed")

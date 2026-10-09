@@ -253,9 +253,7 @@ def test_submission_artifact_hardlinks_the_complete_feedback_log(tmp_path) -> No
     visualizer_output = writer.root / "submissions/agent-1/test_output.txt"
     assert visualizer_output.read_bytes() == complete
     assert visualizer_output.samefile(feedback)
-    payload = json.loads(
-        (writer.root / "submissions/agent-1/report.json").read_text()
-    )
+    payload = json.loads((writer.root / "submissions/agent-1/report.json").read_text())
     assert payload["verifier_output_required"] is True
     assert payload["full_output_captured"] is True
 
@@ -270,9 +268,7 @@ def test_task_authored_verifier_output_is_not_redacted(tmp_path: Path) -> None:
         report("agent-1", score=1.0, rewards={"reward": 1.0}, output=authored)
     )
 
-    assert (
-        writer.root / "submissions/agent-1/test_output.txt"
-    ).read_text() == authored
+    assert (writer.root / "submissions/agent-1/test_output.txt").read_text() == authored
 
 
 def test_failed_submission_cannot_replace_best_valid_score(tmp_path: Path) -> None:

@@ -228,9 +228,7 @@ class CoordinatorBackend(Protocol):
         self, plan: Any, work: ContainerRef, submit_url: str, token: str
     ) -> None: ...
 
-    def prepare_agent(
-        self, plan: Any, max_submissions: int | None = None
-    ) -> Any: ...
+    def prepare_agent(self, plan: Any, max_submissions: int | None = None) -> Any: ...
 
     def run_agent(
         self, prepared: Any, work: ContainerRef, timeout: float | None
@@ -288,15 +286,11 @@ class ProductionCoordinatorBackend:
     network_planner: Callable[[Any, str], str]
     network_creator: Callable[[Any, str, str], ManagedNetwork]
     network_remover: Callable[[ManagedNetwork], None]
-    workdir_volume_planner: Callable[
-        [Any, str], ManagedWorkdirVolume | None
-    ]
+    workdir_volume_planner: Callable[[Any, str], ManagedWorkdirVolume | None]
     workdir_volume_creator: Callable[
         [Any, str, ManagedWorkdirVolume], ManagedWorkdirVolume
     ]
-    workdir_volume_attester: Callable[
-        [ContainerRef, ManagedWorkdirVolume], None
-    ]
+    workdir_volume_attester: Callable[[ContainerRef, ManagedWorkdirVolume], None]
     workdir_volume_remover: Callable[[ManagedWorkdirVolume], None]
     work_name_planner: Callable[[Any, str], str]
     work_creator: Callable[
@@ -317,9 +311,7 @@ class ProductionCoordinatorBackend:
     retained_work_planner: Callable[[Any, ContainerRef], str]
     work_retainer: Callable[[Any, ContainerRef, str], RootfsSnapshotLease]
     retained_work_releaser: Callable[[RootfsSnapshotLease], None]
-    evaluator: Callable[
-        [EvaluationRequest, RoundLifecycleObserver], SubmissionReport
-    ]
+    evaluator: Callable[[EvaluationRequest, RoundLifecycleObserver], SubmissionReport]
     event_recorder: Callable[[str, object], None] = lambda _name, _value: None
     preparation: RunPreparation | None = None
 
@@ -365,9 +357,7 @@ class ProductionCoordinatorBackend:
     def plan_network(self, plan: Any, run_id: str) -> str:
         return self.network_planner(plan, run_id)
 
-    def create_network(
-        self, plan: Any, run_id: str, planned: str
-    ) -> ManagedNetwork:
+    def create_network(self, plan: Any, run_id: str, planned: str) -> ManagedNetwork:
         return self.network_creator(plan, run_id, planned)
 
     def remove_network(self, network: ManagedNetwork) -> None:
@@ -402,9 +392,7 @@ class ProductionCoordinatorBackend:
         planned_name: str,
         workdir_volume: ManagedWorkdirVolume | None,
     ) -> ContainerRef:
-        return self.work_creator(
-            plan, run_id, network, planned_name, workdir_volume
-        )
+        return self.work_creator(plan, run_id, network, planned_name, workdir_volume)
 
     def attest_work_feedback_mount(self, work: ContainerRef) -> None:
         self.work_feedback_attester(work)
@@ -433,9 +421,7 @@ class ProductionCoordinatorBackend:
     ) -> None:
         self.hook_installer(plan, work, submit_url, token)
 
-    def prepare_agent(
-        self, plan: Any, max_submissions: int | None = None
-    ) -> Any:
+    def prepare_agent(self, plan: Any, max_submissions: int | None = None) -> Any:
         return self.agent_preparer(plan, max_submissions)
 
     def run_agent(
@@ -514,6 +500,7 @@ class _RoundEvaluator:
         sandbox_lifecycle: Any = None,
     ) -> None:
         from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
+
         self._sandbox_lifecycle = sandbox_lifecycle or NullSandboxLifecycle()
         self._backend = backend
         self._state = state
@@ -532,27 +519,32 @@ class _RoundEvaluator:
                 "submissions are closed after a required runtime write failed"
             )
         try:
-            report = self._backend.evaluate_submission(
-                request, lifecycle_observer=self
-            )
+            report = self._backend.evaluate_submission(request, lifecycle_observer=self)
         except StateTransitionError:
             raise
         except Exception:
-            if (not self.recovery_required and self._sandbox_lifecycle.can_resume
-                    and self._state.status in {
-                RunStatus.SNAPSHOTTING,
-                RunStatus.JUDGING,
-            }):
+            if (
+                not self.recovery_required
+                and self._sandbox_lifecycle.can_resume
+                and self._state.status
+                in {
+                    RunStatus.SNAPSHOTTING,
+                    RunStatus.JUDGING,
+                }
+            ):
                 self._transition(RunStatus.AGENT_RUNNING)
                 self._backend.record_event(
                     "work_resume", request.work_container.container_id
                 )
-            elif (not self.recovery_required
-                  and self._sandbox_lifecycle.work_ended_normally
-                  and self._state.status in {
-                      RunStatus.SNAPSHOTTING,
-                      RunStatus.JUDGING,
-                  }):
+            elif (
+                not self.recovery_required
+                and self._sandbox_lifecycle.work_ended_normally
+                and self._state.status
+                in {
+                    RunStatus.SNAPSHOTTING,
+                    RunStatus.JUDGING,
+                }
+            ):
                 # As below: Work ended during this round and stays paused.
                 self._transition(RunStatus.AGENT_RUNNING)
             raise
@@ -567,17 +559,18 @@ class _RoundEvaluator:
         if self.recovery_required:
             self.recovery_error = report.error
             self._persist_recovery(report.error or "recovery_required")
-        elif (self._sandbox_lifecycle.can_resume
-              and self._state.status != RunStatus.AGENT_RUNNING):
+        elif (
+            self._sandbox_lifecycle.can_resume
+            and self._state.status != RunStatus.AGENT_RUNNING
+        ):
             self._transition(RunStatus.AGENT_RUNNING)
             self._backend.record_event(
                 "work_resume", request.work_container.container_id
             )
-        elif (self._sandbox_lifecycle.work_ended_normally
-              and self._state.status in {
-                  RunStatus.SNAPSHOTTING,
-                  RunStatus.JUDGING,
-              }):
+        elif self._sandbox_lifecycle.work_ended_normally and self._state.status in {
+            RunStatus.SNAPSHOTTING,
+            RunStatus.JUDGING,
+        }:
             # Work ended during this round and stays paused for removal;
             # only the round phase closes, nothing is resumed.
             self._transition(RunStatus.AGENT_RUNNING)
@@ -607,15 +600,11 @@ class _RoundEvaluator:
                 )
             actual = values.get("actual")
             rollback = values.get("rollback")
-            if actual is not None and not isinstance(
-                actual, ManagedWorkdirVolume
-            ):
+            if actual is not None and not isinstance(actual, ManagedWorkdirVolume):
                 raise InfrastructureError(
                     "WORKDIR volume create returned untyped authority"
                 )
-            if rollback is not None and not isinstance(
-                rollback, ManagedWorkdirVolume
-            ):
+            if rollback is not None and not isinstance(rollback, ManagedWorkdirVolume):
                 raise InfrastructureError(
                     "WORKDIR volume rollback returned untyped authority"
                 )
@@ -650,9 +639,7 @@ class _RoundEvaluator:
                 )
             )
         elif name == "workdir_volume_removed":
-            self._update_work(
-                workdir_volume=WorkdirVolumeResourceLease()
-            )
+            self._update_work(workdir_volume=WorkdirVolumeResourceLease())
         elif name == "work_pause_planned":
             if self._state.status == RunStatus.AGENT_RUNNING:
                 self._transition(RunStatus.SNAPSHOTTING)
@@ -670,18 +657,12 @@ class _RoundEvaluator:
                 snapshot_lease_id=values.get("snapshot_lease_id"),
                 snapshot_image_id=values.get("snapshot_image_id"),
                 snapshot_image_ref=values.get("snapshot_image_ref"),
-                snapshot_source_container_id=values.get(
-                    "snapshot_source_container_id"
-                ),
+                snapshot_source_container_id=values.get("snapshot_source_container_id"),
                 snapshot_merged_path=(
-                    None
-                    if image_authority
-                    else values.get("snapshot_merged_path")
+                    None if image_authority else values.get("snapshot_merged_path")
                 ),
                 snapshot_process_id=(
-                    None
-                    if image_authority
-                    else values.get("snapshot_process_id")
+                    None if image_authority else values.get("snapshot_process_id")
                 ),
             )
         elif name == "snapshot_cancelled":
@@ -718,19 +699,13 @@ class _RoundEvaluator:
                 policy_rule_id=values.get("policy_rule_id"),
             )
         elif name == "judge_policy_planned":
-            self._update_judge(
-                planned_policy_rule_id=values.get("policy_rule_id")
-            )
+            self._update_judge(planned_policy_rule_id=values.get("policy_rule_id"))
         elif name == "judge_removed":
             self._update_judge(container_id=None, planned_container=None)
         elif name == "judge_policy_removed":
-            self._update_judge(
-                planned_policy_rule_id=None, policy_rule_id=None
-            )
+            self._update_judge(planned_policy_rule_id=None, policy_rule_id=None)
         elif name == "judge_network_removed":
-            self._update_judge(
-                network_id=None, network_name=None, planned_network=None
-            )
+            self._update_judge(network_id=None, network_name=None, planned_network=None)
         elif name == "snapshot_released":
             self._update_judge(
                 planned_snapshot=None,
@@ -782,9 +757,7 @@ class _RoundEvaluator:
             planned_name=planned_name,
         )
 
-    def judge_network_created(
-        self, round_id: str, network: ManagedNetwork
-    ) -> None:
+    def judge_network_created(self, round_id: str, network: ManagedNetwork) -> None:
         self.resource_event(
             "judge_network_created",
             round_id=round_id,
@@ -799,9 +772,7 @@ class _RoundEvaluator:
             planned_name=planned_name,
         )
 
-    def judge_container_created(
-        self, round_id: str, container: ContainerRef
-    ) -> None:
+    def judge_container_created(self, round_id: str, container: ContainerRef) -> None:
         self.resource_event(
             "judge_container_created",
             round_id=round_id,
@@ -835,6 +806,7 @@ class _RoundEvaluator:
             "judge_network_removed", round_id=round_id, network_id=network_id
         )
 
+
 class RunCoordinator:
     """Own the complete run sequence through mandatory injected ports."""
 
@@ -849,6 +821,7 @@ class RunCoordinator:
         sandbox_lifecycle: Any = None,
     ) -> None:
         from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
+
         self._sandbox_lifecycle = sandbox_lifecycle or NullSandboxLifecycle()
         self._backend = backend
         self._leases = lease_store
@@ -989,19 +962,25 @@ class RunCoordinator:
                 history = lease.phase_history
                 if history[-1:] != (status.value,):
                     history += (status.value,)
-                mutate_lease(lambda current: current.model_copy(
-                    update={"phase": status.value, "phase_history": history}
-                ))
+                mutate_lease(
+                    lambda current: current.model_copy(
+                        update={"phase": status.value, "phase_history": history}
+                    )
+                )
 
         def update_work(**updates: object) -> None:
-            mutate_lease(lambda current: current.model_copy(
-                update={"work": current.work.model_copy(update=updates)}
-            ))
+            mutate_lease(
+                lambda current: current.model_copy(
+                    update={"work": current.work.model_copy(update=updates)}
+                )
+            )
 
         def update_judge(**updates: object) -> None:
-            mutate_lease(lambda current: current.model_copy(
-                update={"judge": current.judge.model_copy(update=updates)}
-            ))
+            mutate_lease(
+                lambda current: current.model_copy(
+                    update={"judge": current.judge.model_copy(update=updates)}
+                )
+            )
 
         def persist_recovery(message: str) -> None:
             assert lease is not None
@@ -1071,9 +1050,7 @@ class RunCoordinator:
         ) -> None:
             nonlocal setup_recovery_required, setup_recovery_error
             setup_recovery_required = True
-            setup_recovery_error = redact_text(
-                f"recovery_required: {stage}: {error}"
-            )
+            setup_recovery_error = redact_text(f"recovery_required: {stage}: {error}")
             persist_recovery(setup_recovery_error)
 
         sandbox_cancelled = sandbox_closed = sandbox_released = False
@@ -1178,12 +1155,8 @@ class RunCoordinator:
             ):
                 retention_attempted = True
                 try:
-                    planned_retained_work = self._backend.plan_retained_work(
-                        plan, work
-                    )
-                    update_work(
-                        planned_retained_image_ref=planned_retained_work
-                    )
+                    planned_retained_work = self._backend.plan_retained_work(plan, work)
+                    update_work(planned_retained_image_ref=planned_retained_work)
                     retained_work = self._backend.retain_work(
                         plan, work, planned_retained_work
                     )
@@ -1259,15 +1232,11 @@ class RunCoordinator:
                 try:
                     self._backend.remove_work_policy(work_policy_id)
                     work_policy_removed = True
-                    update_work(
-                        planned_policy_rule_id=None, policy_rule_id=None
-                    )
+                    update_work(planned_policy_rule_id=None, policy_rule_id=None)
                 except BaseException as error:
                     cleanup_errors.append(self._error(error))
                     if lease is not None:
-                        persist_recovery(
-                            f"Work policy removal unproven: {error}"
-                        )
+                        persist_recovery(f"Work policy removal unproven: {error}")
                     return
             if network is not None and not network_removed:
                 try:
@@ -1346,9 +1315,7 @@ class RunCoordinator:
                     validate_run_plan_mount_topology(plan)
                     mutate_lease(
                         lambda current: current.model_copy(
-                            update={
-                                "rootfs_snapshot_mode": plan.rootfs_snapshot_mode
-                            }
+                            update={"rootfs_snapshot_mode": plan.rootfs_snapshot_mode}
                         )
                     )
                     artifacts = self._backend.start_artifacts(plan, run_id)
@@ -1377,12 +1344,9 @@ class RunCoordinator:
                     )
                     resources.callback(emergency_cleanup)
 
-                    if (
-                        plan.rootfs_snapshot_mode
-                        is RootfsSnapshotMode.SPLIT_WORKDIR
-                    ):
-                        planned_workdir_volume = (
-                            self._backend.plan_workdir_volume(plan, run_id)
+                    if plan.rootfs_snapshot_mode is RootfsSnapshotMode.SPLIT_WORKDIR:
+                        planned_workdir_volume = self._backend.plan_workdir_volume(
+                            plan, run_id
                         )
                         workdir_volume_authority_known = True
                         if planned_workdir_volume is None:
@@ -1421,15 +1385,11 @@ class RunCoordinator:
                             workdir_volume_mounted = False
                             evaluator.resource_event("workdir_volume_removed")
                             raise
-                        if not isinstance(
-                            created_workdir_volume, ManagedWorkdirVolume
-                        ):
+                        if not isinstance(created_workdir_volume, ManagedWorkdirVolume):
                             raise InfrastructureError(
                                 "WORKDIR volume create returned untyped authority"
                             )
-                        if (
-                            created_workdir_volume != planned_workdir_volume
-                        ):
+                        if created_workdir_volume != planned_workdir_volume:
                             mismatch = InfrastructureError(
                                 "created WORKDIR volume differs from exact "
                                 "split-workdir authority"
@@ -1455,8 +1415,7 @@ class RunCoordinator:
                                 )
                             except BaseException as rollback_error:
                                 retain_workdir_authority_after_write_failure(
-                                    "mismatched WORKDIR volume rollback is "
-                                    "unproven",
+                                    "mismatched WORKDIR volume rollback is unproven",
                                     rollback_error,
                                 )
                                 raise InfrastructureError(
@@ -1485,12 +1444,9 @@ class RunCoordinator:
                             )
                             raise
                     elif (
-                        plan.rootfs_snapshot_mode
-                        is not RootfsSnapshotMode.FULL_ROOTFS
+                        plan.rootfs_snapshot_mode is not RootfsSnapshotMode.FULL_ROOTFS
                     ):
-                        raise InfrastructureError(
-                            "unsupported rootfs snapshot mode"
-                        )
+                        raise InfrastructureError("unsupported rootfs snapshot mode")
 
                     planned_work = self._backend.plan_work_container(plan, run_id)
                     update_work(planned_container=planned_work)
@@ -1505,9 +1461,7 @@ class RunCoordinator:
                     resources.callback(emergency_cleanup)
                     self._backend.attest_work_feedback_mount(work)
                     if actual_workdir_volume is not None:
-                        self._backend.attest_workdir_volume(
-                            work, actual_workdir_volume
-                        )
+                        self._backend.attest_workdir_volume(work, actual_workdir_volume)
                         workdir_volume_mounted = True
                         try:
                             evaluator.resource_event(
@@ -1522,9 +1476,7 @@ class RunCoordinator:
                     planned_work_policy = self._backend.plan_work_policy(
                         plan, work, network
                     )
-                    update_work(
-                        planned_policy_rule_id=planned_work_policy
-                    )
+                    update_work(planned_policy_rule_id=planned_work_policy)
                     try:
                         work_policy_id = self._backend.install_work_policy(
                             plan, work, network
@@ -1550,9 +1502,7 @@ class RunCoordinator:
                         max_submissions=request.options.max_submissions,
                         cooldown_seconds=request.options.cooldown_seconds,
                     )
-                    self._backend.install_hooks(
-                        plan, work, server.endpoint.url, token
-                    )
+                    self._backend.install_hooks(plan, work, server.endpoint.url, token)
                     prepared = self._backend.prepare_agent(
                         plan, request.options.max_submissions
                     )
@@ -1570,9 +1520,7 @@ class RunCoordinator:
                 # Acceptance closes and all in-flight submissions drain before
                 # history, aggregation, artifacts, Agent, or Work are touched.
                 emergency_cleanup()
-                reports = (
-                    self._history(server, evaluator) if drained else ()
-                )
+                reports = self._history(server, evaluator) if drained else ()
                 infrastructure_round = any(
                     report.status == SubmissionStatus.INFRASTRUCTURE_ERROR
                     for report in reports
@@ -1587,8 +1535,7 @@ class RunCoordinator:
                 # budget is the normal end of a run; timed_out stays recorded
                 # in final_result.json and the outcome follows the submissions.
                 elif any(
-                    report.status == SubmissionStatus.COMPLETED
-                    for report in reports
+                    report.status == SubmissionStatus.COMPLETED for report in reports
                 ):
                     terminal = RunStatus.COMPLETED
                 else:
@@ -1611,12 +1558,8 @@ class RunCoordinator:
                     try:
                         artifacts.finalize(
                             status=terminal,
-                            runtime_seconds=max(
-                                0.0, time.monotonic() - started_at
-                            ),
-                            timed_out=bool(
-                                agent_result and agent_result.timed_out
-                            ),
+                            runtime_seconds=max(0.0, time.monotonic() - started_at),
+                            timed_out=bool(agent_result and agent_result.timed_out),
                         )
                     except BaseException as error:
                         cleanup_errors.append(self._error(error))

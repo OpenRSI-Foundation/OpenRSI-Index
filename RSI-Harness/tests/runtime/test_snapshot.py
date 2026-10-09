@@ -277,9 +277,7 @@ class BehavioralOverlayRunner:
         self.mounted: set[Path] = set()
         self.fail_unmount = False
 
-    def mount(
-        self, lower: Path, upper: Path, work: Path, merged: Path
-    ) -> int | None:
+    def mount(self, lower: Path, upper: Path, work: Path, merged: Path) -> int | None:
         self.events.append(("mount", merged))
         if self.mount_error:
             raise InfrastructureError(self.mount_error)
@@ -320,9 +318,7 @@ class PartialMountFailureRunner(BehavioralOverlayRunner):
         super().__init__(name)
         self.fail_after_mount = True
 
-    def mount(
-        self, lower: Path, upper: Path, work: Path, merged: Path
-    ) -> int | None:
+    def mount(self, lower: Path, upper: Path, work: Path, merged: Path) -> int | None:
         process_id = super().mount(lower, upper, work, merged)
         if self.fail_after_mount:
             raise InfrastructureError("synthetic failure after mount became live")
@@ -336,9 +332,7 @@ class DisappearingProcessRunner(BehavioralOverlayRunner):
         self.fail_reap = False
         self.reap_attempts: list[int | None] = []
 
-    def mount(
-        self, lower: Path, upper: Path, work: Path, merged: Path
-    ) -> int | None:
+    def mount(self, lower: Path, upper: Path, work: Path, merged: Path) -> int | None:
         process_id = super().mount(lower, upper, work, merged)
         if self.disappear_after_return:
             self.mounted.discard(merged)
@@ -425,9 +419,7 @@ def test_probe_fails_only_after_native_and_fuse_behavioral_failures(tmp_path):
     workspace_root.mkdir(parents=True)
     backend = OverlaySnapshotBackend(
         data_root,
-        native_runner=BehavioralOverlayRunner(
-            "overlayfs", mount_error="native denied"
-        ),
+        native_runner=BehavioralOverlayRunner("overlayfs", mount_error="native denied"),
         fuse_runner=BehavioralOverlayRunner(
             "fuse-overlayfs", mount_error="fuse missing"
         ),
@@ -460,9 +452,7 @@ def test_probe_records_unreapable_fuse_startup_and_does_not_mark_clean(tmp_path)
     )
     backend = OverlaySnapshotBackend(
         data_root,
-        native_runner=BehavioralOverlayRunner(
-            "overlayfs", mount_error="native denied"
-        ),
+        native_runner=BehavioralOverlayRunner("overlayfs", mount_error="native denied"),
         fuse_runner=fuse,
         sync_runner=RecordingCommandRunner(),
     )
@@ -559,9 +549,7 @@ def test_acquire_durably_records_partial_mount_when_cleanup_fails(tmp_path):
     with pytest.raises(InfrastructureError, match="cleanup.*unmount failure"):
         backend.acquire(workspace, run_id="run-7", round_id="agent-1")
 
-    manifest = json.loads(
-        backend.lease_manifest_path("run-7", "agent-1").read_text()
-    )
+    manifest = json.loads(backend.lease_manifest_path("run-7", "agent-1").read_text())
     assert manifest["state"] == "recovery_required"
     assert manifest["released"] is False
     assert "unmount failure" in manifest["last_error"]
@@ -585,9 +573,7 @@ def test_acquire_reaps_returned_fuse_pid_when_mount_disappears(
     fuse = DisappearingProcessRunner()
     backend = OverlaySnapshotBackend(
         data_root,
-        native_runner=BehavioralOverlayRunner(
-            "overlayfs", mount_error="native denied"
-        ),
+        native_runner=BehavioralOverlayRunner("overlayfs", mount_error="native denied"),
         fuse_runner=fuse,
         sync_runner=RecordingCommandRunner(),
     )
@@ -599,20 +585,14 @@ def test_acquire_reaps_returned_fuse_pid_when_mount_disappears(
         backend.acquire(workspace, run_id="run-7", round_id="agent-1")
 
     assert fuse.reap_attempts == [8123]
-    persisted = json.loads(
-        backend.lease_manifest_path("run-7", "agent-1").read_text()
-    )
+    persisted = json.loads(backend.lease_manifest_path("run-7", "agent-1").read_text())
     assert persisted["state"] == expected_state
     assert persisted["released"] is expected_released
     assert persisted["lease"]["process_id"] == 8123
-    assert (
-        data_root / "snapshots" / "run-7" / "agent-1"
-    ).exists() is root_exists
+    assert (data_root / "snapshots" / "run-7" / "agent-1").exists() is root_exists
 
 
-def test_acquire_durably_records_layer_deletion_failure(
-    tmp_path, monkeypatch
-):
+def test_acquire_durably_records_layer_deletion_failure(tmp_path, monkeypatch):
     data_root = tmp_path / "data"
     workspace_root = data_root / "workspaces"
     workspace = workspace_root / "run-7"
@@ -635,9 +615,7 @@ def test_acquire_durably_records_layer_deletion_failure(
     with pytest.raises(InfrastructureError, match="cleanup.*cannot delete"):
         backend.acquire(workspace, run_id="run-7", round_id="agent-1")
 
-    persisted = json.loads(
-        backend.lease_manifest_path("run-7", "agent-1").read_text()
-    )
+    persisted = json.loads(backend.lease_manifest_path("run-7", "agent-1").read_text())
     assert persisted["state"] == "recovery_required"
     assert "cannot delete" in persisted["last_error"]
 
@@ -715,9 +693,12 @@ def test_restart_discovers_and_releases_active_manifest_and_layers(tmp_path):
 
     restarted.release_snapshot(discovered[0])
 
-    assert restarted.discover_snapshot_leases(
-        run_id="run-7", round_id="agent-1", lease_id=lease.lease_id
-    ) == ()
+    assert (
+        restarted.discover_snapshot_leases(
+            run_id="run-7", round_id="agent-1", lease_id=lease.lease_id
+        )
+        == ()
+    )
     assert not lease.upper_dir.exists()
 
 
@@ -762,9 +743,12 @@ def test_restart_releases_planned_only_fuse_manifest_without_pid(tmp_path):
     assert discovered[0].manifest_requires_recovery is True
     restarted.release_snapshot(discovered[0])
 
-    assert restarted.discover_snapshot_leases(
-        run_id="run-7", round_id="agent-1", lease_id=None
-    ) == ()
+    assert (
+        restarted.discover_snapshot_leases(
+            run_id="run-7", round_id="agent-1", lease_id=None
+        )
+        == ()
+    )
 
 
 def test_restart_releases_active_fuse_manifest_with_recorded_process(tmp_path):
@@ -807,9 +791,12 @@ def test_restart_releases_active_fuse_manifest_with_recorded_process(tmp_path):
     restarted.release_snapshot(authority)
 
     assert restarted_fuse.events[-1] == ("unmount", 991)
-    assert restarted.discover_snapshot_leases(
-        run_id="run-7", round_id="agent-1", lease_id=lease.lease_id
-    ) == ()
+    assert (
+        restarted.discover_snapshot_leases(
+            run_id="run-7", round_id="agent-1", lease_id=lease.lease_id
+        )
+        == ()
+    )
 
 
 def test_restart_discovers_unrecorded_active_fuse_process(tmp_path):
@@ -933,9 +920,7 @@ def test_concrete_snapshot_discovery_exposes_ambiguous_fuse_manifests(tmp_path):
     ]
 
 
-def test_release_fsyncs_layer_root_and_surviving_snapshot_parent(
-    tmp_path, monkeypatch
-):
+def test_release_fsyncs_layer_root_and_surviving_snapshot_parent(tmp_path, monkeypatch):
     import rsi_harness.runtime.snapshot as snapshot_module
 
     data_root = tmp_path / "data"
@@ -979,9 +964,7 @@ def test_failed_unmount_keeps_lease_unreleased_and_write_layer_for_recovery(tmp_
     with pytest.raises(InfrastructureError, match="unmount failure"):
         backend.release(lease)
 
-    persisted = json.loads(
-        backend.lease_manifest_path("run-7", "agent-1").read_text()
-    )
+    persisted = json.loads(backend.lease_manifest_path("run-7", "agent-1").read_text())
     assert persisted["released"] is False
     assert lease.upper_dir.exists()
 
@@ -1051,9 +1034,7 @@ def test_acquire_rejects_run_or_round_identifiers_with_path_syntax(
 
 
 @pytest.mark.parametrize("delimiter", (",", ":", "\\", "\n"))
-def test_backend_rejects_workspace_overlay_option_delimiters(
-    tmp_path, delimiter
-):
+def test_backend_rejects_workspace_overlay_option_delimiters(tmp_path, delimiter):
     data_root = tmp_path / "data"
     workspace_root = data_root / "workspaces"
     workspace = workspace_root / f"bad{delimiter}lower"

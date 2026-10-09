@@ -82,13 +82,9 @@ _SOURCE_CONTAINER_LABEL = "rsi-harness.source-container-id"
 _ROUND_IMAGE_ROLE = "rootfs-snapshot"
 _RETAINED_IMAGE_ROLE = "retained-work-rootfs"
 _RETAINED_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
-_RETAINED_IMAGE_REF = re.compile(
-    r"rsi-harness-rootfs:retained-work-[0-9a-f]{64}\Z"
-)
+_RETAINED_IMAGE_REF = re.compile(r"rsi-harness-rootfs:retained-work-[0-9a-f]{64}\Z")
 _JUDGE_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
-_JUDGE_IMAGE_REF = re.compile(
-    r"rsi-harness-rootfs:judge-round-[0-9a-f]{64}\Z"
-)
+_JUDGE_IMAGE_REF = re.compile(r"rsi-harness-rootfs:judge-round-[0-9a-f]{64}\Z")
 _PHASE_LABEL = "rsi-harness.sandbox-phase"
 _ENV_LABEL = "rsi-harness.sandbox-env"
 _ENV_ID = re.compile(r"e[0-9a-f]{32}\Z")
@@ -149,21 +145,15 @@ class WorkdirVolumeResourceLease(PersistedModel):
 
     @field_validator("planned_target", mode="after")
     @classmethod
-    def valid_planned_target(
-        cls, value: PurePosixPath | None
-    ) -> PurePosixPath | None:
+    def valid_planned_target(cls, value: PurePosixPath | None) -> PurePosixPath | None:
         if value is None:
             return None
         if not value.is_absolute():
             raise ValueError("planned WORKDIR volume target must be absolute")
         if value == PurePosixPath("/"):
-            raise ValueError(
-                "planned WORKDIR volume requires a non-root target"
-            )
+            raise ValueError("planned WORKDIR volume requires a non-root target")
         if ".." in value.parts:
-            raise ValueError(
-                "planned WORKDIR volume target contains lexical traversal"
-            )
+            raise ValueError("planned WORKDIR volume target contains lexical traversal")
         return value
 
     @field_validator("planned_snapshot_mode")
@@ -210,18 +200,14 @@ class WorkdirVolumeResourceLease(PersistedModel):
                     "actual WORKDIR volume target differs from planned target"
                 )
             if self.actual.snapshot_mode != self.planned_snapshot_mode:
-                raise ValueError(
-                    "actual WORKDIR volume mode differs from planned mode"
-                )
+                raise ValueError("actual WORKDIR volume mode differs from planned mode")
             if self.actual.freshness_nonce != self.planned_freshness_nonce:
                 raise ValueError(
                     "actual WORKDIR volume freshness differs from planned authority"
                 )
         if self.rollback is not None:
             if self.planned_name is None:
-                raise ValueError(
-                    "rollback WORKDIR volume requires planned authority"
-                )
+                raise ValueError("rollback WORKDIR volume requires planned authority")
             if self.actual is not None or self.mounted:
                 raise ValueError(
                     "trusted and rollback WORKDIR volume authority cannot coexist"
@@ -311,9 +297,9 @@ class JudgeResourceLease(PersistedModel):
     snapshot_merged_path: Path | None = None
     snapshot_process_id: int | None = None
 
-    _absolute_snapshot_path = field_validator(
-        "snapshot_merged_path", mode="after"
-    )(_absolute_optional_path)
+    _absolute_snapshot_path = field_validator("snapshot_merged_path", mode="after")(
+        _absolute_optional_path
+    )
 
     @field_validator("planned_snapshot_ref", "snapshot_image_ref")
     @classmethod
@@ -351,9 +337,7 @@ class JudgeResourceLease(PersistedModel):
             for value in (self.snapshot_merged_path, self.snapshot_process_id)
         )
         if has_image_authority and has_path_authority:
-            raise ValueError(
-                "Judge snapshot path and image authority cannot be mixed"
-            )
+            raise ValueError("Judge snapshot path and image authority cannot be mixed")
         actual = (
             self.snapshot_image_id,
             self.snapshot_image_ref,
@@ -371,9 +355,7 @@ class JudgeResourceLease(PersistedModel):
                     "actual Judge snapshot authority requires a planned reference"
                 )
             if self.snapshot_image_ref != self.planned_snapshot_ref:
-                raise ValueError(
-                    "actual Judge snapshot reference differs from planned"
-                )
+                raise ValueError("actual Judge snapshot reference differs from planned")
             if self.snapshot_lease_id is None:
                 raise ValueError(
                     "actual Judge snapshot authority requires its lease ID"
@@ -810,23 +792,16 @@ class RecoveryManager:
             if not delete_workspace:
                 return
             if self._find_containers(current, "helper"):
-                self._fail_closed(
-                    current, "workspace deletion blocked by live helper"
-                )
+                self._fail_closed(current, "workspace deletion blocked by live helper")
             if self._find_container(current, "judge") is not None:
-                self._fail_closed(
-                    current, "workspace deletion blocked by live Judge"
-                )
+                self._fail_closed(current, "workspace deletion blocked by live Judge")
             if self._find_container(current, "work") is not None:
-                self._fail_closed(
-                    current, "workspace deletion blocked by live Work"
-                )
+                self._fail_closed(current, "workspace deletion blocked by live Work")
             for role in ("judge", "work"):
                 if self._find_networks(current, role):
                     self._fail_closed(
                         current,
-                        "workspace deletion blocked by a live "
-                        f"{role} network",
+                        f"workspace deletion blocked by a live {role} network",
                     )
             if any(
                 rule_id is not None
@@ -848,9 +823,7 @@ class RecoveryManager:
                 "workspace mount inspection",
                 lambda: self._backend.workspace_is_mounted(workspace),
             ):
-                self._fail_closed(
-                    current, "workspace deletion blocked by a live mount"
-                )
+                self._fail_closed(current, "workspace deletion blocked by a live mount")
             if workspace.exists():
                 if current.cleanup_image_ref is None:
                     raise RuntimeError(
@@ -970,11 +943,14 @@ class RecoveryManager:
                 "Work removal",
                 lambda: self._backend.remove_container(work_id),
             )
-            if self._backend_call(
-                lease,
-                "Work post-removal inspection",
-                lambda: self._backend.inspect_container(work_id),
-            ) is not None:
+            if (
+                self._backend_call(
+                    lease,
+                    "Work post-removal inspection",
+                    lambda: self._backend.inspect_container(work_id),
+                )
+                is not None
+            ):
                 self._fail_closed(lease, "Work removal cannot be proven")
         lease = self._update_work(
             lease,
@@ -994,9 +970,7 @@ class RecoveryManager:
             delete=delete_retained_image,
             source_container_id=retained_source_container_id,
         )
-        lease = self._recover_workdir_volume(
-            lease, delete=delete_retained_image
-        )
+        lease = self._recover_workdir_volume(lease, delete=delete_retained_image)
         # No Work or Judge binds an endpoint any more.
         self._remove_sandbox_root(lease)
 
@@ -1351,8 +1325,7 @@ class RecoveryManager:
         if retained:
             self._fail_closed(
                 lease,
-                "sandbox environment reconciliation left "
-                + ", ".join(retained[:8]),
+                "sandbox environment reconciliation left " + ", ".join(retained[:8]),
             )
         return lease
 
@@ -1749,8 +1722,10 @@ class RecoveryManager:
         if not directory.is_dir():
             return
         for entry in sorted(directory.iterdir()):
-            if entry.is_symlink() or not entry.is_file() or not _LOOP_FILE.fullmatch(
-                entry.name
+            if (
+                entry.is_symlink()
+                or not entry.is_file()
+                or not _LOOP_FILE.fullmatch(entry.name)
             ):
                 self._fail_closed(
                     lease, f"sandbox build directory holds a foreign entry {entry.name}"
@@ -2176,9 +2151,7 @@ class RecoveryManager:
                     self._backend_call(
                         lease,
                         "sandbox env service post-removal inspection",
-                        lambda lookup=lookup: self._backend.inspect_container(
-                            lookup
-                        ),
+                        lambda lookup=lookup: self._backend.inspect_container(lookup),
                     )
                     is not None
                 ):
@@ -2327,9 +2300,7 @@ class RecoveryManager:
                 self._backend_call(
                     lease,
                     "sandbox env orphan post-removal inspection",
-                    lambda identity=identity: self._backend.inspect_container(
-                        identity
-                    ),
+                    lambda identity=identity: self._backend.inspect_container(identity),
                 )
                 is not None
             ):
@@ -2356,9 +2327,13 @@ class RecoveryManager:
         for network_id, state in networks:
             owner, env_id = self._env_label_owner(lease, state.get("labels"))
             name = env_network_name(env_id)
-            if state.get("labels") != sandbox_object_labels(
-                owner, ENV_NETWORK_ROLE, {"sandbox-env": env_id}
-            ) or state.get("Name") != name:
+            if (
+                state.get("labels")
+                != sandbox_object_labels(
+                    owner, ENV_NETWORK_ROLE, {"sandbox-env": env_id}
+                )
+                or state.get("Name") != name
+            ):
                 self._fail_closed(
                     lease,
                     f"sandbox env orphan network {network_id} is not provably owned",
@@ -2574,9 +2549,7 @@ class RecoveryManager:
         services[index] = services[index].model_copy(update=updates)
         return env.model_copy(update={"services": tuple(services)})
 
-    def _commit_env(
-        self, lease: ResourceLease, env: SandboxEnvLease
-    ) -> ResourceLease:
+    def _commit_env(self, lease: ResourceLease, env: SandboxEnvLease) -> ResourceLease:
         """Replace an env record; a proven-removed env leaves the lease
         (SandboxJournal.commit_env compacts the same way)."""
         removed = env.state == "removed" and not env.pending_mutation
@@ -2616,11 +2589,14 @@ class RecoveryManager:
             "Judge removal",
             lambda: self._backend.remove_container(judge_id),
         )
-        if self._backend_call(
-            lease,
-            "Judge post-removal inspection",
-            lambda: self._backend.inspect_container(judge_id),
-        ) is not None:
+        if (
+            self._backend_call(
+                lease,
+                "Judge post-removal inspection",
+                lambda: self._backend.inspect_container(judge_id),
+            )
+            is not None
+        ):
             self._fail_closed(lease, "Judge removal cannot be proven")
 
     def _stop_and_remove_helper(
@@ -2641,19 +2617,20 @@ class RecoveryManager:
             lambda: self._backend.inspect_container(helper_id),
         )
         if inspected is not None and bool(inspected.get("running", False)):
-            self._fail_closed(
-                lease, "cleanup helper containment cannot be proven"
-            )
+            self._fail_closed(lease, "cleanup helper containment cannot be proven")
         self._backend_call(
             lease,
             "cleanup helper removal",
             lambda: self._backend.remove_container(helper_id),
         )
-        if self._backend_call(
-            lease,
-            "cleanup helper post-removal inspection",
-            lambda: self._backend.inspect_container(helper_id),
-        ) is not None:
+        if (
+            self._backend_call(
+                lease,
+                "cleanup helper post-removal inspection",
+                lambda: self._backend.inspect_container(helper_id),
+            )
+            is not None
+        ):
             self._fail_closed(lease, "cleanup helper removal cannot be proven")
 
     def _contain_helpers_after_delete_failure(
@@ -2724,9 +2701,7 @@ class RecoveryManager:
                 f"{role} firewall policy post-removal inspection",
                 lambda rule_id=rule_id: self._backend.policy_exists(rule_id),
             ):
-                self._fail_closed(
-                    lease, f"{role} firewall policy removal is unproven"
-                )
+                self._fail_closed(lease, f"{role} firewall policy removal is unproven")
         if not rule_ids:
             return lease
         if role == "judge":
@@ -2744,17 +2719,13 @@ class RecoveryManager:
             if self._backend_call(
                 lease,
                 f"{role} network use inspection",
-                lambda network_id=network_id: self._backend.network_in_use(
-                    network_id
-                ),
+                lambda network_id=network_id: self._backend.network_in_use(network_id),
             ):
                 self._fail_closed(lease, f"{role} network remains in use")
             self._backend_call(
                 lease,
                 f"{role} network removal",
-                lambda network_id=network_id: self._backend.remove_network(
-                    network_id
-                ),
+                lambda network_id=network_id: self._backend.remove_network(network_id),
             )
         if self._find_networks(lease, role):
             self._fail_closed(lease, f"{role} network removal is unproven")
@@ -2777,8 +2748,7 @@ class RecoveryManager:
             )
         )
         legacy_planned_only = (
-            judge.planned_snapshot is not None
-            and judge.planned_snapshot_ref is None
+            judge.planned_snapshot is not None and judge.planned_snapshot_ref is None
         )
         if not has_path_authority and not legacy_planned_only:
             return lease
@@ -2797,9 +2767,7 @@ class RecoveryManager:
             self._backend_call(
                 lease,
                 "snapshot release",
-                lambda authority=authority: self._backend.release_snapshot(
-                    authority
-                ),
+                lambda authority=authority: self._backend.release_snapshot(authority),
             )
             if self._backend_call(
                 lease,
@@ -2808,9 +2776,7 @@ class RecoveryManager:
                     authority.merged_path
                 ),
             ):
-                self._fail_closed(
-                    lease, "snapshot containment release is unproven"
-                )
+                self._fail_closed(lease, "snapshot containment release is unproven")
         remaining = self._backend_call(
             lease,
             "snapshot post-release discovery",
@@ -2822,13 +2788,10 @@ class RecoveryManager:
         )
         if remaining:
             self._fail_closed(lease, "snapshot durable authority remains")
-        if (
-            judge.snapshot_merged_path is not None
-            and self._backend_call(
-                lease,
-                "planned snapshot mount inspection",
-                lambda: self._backend.is_mounted(judge.snapshot_merged_path),
-            )
+        if judge.snapshot_merged_path is not None and self._backend_call(
+            lease,
+            "planned snapshot mount inspection",
+            lambda: self._backend.is_mounted(judge.snapshot_merged_path),
         ):
             self._fail_closed(lease, "snapshot mount remains without a manifest")
         return self._update_judge(
@@ -3040,9 +3003,7 @@ class RecoveryManager:
                 "retained Work image reference inspection",
                 lambda image_id=image_id: self._backend.image_in_use(image_id),
             ):
-                self._fail_closed(
-                    lease, "retained Work image remains referenced"
-                )
+                self._fail_closed(lease, "retained Work image remains referenced")
         if expected_id is None:
             return self._update_work(
                 lease,
@@ -3051,9 +3012,7 @@ class RecoveryManager:
             )
         return lease
 
-    def _clear_retained_image_authority(
-        self, lease: ResourceLease
-    ) -> ResourceLease:
+    def _clear_retained_image_authority(self, lease: ResourceLease) -> ResourceLease:
         return self._update_work(
             lease,
             planned_retained_image_ref=None,
@@ -3108,9 +3067,7 @@ class RecoveryManager:
             "WORKDIR volume direct-name inspection",
             lambda: self._backend.inspect_volume(authority.name),
         )
-        labeled = self._find_volumes(
-            lease, required=required, expected=authority
-        )
+        labeled = self._find_volumes(lease, required=required, expected=authority)
         must_remove = delete or owned.rollback is not None or owned.actual is None
 
         if direct is None and not labeled:
@@ -3156,15 +3113,16 @@ class RecoveryManager:
             "WORKDIR volume removal",
             lambda: self._backend.remove_volume(authority.name),
         )
-        if self._backend_call(
-            lease,
-            "WORKDIR volume post-removal direct-name inspection",
-            lambda: self._backend.inspect_volume(authority.name),
-        ) is not None:
-            self._fail_closed(lease, "WORKDIR volume removal is unproven")
-        if self._find_volumes(
-            lease, required=required, expected=authority
+        if (
+            self._backend_call(
+                lease,
+                "WORKDIR volume post-removal direct-name inspection",
+                lambda: self._backend.inspect_volume(authority.name),
+            )
+            is not None
         ):
+            self._fail_closed(lease, "WORKDIR volume removal is unproven")
+        if self._find_volumes(lease, required=required, expected=authority):
             self._fail_closed(
                 lease,
                 "WORKDIR volume exact-labeled absence is unproven",
@@ -3190,9 +3148,7 @@ class RecoveryManager:
             if name in seen:
                 self._fail_closed(lease, "duplicate WORKDIR volume query identity")
             seen.add(name)
-            self._attest_volume_state(
-                lease, name=name, state=state, expected=expected
-            )
+            self._attest_volume_state(lease, name=name, state=state, expected=expected)
             found.append((name, state))
         if len(found) > 1:
             self._fail_closed(lease, "ambiguous WORKDIR volume authority")
@@ -3215,20 +3171,14 @@ class RecoveryManager:
                 state, expected, expected_references=()
             )
         except InfrastructureError as error:
-            self._fail_closed(
-                lease, "WORKDIR volume attestation failed", cause=error
-            )
+            self._fail_closed(lease, "WORKDIR volume attestation failed", cause=error)
 
     @staticmethod
     def _volume_labels(volume: ManagedWorkdirVolume) -> dict[str, str]:
         return managed_workdir_volume_labels(volume)
 
-    def _clear_workdir_volume_authority(
-        self, lease: ResourceLease
-    ) -> ResourceLease:
-        return self._update_work(
-            lease, workdir_volume=WorkdirVolumeResourceLease()
-        )
+    def _clear_workdir_volume_authority(self, lease: ResourceLease) -> ResourceLease:
+        return self._update_work(lease, workdir_volume=WorkdirVolumeResourceLease())
 
     def _find_images(
         self,
@@ -3270,10 +3220,9 @@ class RecoveryManager:
                 required=required,
                 source_container_id=source_container_id,
             )
-            if (
-                state.get("labels") != inspected.get("labels")
-                or state.get("repo_tags") != inspected.get("repo_tags")
-            ):
+            if state.get("labels") != inspected.get("labels") or state.get(
+                "repo_tags"
+            ) != inspected.get("repo_tags"):
                 self._fail_closed(
                     lease, "image listing and inspection authority differ"
                 )
@@ -3293,9 +3242,7 @@ class RecoveryManager:
         labels = state.get("labels")
         repo_tags = state.get("repo_tags")
         source = (
-            labels.get(_SOURCE_CONTAINER_LABEL)
-            if isinstance(labels, Mapping)
-            else None
+            labels.get(_SOURCE_CONTAINER_LABEL) if isinstance(labels, Mapping) else None
         )
         valid = (
             _JUDGE_IMAGE_ID.fullmatch(image_id) is not None
@@ -3334,11 +3281,14 @@ class RecoveryManager:
                 f"{purpose} image removal",
                 lambda image_id=image_id: self._backend.remove_image(image_id),
             )
-            if self._backend_call(
-                lease,
-                f"{purpose} image absence query",
-                lambda image_id=image_id: self._backend.inspect_image(image_id),
-            ) is not None:
+            if (
+                self._backend_call(
+                    lease,
+                    f"{purpose} image absence query",
+                    lambda image_id=image_id: self._backend.inspect_image(image_id),
+                )
+                is not None
+            ):
                 self._fail_closed(lease, f"{purpose} image removal is unproven")
         if self._find_images(
             lease,
@@ -3466,9 +3416,7 @@ class RecoveryManager:
             }
         )
         self._store.write(retained)
-        error = RuntimeError(
-            f"{safe_message}; runtime authority remains retained"
-        )
+        error = RuntimeError(f"{safe_message}; runtime authority remains retained")
         if cause is None:
             raise error
         raise error from cause

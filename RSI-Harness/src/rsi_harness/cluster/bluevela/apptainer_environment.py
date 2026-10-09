@@ -29,13 +29,9 @@ def isolated_apptainer_environment(
     }
     for name, value in values.items():
         if not _ENVIRONMENT_NAME.fullmatch(name):
-            raise InfrastructureError(
-                f"invalid Apptainer environment name: {name!r}"
-            )
+            raise InfrastructureError(f"invalid Apptainer environment name: {name!r}")
         if not isinstance(value, str) or "\x00" in value:
-            raise InfrastructureError(
-                f"invalid Apptainer environment value: {name}"
-            )
+            raise InfrastructureError(f"invalid Apptainer environment value: {name}")
         environment[f"APPTAINERENV_{name}"] = value
     return environment
 

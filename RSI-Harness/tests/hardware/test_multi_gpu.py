@@ -121,11 +121,7 @@ def _run_real_round(
             if len(command) == 4 and command[3] in {"DOCKER-USER", "INPUT"}:
                 lines = [line for line in lines if "rsi-" in line]
             elif len(command) == 3:
-                lines = [
-                    line
-                    for line in lines
-                    if "rsi-" in line or "RSI_" in line
-                ]
+                lines = [line for line in lines if "rsi-" in line or "RSI_" in line]
             firewall_trace.append(
                 f"$ {' '.join(command)}\n"
                 + "\n".join(lines)
@@ -133,15 +129,14 @@ def _run_real_round(
             )
         return result
 
-    firewall = DockerIptablesFirewallBackend(
-        client, runner=recording_firewall_runner
-    )
+    firewall = DockerIptablesFirewallBackend(client, runner=recording_firewall_runner)
     if not firewall.probe():
         pytest.skip(
             "multi-GPU fail-closed gate: host DOCKER-USER/INPUT firewall "
             "authority is unavailable"
         )
     data = tmp_path / "data"
+
     class EnumeratingAgent(RSILoopAgentAdapter):
         def prepare(self, request):
             prepared = super().prepare(request)
@@ -215,9 +210,7 @@ def _run_real_round(
         )
         assert result.total_rounds == 2
         assert result.best_score == 1
-        run_created = [
-            entry for entry in created if entry["run_id"] == result.run_id
-        ]
+        run_created = [entry for entry in created if entry["run_id"] == result.run_id]
         run_roles = [entry["role"] for entry in run_created]
         assert run_roles.count("work") == 1
         assert run_roles.count("judge") == 2
@@ -228,9 +221,7 @@ def _run_real_round(
             mounts = entry["mounts"]
             assert isinstance(mounts, list)
             workdir_mounts = [
-                mount
-                for mount in mounts
-                if mount.get("Destination") == "/workspace"
+                mount for mount in mounts if mount.get("Destination") == "/workspace"
             ]
             assert len(workdir_mounts) == 1
             workdir_mount = workdir_mounts[0]
@@ -249,27 +240,14 @@ def _run_real_round(
         assert client.containers.list(all=True, filters=labels) == []
         assert client.networks.list(filters=labels) == []
         verifier_root = (
-            tmp_path
-            / "logs"
-            / "runs"
-            / result.run_id
-            / task_id
-            / "verifier"
+            tmp_path / "logs" / "runs" / result.run_id / task_id / "verifier"
         )
         work = tuple(
-            _read_uuids(
-                verifier_root
-                / f"agent-{round_number}"
-                / "work-gpus.txt"
-            )
+            _read_uuids(verifier_root / f"agent-{round_number}" / "work-gpus.txt")
             for round_number in (1, 2)
         )
         judges = tuple(
-            _read_uuids(
-                verifier_root
-                / f"agent-{round_number}"
-                / "judge-gpus.txt"
-            )
+            _read_uuids(verifier_root / f"agent-{round_number}" / "judge-gpus.txt")
             for round_number in (1, 2)
         )
         return allocation.uuids, work, judges

@@ -39,9 +39,7 @@ from tests.integration.test_shared_root_judge import (
     _tree_identity,
 )
 
-_FIXTURE = (
-    Path(__file__).parents[1] / "fixtures" / "tasks" / "minimal-split-workdir"
-)
+_FIXTURE = Path(__file__).parents[1] / "fixtures" / "tasks" / "minimal-split-workdir"
 _SPARSE_SIZE = 8 * 1024**3
 _FAKE_UUIDS = (
     "GPU-generic-fake-one",
@@ -60,7 +58,9 @@ class _SplitLifecycleObserver(_LifecycleObserver):
     def resource_event(self, name: str, **values: object) -> None:
         if name == "snapshot_acquired":
             image_id = str(values["snapshot_image_id"])
-            self.image_histories.append(copy.deepcopy(self.client.api.history(image_id)))
+            self.image_histories.append(
+                copy.deepcopy(self.client.api.history(image_id))
+            )
         super().resource_event(name, **values)
 
 
@@ -218,9 +218,7 @@ def test_split_workdir_gpu_preserves_rw_work_and_ro_judges_without_rootfs_copy(
             ),
         )
         work_ref = work_runtime.create(work_spec)
-        work_runtime.attest_workdir_volume_mount(
-            work_ref, work_spec.volume_mounts[0]
-        )
+        work_runtime.attest_workdir_volume_mount(work_ref, work_spec.volume_mounts[0])
         work = client.containers.get(work_ref.container_id)
         work.start()
         mutation = work.exec_run(
@@ -334,7 +332,7 @@ def test_split_workdir_gpu_preserves_rw_work_and_ro_judges_without_rootfs_copy(
                 [
                     "/bin/bash",
                     "-lc",
-                    "test \"$(cat /workspace/round-state.txt)\" = "
+                    'test "$(cat /workspace/round-state.txt)" = '
                     f"round-{round_number} "
                     "&& test ! -e /workspace/judge-write "
                     "&& test ! -e /etc/minimal-split-judge-only",
@@ -402,9 +400,10 @@ def test_split_workdir_gpu_preserves_rw_work_and_ro_judges_without_rootfs_copy(
             )
             assert judge_workdir_write_exit_code != 0
             assert tuple(
-                (
-                    plan.paths.logs / "verifier" / round_id / "judge-gpus.txt"
-                ).read_text().strip().split(",")
+                (plan.paths.logs / "verifier" / round_id / "judge-gpus.txt")
+                .read_text()
+                .strip()
+                .split(",")
             ) == ("GPU-generic-fake-three", "GPU-generic-fake-four")
             judge_spec = observer.specs[round_id]
             assert judge_spec.gpu_allocation.uuids == (
@@ -422,10 +421,7 @@ def test_split_workdir_gpu_preserves_rw_work_and_ro_judges_without_rootfs_copy(
                 for value in judge_attrs["config"]["Env"]
             )
             assert all(
-                not (
-                    mount["Type"] == "bind"
-                    and mount["Destination"] == str(_WORKDIR)
-                )
+                not (mount["Type"] == "bind" and mount["Destination"] == str(_WORKDIR))
                 for mount in judge_attrs["mounts"]
             )
             print(

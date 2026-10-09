@@ -374,9 +374,7 @@ def test_work_ending_normally_mid_round_keeps_reward_and_parent_paused(
 
 def test_gpu_release_rejection_after_work_end_leaves_work_paused(tmp_path):
     """Ended Work can never retry, so its rejection must not resume it."""
-    runner, lifecycle, runtime, snapshot, artifacts, request = sandbox_harness(
-        tmp_path
-    )
+    runner, lifecycle, runtime, snapshot, artifacts, request = sandbox_harness(tmp_path)
     plan, work, logs = request
     plan = plan.model_copy(
         update={
@@ -695,7 +693,8 @@ def test_sandbox_token_is_redacted_from_report_without_changing_verifier_literal
     )
     token = lifecycle.endpoint.environment["RSI_SANDBOX_TOKEN"]
     runtime.exec_result = AgentRunResult(
-        exit_code=0, output=f"token=task-literal\nechoed {token}\n",
+        exit_code=0,
+        output=f"token=task-literal\nechoed {token}\n",
         full_output_captured=True,
     )
 
@@ -715,14 +714,22 @@ def test_judge_round_redacts_sandbox_token_in_real_atomic_output_capture(tmp_pat
     client.containers.by_id["judge"] = FakeDockerContainer("judge")
     concrete = make_runtime(client, tmp_path, role="judge")
     runtime = DockerJudgeRoundRuntime(
-        runtime=concrete, provisioner=None, enforcer=None, network=None, policy=None,
-        round_id="r1", planned_container_name="judge", observer=None,
+        runtime=concrete,
+        provisioner=None,
+        enforcer=None,
+        network=None,
+        policy=None,
+        round_id="r1",
+        planned_container_name="judge",
+        observer=None,
     )
     output = tmp_path / "engine-root" / "judge.log"
 
     result = runtime.exec(
-        ContainerRef(container_id="judge", role="judge"), ("true",),
-        output_path=output, output_redact_values=("sandbox-secret",),
+        ContainerRef(container_id="judge", role="judge"),
+        ("true",),
+        output_path=output,
+        output_redact_values=("sandbox-secret",),
     )
 
     assert result.output == "ordinary token=literal\n[REDACTED]\n"

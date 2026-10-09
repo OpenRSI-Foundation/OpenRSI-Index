@@ -208,7 +208,7 @@ class _ExactOutputRedactor:
         for match in self._pattern.finditer(data):
             if match.start() >= boundary:
                 break
-            pieces.extend((data[consumed:match.start()], b"[REDACTED]"))
+            pieces.extend((data[consumed : match.start()], b"[REDACTED]"))
             consumed = match.end()
         boundary = max(boundary, consumed)
         pieces.append(data[consumed:boundary])
@@ -250,9 +250,7 @@ class _RawOutputWriter:
             except OSError:
                 pass
             try:
-                os.unlink(
-                    self._temporary_name, dir_fd=self._directory_descriptor
-                )
+                os.unlink(self._temporary_name, dir_fd=self._directory_descriptor)
             except FileNotFoundError:
                 pass
             os.close(self._directory_descriptor)
@@ -409,9 +407,7 @@ class DockerContainerRuntime:
         self._log_output_limit_bytes = log_output_limit_bytes
         self._pause_timeout_seconds = pause_timeout_seconds
         self._poll_interval_seconds = poll_interval_seconds
-        self._omit_gpu_device_requests_for_tests = (
-            omit_gpu_device_requests_for_tests
-        )
+        self._omit_gpu_device_requests_for_tests = omit_gpu_device_requests_for_tests
         self._workdir_volume_references = tuple(workdir_volume_references)
         if not all(
             isinstance(reference, ContainerRef)
@@ -431,8 +427,7 @@ class DockerContainerRuntime:
                 )
             except OSError as error:
                 raise SetupError(
-                    "Work feedback directory is missing, non-directory, or "
-                    "symlinked"
+                    "Work feedback directory is missing, non-directory, or symlinked"
                 ) from error
             try:
                 metadata = os.fstat(feedback_descriptor)
@@ -509,10 +504,7 @@ class DockerContainerRuntime:
             raise SetupError("runtime recovery labels cannot be overridden")
         labels.update(self.recovery_labels)
         device_requests: list[DeviceRequest] = []
-        if (
-            spec.gpu_allocation.devices
-            and not self._omit_gpu_device_requests_for_tests
-        ):
+        if spec.gpu_allocation.devices and not self._omit_gpu_device_requests_for_tests:
             device_requests.append(
                 DeviceRequest(
                     driver="nvidia",
@@ -548,9 +540,7 @@ class DockerContainerRuntime:
         if spec.memory_mb is not None:
             kwargs["mem_limit"] = f"{spec.memory_mb}m"
         if spec.tmpfs:
-            kwargs["tmpfs"] = {
-                str(tmpfs.target): tmpfs.options for tmpfs in spec.tmpfs
-            }
+            kwargs["tmpfs"] = {str(tmpfs.target): tmpfs.options for tmpfs in spec.tmpfs}
         if planned_name is not None:
             if planned_name != self.planned_container_name(planned_name):
                 raise SetupError("planned container name is not canonical")
@@ -627,9 +617,7 @@ class DockerContainerRuntime:
                 "is unavailable"
             )
         try:
-            directory_descriptor = self._open_engine_directory(
-                self._work_feedback_dir
-            )
+            directory_descriptor = self._open_engine_directory(self._work_feedback_dir)
             try:
                 metadata = os.fstat(directory_descriptor)
             finally:
@@ -650,8 +638,7 @@ class DockerContainerRuntime:
             exact = (
                 len(at_target) == 1
                 and at_target[0].get("Type") == "bind"
-                and at_target[0].get("Source")
-                == str(self._work_feedback_dir)
+                and at_target[0].get("Source") == str(self._work_feedback_dir)
                 and at_target[0].get("RW") is False
             )
         except Exception as error:
@@ -684,11 +671,17 @@ class DockerContainerRuntime:
             self._attest_sandbox_directory()
             actual = self._container(container)
             actual.reload()
-            mounts = [m for m in actual.attrs["Mounts"]
-                      if m.get("Destination") == str(SANDBOX_MOUNT_TARGET)]
-            if (len(mounts) != 1 or mounts[0].get("Type") != "bind"
-                    or mounts[0].get("Source") != str(self._sandbox_socket_dir)
-                    or mounts[0].get("RW") is not False):
+            mounts = [
+                m
+                for m in actual.attrs["Mounts"]
+                if m.get("Destination") == str(SANDBOX_MOUNT_TARGET)
+            ]
+            if (
+                len(mounts) != 1
+                or mounts[0].get("Type") != "bind"
+                or mounts[0].get("Source") != str(self._sandbox_socket_dir)
+                or mounts[0].get("RW") is not False
+            ):
                 raise ValueError("exact read-only mount differs")
         except Exception as error:
             raise InfrastructureError(
@@ -767,7 +760,8 @@ class DockerContainerRuntime:
     ) -> None:
         try:
             docker_container = (
-                self._container(container) if control_client is None
+                self._container(container)
+                if control_client is None
                 else control_client.containers.get(container.container_id)
             )
             docker_container.reload()
@@ -786,9 +780,7 @@ class DockerContainerRuntime:
                     f"{container.container_id}: {error}"
                 ) from error
 
-    def inspect_quiescence(
-        self, container: ContainerRef
-    ) -> WorkQuiescence | None:
+    def inspect_quiescence(self, container: ContainerRef) -> WorkQuiescence | None:
         """Return exact paused/stopped state, or ``None`` when still running."""
         if self._role != "work" or container.role != "work":
             raise SetupError("quiescence inspection requires the exact Work runtime")
@@ -911,7 +903,8 @@ class DockerContainerRuntime:
         if path is None:
             config = self._container(container).attrs.get("Config", {})
             inherited = dict(
-                item.split("=", 1) for item in config.get("Env", ()) or ()
+                item.split("=", 1)
+                for item in config.get("Env", ()) or ()
                 if "=" in item
             )
             path = inherited.get(
@@ -938,11 +931,7 @@ class DockerContainerRuntime:
         on_exec_start: Callable[[float], None] | None = None,
         deadline: float | None = None,
     ) -> AgentRunResult:
-        if (
-            on_exec_start is not None
-            and deadline is None
-            and timeout_seconds is None
-        ):
+        if on_exec_start is not None and deadline is None and timeout_seconds is None:
             raise SetupError("exec start callback requires a bounded deadline")
         environment = self._sandbox_exec_environment(container, environment)
         # Configure redaction before starting a process or opening its artifact.
@@ -1047,6 +1036,7 @@ class DockerContainerRuntime:
             ) from error
         stream_errors: list[BaseException] = []
         stream_drained = threading.Event()
+
         # Raw verifier bytes retain their historical meaning except for explicit
         # Engine-issued capability tokens. Filter before bounded capture as well
         # as the atomic artifact, including matches split across Docker chunks.
@@ -1293,8 +1283,7 @@ class DockerContainerRuntime:
                 active_mount_is_exact = (
                     len(matches) == 1
                     and matches[0][1] == "tmpfs"
-                    and {"rw", "nosuid", "nodev", "noexec"}
-                    <= matches[0][0]
+                    and {"rw", "nosuid", "nodev", "noexec"} <= matches[0][0]
                     and "rw" in matches[0][2]
                     and matches[0][2] & {"mode=700", "mode=0700"}
                 )
@@ -1443,9 +1432,7 @@ class DockerContainerRuntime:
         target: PurePosixPath,
         plan: _TestArchivePlan,
     ) -> None:
-        staging = PurePosixPath(
-            f"/tmp/.rsi-harness-tests-{uuid.uuid4().hex}"
-        )
+        staging = PurePosixPath(f"/tmp/.rsi-harness-tests-{uuid.uuid4().hex}")
         prepared = self.exec(
             container,
             ("/usr/bin/install", "-d", "-m", "0700", str(staging)),
@@ -1456,9 +1443,7 @@ class DockerContainerRuntime:
                 f"failed to prepare private tests staging: {prepared.output}"
             )
         reader_descriptor, writer_descriptor = os.pipe()
-        reader = _ChunkedReadStream(
-            os.fdopen(reader_descriptor, "rb", buffering=0)
-        )
+        reader = _ChunkedReadStream(os.fdopen(reader_descriptor, "rb", buffering=0))
         writer = os.fdopen(writer_descriptor, "wb", buffering=0)
         producer_errors: list[BaseException] = []
 
@@ -1548,9 +1533,7 @@ class DockerContainerRuntime:
 
     def _collect_test_archive_entries(self, source: Path) -> _TestArchivePlan:
         directory_flags = (
-            os.O_RDONLY
-            | getattr(os, "O_DIRECTORY", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
         )
         try:
             root_descriptor = os.open(source, directory_flags)
@@ -1775,9 +1758,7 @@ class DockerContainerRuntime:
         descriptor = os.dup(root_descriptor)
         prefix = PurePosixPath()
         flags = (
-            os.O_RDONLY
-            | getattr(os, "O_DIRECTORY", 0)
-            | getattr(os, "O_NOFOLLOW", 0)
+            os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
         )
         try:
             for part in PurePosixPath(name).parts[:-1]:
@@ -2123,10 +2104,7 @@ class DockerContainerRuntime:
                 "recovery_required: managed WORKDIR volume attestation is "
                 f"ambiguous before container create: {error}"
             ) from error
-        if (
-            mount.volume.run_id != self._run_id
-            or mount.volume.task_id != self._task_id
-        ):
+        if mount.volume.run_id != self._run_id or mount.volume.task_id != self._task_id:
             raise SetupError("managed WORKDIR volume does not attest exact authority")
         DockerWorkdirVolumeBackend(self._client).inspect(
             mount.volume,

@@ -288,6 +288,7 @@ def test_policy_identity_can_be_planned_before_firewall_mutation():
     assert installed == planned
     assert ("install", planned.rule_id) in firewall.events
 
+
 class RecordingFirewallRunner:
     def __init__(self) -> None:
         self.commands: list[tuple[str, ...]] = []
@@ -415,10 +416,7 @@ class InMemoryIptablesRunner:
         if operation == "-S":
             if chain not in self.chains:
                 return subprocess.CompletedProcess(command, 1, "", "missing")
-            if (
-                self.fail_managed_chain_query
-                and chain not in {"DOCKER-USER", "INPUT"}
-            ):
+            if self.fail_managed_chain_query and chain not in {"DOCKER-USER", "INPUT"}:
                 return subprocess.CompletedProcess(command, 4, "", "inspection denied")
             lines = [] if chain in {"DOCKER-USER", "INPUT"} else [f"-N {chain}"]
             lines.extend(
@@ -516,8 +514,7 @@ def test_firewall_attestation_compares_both_exact_ordered_chains_and_jumps():
     backend, enforcer, lease, runner = exact_firewall_harness()
     enforcer.attest(lease)
     pristine = {
-        name: [list(rule) for rule in rules]
-        for name, rules in runner.chains.items()
+        name: [list(rule) for rule in rules] for name, rules in runner.chains.items()
     }
     forward_chain = next(
         rule[-1]
@@ -525,9 +522,7 @@ def test_firewall_attestation_compares_both_exact_ordered_chains_and_jumps():
         if f"{lease.rule_id}:forward" in rule
     )
     input_chain = next(
-        rule[-1]
-        for rule in runner.chains["INPUT"]
-        if f"{lease.rule_id}:input" in rule
+        rule[-1] for rule in runner.chains["INPUT"] if f"{lease.rule_id}:input" in rule
     )
 
     mutations = (
@@ -578,8 +573,7 @@ def test_firewall_attestation_accepts_canonical_siblings_and_scoped_cleanup():
         enforcer.attest(lease)
     for host_chain in ("DOCKER-USER", "INPUT"):
         comments = [
-            rule[rule.index("--comment") + 1]
-            for rule in runner.chains[host_chain]
+            rule[rule.index("--comment") + 1] for rule in runner.chains[host_chain]
         ]
         assert len(comments) == 2
         assert all(leases[1].rule_id not in comment for comment in comments)
@@ -730,9 +724,7 @@ def test_partial_install_rollback_failure_is_recovery_required_and_discoverable(
 def test_partial_policy_state_remains_discoverable_and_remove_cleans_everything():
     backend, _enforcer, lease, runner = exact_firewall_harness()
     input_chain = next(
-        rule[-1]
-        for rule in runner.chains["INPUT"]
-        if f"{lease.rule_id}:input" in rule
+        rule[-1] for rule in runner.chains["INPUT"] if f"{lease.rule_id}:input" in rule
     )
     runner.chains["INPUT"].clear()
     runner.chains[input_chain].clear()
@@ -889,9 +881,7 @@ def reject(destination):
 def policy_chain(runner, rule_id, kind):
     host_chain = "DOCKER-USER" if kind == "forward" else "INPUT"
     return next(
-        rule[-1]
-        for rule in runner.chains[host_chain]
-        if f"{rule_id}:{kind}" in rule
+        rule[-1] for rule in runner.chains[host_chain] if f"{rule_id}:{kind}" in rule
     )
 
 
@@ -1070,9 +1060,7 @@ def test_real_firewall_allows_exact_endpoint_and_blocks_unrelated_container():
         ]
         for peer in containers[:2]:
             for _attempt in range(50):
-                readiness = peer.exec_run(
-                    ["nc", "-z", "-w", "1", "127.0.0.1", "8080"]
-                )
+                readiness = peer.exec_run(["nc", "-z", "-w", "1", "127.0.0.1", "8080"])
                 if readiness.exit_code == 0:
                     break
                 time.sleep(0.1)
@@ -1096,10 +1084,7 @@ def test_real_firewall_allows_exact_endpoint_and_blocks_unrelated_container():
         )
         work.start()
         assert work.exec_run(["nc", "-z", "-w", "1", allowed_ip, "8080"])[0] == 0
-        assert (
-            work.exec_run(["nc", "-z", "-w", "1", blocked_ip, "8080"])[0]
-            != 0
-        )
+        assert work.exec_run(["nc", "-z", "-w", "1", blocked_ip, "8080"])[0] != 0
     finally:
         if lease is not None:
             try:
@@ -1150,9 +1135,7 @@ def test_real_internal_bridge_reaches_host_before_policy_then_input_blocks_it():
         driver="bridge",
         internal=True,
         labels=labels,
-        options={
-            "com.docker.network.bridge.name": managed_bridge_interface(name)
-        },
+        options={"com.docker.network.bridge.name": managed_bridge_interface(name)},
     )
     container = None
     lease = None
