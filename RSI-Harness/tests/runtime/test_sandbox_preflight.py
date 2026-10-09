@@ -39,6 +39,7 @@ def test_local_denial_precedes_inventory_auth_docker_and_roots(tmp_path, monkeyp
 @pytest.mark.parametrize("build", [False, True])
 def test_environment_request_is_accepted(tmp_path, monkeypatch, build):
     import rsi_harness.runtime.production as production
+    from rsi_harness.models import GPUDevice
     from tests.sandbox_helpers import env_task_toml, make_env_policy
 
     class Reached(Exception):
@@ -47,11 +48,19 @@ def test_environment_request_is_accepted(tmp_path, monkeypatch, build):
     def reached(*args, **kwargs):
         raise Reached
 
+    class Inventory:
+        # The task declares GPUs; no nvidia-smi is needed to reach auth.
+        def list_devices(self):
+            return tuple(
+                GPUDevice(index=i, uuid=f"GPU-{i}", name="test") for i in (0, 1)
+            )
+
     services = ProductionRuntimeServices(
         data_root=tmp_path / "data",
         logs_root=tmp_path / "logs",
         rsi_loop_config=RSILoopConfig(),
         engine_config=EngineConfig(sandbox_policy=make_env_policy(tmp_path)),
+        inventory=Inventory(),
     )
     monkeypatch.setattr(production, "resolve_agent_auth", reached)
     # Builds are approved once in the policy; the builder image itself is

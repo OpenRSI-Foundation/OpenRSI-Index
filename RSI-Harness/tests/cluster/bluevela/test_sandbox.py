@@ -573,6 +573,8 @@ def test_run_native_engine_wires_the_sandbox_into_the_coordinator(
     monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(short_root))
     monkeypatch.setattr(cluster_sandbox, "_default_client", lambda *_: fake)
     monkeypatch.setattr(runtime, "RunCoordinator", coordinator)
+    # Provider URLs come from the Agent login, which CI runners do not have.
+    monkeypatch.setattr(runtime, "_agent_provider_urls", lambda *a, **k: ())
     payload = _payload(tmp_path)
     plan = payload.run_plan.model_copy(
         update={
