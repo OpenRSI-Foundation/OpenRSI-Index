@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 import httpx
-from openai import RateLimitError
+from openai import APIConnectionError, APIStatusError, RateLimitError
 
 from checks.github_retry import GitHubTransientError, retry_call
 
@@ -1141,3 +1141,61 @@ def test_main_exits_unsuccessfully_when_judge_has_no_canonical_decision(
         review.main([str(proposal), "--rubric", str(rubric)])
 
     assert exc.value.code != 0
+
+
+@pytest.mark.parametrize(
+    "status,message,kind",
+    [
+        (502, "Upstream authentication failed, please contact administrator", "provider_authentication"),
+        (401, "Invalid key", "provider_authentication"),
+        (403, "Forbidden", "provider_authentication"),
+        (502, "Upstream service temporarily unavailable", "provider"),
+        (503, "Service temporarily unavailable", "provider"),
+        (429, "Rate limited", "provider"),
+        (400, "Invalid provider request", "provider"),
+        (None, "Connection failed", "provider"),
+    ],
+)
+def test_main_reports_provider_failure_without_a_verdict_or_response_body(
+    review, monkeypatch, tmp_path, capsys, status, message, kind
+):
+    proposal = tmp_path / "proposal.md"
+    rubric = tmp_path / "rubric.md"
+    output = tmp_path / "output"
+    proposal.write_text("A proposal with no repository yet.")
+    rubric.write_text("A private rubric.")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    request = httpx.Request("POST", "https://proxy.example/v1/responses")
+    if status is None:
+        error = APIConnectionError(request=request)
+    else:
+        error = APIStatusError(
+            message + " sensitive-provider-body",
+            response=httpx.Response(status, request=request),
+            body={"message": message + " sensitive-provider-body"},
+        )
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(review, "call_openai", fail)
+    with pytest.raises(SystemExit) as exc:
+        review.main([str(proposal), "--rubric", str(rubric)])
+
+    assert exc.value.code == 1
+    assert output.read_text() == f"failure_kind={kind}\n"
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "No review was completed" in captured.err
+    assert "sensitive-provider-body" not in captured.err
+    assert ("repair the review provider authentication" in captured.err) == (
+        kind == "provider_authentication"
+    )
+
+
+def test_provider_failure_reporting_also_works_outside_actions(review, monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    review.report_provider_failure(
+        APIConnectionError(request=httpx.Request("POST", "https://proxy.example/v1/responses"))
+    )
+    assert "connection error" in capsys.readouterr().err
