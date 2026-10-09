@@ -11,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 
 from rsi_harness.cluster.base import ClusterRunRequest
+from rsi_harness.cluster.bluevela import adapter as adapter_module
 from rsi_harness.cluster.bluevela.adapter import (
     BlueVelaClusterAdapter,
     derive_resources,
@@ -41,6 +42,25 @@ from rsi_harness.models import (
 )
 from rsi_harness.runtime.artifacts import RunArtifactWriter
 from tests.factories import DEFAULT_TASK_TOML, write_cluster_task, write_harbor_task
+
+
+@pytest.fixture(autouse=True)
+def _fake_codex_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Scheduler unit tests must not depend on a real Codex install or login."""
+    resolve_auth = adapter_module.resolve_agent_auth
+    which = adapter_module.shutil.which
+    monkeypatch.setattr(
+        adapter_module,
+        "resolve_agent_auth",
+        lambda **kwargs: (
+            None if kwargs["agent_name"] == "codex" else resolve_auth(**kwargs)
+        ),
+    )
+    monkeypatch.setattr(
+        adapter_module.shutil,
+        "which",
+        lambda name: sys.executable if name == "codex" else which(name),
+    )
 
 
 def _task_dir(tmp_path: Path) -> Path:
