@@ -55,7 +55,7 @@ superpowers/
 .agents/skills
 tmp.md
 CLUSTER_INSTRUCTIONS (1).md
-docs
+/docs
 
 # Public documentation
 !/assets/docs/

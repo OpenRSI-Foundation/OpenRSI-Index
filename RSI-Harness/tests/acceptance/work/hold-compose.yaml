@@ -1,0 +1,7 @@
+# A7: a two-service env Work keeps alive (paused while a Judge round runs).
+services:
+  main:
+    image: python:3.13-slim-bookworm
+    command: ["sleep", "infinity"]
+  kv:
+    image: redis:7-alpine

@@ -1,0 +1,28 @@
+# Vendored from laude-institute/harbor-datasets@86723674f04e4209ac479d0fb75d9d9f44b4377e
+# datasets/swebench-verified/pytest-dev__pytest-7236 (Harbor registry swebench-verified@1.0),
+# made offline for the RSI sample (see ../../../instruction.md): the
+# prebuilt image pinned by digest, no network, and tests/test.sh grading
+# without PyPI.
+[metadata]
+author_name = "unknown"
+author_email = "unknown"
+difficulty = "15 min - 1 hour"
+category = "debugging"
+tags = ["debugging", "swe-bench"]
+
+[verifier]
+# Overall time budget for the agent's work (seconds)
+timeout_sec = 3000
+
+[agent]
+# Set to same as verifier unless you want to restrict agent time separately
+timeout_sec = 3000
+
+[environment]
+docker_image = "swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7236@sha256:54f89a5c1611eac42d3d7b7c03e17a43e9e70c604cd8439f45bf68102fc3ff09"
+workdir = "/testbed"
+network_mode = "no-network"
+build_timeout_sec = 1800.0
+cpus = 1
+memory = '4G'
+storage = '10G'

@@ -69,7 +69,9 @@ class _SubmissionRejected(Exception):
 class WorkRuntime(Protocol):
     def pause(self, container: ContainerRef) -> None: ...
 
-    def unpause(self, container: ContainerRef) -> None: ...
+    def unpause(
+        self, container: ContainerRef, *, admission=None, control_client=None
+    ) -> None: ...
 
     def inspect_quiescence(self, container: ContainerRef) -> WorkQuiescence | None: ...
 
@@ -89,6 +91,8 @@ class JudgeRoundRuntime(Protocol):
         timeout_seconds: float | None = None,
         environment: dict[str, str] | None = None,
         output_path: Path | None = None,
+        deadline: float | None = None,
+        output_redact_values: tuple[str, ...] = (),
     ) -> AgentRunResult: ...
 
     def remove(self, container: ContainerRef) -> None: ...
@@ -260,7 +264,12 @@ class DockerJudgeRoundRuntime:
         timeout_seconds: float | None = None,
         environment: dict[str, str] | None = None,
         output_path: Path | None = None,
+        deadline: float | None = None,
+        output_redact_values: tuple[str, ...] = (),
     ) -> AgentRunResult:
+        options = {} if deadline is None else {"deadline": deadline}
+        if output_redact_values:
+            options["output_redact_values"] = output_redact_values
         return self._runtime.exec(
             container,
             command,
@@ -268,6 +277,7 @@ class DockerJudgeRoundRuntime:
             environment=environment,
             output_path=output_path,
             redact_output=False,
+            **options,
         )
 
     def remove(self, container: ContainerRef) -> None:
@@ -369,7 +379,13 @@ class DockerJudgeRuntimeFactory:
         lifecycle_observer: JudgeResourceMutationObserver,
         work_container: ContainerRef | None = None,
         omit_gpu_device_requests_for_tests: bool = False,
+        sandbox_lifecycle: Any | None = None,
     ) -> None:
+        if sandbox_lifecycle is None:
+            from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
+
+            sandbox_lifecycle = NullSandboxLifecycle()
+        self._sandbox_lifecycle = sandbox_lifecycle
         self._client = client
         self._run_id = run_id
         self._task_id = task_id
@@ -383,6 +399,11 @@ class DockerJudgeRuntimeFactory:
         self._omit_gpu_device_requests_for_tests = omit_gpu_device_requests_for_tests
 
     def __call__(self, plan: RunPlan, round_id: str) -> DockerJudgeRoundRuntime:
+        sandbox_options = {}
+        if self._sandbox_lifecycle.enabled:
+            endpoint = self._sandbox_lifecycle.prepare_judge(round_id)
+            if endpoint is not None:
+                sandbox_options["sandbox_socket_dir"] = endpoint.directory
         common = {
             "run_id": self._run_id,
             "task_id": self._task_id,
@@ -426,6 +447,7 @@ class DockerJudgeRuntimeFactory:
                 workdir_volume_references=(
                     () if self._work_container is None else (self._work_container,)
                 ),
+                **sandbox_options,
             )
             return DockerJudgeRoundRuntime(
                 runtime=runtime,
@@ -477,7 +499,13 @@ class JudgeRunner:
         lifecycle_observer: Any | None = None,
         verifier_secret_env: Mapping[str, str] | None = None,
         event_callback: Callable[[str, object], None] | None = None,
+        sandbox_lifecycle: Any | None = None,
     ) -> None:
+        if sandbox_lifecycle is None:
+            from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
+
+            sandbox_lifecycle = NullSandboxLifecycle()
+        self._sandbox_lifecycle = sandbox_lifecycle
         self._run_id = run_id
         self._workdir_volume = workdir_volume
         self._work_runtime = work_runtime
@@ -517,6 +545,11 @@ class JudgeRunner:
         persisted_report: SubmissionReport | None = None
         artifact_error: BaseException | None = None
         retry_candidate: SubmissionError | None = None
+        retry_reason: str | None = None
+        family_freeze_started = False
+        family_frozen = False
+        work_ended = False
+        sandbox_endpoint = None
 
         try:
             self._validate_feedback_output(request)
@@ -525,6 +558,23 @@ class JudgeRunner:
                 raise RuntimeError(
                     "RunPlan verifier command is not the fixed Harbor test command"
                 )
+            if self._sandbox_lifecycle.enabled:
+                family_freeze_started = True
+                try:
+                    self._sandbox_lifecycle.freeze_work()
+                except RetryableSubmissionError as error:
+                    # Busy admission is rejected before any family mutation.
+                    family_freeze_started = False
+                    retry_candidate = error
+                    retry_reason = _error_text(error, verifier_error_secrets)
+                    primary_error = retry_reason
+                    raise _SubmissionRejected from error
+                except Exception as error:
+                    raise InfrastructureError(
+                        "recovery_required: sandbox Work family freeze failed: "
+                        f"{_error_text(error, verifier_error_secrets)}"
+                    ) from error
+                family_frozen = True
             self._observe(
                 "work_pause_planned",
                 work_container_id=request.work_container.container_id,
@@ -540,6 +590,10 @@ class JudgeRunner:
                     self._quiescence_checker(plan.gpu_plan.work, request.work_container)
                 except SubmissionError as error:
                     retry_candidate = error
+                    retry_reason = (
+                        "release all Work GPU processes before retrying: "
+                        f"{_error_text(error, verifier_error_secrets)}"
+                    )
                     primary_error = _error_text(error, verifier_error_secrets)
                     raise _SubmissionRejected from error
             log_dir = self._prepare_log_dir(request)
@@ -598,9 +652,21 @@ class JudgeRunner:
             )
             safe_to_release_isolation = True
             self._observe("judge_planned", round_id=request.round_id)
+            if self._sandbox_lifecycle.enabled:
+                sandbox_endpoint = self._sandbox_lifecycle.prepare_judge(
+                    request.round_id
+                )
+                if sandbox_endpoint is not None:
+                    token = sandbox_endpoint.environment.get("RSI_SANDBOX_TOKEN")
+                    if token:
+                        verifier_error_secrets.add(token)
             judge_round = self._judge_runtime_factory(plan, request.round_id)
             judge_spec, verifier_environment = self._judge_spec(
-                request, lease, log_dir, verifier_error_secrets
+                request,
+                lease,
+                log_dir,
+                verifier_error_secrets,
+                sandbox_endpoint=sandbox_endpoint,
             )
             judge = judge_round.create(judge_spec)
             self._observe(
@@ -611,6 +677,17 @@ class JudgeRunner:
             judge_round.start(judge)
             judge_round.inject_tests(judge, plan.task.source_dir / "tests")
             self._event_callback("judge_exec_started", {"round_id": request.round_id})
+            exec_options = {}
+            sandbox_output_secrets = ()
+            if self._sandbox_lifecycle.enabled:
+                deadline = self._monotonic() + plan.task.verifier.timeout_seconds
+                self._sandbox_lifecycle.activate_judge(deadline)
+                exec_options["deadline"] = deadline
+                if sandbox_endpoint is not None:
+                    token = sandbox_endpoint.environment.get("RSI_SANDBOX_TOKEN")
+                    if token:
+                        sandbox_output_secrets = (token,)
+                        exec_options["output_redact_values"] = sandbox_output_secrets
             verifier_output_required = True
             result = judge_round.exec(
                 judge,
@@ -618,9 +695,10 @@ class JudgeRunner:
                 timeout_seconds=plan.task.verifier.timeout_seconds,
                 environment=verifier_environment,
                 output_path=request.verifier_output,
+                **exec_options,
             )
             output = _bounded_output(
-                result.output,
+                redact_exact_values(result.output, sandbox_output_secrets),
                 limit=plan.task.verifier.output_limit_bytes,
                 truncated=result.output_truncated,
             )
@@ -632,6 +710,8 @@ class JudgeRunner:
             exit_code = result.exit_code
             timed_out = result.timed_out
             full_output_captured = result.full_output_captured
+            if timed_out and not result.exec_started:
+                verifier_output_required = False
             if timed_out:
                 self._discard_timeout_rewards(log_dir)
                 status = SubmissionStatus.VERIFIER_TIMEOUT
@@ -664,6 +744,43 @@ class JudgeRunner:
             if "recovery_required" in primary_error:
                 safe_to_release_isolation = False
         finally:
+            if family_freeze_started:
+                try:
+                    self._sandbox_lifecycle.close_judge()
+                except Exception as error:
+                    cleanup_errors.append(
+                        "sandbox Judge child cleanup: "
+                        f"{_error_text(error, verifier_error_secrets)}"
+                    )
+                    safe_to_release_isolation = False
+                if not family_frozen:
+                    cleanup_errors.extend(
+                        self._contain_work_family(verifier_error_secrets)
+                    )
+                    cleanup_errors.extend(
+                        self._restore_work_quiescence(
+                            request.work_container, verifier_error_secrets
+                        )
+                    )
+                    paused = True
+                    safe_to_release_isolation = False
+                if not self._sandbox_lifecycle.can_resume:
+                    if self._sandbox_lifecycle.work_ended_normally:
+                        # Work reached its deadline or was retired while this
+                        # accepted round ran: keep the result and leave Work
+                        # paused for the coordinator to remove.
+                        work_ended = True
+                        cleanup_errors.extend(
+                            self._close_after_work_end(verifier_error_secrets)
+                        )
+                    else:
+                        cleanup_errors.append(
+                            "recovery_required: sandbox Work phase expired, "
+                            "cancelled, or requires recovery; Work family "
+                            "remains contained"
+                        )
+                        safe_to_release_isolation = False
+                    self.submission_closed = True
             # The evaluator is the sole report owner. Prove the required
             # artifact write while Work is still paused and all round
             # isolation is retained. SubmissionService only publishes the
@@ -687,9 +804,19 @@ class JudgeRunner:
                 except BaseException as error:
                     artifact_error = error
                     self.submission_closed = True
-                    if paused:
+                    if paused or family_frozen:
                         self.recovery_required = True
                         safe_to_release_isolation = False
+                        if family_frozen and not paused:
+                            cleanup_errors.extend(
+                                self._contain_work_family(verifier_error_secrets)
+                            )
+                            cleanup_errors.extend(
+                                self._restore_work_quiescence(
+                                    request.work_container, verifier_error_secrets
+                                )
+                            )
+                            paused = True
                     try:
                         self._observe(
                             "recovery_required" if paused else "submission_closed",
@@ -802,17 +929,49 @@ class JudgeRunner:
                         "recovery_required",
                         recovery_context=f"snapshot_lease_id={lease.lease_id}",
                     )
-            if paused and safe_to_release_isolation:
+            if (
+                family_frozen
+                and safe_to_release_isolation
+                and not work_ended
+                and not self._sandbox_lifecycle.can_resume
+                and self._sandbox_lifecycle.work_ended_normally
+            ):
+                # Work's deadline passed during Judge cleanup. Resume would
+                # now be denied, so keep the result exactly as above.
+                work_ended = True
+                cleanup_errors.extend(
+                    self._close_after_work_end(verifier_error_secrets)
+                )
+            if (
+                (paused or family_frozen)
+                and safe_to_release_isolation
+                and not work_ended
+            ):
                 try:
-                    self._work_runtime.unpause(request.work_container)
-                    self._observe(
-                        "work_unpaused",
-                        work_container_id=request.work_container.container_id,
-                    )
+                    if family_frozen:
+                        self._sandbox_lifecycle.resume_work()
+                        if not self._sandbox_lifecycle.can_resume:
+                            raise InfrastructureError(
+                                "sandbox Work phase ended during family resume"
+                            )
+                    if paused:
+                        self._sandbox_lifecycle.resume_parent(
+                            self._work_runtime, request.work_container
+                        )
+                        self._observe(
+                            "work_unpaused",
+                            work_container_id=request.work_container.container_id,
+                        )
+                    if family_frozen:
+                        self._sandbox_lifecycle.reopen_work()
                 except Exception as error:
                     cleanup_errors.append(
                         f"Work unpause: {_error_text(error, verifier_error_secrets)}"
                     )
+                    if family_frozen:
+                        cleanup_errors.extend(
+                            self._contain_work_family(verifier_error_secrets)
+                        )
                     cleanup_errors.extend(
                         self._restore_work_quiescence(
                             request.work_container,
@@ -842,7 +1001,7 @@ class JudgeRunner:
         if retry_candidate is not None and not cleanup_errors:
             verifier_error_secrets.clear()
             raise RetryableSubmissionError(
-                f"release all Work GPU processes before retrying: {retry_candidate}"
+                retry_reason or "submission rejected; retry after Work is ready"
             ) from retry_candidate
         if artifact_error is not None:
             safe_error = _error_text(artifact_error, verifier_error_secrets)
@@ -888,6 +1047,28 @@ class JudgeRunner:
             )
         verifier_error_secrets.clear()
         return report
+
+    def _close_after_work_end(self, secret_values: set[str]) -> list[str]:
+        """Close the stream: a later round would re-pause the ended Work."""
+        self.submission_closed = True
+        try:
+            self._observe("submission_closed")
+        except Exception as error:
+            return [
+                "submission closure after Work end: "
+                f"{_error_text(error, secret_values)}"
+            ]
+        return []
+
+    def _contain_work_family(self, secret_values: set[str]) -> list[str]:
+        try:
+            self._sandbox_lifecycle.contain_work()
+        except Exception as error:
+            return [
+                "sandbox Work containment unproven: "
+                f"{_error_text(error, secret_values)}"
+            ]
+        return []
 
     def _restore_work_quiescence(
         self,
@@ -991,6 +1172,8 @@ class JudgeRunner:
         lease: RootfsSnapshotLease,
         log_dir: Path,
         error_secret_values: set[str],
+        *,
+        sandbox_endpoint: Any | None = None,
     ) -> tuple[ContainerSpec, dict[str, str]]:
         plan = request.run_plan
         try:
@@ -1024,6 +1207,13 @@ class JudgeRunner:
             and runtime_template_name(template) in secret_names
             and environment[key]
         )
+        sandbox_mounts = ()
+        if sandbox_endpoint is not None:
+            environment.update(sandbox_endpoint.environment)
+            token = sandbox_endpoint.environment.get("RSI_SANDBOX_TOKEN")
+            if token:
+                error_secret_values.add(token)
+            sandbox_mounts = (sandbox_endpoint.mount,)
         return (
             ContainerSpec(
                 image=lease.image_id,
@@ -1050,7 +1240,8 @@ class JudgeRunner:
                         source=log_dir,
                         target=PurePosixPath("/logs/verifier"),
                     ),
-                ),
+                )
+                + sandbox_mounts,
                 volume_mounts=(
                     (
                         ContainerVolumeMount(

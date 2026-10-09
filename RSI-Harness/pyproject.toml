@@ -24,7 +24,13 @@ dependencies = [
   "uvicorn[standard]>=0.38,<1",
 ]
 
+[project.optional-dependencies]
+# The E2B env backend ([environments.host] backend = "e2b"): exact pin, the
+# broker calls an SDK-internal envd RPC (runtime/sandbox_e2b.py).
+e2b = ["e2b==2.52.0"]
+
 [project.scripts]
+rsi-sandbox = "rsi_harness.integrations.sandbox_client:main"
 rsi-harness = "rsi_harness.cli:app"
 
 [dependency-groups]
@@ -45,11 +51,17 @@ markers = [
   "runtime: tests for runtime contracts",
   "gpu: tests that need GPU support",
   "integration: integration tests",
+  "acceptance: operator acceptance and root checks (opt-in: RSI_ACCEPTANCE=1)",
 ]
 
 [tool.ruff]
 target-version = "py312"
-extend-exclude = ["src/rsi_loop"]
+extend-exclude = [
+  "src/rsi_loop",
+  # Verbatim Terminal-Bench 2 tasks shipped by the harbor-in-judge sample.
+  "sample_tasks/harbor-in-judge/tests/tb2-subset",
+  "sample_tasks/harbor-in-judge/tests/fix-git-build",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

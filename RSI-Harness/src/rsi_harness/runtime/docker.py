@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import codecs
 import os
+import re
 import shutil
 import socket
 import stat
@@ -12,6 +13,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -40,7 +42,10 @@ from rsi_harness.runtime.gpu import (
     nvidia_visible_devices_value,
 )
 from rsi_harness.runtime.local_auth import AgentAuthMaterial
-from rsi_harness.runtime.mount_topology import validate_split_workdir_target
+from rsi_harness.runtime.mount_topology import (
+    SANDBOX_MOUNT_TARGET,
+    validate_split_workdir_target,
+)
 from rsi_harness.runtime.network import (
     NetworkPolicyEnforcer,
     NetworkPolicyLease,
@@ -182,6 +187,33 @@ class _RedactedOutputWriter:
                 # Console/progress rendering is observational and must never
                 # disturb Agent execution or durable artifact capture.
                 pass
+
+
+class _ExactOutputRedactor:
+    """Replace only supplied byte strings, retaining less than one token of input."""
+
+    def __init__(self, secrets: Sequence[str]) -> None:
+        values = sorted(
+            {secret.encode() for secret in secrets if secret}, key=len, reverse=True
+        )
+        self._pattern = re.compile(b"|".join(re.escape(value) for value in values))
+        self._overlap = max(map(len, values)) - 1
+        self._pending = b""
+
+    def append(self, chunk: bytes, *, final: bool = False) -> bytes:
+        data = self._pending + chunk
+        boundary = len(data) if final else max(0, len(data) - self._overlap)
+        pieces = []
+        consumed = 0
+        for match in self._pattern.finditer(data):
+            if match.start() >= boundary:
+                break
+            pieces.extend((data[consumed:match.start()], b"[REDACTED]"))
+            consumed = match.end()
+        boundary = max(boundary, consumed)
+        pieces.append(data[consumed:boundary])
+        self._pending = data[boundary:]
+        return b"".join(pieces)
 
 
 class _RawOutputWriter:
@@ -350,6 +382,7 @@ class DockerContainerRuntime:
         omit_gpu_device_requests_for_tests: bool = False,
         workdir_volume_references: Sequence[ContainerRef] = (),
         work_feedback_dir: Path | None = None,
+        sandbox_socket_dir: Path | None = None,
     ) -> None:
         if role not in {"work", "judge", "helper"}:
             raise ValueError(f"unsupported container role {role!r}")
@@ -409,6 +442,24 @@ class DockerContainerRuntime:
                 )
             finally:
                 os.close(feedback_descriptor)
+        self._sandbox_socket_dir = (
+            None if sandbox_socket_dir is None else Path(sandbox_socket_dir)
+        )
+        self._sandbox_socket_identity: tuple[int, int] | None = None
+        if self._sandbox_socket_dir is not None:
+            if role not in {"work", "judge"}:
+                raise SetupError("sandbox socket is limited to parent Work/Judge")
+            try:
+                descriptor = self._open_engine_directory(self._sandbox_socket_dir)
+                try:
+                    metadata = os.fstat(descriptor)
+                    self._sandbox_socket_identity = (metadata.st_dev, metadata.st_ino)
+                finally:
+                    os.close(descriptor)
+            except OSError as error:
+                raise SetupError(
+                    "sandbox socket directory is missing or symlinked"
+                ) from error
         self._container_networks: dict[str, str] = {}
         self._policy_leases: dict[str, NetworkPolicyLease] = {}
 
@@ -423,6 +474,16 @@ class DockerContainerRuntime:
     def create(
         self, spec: ContainerSpec, *, planned_name: str | None = None
     ) -> ContainerRef:
+        if self._sandbox_socket_dir is not None:
+            targets = [m.target for m in spec.volume_mounts]
+            targets.extend(m.target for m in spec.tmpfs)
+            for target in targets:
+                if (
+                    target == SANDBOX_MOUNT_TARGET
+                    or target in SANDBOX_MOUNT_TARGET.parents
+                    or SANDBOX_MOUNT_TARGET in target.parents
+                ):
+                    raise SetupError("parent mount overlaps sandbox socket authority")
         if len(spec.volume_mounts) > 1:
             raise SetupError("exactly one managed WORKDIR volume mount is allowed")
         for volume_mount in spec.volume_mounts:
@@ -604,7 +665,39 @@ class DockerContainerRuntime:
                 "from exact read-only authority"
             )
 
+    def _attest_sandbox_directory(self) -> None:
+        try:
+            descriptor = self._open_engine_directory(self._sandbox_socket_dir)
+            try:
+                metadata = os.fstat(descriptor)
+            finally:
+                os.close(descriptor)
+            if (metadata.st_dev, metadata.st_ino) != self._sandbox_socket_identity:
+                raise SetupError("sandbox socket directory identity changed")
+        except OSError as error:
+            raise SetupError("sandbox socket directory identity unavailable") from error
+
+    def attest_sandbox_mount(self, container: ContainerRef) -> None:
+        if self._sandbox_socket_dir is None or container.role != self._role:
+            raise InfrastructureError("sandbox mount attestation authority unavailable")
+        try:
+            self._attest_sandbox_directory()
+            actual = self._container(container)
+            actual.reload()
+            mounts = [m for m in actual.attrs["Mounts"]
+                      if m.get("Destination") == str(SANDBOX_MOUNT_TARGET)]
+            if (len(mounts) != 1 or mounts[0].get("Type") != "bind"
+                    or mounts[0].get("Source") != str(self._sandbox_socket_dir)
+                    or mounts[0].get("RW") is not False):
+                raise ValueError("exact read-only mount differs")
+        except Exception as error:
+            raise InfrastructureError(
+                "sandbox socket mount unproven; recovery required"
+            ) from error
+
     def start(self, container: ContainerRef) -> None:
+        if self._sandbox_socket_dir is not None:
+            self.attest_sandbox_mount(container)
         network_id = self._container_networks.get(container.container_id)
         lease = self._policy_leases.get(container.container_id)
         if network_id is None or lease is None:
@@ -669,9 +762,14 @@ class DockerContainerRuntime:
                 raise InfrastructureError("Docker did not report the container paused")
             time.sleep(self._poll_interval_seconds)
 
-    def unpause(self, container: ContainerRef) -> None:
+    def unpause(
+        self, container: ContainerRef, *, admission=None, control_client=None
+    ) -> None:
         try:
-            docker_container = self._container(container)
+            docker_container = (
+                self._container(container) if control_client is None
+                else control_client.containers.get(container.container_id)
+            )
             docker_container.reload()
         except APIError as error:
             raise InfrastructureError(
@@ -680,7 +778,8 @@ class DockerContainerRuntime:
             ) from error
         if docker_container.attrs.get("State", {}).get("Paused") is True:
             try:
-                docker_container.unpause()
+                with admission() if admission is not None else nullcontext():
+                    docker_container.unpause()
             except APIError as error:
                 raise InfrastructureError(
                     f"failed to unpause {self._role.title()} container "
@@ -800,6 +899,30 @@ class DockerContainerRuntime:
                 f"ambiguous Docker process listing: {error}"
             ) from error
 
+    def _sandbox_exec_environment(self, container, environment):
+        # Resolve image/container ENV only at the real exec boundary. A static
+        # default injected at composition time hides image-specific toolchains.
+        if not environment or environment.get("RSI_SANDBOX_SOCKET") != (
+            "/run/rsi-harness/sandbox/s"
+        ):
+            return environment
+        resolved = dict(environment)
+        path = resolved.get("PATH")
+        if path is None:
+            config = self._container(container).attrs.get("Config", {})
+            inherited = dict(
+                item.split("=", 1) for item in config.get("Env", ()) or ()
+                if "=" in item
+            )
+            path = inherited.get(
+                "PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+            )
+        prefix = "/run/rsi-harness/sandbox"
+        resolved["PATH"] = (
+            path if path.split(":", 1)[0] == prefix else prefix + ":" + path
+        )
+        return resolved
+
     def exec(
         self,
         container: ContainerRef,
@@ -812,7 +935,22 @@ class DockerContainerRuntime:
         output_redact_values: tuple[str, ...] = (),
         output_callback: Callable[[str], None] | None = None,
         redact_output: bool = True,
+        on_exec_start: Callable[[float], None] | None = None,
+        deadline: float | None = None,
     ) -> AgentRunResult:
+        if (
+            on_exec_start is not None
+            and deadline is None
+            and timeout_seconds is None
+        ):
+            raise SetupError("exec start callback requires a bounded deadline")
+        environment = self._sandbox_exec_environment(container, environment)
+        # Configure redaction before starting a process or opening its artifact.
+        exact_redactor = (
+            _ExactOutputRedactor(output_redact_values)
+            if not redact_output and any(output_redact_values)
+            else None
+        )
         output_writer: _RedactedOutputWriter | _RawOutputWriter | None = None
         resolved_output: Path | None = None
         try:
@@ -846,6 +984,26 @@ class DockerContainerRuntime:
             raise InfrastructureError(
                 f"failed to open complete {self._role.title()} output artifact"
             ) from error
+        exec_deadline = deadline
+        if on_exec_start is not None or exec_deadline is not None:
+            if exec_deadline is None:
+                assert timeout_seconds is not None
+                exec_deadline = time.monotonic() + timeout_seconds
+            try:
+                if on_exec_start is not None:
+                    on_exec_start(exec_deadline)
+            except BaseException:
+                if output_writer is not None:
+                    output_writer.abort()
+                raise
+            if time.monotonic() >= exec_deadline:
+                if output_writer is not None:
+                    output_writer.abort()
+                return AgentRunResult(
+                    exit_code=None,
+                    exec_started=False,
+                    timed_out=True,
+                )
         try:
             create = self._client.api.exec_create(
                 container.container_id,
@@ -865,6 +1023,14 @@ class DockerContainerRuntime:
                 f"failed to create Docker exec in {self._role.title()} container "
                 f"{container.container_id} for command {command!r}: {error}"
             ) from error
+        if exec_deadline is not None and time.monotonic() >= exec_deadline:
+            if output_writer is not None:
+                output_writer.abort()
+            return AgentRunResult(
+                exit_code=None,
+                exec_started=False,
+                timed_out=True,
+            )
         exec_id = create["Id"]
         output = _BoundedBytes(self._exec_output_limit_bytes)
         try:
@@ -881,14 +1047,23 @@ class DockerContainerRuntime:
             ) from error
         stream_errors: list[BaseException] = []
         stream_drained = threading.Event()
+        # Raw verifier bytes retain their historical meaning except for explicit
+        # Engine-issued capability tokens. Filter before bounded capture as well
+        # as the atomic artifact, including matches split across Docker chunks.
+        def capture(chunk: bytes) -> None:
+            output.append(chunk)
+            if output_writer is not None:
+                output_writer.append(chunk)
 
         def drain() -> None:
             try:
                 for chunk in stream:
                     if chunk:
-                        output.append(chunk)
-                        if output_writer is not None:
-                            output_writer.append(chunk)
+                        capture(
+                            exact_redactor.append(chunk) if exact_redactor else chunk
+                        )
+                if exact_redactor is not None:
+                    capture(exact_redactor.append(b"", final=True))
             except BaseException as error:  # surfaced on the caller thread below
                 stream_errors.append(error)
                 if output_writer is not None:
@@ -907,9 +1082,15 @@ class DockerContainerRuntime:
 
         reader = threading.Thread(target=drain, daemon=True, name=f"exec-{exec_id}")
         reader.start()
-        reader.join(timeout_seconds)
+        wait_timeout = timeout_seconds
+        if exec_deadline is not None:
+            wait_timeout = max(0.0, exec_deadline - time.monotonic())
+        reader.join(wait_timeout)
         capture_stalled = reader.is_alive() and stream_drained.is_set()
-        timed_out = reader.is_alive() and not capture_stalled
+        deadline_expired = (
+            exec_deadline is not None and time.monotonic() >= exec_deadline
+        )
+        timed_out = not capture_stalled and (reader.is_alive() or deadline_expired)
 
         def abort_output_drain() -> None:
             if output_writer is not None:
@@ -940,7 +1121,7 @@ class DockerContainerRuntime:
                     f"failed to stop {self._role.title()} container "
                     f"{container.container_id} after exec {exec_id} timed out: {error}"
                 ) from error
-            deadline = time.monotonic() + self._pause_timeout_seconds
+            containment_deadline = time.monotonic() + self._pause_timeout_seconds
             while True:
                 try:
                     docker_container.reload()
@@ -953,7 +1134,7 @@ class DockerContainerRuntime:
                     ) from error
                 if docker_container.attrs.get("State", {}).get("Running") is False:
                     break
-                if time.monotonic() >= deadline:
+                if time.monotonic() >= containment_deadline:
                     abort_output_drain()
                     raise InfrastructureError(
                         "timed-out Docker exec container did not stop"
@@ -1850,6 +2031,18 @@ class DockerContainerRuntime:
             and mount.read_only
             and source == self._work_feedback_dir
         )
+        exact_sandbox = (
+            self._role in {"work", "judge"}
+            and self._sandbox_socket_dir is not None
+            and mount.target == SANDBOX_MOUNT_TARGET
+            and mount.read_only
+            and mount.source == self._sandbox_socket_dir
+            and source == self._sandbox_socket_dir
+        )
+        if mount.target == SANDBOX_MOUNT_TARGET:
+            if not exact_sandbox:
+                raise SetupError("sandbox socket mount differs from exact authority")
+            self._attest_sandbox_directory()
         if mount.target == WORK_FEEDBACK_ROOT and not exact_work_feedback:
             raise SetupError(
                 "Work feedback mount differs from exact read-only authority"
@@ -1869,6 +2062,8 @@ class DockerContainerRuntime:
             )
         if exact_work_feedback:
             allowed_targets.add(WORK_FEEDBACK_ROOT)
+        if exact_sandbox:
+            allowed_targets.add(SANDBOX_MOUNT_TARGET)
         if mount.target not in allowed_targets:
             raise SetupError(
                 f"mount target {mount.target} is not allowed for role {self._role}"

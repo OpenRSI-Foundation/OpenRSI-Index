@@ -194,6 +194,14 @@ class RecoveryBackend:
             )
         )
 
+    def list_tagged_images(self, prefix):
+        self.events.append(("list_tagged_images", prefix))
+        return tuple(
+            (image_id, state)
+            for image_id, state in self.images.items()
+            if any(tag.startswith(prefix) for tag in state["repo_tags"])
+        )
+
     def inspect_image(self, image_id: str):
         self.events.append(("inspect_image", image_id))
         direct = self.images.get(image_id)
@@ -416,7 +424,7 @@ def test_store_writes_atomic_secret_free_exact_lease_and_serializes_lock(
     assert raw["judge"]["planned_policy_rule_id"] == "policy-judge-real"
     assert raw["judge"]["snapshot_process_id"] == 321
     assert raw["cleanup_image_ref"] == CLEANUP_IMAGE
-    assert raw["schema_version"] == 4
+    assert raw["schema_version"] == 6
     serialized = json.dumps(raw).lower()
     assert "authorization" not in serialized
     assert "bearer" not in serialized
@@ -474,12 +482,17 @@ def test_schema_four_full_rootfs_lease_without_volume_fields_defaults_safely(
     tmp_path,
 ) -> None:
     payload = lease(tmp_path).model_dump(mode="json")
+    payload["schema_version"] = 4
+    payload.pop("sandboxes", None)
+    payload.pop("sandbox_reservation", None)
     payload.pop("rootfs_snapshot_mode", None)
     payload["work"].pop("workdir_volume", None)
 
-    loaded = ResourceLease.model_validate(payload)
+    store = LeaseStore(tmp_path)
+    store.path_for("run-1").write_text(json.dumps(payload))
+    loaded = store.read("run-1")
 
-    assert loaded.schema_version == 4
+    assert loaded.schema_version == 6
     assert loaded.rootfs_snapshot_mode is RootfsSnapshotMode.FULL_ROOTFS
     assert loaded.work.workdir_volume == WorkdirVolumeResourceLease()
 

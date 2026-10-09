@@ -1,0 +1,131 @@
+{
+  "images": {
+    "client": {
+      "args": {},
+      "build": ".",
+      "dockerfile": "Dockerfile",
+      "dockerfile_inline": null,
+      "network": null,
+      "no_cache": false,
+      "target": null
+    },
+    "db": {
+      "policy": "missing",
+      "pull": "postgres:16"
+    }
+  },
+  "notes": [
+    "services.client: no cpus limit; using 1.0",
+    "services.client: no memory limit; using 1024 MiB",
+    "services.client.volumes./logs: log mount dropped; logs are downloaded",
+    "services.client.volumes./agent-logs: log mount dropped; logs are downloaded",
+    "services.client.volumes./app/data: directory bind becomes a volume seeded once (not read-only, not synced back)",
+    "services.db.ports: dropped; services reach each other on container ports",
+    "services.db: no cpus limit; using 1.0",
+    "services.db: no memory limit; using 1024 MiB",
+    "services.db.volumes./docker-entrypoint-initdb.d: directory bind becomes a volume seeded once (not read-only, not synced back)"
+  ],
+  "seeds": [
+    {
+      "dest_dir": "/docker-entrypoint-initdb.d",
+      "kind": "dir",
+      "service": "db",
+      "source": "./init"
+    },
+    {
+      "dest_dir": "/app/data",
+      "kind": "dir",
+      "service": "client",
+      "source": "."
+    }
+  ],
+  "spec": {
+    "disk_mb": 2048,
+    "lifetime_sec": null,
+    "network": "public",
+    "services": {
+      "client": {
+        "aliases": [
+          "tb-client"
+        ],
+        "command": [
+          "sh",
+          "-c",
+          "sleep infinity"
+        ],
+        "cpus": 1.0,
+        "depends_on": {
+          "db": {
+            "condition": "healthy",
+            "required": true
+          }
+        },
+        "env": {
+          "DATABASE_URL": "postgresql://postgres:postgres@db:5432/customers_db",
+          "TEST_DIR": "/tests"
+        },
+        "image": null,
+        "memory_mb": 1024,
+        "mounts": [
+          {
+            "target": "/app/data",
+            "volume": "seed-cdb4ee2aea69"
+          }
+        ]
+      },
+      "db": {
+        "aliases": [
+          "postgres_db"
+        ],
+        "command": [
+          "postgres",
+          "-c",
+          "shared_preload_libraries=pg_stat_statements",
+          "-c",
+          "logging_collector=on",
+          "-c",
+          "log_statement=all"
+        ],
+        "cpus": 1.0,
+        "env": {
+          "POSTGRES_DB": "customers_db",
+          "POSTGRES_PASSWORD": "postgres",
+          "POSTGRES_USER": "postgres"
+        },
+        "healthcheck": {
+          "interval_sec": 5.0,
+          "retries": 10,
+          "test": [
+            "CMD-SHELL",
+            "pg_isready -U postgres -d customers_db"
+          ],
+          "timeout_sec": 3.0
+        },
+        "image": null,
+        "memory_mb": 1024,
+        "mounts": [
+          {
+            "target": "/docker-entrypoint-initdb.d",
+            "volume": "seed-bb54068aea85"
+          },
+          {
+            "target": "/var/lib/postgresql/data",
+            "volume": "pgdata"
+          }
+        ]
+      }
+    },
+    "version": 1,
+    "volumes": {
+      "pgdata": {
+        "seeded": false
+      },
+      "seed-bb54068aea85": {
+        "seeded": true
+      },
+      "seed-cdb4ee2aea69": {
+        "seeded": true
+      }
+    }
+  }
+}

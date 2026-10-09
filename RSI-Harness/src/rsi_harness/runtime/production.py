@@ -5,6 +5,8 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
+import shutil
+import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -75,6 +77,7 @@ from rsi_harness.runtime.network import (
     NetworkPolicyEnforcer,
     NetworkPolicyLease,
     PinnedEndpoint,
+    firewall_rule_chains,
 )
 from rsi_harness.runtime.recovery import (
     LeaseStore,
@@ -83,6 +86,54 @@ from rsi_harness.runtime.recovery import (
 )
 from rsi_harness.runtime.redaction import redact_exact_values, redact_text
 from rsi_harness.runtime.rootfs_snapshot import DockerRootfsSnapshotBackend
+from rsi_harness.runtime.sandbox import SandboxBroker
+from rsi_harness.runtime.sandbox_budget import SandboxAdmissionPool, SandboxJournal
+from rsi_harness.runtime.sandbox_build import engine_socket
+from rsi_harness.runtime.sandbox_buildfs import (
+    CommandRunner,
+    remove_loop_file,
+    run_command,
+)
+from rsi_harness.runtime.sandbox_contracts import (
+    SandboxEnvTask,
+    SandboxLease,
+    SandboxPolicy,
+)
+from rsi_harness.runtime.sandbox_docker import SandboxDockerBackend
+from rsi_harness.runtime.sandbox_e2b import (
+    e2b_client,
+    e2b_env_runtime,
+    read_api_key,
+)
+from rsi_harness.runtime.sandbox_env_contracts import (
+    BuilderLease,
+    SandboxEnvLease,
+    sandbox_spool_root,
+)
+from rsi_harness.runtime.sandbox_env_docker import (
+    PausedKiller,
+    default_paused_killer,
+    terminate_container,
+)
+from rsi_harness.runtime.sandbox_envs import docker_env_runtime
+from rsi_harness.runtime.sandbox_ledger import (
+    ImagePruner,
+    PruneRow,
+    PullLedger,
+    pull_ledger_root,
+)
+from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle, SandboxLifecycle
+from rsi_harness.runtime.sandbox_network import (
+    SandboxNetworkBackend,
+    env_lease_network_plan,
+    plan_builder_network,
+)
+from rsi_harness.runtime.sandbox_policy import (
+    resolve_env_grant,
+    resolve_sandbox_grant,
+    validate_sandbox_policy,
+)
+from rsi_harness.runtime.sandbox_tools import check_tools
 from rsi_harness.runtime.snapshot import OverlaySnapshotBackend
 from rsi_harness.runtime.workdir_volume import (
     DockerWorkdirVolumeBackend,
@@ -97,6 +148,30 @@ from rsi_loop.harness.config import RSILoopConfig, load_config
 class _Clock:
     def now(self) -> datetime:
         return datetime.now(UTC)
+
+
+def sandbox_builder_images(client: Any, task: Any, policy: Any) -> dict[str, Any]:
+    """``docker image inspect`` of each approved builder image a requested
+    build uses, by phase; resolve_env_grant checks and pins them. The broker
+    never pulls a builder: an image missing here fails the run's setup, as
+    does a Docker host other than a Unix socket (image loads use it, B8)."""
+    environments = getattr(policy, "environments", None)
+    found: dict[str, Any] = {}
+    if not isinstance(task, SandboxEnvTask) or environments is None:
+        return found
+    for phase in ("work", "judge"):
+        requested = getattr(task.environments, phase)
+        grant = getattr(environments, phase)
+        if requested is None or not requested.build or grant is None:
+            continue
+        if grant.build is None:
+            continue
+        engine_socket(client.api)
+        try:
+            found[phase] = client.api.inspect_image(grant.build.builder_image)
+        except NotFound:
+            continue
+    return found
 
 
 def _safe_endpoint_label(value: str) -> str:
@@ -283,6 +358,13 @@ _MOUNTINFO_ESCAPE = re.compile(r"\\([0-7]{3})")
 # (each Judge round commits the Work rootfs), which surfaced as a spurious
 # infrastructure_error while the daemon kept committing and leaked the image.
 DOCKER_API_TIMEOUT_SECONDS = 3600
+# Per-response read timeout of the v2 env runtime's own Docker client. The
+# 5 s child control transport is too short for env objects: removing a
+# service whose writable layer grew (apt in a TB2 task) or archiving a large
+# tree can take longer on a busy daemon, and a timeout there surfaces as an
+# unknown outcome. Destroy's removal stage is bounded by 60 s as well, and
+# the env Docker tests run with this same bound. Image pulls set no timeout.
+SANDBOX_ENV_DOCKER_TIMEOUT_SECONDS = 60
 
 
 def _decode_mountinfo_field(value: str) -> str:
@@ -337,13 +419,105 @@ def _mountinfo_references_workspace(text: str, workspace: Path) -> bool:
     return False
 
 
+def coordinator_may_run(
+    pid: int, started_at: float, *, proc: Path = Path("/proc")
+) -> bool:
+    """Whether ``pid`` may still be the coordinator that wrote its lease at
+    ``started_at`` (epoch seconds): live, not a zombie, and started no later.
+
+    A PID started afterwards was reused. Anything unreadable counts as
+    running, so a pending create then stays unresolved (fail closed); so
+    does a missing PID when ``/proc`` hides even PID 1 (hidepid).
+    """
+    if pid <= 0:
+        return True
+    try:
+        stat = (proc / str(pid) / "stat").read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        try:
+            (proc / "1" / "stat").read_text()
+        except OSError:
+            return True
+        return False
+    except OSError:
+        return True
+    try:
+        # The command name may hold spaces and parentheses; fields follow it.
+        fields = stat[stat.rindex(")") + 2 :].split()
+        state, start_ticks = fields[0], int(fields[19])
+        boot = next(
+            int(line.split()[1])
+            for line in (proc / "stat").read_text().splitlines()
+            if line.startswith("btime ")
+        )
+        started = boot + start_ticks / os.sysconf("SC_CLK_TCK")
+    except (OSError, ValueError, IndexError, StopIteration):
+        return True
+    if state in ("Z", "X"):
+        return False
+    # btime has whole-second resolution: err towards running.
+    return started <= started_at + 2.0
+
+
+def firewall_commands_running(
+    rule_ids: Sequence[str], *, proc: Path = Path("/proc")
+) -> bool:
+    """Whether a live process still runs a firewall command for these rules.
+
+    A SIGKILLed broker's ``iptables --wait`` child outlives it and may still
+    land. Every command of an install names one of the rule's chains (-N,
+    -A, and the jump's -j). A process that vanishes while read is gone;
+    anything else unreadable counts as running (fail closed).
+    """
+    needles = {
+        chain.encode()
+        for rule_id in rule_ids
+        for chain in firewall_rule_chains(rule_id)
+    }
+    if not needles:
+        return False
+    try:
+        entries = [entry for entry in proc.iterdir() if entry.name.isdigit()]
+    except OSError:
+        return True
+    for entry in entries:
+        try:
+            argv = (entry / "cmdline").read_bytes().split(b"\0")
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        except OSError:
+            return True
+        if needles.intersection(argv):
+            return True
+    return False
+
+
+# Long enough for the daemon to finish a create a killed broker already sent;
+# anything later still carries the run's labels for the next sweep.
+ENV_CREATE_SETTLE_SEC = 5.0
+
+
 class ProductionRecoveryBackend:
     """Bind recovery authority to Docker labels, overlay manifests and iptables."""
 
-    def __init__(self, client: Any, snapshot: Any, firewall: Any) -> None:
+    def __init__(
+        self,
+        client: Any,
+        snapshot: Any,
+        firewall: Any,
+        *,
+        paused_killer: PausedKiller | None = None,
+        settle_sec: float = ENV_CREATE_SETTLE_SEC,
+        proc: Path = Path("/proc"),
+        loop_runner: CommandRunner = run_command,
+    ) -> None:
         self._client = client
         self._snapshot = snapshot
         self._firewall = firewall
+        self._paused_killer = paused_killer
+        self._settle_sec = settle_sec
+        self._proc = proc
+        self._loop_runner = loop_runner
 
     @staticmethod
     def _filter(labels: Mapping[str, str]) -> dict[str, list[str]]:
@@ -355,6 +529,19 @@ class ProductionRecoveryBackend:
         found = self._client.containers.list(all=True, filters=self._filter(labels))
         return tuple((item.id, self._container_state(item)) for item in found)
 
+    def list_container_candidates(
+        self, *, labels: Mapping[str, str]
+    ) -> tuple[tuple[str, Mapping[str, Any]], ...]:
+        """Discovery only: do not let one failed inspect hide healthy siblings."""
+        # The high-level SDK collection list eagerly inspects every result.
+        # Recovery independently re-inspects and attests each returned ID.
+        return tuple(
+            (item["Id"], {"labels": dict(item.get("Labels") or {})})
+            for item in self._client.api.containers(
+                all=True, filters=self._filter(labels)
+            )
+        )
+
     @staticmethod
     def _container_state(container: Any) -> Mapping[str, Any]:
         container.reload()
@@ -365,6 +552,9 @@ class ProductionRecoveryBackend:
             "running": bool(state.get("Running", False)),
             "paused": bool(state.get("Paused", False)),
             "labels": dict(labels),
+            "id": container.id,
+            "name": (container.attrs.get("Name") or "").removeprefix("/"),
+            "image_id": container.attrs.get("Image"),
         }
 
     def inspect_container(self, container_id: str) -> Mapping[str, Any] | None:
@@ -385,11 +575,89 @@ class ProductionRecoveryBackend:
         except NotFound:
             return
 
+    def terminate_sandbox(self, child: SandboxLease) -> None:
+        SandboxDockerBackend(self._client).terminate(child)
+
+    def remove_sandbox(self, child: SandboxLease) -> None:
+        SandboxDockerBackend(self._client).remove(child)
+
+    def kill_sandbox_container(self, container_id: str) -> None:
+        """SIGKILL an env service, paused or not, and await its stop (M3):
+        cgroup.kill as root, so a frozen service never runs again."""
+        api = self._client.api
+
+        def inspect() -> Mapping[str, Any] | None:
+            try:
+                return api.inspect_container(container_id)
+            except NotFound:
+                return None
+
+        terminate_container(
+            api,
+            container_id,
+            inspect=inspect,
+            paused_killer=self._paused_killer or default_paused_killer(api),
+        )
+
+    def remove_sandbox_container(self, container_id: str) -> None:
+        try:
+            # v=True: no anonymous volume may outlive its container.
+            self._client.api.remove_container(container_id, v=True, force=False)
+        except NotFound:
+            return
+
+    def recover_sandbox_network(
+        self, env: SandboxEnvLease | BuilderLease, *, settled: bool = False
+    ) -> tuple[str, ...]:
+        """The env or builder bridge, then its firewall rule, each proven
+        absent (M2).
+
+        A pending bridge create that finds nothing keeps its rule, unless
+        recovery proved that create settled.
+        """
+        network = SandboxNetworkBackend(self._client, self._firewall)
+        if not settled:
+            return network.recover(env)
+        if isinstance(env, BuilderLease):
+            plan = plan_builder_network(env.owner, env.builder_id)
+        else:
+            plan = env_lease_network_plan(env)
+        return () if plan is None else network.remove(plan, env.network_id)
+
+    def remove_builder_loop(self, path: Path) -> None:
+        """Detach every loop device of a builder file, then remove it (M8)."""
+        remove_loop_file(path, self._loop_runner)
+
+    def coordinator_alive(self, pid: int, started_at: float) -> bool:
+        return coordinator_may_run(pid, started_at, proc=self._proc)
+
+    def settle_sandbox_creates(self, rule_ids: tuple[str, ...]) -> bool:
+        """Let a create the dead broker sent land, then prove that no firewall
+        command for ``rule_ids`` still runs."""
+        time.sleep(self._settle_sec)
+        return not firewall_commands_running(rule_ids, proc=self._proc)
+
+    @staticmethod
+    def remove_sandbox_spool(path: Path) -> None:
+        # rmtree refuses a symlinked root and never follows links below it.
+        shutil.rmtree(path)
+
     def list_images(
         self, *, labels: Mapping[str, str]
     ) -> tuple[tuple[str, Mapping[str, Any]], ...]:
         found = self._client.images.list(filters=self._filter(labels))
         return tuple((item.id, self._image_state(item)) for item in found)
+
+    def list_tagged_images(
+        self, prefix: str
+    ) -> tuple[tuple[str, Mapping[str, Any]], ...]:
+        """Images with a ``repository:tag`` starting with ``prefix``."""
+        found = self._client.images.list(filters={"reference": f"{prefix}*"})
+        return tuple(
+            (item.id, self._image_state(item))
+            for item in found
+            if any(tag.startswith(prefix) for tag in item.tags)
+        )
 
     @staticmethod
     def _image_state(image: Any) -> Mapping[str, Any]:
@@ -592,6 +860,7 @@ class _ProductionRunComposition:
         event_callback: Callable[[str, object], None] | None = None,
         preparation: RunPreparation | None = None,
         compiler: HarborTaskCompiler | None = None,
+        sandbox_policy: SandboxPolicy | None = None,
     ) -> None:
         del inventory
         self.client = client
@@ -637,6 +906,145 @@ class _ProductionRunComposition:
         self.planned_workdir_volume: ManagedWorkdirVolume | None = None
         self.workdir_volume: ManagedWorkdirVolume | None = None
         self.planned_work_policy: NetworkPolicyLease | None = None
+        self.sandbox_policy = sandbox_policy
+        self.sandbox_lifecycle = (
+            SandboxLifecycle() if sandbox_policy is not None else NullSandboxLifecycle()
+        )
+        self._sandbox_grant = None
+        self._sandbox_broker = None
+        self._sandbox_broker_factory: Callable[[], SandboxBroker] | None = None
+        # (API key, [environments.host.e2b]) -> the E2B client (tests fake it).
+        self.e2b_client_factory: Callable[[str, Any], Any] = (
+            lambda key, settings: e2b_client(settings, key)
+        )
+
+    def bind_sandbox_lease(self, mutate):
+        """Resolve and reserve child authority before preparing parent images.
+
+        A v2 (environment) grant builds its broker only in prepare_plan: its
+        exec spool lives under the run root, which does not exist yet.
+        """
+        lease = mutate(lambda current: current)
+        if self.definition is None or self.definition.sandbox is None:
+            raise SetupError("sandbox lease requires a prevalidated task")
+        self.sandbox_lifecycle.validate_root(self.data_root / lease.run_id / "sb")
+        child_client = docker.from_env(timeout=5)
+        env_client = None
+        try:
+            # Never silently send child authority to a different daemon when a
+            # programmatic caller supplied a custom parent Docker client.
+            parent_id = self.client.info().get("ID")
+            if not parent_id or child_client.info().get("ID") != parent_id:
+                raise SetupError(
+                    "sandbox parent and child Docker daemon identities differ"
+                )
+            # Paused Work children are killed without a thaw (cgroup.kill as
+            # root), so close() removes them instead of requiring recovery.
+            paused_killer = default_paused_killer(child_client.api)
+            backend = SandboxDockerBackend(child_client, paused_killer=paused_killer)
+            task = self.definition.sandbox
+            environments = getattr(self.sandbox_policy, "environments", None)
+            if (
+                isinstance(task, SandboxEnvTask)
+                and environments is not None
+                and environments.host.backend == "e2b"
+            ):
+                # E2B envs: no env Docker client, firewall, builder or root.
+                grant = resolve_env_grant(
+                    task, self.sandbox_policy, {},
+                    self.definition.service.cpus, self.definition.service.memory_mb,
+                )
+                check_tools(grant.environments.host)
+                settings = grant.environments.host.e2b
+                # Read once, here; it lives only in the broker's client.
+                api_key = read_api_key(settings)
+                self.agent_output_secrets.add(api_key)
+                journal = SandboxJournal(mutate)
+                run_id = lease.run_id
+
+                def build_broker() -> SandboxBroker:
+                    runtime = e2b_env_runtime(
+                        self.e2b_client_factory(api_key, settings),
+                        spool_root=sandbox_spool_root(self.data_root, run_id),
+                        host=grant.environments.host,
+                    )
+                    return SandboxBroker(
+                        grant, backend, journal, time.monotonic, envs=runtime,
+                    )
+
+                self._sandbox_broker_factory = build_broker
+                reserved = {"disk_mb": grant.reserved_disk_mb}
+            elif isinstance(task, SandboxEnvTask):
+                env_client = docker.from_env(
+                    timeout=SANDBOX_ENV_DOCKER_TIMEOUT_SECONDS
+                )
+                if env_client.info().get("ID") != parent_id:
+                    raise SetupError(
+                        "sandbox parent and env Docker daemon identities differ"
+                    )
+                docker_root = env_client.info().get("DockerRootDir")
+                if not docker_root:
+                    raise SetupError("sandbox Docker root directory is unknown")
+                grant = resolve_env_grant(
+                    task, self.sandbox_policy,
+                    sandbox_builder_images(env_client, task, self.sandbox_policy),
+                    self.definition.service.cpus, self.definition.service.memory_mb,
+                )
+                check_tools(grant.environments.host)
+                journal = SandboxJournal(mutate)
+                run_id = lease.run_id
+
+                def build_broker() -> SandboxBroker:
+                    # Recovery removes this same derived spool (M6).
+                    runtime = docker_env_runtime(
+                        env_client,
+                        self.firewall,
+                        run_id=run_id,
+                        spool_root=sandbox_spool_root(self.data_root, run_id),
+                        docker_root=docker_root,
+                        host=grant.environments.host,
+                        engine_destinations=(self.bridge_gateway,),
+                        paused_killer=paused_killer,
+                        # Loop-ext4 builder files: <data>/<run>/sb/build.
+                        data_root=self.data_root,
+                    )
+                    return SandboxBroker(
+                        grant, backend, journal, time.monotonic, envs=runtime,
+                    )
+
+                self._sandbox_broker_factory = build_broker
+                reserved = {"disk_mb": grant.reserved_disk_mb}
+            else:
+                images = {p.name: backend.preflight(p) for p in task.profiles}
+                grant = resolve_sandbox_grant(
+                    task, self.sandbox_policy, images,
+                    self.definition.service.cpus, self.definition.service.memory_mb,
+                )
+                self._sandbox_broker = SandboxBroker(
+                    grant, backend, SandboxJournal(mutate), time.monotonic,
+                )
+                reserved = {}
+            self.sandbox_lifecycle.reserve(
+                SandboxAdmissionPool(LeaseStore(self.data_root / "leases")),
+                grant, lease.run_id, mutate,
+            )
+            self.sandbox_lifecycle.own_transport(
+                child_client, *(() if env_client is None else (env_client,))
+            )
+            self._sandbox_grant = grant
+            self.event_callback(
+                "sandbox_reserved",
+                {
+                    "cpus": grant.reserved_cpus,
+                    "memory_mb": grant.reserved_memory_mb,
+                    **reserved,
+                },
+            )
+        except BaseException:
+            child_client.close()
+            if env_client is not None:
+                env_client.close()
+            raise
 
     def backend(self) -> ProductionCoordinatorBackend:
         return ProductionCoordinatorBackend(
@@ -747,6 +1155,23 @@ class _ProductionRunComposition:
         self.plan = self.compiler.finalize(
             definition, images, gpu_plan, paths, "docker-rootfs"
         )
+        if self.sandbox_lifecycle.enabled:
+            if self._sandbox_grant is None:
+                raise SetupError(
+                    "sandbox reservation was not established before parent setup"
+                )
+            self.plan = self.plan.model_copy(update={"sandbox": self._sandbox_grant})
+            if self._sandbox_broker is None:
+                if self._sandbox_broker_factory is None:
+                    raise SetupError("sandbox broker was not bound to the lease")
+                # The run-owned sandbox root is private before the env
+                # broker creates its spool below it.
+                (run_root / "sb").mkdir(mode=0o700)
+                self._sandbox_broker = self._sandbox_broker_factory()
+            self.sandbox_lifecycle.configure(
+                self._sandbox_broker, run_root / "sb", run_id, self.plan.task.task_id,
+            )
+            self.sandbox_lifecycle.prepare_work()
         self.definition = self.plan.task
         metadata_staging = run_root / "rsi-loop-task"
         metadata = self.compiler.write_rsi_loop_metadata(
@@ -893,6 +1318,7 @@ class _ProductionRunComposition:
             raise RuntimeError("network enforcer was not initialized")
         if self.artifacts is None:
             raise RuntimeError("Work feedback artifacts were not initialized")
+        endpoint = self.sandbox_lifecycle.prepare_work()
         self.work_runtime = DockerContainerRuntime(
             self.client,
             **self._runtime_common("work"),
@@ -900,6 +1326,7 @@ class _ProductionRunComposition:
             network_policy_enforcer=self.enforcer,
             staging_dir=self.data_root / self.run_id / "staging",
             work_feedback_dir=self.artifacts.feedback_root,
+            **({"sandbox_socket_dir": endpoint.directory} if endpoint else {}),
         )
         try:
             self.agent = self.agent_adapter_factory(
@@ -964,6 +1391,7 @@ class _ProductionRunComposition:
                 if plan.rootfs_snapshot_mode is RootfsSnapshotMode.SPLIT_WORKDIR
                 else ()
             )
+            endpoint = self.sandbox_lifecycle.prepare_work()
             return self.work_runtime.create(
                 ContainerSpec(
                     image=plan.images.work_ref,
@@ -986,7 +1414,7 @@ class _ProductionRunComposition:
                             target=WORK_FEEDBACK_ROOT,
                             read_only=True,
                         ),
-                    ),
+                    ) + ((endpoint.mount,) if endpoint else ()),
                     volume_mounts=volume_mounts,
                     tmpfs=(
                         tuple(mount.tmpfs for mount in self.agent_auth.mounts)
@@ -1125,6 +1553,13 @@ class _ProductionRunComposition:
             exec_environment[NVIDIA_VISIBLE_DEVICES_ENV] = (
                 nvidia_visible_devices_value(plan.gpu_plan.work)
             )
+            endpoint = self.sandbox_lifecycle.prepare_work()
+            if endpoint is not None:
+                previous_path = exec_environment.get("PATH", resolved.get("PATH"))
+                exec_environment.update(endpoint.environment)
+                if previous_path is not None:
+                    exec_environment["PATH"] = previous_path
+                self.agent_output_secrets.add(endpoint.environment["RSI_SANDBOX_TOKEN"])
             return replace(
                 prepared,
                 environment=tuple(sorted(exec_environment.items())),
@@ -1157,6 +1592,8 @@ class _ProductionRunComposition:
         try:
             if self.agent is None or self.artifacts is None:
                 raise RuntimeError("Agent runtime is unavailable")
+            if self.sandbox_lifecycle.enabled and timeout is None:
+                raise SetupError("sandbox requires a finite Work execution timeout")
             agent_name = getattr(prepared, "agent_name", None)
             if agent_name is None and self.definition is not None:
                 agent_name = self.definition.agent.name
@@ -1178,6 +1615,8 @@ class _ProductionRunComposition:
                     output_callback=lambda value: self.event_callback(
                         "agent_output", value
                     ),
+                    on_exec_start=(self.sandbox_lifecycle.activate_work
+                                   if self.sandbox_lifecycle.enabled else None),
                 )
             )
             safe_output = redact_text(
@@ -1190,6 +1629,7 @@ class _ProductionRunComposition:
                 output_truncated=result.output_truncated,
                 full_output_captured=result.full_output_captured,
                 cancelled=result.cancelled,
+                exec_started=result.exec_started,
             )
             if not result.full_output_captured:
                 self.artifacts.root.joinpath("agent_output.txt").write_text(
@@ -1367,6 +1807,8 @@ class _ProductionRunComposition:
             lifecycle_observer=observer,
             work_container=request.work_container,
             omit_gpu_device_requests_for_tests=self.omit_gpu,
+            **({"sandbox_lifecycle": self.sandbox_lifecycle}
+               if self.sandbox_lifecycle.enabled else {}),
         )
         self.event_callback("judge_started", {"round_id": request.round_id})
         runner = JudgeRunner(
@@ -1380,6 +1822,8 @@ class _ProductionRunComposition:
             lifecycle_observer=observer,
             verifier_secret_env=self.verifier_secret_env,
             event_callback=self.event_callback,
+            **({"sandbox_lifecycle": self.sandbox_lifecycle}
+               if self.sandbox_lifecycle.enabled else {}),
         )
         report = runner.evaluate(request)
         self.event_callback(
@@ -1433,6 +1877,9 @@ class ProductionRuntimeServices:
         self.quiescence_checker = quiescence_checker
         self.event_callback = event_callback
         configured_agent_env = {} if engine_config is None else engine_config.secret_env
+        self.sandbox_policy = (
+            None if engine_config is None else engine_config.sandbox_policy
+        )
         configured_verifier_env = (
             {} if engine_config is None else engine_config.verifier_secret_env
         )
@@ -1468,6 +1915,7 @@ class ProductionRuntimeServices:
         # Docker, or be collapsed into a generic terminal result.
         compiler = HarborTaskCompiler()
         definition = compiler.compile(request.task_dir, request.options)
+        validate_sandbox_policy(definition.sandbox, self.sandbox_policy, "docker")
         validate_agent_reasoning_effort(
             definition.agent.name, request.reasoning_effort
         )
@@ -1527,11 +1975,17 @@ class ProductionRuntimeServices:
             event_callback=self.event_callback,
             preparation=preparation,
             compiler=compiler,
+            **({"sandbox_policy": self.sandbox_policy} if definition.sandbox else {}),
         )
         coordinator = self.coordinator_factory(
             backend=ports.backend(),
             lease_store=LeaseStore(self.data_root / "leases"),
             clock=_Clock(),
+            **(
+                {"on_lease_ready": ports.bind_sandbox_lease,
+                 "sandbox_lifecycle": ports.sandbox_lifecycle}
+                if definition.sandbox else {}
+            ),
         )
         return coordinator.run(request)
 
@@ -1550,6 +2004,21 @@ class ProductionRuntimeServices:
 
     def cleanup(self, run_id: str, *, delete_workspace: bool) -> None:
         self._recovery().cleanup(run_id, delete_workspace=delete_workspace)
+
+    def prune_images(
+        self,
+        *,
+        older_than_seconds: float | None,
+        dry_run: bool,
+        confirm: Callable[[tuple[PruneRow, ...]], bool],
+    ) -> tuple[PruneRow, ...] | None:
+        """Remove the pulled images the host pull ledger names (sandbox_ledger)."""
+        pruner = ImagePruner(
+            PullLedger(pull_ledger_root(self.data_root)),
+            LeaseStore(self.data_root / "leases"),
+            self._client().api,
+        )
+        return pruner.run(older_than_seconds, dry_run=dry_run, confirm=confirm)
 
 
 __all__ = ["ProductionRecoveryBackend", "ProductionRuntimeServices"]

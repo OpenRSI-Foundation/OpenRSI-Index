@@ -13,6 +13,7 @@ ENGINE_MOUNT_TARGETS = (
     PurePosixPath("/run/rsi-harness/staging"),
     WORK_FEEDBACK_ROOT,
 )
+SANDBOX_MOUNT_TARGET = PurePosixPath("/run/rsi-harness/sandbox")
 
 
 def _overlaps(left: PurePosixPath, right: PurePosixPath) -> bool:
@@ -50,6 +51,8 @@ def validate_run_plan_mount_topology(plan: RunPlan) -> None:
     if plan.rootfs_snapshot_mode is not RootfsSnapshotMode.SPLIT_WORKDIR:
         raise SetupError("unsupported rootfs snapshot mode")
     validate_split_workdir_target(plan.workdir)
+    if plan.sandbox is not None and _overlaps(plan.workdir, SANDBOX_MOUNT_TARGET):
+        raise SetupError("split WORKDIR overlaps sandbox socket mount")
 
 
 __all__ = [

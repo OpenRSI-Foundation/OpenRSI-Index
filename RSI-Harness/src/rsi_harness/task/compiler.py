@@ -29,6 +29,7 @@ from rsi_harness.models import (
     TaskDefinition,
     VerifierPlan,
 )
+from rsi_harness.runtime.sandbox_policy import parse_sandbox_task
 from rsi_harness.task.compose import ComposeMainServiceParser
 from rsi_harness.task.digest import hash_tree
 
@@ -61,6 +62,12 @@ class HarborTaskCompiler:
             ) from error
 
         self._reject_unsupported_config(task)
+        harness_metadata = task.config.metadata.get("rsi_harness", {})
+        sandbox = (
+            parse_sandbox_task(harness_metadata["sandbox"])
+            if isinstance(harness_metadata, dict) and "sandbox" in harness_metadata
+            else None
+        )
         test_path = self._require_files(task)
         compose_path = task.paths.environment_dir / "docker-compose.yaml"
         compose_service = (
@@ -120,6 +127,7 @@ class HarborTaskCompiler:
                 ),
                 assets=self._asset_requirements(task),
                 require_disjoint_phase_nodes=self._require_disjoint_phase_nodes(task),
+                sandbox=sandbox,
                 score_direction=options.score_direction,
             )
         except ValidationError as error:

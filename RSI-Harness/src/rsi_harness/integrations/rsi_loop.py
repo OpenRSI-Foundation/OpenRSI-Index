@@ -184,6 +184,7 @@ class AgentRuntime(Protocol):
         output_path: Path | None = None,
         output_redact_values: tuple[str, ...] = (),
         output_callback: Callable[[str], None] | None = None,
+        on_exec_start: Callable[[float], None] | None = None,
     ) -> AgentRunResult: ...
 
 
@@ -360,6 +361,8 @@ class RSILoopAgentAdapter:
                 )
             if request.output_callback is not None:
                 exec_options["output_callback"] = request.output_callback
+            if request.on_exec_start is not None:
+                exec_options["on_exec_start"] = request.on_exec_start
             result = runtime.exec(
                 request.container,
                 request.prepared.command,

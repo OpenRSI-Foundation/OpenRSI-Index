@@ -14,6 +14,7 @@ from typing import Any
 
 from docker.errors import NotFound
 
+from rsi_harness.errors import InfrastructureError
 from rsi_harness.models import (
     AgentHookRequest,
     AgentPrepareRequest,
@@ -145,10 +146,15 @@ class FakeJudgeRuntime:
         self.events.append(("workspace_attest", self._round_id or "work"))
         self._raise("attest")
 
-    def unpause(self, container: ContainerRef) -> None:
-        self.events.append(("unpause", container.container_id))
-        self.work_paused = False
-        self._raise("unpause")
+    def unpause(
+        self, container: ContainerRef, *, admission=None, control_client=None
+    ) -> None:
+        from contextlib import nullcontext
+
+        with admission() if admission is not None else nullcontext():
+            self.events.append(("unpause", container.container_id))
+            self.work_paused = False
+            self._raise("unpause")
 
     def inspect_quiescence(
         self, container: ContainerRef
@@ -885,3 +891,10 @@ class FakeFirewallBackend:
     def remove(self, rule_id: str) -> None:
         self.events.append(("remove", rule_id))
         self.installed.pop(rule_id, None)
+
+    def update(self, rule_id: str, rules: object) -> None:
+        # Like the real backend: only an installed rule's allow chain changes.
+        self.events.append(("update", rule_id))
+        if rule_id not in self.installed:
+            raise InfrastructureError(f"network policy {rule_id} allow chain is absent")
+        self.installed[rule_id] = rules

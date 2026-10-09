@@ -1,0 +1,28 @@
+# Vendored from laude-institute/harbor-datasets@86723674f04e4209ac479d0fb75d9d9f44b4377e
+# datasets/swebench-verified/pallets__flask-5014 (Harbor registry swebench-verified@1.0),
+# made offline for the RSI sample (see ../../../instruction.md): the
+# prebuilt image pinned by digest, no network, and tests/test.sh grading
+# without PyPI.
+[metadata]
+author_name = "unknown"
+author_email = "unknown"
+difficulty = "<15 min fix"
+category = "debugging"
+tags = ["debugging", "swe-bench"]
+
+[verifier]
+# Overall time budget for the agent's work (seconds)
+timeout_sec = 3000
+
+[agent]
+# Set to same as verifier unless you want to restrict agent time separately
+timeout_sec = 3000
+
+[environment]
+docker_image = "swebench/sweb.eval.x86_64.pallets_1776_flask-5014@sha256:bde4fbdafa36141d4396944da88ec37aabdef612ed36920090675bccd0ca5d72"
+workdir = "/testbed"
+network_mode = "no-network"
+build_timeout_sec = 1800.0
+cpus = 1
+memory = '4G'
+storage = '10G'

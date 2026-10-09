@@ -1,0 +1,59 @@
+schema_version = "1.4"
+
+[task]
+name = "rsi/minimal-sandbox"
+
+[environment]
+os = "linux"
+workdir = "/workspace"
+gpus = 0
+cpus = 1
+memory_mb = 256
+network_mode = "no-network"
+
+[agent]
+timeout_sec = 120
+network_mode = "no-network"
+
+[verifier]
+timeout_sec = 30
+network_mode = "no-network"
+
+[metadata.rsi_harness.sandbox]
+version = 1
+
+[[metadata.rsi_harness.sandbox.profiles]]
+name = "offline"
+image = "__APPROVED_IMAGE_ID__"
+cpus = 1
+memory_mb = 128
+pids = 32
+max_lifetime_sec = 120
+workdir = "/workspace"
+tmpfs_mb = { "/workspace" = 16, "/tmp" = 8, "/dev/shm" = 8 }
+
+[metadata.rsi_harness.sandbox.work]
+profiles = ["offline"]
+[metadata.rsi_harness.sandbox.work.limits]
+max_live = 1
+max_created = 1
+max_operations = 32
+max_cpus = 1
+max_memory_mb = 128
+max_lifetime_sec = 120
+max_upload_bytes = 1048576
+max_download_bytes = 1048576
+max_log_bytes = 4194304
+
+[metadata.rsi_harness.sandbox.judge]
+profiles = ["offline"]
+[metadata.rsi_harness.sandbox.judge.limits]
+max_live = 1
+max_created = 2
+max_operations = 32
+max_cpus = 1
+max_memory_mb = 128
+max_lifetime_sec = 120
+max_upload_bytes = 1048576
+max_download_bytes = 1048576
+max_log_bytes = 4194304

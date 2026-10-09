@@ -1,0 +1,16 @@
+# Example manifest for prepull_images.sh: the acceptance images (Operator
+# steps, step 2) by the digests their tags had on the reference host, as
+# `docker image inspect --format '{{index .RepoDigests 0}}' IMAGE` prints
+# them. A task naming an image by such a digest uses the cached image with
+# no pull budget; the acceptance itself names the tags, which step 2 pulls.
+# A SWE-bench set looks the same, one line per image (about 500 lines,
+# docker.io/swebench/sweb.eval.x86_64.<instance>@sha256:<digest>).
+alexgshaw/fix-git@sha256:61e431c00c58df652287aadce5457634d9f9330cfdd153ebdf2802df0d540119
+alexgshaw/regex-log@sha256:90101b2e815323a8da20528a1439bebc407eb9761c9c68a3d557730856c878e9
+alexgshaw/adaptive-rejection-sampler@sha256:985bed39e8448bc95f138b5f766b59003a95c4be171c96af8e76448338f3dd8f
+alexgshaw/kv-store-grpc@sha256:3399400800dcb207634daa42bc1b052e831e285cc9d221eea66c47bc0fc79791
+alexgshaw/nginx-request-logging@sha256:693e64431a0dbf45952e8b91a298d54fd60247e501c6623fb8fa3ebc07fc3d3d
+alexgshaw/git-multibranch@sha256:5bc449921c138295f6ddd8dca2977319fee2ce523811dbe56cec4ca663385fb5
+python@sha256:2325bb286ec344af3e5898cc224b5844e2707ac6e26b1632516fd3edc84a5e26
+redis@sha256:858f009f9709ce576febc734aa78b8f6d624b82571f9ddb6bda4377c833b3499
+alpine@sha256:ce64758a109eb420d874a118f87920e625e12d3634e03b4a5573fd9f6e5d3507

@@ -1,0 +1,96 @@
+{
+  "images": {
+    "client": {
+      "args": {},
+      "build": ".",
+      "dockerfile": "Dockerfile",
+      "dockerfile_inline": null,
+      "network": null,
+      "no_cache": false,
+      "target": null
+    },
+    "decryptor": {
+      "policy": "missing",
+      "pull": "python:3.13-slim-bookworm"
+    }
+  },
+  "notes": [
+    "services.client: no cpus limit; using 1.0",
+    "services.client: no memory limit; using 1024 MiB",
+    "services.client.volumes./logs: log mount dropped; logs are downloaded",
+    "services.client.volumes./agent-logs: log mount dropped; logs are downloaded",
+    "services.decryptor.ports: dropped; services reach each other on container ports",
+    "services.decryptor: no cpus limit; using 1.0",
+    "services.decryptor: no memory limit; using 1024 MiB",
+    "services.decryptor.volumes./app/decryptor_server.py: file bind becomes a copy before start"
+  ],
+  "seeds": [
+    {
+      "dest_dir": "/app",
+      "kind": "file",
+      "name": "decryptor_server.py",
+      "service": "decryptor",
+      "source": "./decryptor_server.py"
+    }
+  ],
+  "spec": {
+    "disk_mb": 2048,
+    "lifetime_sec": null,
+    "network": "public",
+    "services": {
+      "client": {
+        "aliases": [
+          "tb-client"
+        ],
+        "command": [
+          "sh",
+          "-c",
+          "sleep infinity"
+        ],
+        "cpus": 1.0,
+        "depends_on": {
+          "decryptor": {
+            "condition": "started",
+            "required": true
+          }
+        },
+        "env": {
+          "TEST_DIR": "/tests"
+        },
+        "image": null,
+        "memory_mb": 1024,
+        "mounts": [
+          {
+            "target": "/app",
+            "volume": "shared_results"
+          }
+        ]
+      },
+      "decryptor": {
+        "command": [
+          "sh",
+          "-c",
+          "pip install flask==3.0.3 flask-cors==5.0.0 && python /app/decryptor_server.py"
+        ],
+        "cpus": 1.0,
+        "env": {
+          "PYTHONUNBUFFERED": "1"
+        },
+        "image": null,
+        "memory_mb": 1024,
+        "mounts": [
+          {
+            "target": "/app",
+            "volume": "shared_results"
+          }
+        ]
+      }
+    },
+    "version": 1,
+    "volumes": {
+      "shared_results": {
+        "seeded": false
+      }
+    }
+  }
+}

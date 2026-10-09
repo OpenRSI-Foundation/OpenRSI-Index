@@ -4,6 +4,11 @@ RSI Harness accepts a deliberately narrow Docker Compose file at
 `environment/docker-compose.yaml`. It uses only one service named `main` and
 rejects settings that could bypass Engine-owned isolation or recovery.
 
+This page first describes the Compose file of the RSI task itself (the
+Work/Judge parent). A Harbor task run *inside* Work or Judge through a
+brokered environment has a much wider Compose subset, with sidecars; see
+[Compose inside brokered environments](#compose-inside-brokered-environments).
+
 For `task.toml`, including Work and Judge GPU declarations, see
 [`task-toml.md`](task-toml.md).
 
@@ -360,3 +365,79 @@ The following are explicitly rejected:
 RSI Harness owns Docker networks, mount targets, GPU UUID selection, temporary
 Judge test injection, and recovery labels. Rejecting these Compose fields keeps
 that authority in one place rather than silently ignoring task settings.
+
+## Compose inside brokered environments
+
+A Harbor task that code in Work or Judge runs through the
+`rsi_sandbox_harbor` plugin (or `rsi-sandbox compose`, see
+[`sandboxes.md`](sandboxes.md#brokered-environments-metadata-version-2)) may
+use sidecar services. Its Compose files are translated inside Work or Judge
+into one environment specification; the host broker never runs `docker
+compose` or reads YAML, and the specification cannot express host paths,
+devices, extra privileges or host networking. A key that cannot be
+translated fails with its key path (for example `services.db.cap_add:
+unsupported compose key`) before anything is created; a key translated with
+a change is reported as a note.
+
+Loading follows Compose: YAML without tags (`!reset`, `!override` and custom
+tags are refused), files merged in order (mappings recursively; `command` and
+`entrypoint` replaced; `environment`, `extra_hosts`, `volumes` (by target),
+`depends_on` and `networks` merged by key; `cap_drop` a union), variables
+from `.env` below the process environment, the task/persistent env and
+Harbor's `CONTEXT_DIR`, `PREBUILT_IMAGE_NAME`, `MAIN_IMAGE_NAME`, `CPUS` and
+`MEMORY`; `$$`, `${V:-d}`, `${V-d}`, `${V:?e}`, `${V?e}`, `${V:+a}` and
+`${V+a}` are supported. The endpoint's own `RSI_SANDBOX_*` variables are
+never offered to interpolation. Profiles are honoured (`COMPOSE_PROFILES`).
+
+Accepted:
+
+- `image`, `pull_policy`, `platform: linux/amd64`, and `build` (`context`
+  inside the project, `dockerfile`, `dockerfile_inline`, `args`, `target`,
+  `network: default|none`, `no_cache`, `pull` and `labels`); builds need a
+  builder grant;
+- `command`, `entrypoint`, `environment`, `env_file`, `working_dir`, `user`,
+  `group_add`, `hostname`;
+- one network per project with `aliases`; `container_name` and `links`
+  become aliases; `network_mode: none`; `extra_hosts` with IP literals
+  (hostnames, `host-gateway` and scoped IPv6 addresses are refused);
+- `healthcheck` and `depends_on` (`service_started`, `service_healthy`,
+  `service_completed_successfully`, `required`);
+- `read_only`, `tty`, `cap_drop` (`ALL` drops Docker's default set),
+  `security_opt: [no-new-privileges:true]`;
+- `cpus`, `mem_limit`, `pids_limit`, `deploy.resources.limits`, `shm_size`,
+  `tmpfs`, `ulimits.nofile`; `deploy.replicas: 1`, `deploy.mode:
+  replicated`, `ipc: private`, `cgroup: private` and `init` (an init process
+  always runs);
+- named and anonymous volumes (local driver, no options); image `VOLUME`
+  paths get their own labelled volume;
+- relative binds inside the project: a file is copied into the service
+  before it starts, a directory becomes a volume seeded once (not read-only,
+  not synced back);
+- `configs`/`secrets` from `file:`, `content:` or `environment:`, copied in
+  before start;
+- `stop_signal`, `stop_grace_period` up to 30 s, `profiles`, `x-*`.
+
+Normalized with a note: `ports` and `expose` are dropped (services reach each
+other on container ports); `restart` becomes `no`; `memswap_limit` gives way
+to the operator's `swap_ratio` (default: as much swap as memory, as in
+Docker); reservations (`deploy.resources.reservations`, `mem_reservation`),
+`labels`, `logging`, `develop`, `annotations`, `stdin_open`, `cpu_shares`,
+`cpu_percent`, `deploy.restart_policy`, `deploy.labels` and other `deploy`
+keys are ignored; Harbor's log mounts are dropped because logs are
+downloaded; a service without limits gets the default CPU and memory; `ulimits.nproc` is
+bounded by the pids limit.
+
+Refused: `privileged: true`, `cap_add`, `devices`, `device_cgroup_rules`,
+`gpus`, `runtime`, `isolation`, other `security_opt`, `sysctls`,
+`oom_kill_disable`, `storage_opt`, `blkio_config`, `cpuset` and CPU quota
+keys; `pid`, `uts`, `userns_mode`, `cgroup_parent`, host `ipc`/`cgroup`;
+`network_mode` other than `none`; `volumes_from`, `external_links`;
+`domainname` (it would change the service's FQDN); absolute, `~` or
+out-of-project binds (including `/var/run/docker.sock`); any volume, bind or
+`tmpfs` target at `/` or under `/proc`, `/sys`, `/dev` or `/run/rsi-harness`;
+volume drivers, `driver_opts`, `external` volumes and `subpath`; more than one
+network, external/internal networks, IPAM, fixed IP or MAC addresses, `dns*`
+and `host-gateway`; more than one replica; `use_api_socket`, `provider`,
+`models`, lifecycle hooks, `extends`, `include`; build `secrets`, `ssh`,
+`network: host`, `additional_contexts`, `cache_from`/`cache_to`,
+`entitlements`; any unknown key.

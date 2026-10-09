@@ -1,0 +1,52 @@
+schema_version = "1.4"
+
+[task]
+name = "rsi/harbor-in-judge"
+
+# Work installs Harbor; the Judge is derived from Work. Neither has network
+# of its own: Harbor reaches the host broker through the injected endpoint,
+# and only the environments the broker creates get public egress.
+[environment]
+os = "linux"
+workdir = "/workspace"
+cpus = 2
+memory_mb = 4096
+gpus = 0
+build_timeout_sec = 1800
+network_mode = "no-network"
+
+[agent]
+timeout_sec = 3600
+network_mode = "no-network"
+
+# The fixed procedure (/tests/test.sh) runs the oracle and nop agents over
+# the suites named here; the operator may pick others for one run through
+# the host environment, e.g. RSI_HARBOR_SUITES=tb2,compose,build.
+[verifier]
+timeout_sec = 3600
+network_mode = "no-network"
+
+[verifier.env]
+RSI_HARBOR_SUITES = "${RSI_HARBOR_SUITES:-tb2}"
+RSI_HARBOR_TB2_TASKS = "${RSI_HARBOR_TB2_TASKS:-}"
+RSI_HARBOR_CONCURRENCY = "${RSI_HARBOR_CONCURRENCY:-2}"
+
+# Brokered environments (metadata version 2) for both phases. Harbor pulls
+# the TB2 images (docker.io alexgshaw/*), python and redis for the Compose
+# sidecar, and builds fix-git from its Dockerfile, whose RUN steps need the
+# public build network. The operator approves this once per run with
+# --sandbox-policy (see sample_tasks/harbor-in-judge/operator-policy.toml).
+[metadata.rsi_harness.sandbox]
+version = 2
+
+[metadata.rsi_harness.sandbox.environments.work]
+network = ["public", "none"]
+pull = true
+build = true
+build_network = ["public"]
+
+[metadata.rsi_harness.sandbox.environments.judge]
+network = ["public", "none"]
+pull = true
+build = true
+build_network = ["public"]

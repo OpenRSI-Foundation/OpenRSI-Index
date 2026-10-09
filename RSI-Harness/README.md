@@ -148,6 +148,35 @@ no GPU allocation or NVIDIA tools are required. Mixed CPU/GPU tasks need a GPU
 partition, and only GPU phases enable NVIDIA passthrough. Blue Vela still
 requires Work GPUs. Multi-node CPU Work is not supported.
 
+## Managed child sandboxes
+
+Code in Work or Judge can create bounded child containers without access to
+the Docker socket. The task requests them in `task.toml`, and a trusted
+operator approves the request with a TOML policy:
+
+```bash
+sudo -E "$(command -v rsi-harness)" run /absolute/path/to/task \
+  --agent codex \
+  --sandbox-policy /absolute/path/to/sandbox-policy.toml
+```
+
+- **Version 1 profiles:** cached, digest-pinned images run as root inside a
+  read-only, no-network, no-GPU child with bounded tmpfs scratch.
+- **Version 2 brokered environments:** pulled and built images, Compose
+  services, long-running execs and copies, used by stock Harbor through an
+  injected plugin. Envs run on local Docker or, with
+  `backend = "e2b"`, as E2B sandboxes.
+
+Docker-backed sandboxes need `rsi-harness run` as root next to a rootful
+Docker daemon; the BlueVela and Slurm backends accept only E2B-backed
+environment grants (see
+[Host requirements](docs/sandbox-operator-guide.md#host-requirements)).
+Task authors start with
+[docs/harbor-task-authoring/sandboxes.md](docs/harbor-task-authoring/sandboxes.md);
+operators with [docs/sandbox-operator-guide.md](docs/sandbox-operator-guide.md)
+(every grant field, the refusals, the BuildKit builder exception, the root
+checks and the acceptance). Examples are in [sample_tasks](sample_tasks).
+
 ## Run multi-node tasks on a cluster
 
 The `bluevela` adapter supports LSF clusters; `slurm` uses the same image build,
@@ -289,6 +318,7 @@ above.
 | `recover [RUN_ID]` | Recover one interrupted run, or all unfinished runs when `RUN_ID` is omitted. | `rsi-harness recover RUN_ID` |
 | `cleanup RUN_ID` | Remove leftover runtime resources while retaining the final workspace. | `rsi-harness cleanup RUN_ID` |
 | `cleanup RUN_ID --delete-workspace --yes` | Also delete the retained final workspace without prompting. | `rsi-harness cleanup RUN_ID --delete-workspace --yes` |
+| `sandbox prune-images` | Remove images that managed sandboxes first pulled to this host ([Pulled images](docs/sandbox-operator-guide.md#pulled-images)). | `rsi-harness sandbox prune-images --dry-run` |
 
 ### Common `run` options
 
@@ -306,6 +336,7 @@ above.
 | `--primary-reward KEY` | Select the reward key used as the primary score. | `reward`, or the only reward key when exactly one exists |
 | `--score-direction DIRECTION` | Choose whether the best score is the maximum or minimum: `maximize` or `minimize`. | `maximize` |
 | `--disable-stop-hook` | Let the Agent stop naturally instead of installing the RSI Loop stop hook. | Disabled; the stop hook is installed |
+| `--sandbox-policy PATH` | Operator policy TOML that approves the task's [managed sandbox](#managed-child-sandboxes) request. | Not set; nothing is granted |
 | `--cluster NAME_OR_PROFILE` | Run through a named cluster integration or profile TOML instead of local Docker. | Not set; run locally |
 | `--dry-run` | Resolve and print cluster submissions without submitting jobs. Requires `--cluster`. | Disabled |
 | `--data-root PATH` | Store runtime state under this directory. | `.rsi-harness` |
@@ -314,8 +345,10 @@ above.
 
 The default roots are resolved relative to the current working directory.
 `visualize` uses the same roots and listens on `127.0.0.1:8000` by default.
-Both `recover` and `cleanup` also accept `--data-root`, `--logs-root`, and
-`--verbose`.
+Both `recover` and `cleanup` also accept `--data-root`, `--logs-root`,
+`--verbose`, and `--cluster NAME` (to kill a cluster run's E2B sandboxes).
+`rsi-sandbox` is not a host command: it is the client injected into Work and
+Judge ([Using the broker](docs/harbor-task-authoring/sandboxes.md#using-the-broker)).
 
 ## Acknowledgements
 

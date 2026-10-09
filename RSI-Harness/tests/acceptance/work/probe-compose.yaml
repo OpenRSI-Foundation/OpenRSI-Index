@@ -1,0 +1,5 @@
+# A6: a child sees no socket (cached docker.io image, no network).
+services:
+  main:
+    image: alpine:3.21
+    command: ["sleep", "600"]

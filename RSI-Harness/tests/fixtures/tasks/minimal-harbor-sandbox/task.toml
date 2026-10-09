@@ -1,0 +1,23 @@
+schema_version = "1.4"
+
+[task]
+name = "rsi/minimal-harbor-sandbox"
+
+[environment]
+docker_image = "__APPROVED_IMAGE_ID__"
+os = "linux"
+workdir = "/workspace"
+cpus = 1
+memory_mb = 256
+gpus = 0
+network_mode = "no-network"
+
+[agent]
+timeout_sec = 30
+user = "root"
+network_mode = "no-network"
+
+[verifier]
+timeout_sec = 30
+user = "root"
+network_mode = "no-network"

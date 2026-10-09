@@ -13,6 +13,7 @@ from rsi_harness.models import (
     PersistedModel,
     RunStatus,
 )
+from rsi_harness.runtime.sandbox_contracts import SandboxPolicy
 
 
 class ClusterRunRequest(PersistedModel):
@@ -24,6 +25,8 @@ class ClusterRunRequest(PersistedModel):
     reasoning_effort: str | None = None
     agent_auth: AgentAuthSource | None = None
     dry_run: bool = False
+    # Only an E2B env policy ([environments.host] backend = "e2b").
+    sandbox_policy: SandboxPolicy | None = None
 
 
 class ClusterRunResult(PersistedModel):
