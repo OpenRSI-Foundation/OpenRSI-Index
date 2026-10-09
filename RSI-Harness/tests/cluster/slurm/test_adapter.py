@@ -15,7 +15,14 @@ from rsi_harness.cluster.schedulers.slurm import SlurmJobResult, SlurmScheduler
 from rsi_harness.cluster.slurm.adapter import SlurmClusterAdapter
 from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.models import GPURequirement, RunStatus
-from tests.cluster.bluevela.test_adapter import RecordingScheduler, _profile, _request
+from tests.cluster.bluevela.test_adapter import (
+    RecordingScheduler,
+    _profile,
+    _request,
+)
+from tests.cluster.bluevela.test_adapter import (
+    _fake_codex_runtime as _fake_codex_runtime,
+)
 from tests.factories import DEFAULT_TASK_TOML, write_harbor_task
 
 
