@@ -942,8 +942,15 @@ class ApptainerAgentRuntime:
         with self._lock:
             process = self._process
             if process is None or process.poll() is not None:
-                raise InfrastructureError("Agent process stopped during Judge round")
-            os.killpg(process.pid, signal.SIGCONT)
+                # A final Judge can finish after the Agent exits. There is
+                # nothing left to resume, but its completed report is valid.
+                self._paused = False
+                return
+            try:
+                os.killpg(process.pid, signal.SIGCONT)
+            except ProcessLookupError:
+                # The process group may exit between poll() and SIGCONT.
+                pass
             self._paused = False
 
     def stop(self, container: ContainerRef) -> None:
@@ -1320,11 +1327,6 @@ class NativeJudgeEvaluator:
                 error=error,
             )
             self.artifacts.record_submission(report)
-            shutil.rmtree(request.verifier_logs)
-            try:
-                request.verifier_logs.parent.rmdir()
-            except OSError:
-                pass
             observer.resource_event("judge_removed", judge_container_id=judge_id)
             observer.resource_event(
                 "snapshot_released", snapshot_lease_id=f"workspace-{request.round_id}"
