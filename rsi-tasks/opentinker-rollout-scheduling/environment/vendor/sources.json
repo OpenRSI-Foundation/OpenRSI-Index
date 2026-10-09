@@ -1,0 +1,20 @@
+{
+  "opentinker": {
+    "repository": "https://github.com/open-tinker/OpenTinker",
+    "revision": "f87fe25fc483e7f1d7596182fc55115cbc992724",
+    "archive_sha256": "d19643843cf55b5bceeda12016f65c897c683c9664d02bbe25139eb7e28a4298",
+    "packaged_archive_sha256": "a07bc8710ee99c3884acc1f9f8862ae5bae4c1dee1545ca05af478fce9108eb6"
+  },
+  "verl": {
+    "repository": "https://github.com/volcengine/verl",
+    "revision": "4bf4bd32d049be648867ade8c72ee3f5c27ebfcf",
+    "archive_sha256": "be6a291f9b4a3070fa0733f007e7d64918cf2382974757bcfa472df4783854b3",
+    "packaged_archive_sha256": "5588159362ac8e9aca2d1f98a9e7f8858eb5b9068684b586dc77eefe85967dd6"
+  },
+  "alfworld": {
+    "repository": "https://github.com/alfworld/alfworld",
+    "revision": "1558ba46d078279ecb4c5d33a6cdffc96714a2d2",
+    "archive_sha256": "9388055013d2e76867e7225e1eb483f3d3164dd78f74e113664df7cb9eaa1a3b",
+    "packaged_archive_sha256": "e8b06219d2da5aaa2e6cb04530e8f9eb0410c87f6cc473ae5836c434f4940053"
+  }
+}

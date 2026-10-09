@@ -1,0 +1,124 @@
+{
+  "episodes": [
+    {
+      "path": "json_2.1.1/train/look_at_obj_in_light-Pillow-None-DeskLamp-301/trial_T20190908_012939_225603/game.tw-pddl",
+      "sha256": "fff5d92a6f653217a8bfd4f344702fd9a359f38bd286eacec35f38bd99f0175a",
+      "type": "look_at_obj_in_light"
+    },
+    {
+      "path": "json_2.1.1/train/look_at_obj_in_light-Box-None-DeskLamp-225/trial_T20190908_140234_782899/game.tw-pddl",
+      "sha256": "1feceb97c3eebe59ce33857cda89cdf08138e7567aa16fa3465307a4109827f0",
+      "type": "look_at_obj_in_light"
+    },
+    {
+      "path": "json_2.1.1/train/look_at_obj_in_light-Statue-None-DeskLamp-304/trial_T20190909_035310_552898/game.tw-pddl",
+      "sha256": "2049b425b0fd9b04c2c2a28defd00dc702ff20731d31560d978ad6870bc101f2",
+      "type": "look_at_obj_in_light"
+    },
+    {
+      "path": "json_2.1.1/train/look_at_obj_in_light-CD-None-DeskLamp-302/trial_T20190907_154604_364291/game.tw-pddl",
+      "sha256": "a0205d1d8878d389034d3ee395502856ae0c021738937aec901f9ff8f7d92641",
+      "type": "look_at_obj_in_light"
+    },
+    {
+      "path": "json_2.1.1/train/pick_and_place_simple-CellPhone-None-Desk-312/trial_T20190908_021751_687867/game.tw-pddl",
+      "sha256": "c5118b8311aa9b0a238ec3f09e70a4288dcf5624214afb83aea224ce11ecc490",
+      "type": "pick_and_place_simple"
+    },
+    {
+      "path": "json_2.1.1/train/pick_and_place_simple-TissueBox-None-Toilet-402/trial_T20190908_055936_625704/game.tw-pddl",
+      "sha256": "1acaacc6b227e58afcfe2fd7b15f5b95c99b7f311dac31aa1dc6a5b4fc64143c",
+      "type": "pick_and_place_simple"
+    },
+    {
+      "path": "json_2.1.1/train/pick_and_place_simple-HandTowel-None-CounterTop-416/trial_T20190909_045204_373695/game.tw-pddl",
+      "sha256": "1b91c35a0112a3ce97402915d8c5c8199848622867b950b4dbfbd83d7535bcc1",
+      "type": "pick_and_place_simple"
+    },
+    {
+      "path": "json_2.1.1/train/pick_and_place_simple-Laptop-None-Sofa-216/trial_T20190907_014811_569477/game.tw-pddl",
+      "sha256": "8d8ebc6f3d565e011dad40a70d1889d2e3205c5f2f84492db88f00bbc5c8fd69",
+      "type": "pick_and_place_simple"
+    },
+    {
+      "path": "json_2.1.1/train/pick_clean_then_place_in_recep-Fork-None-DiningTable-15/trial_T20190907_203221_946933/game.tw-pddl",
+      "sha256": "f1ee7bf219dd25c1e88b2fd3d083ce0cad8439bd09d5d525d433c4b2a18cb5ee",
+      "type": "pick_clean_then_place_in_recep"
+    },
+    {
+      "path": "json_2.1.1/train/pick_clean_then_place_in_recep-Plate-None-DiningTable-19/trial_T20190909_045437_991233/game.tw-pddl",
+      "sha256": "23132fc60f122636badb280ca9a7c1c65b0c2fbfa41cf1eec9c5b623f5170bb5",
+      "type": "pick_clean_then_place_in_recep"
+    },
+    {
+      "path": "json_2.1.1/train/pick_clean_then_place_in_recep-Lettuce-None-DiningTable-21/trial_T20190908_215554_002650/game.tw-pddl",
+      "sha256": "24253a8406b71412d1648c68971946c8485de9aa93cb0dfd9698b8550dc2afbe",
+      "type": "pick_clean_then_place_in_recep"
+    },
+    {
+      "path": "json_2.1.1/train/pick_clean_then_place_in_recep-Pan-None-CounterTop-22/trial_T20190907_060222_263381/game.tw-pddl",
+      "sha256": "ad1b5b7bed1e15802814ac7fef772bfc38cbb9b7f0add7444f1e01990025ae73",
+      "type": "pick_clean_then_place_in_recep"
+    },
+    {
+      "path": "json_2.1.1/train/pick_cool_then_place_in_recep-Potato-None-GarbageCan-18/trial_T20190909_044319_709757/game.tw-pddl",
+      "sha256": "2f7b76176156d5cde9f4c725d3d9772e621c637d0142210453be7ba44cc07e72",
+      "type": "pick_cool_then_place_in_recep"
+    },
+    {
+      "path": "json_2.1.1/train/pick_cool_then_place_in_recep-Cup-None-Shelf-1/trial_T20190907_181520_113143/game.tw-pddl",
+      "sha256": "305291af47d4c372dc28deebfc7b63fb55ef04d5ca5f4b53a3117b64ba2772d4",
+      "type": "pick_cool_then_place_in_recep"
+    },
+    {
+      "path": "json_2.1.1/train/pick_cool_then_place_in_recep-Pan-None-StoveBurner-16/trial_T20190907_104135_056609/game.tw-pddl",
+      "sha256": "d8d7ead65fa7da06bf1e9e1f66ef695ef31d94a21ac6b7c4758a4e51c9909234",
+      "type": "pick_cool_then_place_in_recep"
+    },
+    {
+      "path": "json_2.1.1/train/pick_cool_then_place_in_recep-Potato-None-Microwave-13/trial_T20190911_231120_340419/game.tw-pddl",
+      "sha256": "8fdf7dd53176bad1ff4fc61db6b398ce881c956400da6b3b925f12693c6cfce5",
+      "type": "pick_cool_then_place_in_recep"
+    },
+    {
+      "path": "json_2.1.1/train/pick_heat_then_place_in_recep-Mug-None-CoffeeMachine-21/trial_T20190908_192915_554153/game.tw-pddl",
+      "sha256": "a79d9e8a8f9d018936cd24f29999a2bde3fb2624fb43fa67a7091e557119ab6a",
+      "type": "pick_heat_then_place_in_recep"
+    },
+    {
+      "path": "json_2.1.1/train/pick_heat_then_place_in_recep-Cup-None-Cabinet-18/trial_T20190907_150623_388922/game.tw-pddl",
+      "sha256": "16fd872bfc7bf4609ebf5cfdb8db28341ee2b38b9d24e0f35016abc4b053cf7a",
+      "type": "pick_heat_then_place_in_recep"
+    },
+    {
+      "path": "json_2.1.1/train/pick_heat_then_place_in_recep-Tomato-None-CounterTop-17/trial_T20190908_223110_184111/game.tw-pddl",
+      "sha256": "18678bde9544bed19ef9e642fb07b5f2d2116bf08aec729d94ba8f00034afc13",
+      "type": "pick_heat_then_place_in_recep"
+    },
+    {
+      "path": "json_2.1.1/train/pick_heat_then_place_in_recep-Potato-None-SideTable-28/trial_T20190907_075944_387797/game.tw-pddl",
+      "sha256": "7413649276b50e0071db410f9072bbd0af9a05691ed9706b1597a50af559d7eb",
+      "type": "pick_heat_then_place_in_recep"
+    },
+    {
+      "path": "json_2.1.1/train/pick_two_obj_and_place-ToiletPaper-None-Drawer-409/trial_T20190906_193444_042317/game.tw-pddl",
+      "sha256": "bb21a64714cea3573b820a5faad4f53c629d740c3bc167189a43eab466e4bf79",
+      "type": "pick_two_obj_and_place"
+    },
+    {
+      "path": "json_2.1.1/train/pick_two_obj_and_place-CellPhone-None-DiningTable-326/trial_T20190907_130034_226200/game.tw-pddl",
+      "sha256": "1bd38a8ff75b870f05b78da031edcad03c604d143690132ec95f22cddf44d767",
+      "type": "pick_two_obj_and_place"
+    },
+    {
+      "path": "json_2.1.1/train/pick_two_obj_and_place-CD-None-Dresser-303/trial_T20190908_085759_424304/game.tw-pddl",
+      "sha256": "1c4632671ad6257d6fc412b51f7cc6ed28ee91d99e9da0c28b4fae3b71bf816e",
+      "type": "pick_two_obj_and_place"
+    },
+    {
+      "path": "json_2.1.1/train/pick_two_obj_and_place-CellPhone-None-Sofa-218/trial_T20190907_232123_370650/game.tw-pddl",
+      "sha256": "870e4515a6500526df32ff383fe45b1a2c92ef4e02028ad32a23ab2d632c2e82",
+      "type": "pick_two_obj_and_place"
+    }
+  ]
+}

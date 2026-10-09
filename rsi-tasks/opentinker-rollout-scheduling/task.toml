@@ -1,0 +1,38 @@
+schema_version = "1.4"
+
+[task]
+name = "rsi/opentinker-rollout-scheduling"
+version = "1.2.0"
+description = "Optimize causal multi-turn rollout scheduling with a task-success quality floor."
+
+[metadata]
+author_name = "Siqi Zhu"
+author_email = "siqizhu4@illinois.edu"
+difficulty_explanation = "Balance prefix locality, admission pressure, and replica queues using only causal metadata."
+verification_explanation = "Measure real paired GPU rollouts on four fixed workloads and require complete workloads and at most a 5-point aggregate success-rate drop before timing ratios score."
+category = "ML"
+subcategory = "Inference"
+tags = ["autoresearch", "opentinker", "scheduling", "alfworld", "vllm"]
+expert_time_estimate_hours = 48
+
+[metadata.rsi_harness.verifier]
+gpus = 2
+
+[environment]
+os = "linux"
+cpus = 32
+memory_mb = 131072
+storage_mb = 262144
+build_timeout_sec = 14400
+workdir = "/workspace"
+gpus = 2
+network_mode = "no-network"
+
+[agent]
+timeout_sec = 172800
+network_mode = "no-network"
+
+[verifier]
+timeout_sec = 10800
+network_mode = "no-network"
+environment_mode = "shared"

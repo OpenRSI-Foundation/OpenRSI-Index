@@ -1,0 +1,32 @@
+[
+  {
+    "path": "verl/verl/workers/rollout/vllm_rollout/vllm_async_server.py",
+    "old": "max_tokens = self.config.max_model_len - len(prompt_ids)",
+    "new": "max_tokens = min(128, self.config.max_model_len - len(prompt_ids))"
+  },
+  {
+    "path": "verl/verl/workers/rollout/vllm_rollout/vllm_async_server.py",
+    "old": "    async def generate(\n",
+    "new": "    async def task_reset_prefix_cache(self):\n        await self.wait_for_requests_to_drain()\n        result = await self.engine.reset_prefix_cache()\n        if result is False:\n            raise RuntimeError('prefix_cache_reset_failed')\n        return True\n\n    async def generate(\n"
+  },
+  {
+    "path": "verl/verl/workers/rollout/vllm_rollout/vllm_async_server.py",
+    "old": "from vllm.utils import FlexibleArgumentParser, get_tcp_uri",
+    "new": "from vllm.utils.argparse_utils import FlexibleArgumentParser\nfrom vllm.utils.network_utils import get_tcp_uri"
+  },
+  {
+    "path": "verl/verl/workers/rollout/vllm_rollout/vllm_async_server.py",
+    "old": "disable_log_requests=engine_args.disable_log_requests,",
+    "new": "enable_log_requests=engine_args.enable_log_requests,"
+  },
+  {
+    "path": "verl/verl/workers/rollout/vllm_rollout/vllm_async_server.py",
+    "old": "await init_app_state(engine_client, vllm_config, app.state, args)",
+    "new": "await init_app_state(engine_client, app.state, args)"
+  },
+  {
+    "path": "verl/verl/workers/rollout/vllm_rollout/vllm_async_server.py",
+    "old": "    def check_health(self):\n        return\n",
+    "new": "    def _single_result(self, method, argument, non_block):\n        # vLLM 0.12 requires a Future even for the synchronous executor.\n        # Match UniProcExecutor: complete the same RPC, then wrap its result.\n        if not non_block:\n            return self.collective_rpc(method, args=(argument,))[0]\n        from concurrent.futures import Future\n        future = Future()\n        try:\n            future.set_result(self.collective_rpc(method, args=(argument,))[0])\n        except Exception as exc:\n            future.set_exception(exc)\n        return future\n\n    def execute_model(self, scheduler_output, non_block=False):\n        return self._single_result(\"execute_model\", scheduler_output, non_block)\n\n    def sample_tokens(self, grammar_output, non_block=False):\n        return self._single_result(\"sample_tokens\", grammar_output, non_block)\n\n    def check_health(self):\n        return\n"
+  }
+]
