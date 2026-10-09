@@ -42,6 +42,13 @@ web search, strict JSON output, and image inputs when a proposal contains images
 Existing API exponential backoff, rubric content, and review output format are
 unchanged. Never commit API keys.
 
+Repository refs may be a bare SHA/branch/tag, an inline-code ref, or a linked
+ref label. Multi-word prose such as "Pinned at submission" is treated as a
+missing ref, not truncated into a branch name. With no ref, the reviewer resolves
+the repository's default branch once to an immutable SHA and records that the
+proposal did not supply a ref. An explicit ref that cannot be resolved still
+produces an evidence limitation; it does not fall back to another revision.
+
 ## Recovering a failed Discussion review
 
 The workflow streams retry diagnostics to its Actions log while the review runs.

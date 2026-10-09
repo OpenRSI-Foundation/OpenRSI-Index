@@ -276,11 +276,16 @@ def _clean_field_value(value: str) -> str | None:
     sha = re.search(r"\b[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?\b", value)
     if sha:
         return sha.group()
-    value = _MARKDOWN_LINK_RE.sub(r"\1", value)
-    cleaned = value.strip().strip("`*_ ")
+    # A formatted ref can be followed by explanatory prose. An unformatted
+    # multi-word field is not a ref: taking its first word turns placeholders
+    # such as "Pinned at submission" into a nonexistent branch named "Pinned".
+    explicit = re.search(r"`([^`\n]+)`", value) or _MARKDOWN_LINK_RE.search(value)
+    if explicit:
+        value = explicit.group(1)
+    cleaned = unquote(value.strip().strip("`*_ ").rstrip(",.;"))
     if not cleaned or cleaned.lower() in {"-", "n/a", "none", "tbd"}:
         return None
-    return unquote(cleaned.split()[0].rstrip(",.;")) or None
+    return None if re.search(r"\s", cleaned) else cleaned
 
 
 def _clean_repo_path(value: str) -> str | None:
