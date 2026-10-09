@@ -43,9 +43,7 @@ class ComposeMainServiceParser:
         except (OSError, yaml.YAMLError) as error:
             raise UnsupportedTaskError(f"invalid Compose file: {error}") from error
         if not isinstance(document, dict) or set(document) != {"services"}:
-            raise UnsupportedTaskError(
-                "Compose must contain only a services mapping"
-            )
+            raise UnsupportedTaskError("Compose must contain only a services mapping")
         services = document["services"]
         if not isinstance(services, dict) or "main" not in services:
             raise UnsupportedTaskError(
@@ -121,9 +119,7 @@ class ComposeMainServiceParser:
         if isinstance(value, dict):
             for raw_name, raw_value in value.items():
                 name = self._environment_name(raw_name)
-                entries[name] = (
-                    f"${{{name}}}" if raw_value is None else str(raw_value)
-                )
+                entries[name] = f"${{{name}}}" if raw_value is None else str(raw_value)
         elif isinstance(value, list):
             for item in value:
                 if not isinstance(item, str):

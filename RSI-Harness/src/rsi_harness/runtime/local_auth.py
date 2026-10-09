@@ -131,11 +131,7 @@ def _read_auth_file(
 ) -> bytes:
     auth_fd: int | None = None
     try:
-        flags = (
-            os.O_RDONLY
-            | getattr(os, "O_NOFOLLOW", 0)
-            | getattr(os, "O_CLOEXEC", 0)
-        )
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
         try:
             auth_fd = os.open(filename, flags, dir_fd=directory_fd)
         except OSError as error:
@@ -200,9 +196,7 @@ def _read_standard_auth_file(
     uid: int,
     agent_label: str,
 ) -> bytes:
-    home_fd = _open_directory(
-        home, agent_label=agent_label, label="home directory"
-    )
+    home_fd = _open_directory(home, agent_label=agent_label, label="home directory")
     config_fd: int | None = None
     try:
         config_fd = _open_directory(
@@ -395,9 +389,7 @@ class ClaudeCodeLocalAuthProvider:
             decoded = content.decode("utf-8")
             parsed = json.loads(decoded)
         except (UnicodeDecodeError, json.JSONDecodeError):
-            raise SetupError(
-                "local Claude Code auth must contain valid JSON"
-            ) from None
+            raise SetupError("local Claude Code auth must contain valid JSON") from None
         if not isinstance(parsed, dict):
             raise SetupError("local Claude Code auth must contain a JSON object")
         secret_values = _secret_strings(parsed)

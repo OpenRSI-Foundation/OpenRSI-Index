@@ -196,9 +196,7 @@ def test_workspace_snapshot_uses_path_authority_and_native_artifacts(
         run_plan=plan,
         work_container=work,
         round_id="agent-1",
-        verifier_logs=(
-            writer.root / "verifier" / "agent-1"
-        ),
+        verifier_logs=(writer.root / "verifier" / "agent-1"),
         verifier_output=writer.feedback_root / "agent-1.log",
     )
 
@@ -243,7 +241,11 @@ def test_active_remote_work_makes_submission_retryable_before_snapshot(
 
 
 def _single_node_gpu_runtime(
-    tmp_path, monkeypatch, *, mode=JudgeGPUMode.RELEASE_ALL, selector="2",
+    tmp_path,
+    monkeypatch,
+    *,
+    mode=JudgeGPUMode.RELEASE_ALL,
+    selector="2",
 ):
     monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(tmp_path / "node-tmp"))
     plan = make_run_plan(tmp_path)
@@ -253,8 +255,13 @@ def _single_node_gpu_runtime(
         authorized_pool=GPUAllocation(devices=(work, spare)),
         work=GPUAllocation(devices=(work,)),
         judge=GPUAllocation(
-            devices=(() if mode is JudgeGPUMode.FREEZE_ONLY else
-                     (spare,) if mode is JudgeGPUMode.DISJOINT else (work,))
+            devices=(
+                ()
+                if mode is JudgeGPUMode.FREEZE_ONLY
+                else (spare,)
+                if mode is JudgeGPUMode.DISJOINT
+                else (work,)
+            )
         ),
         judge_mode=mode,
     )
@@ -271,27 +278,42 @@ def _single_node_gpu_runtime(
 
 
 def _gpu_preflight_commands(
-    monkeypatch, *, compute="", graphics_pid=999, ps=None, failure=None,
+    monkeypatch,
+    *,
+    compute="",
+    graphics_pid=999,
+    ps=None,
+    failure=None,
     inventory="2, GPU-owned, NVIDIA H100\n3, GPU-other, NVIDIA H100\n",
 ):
     # Child 102 is a grandchild; 103 has a separate session; 104 is reparented
     # but still belongs to Work's dedicated session. PID 999 is unrelated.
-    process_table = ps if ps is not None else (
-        "100 1 100\n101 100 100\n102 101 100\n"
-        "103 101 103\n104 1 100\n999 1 999\n"
+    process_table = (
+        ps
+        if ps is not None
+        else (
+            "100 1 100\n101 100 100\n102 101 100\n103 101 103\n104 1 100\n999 1 999\n"
+        )
     )
     responses = {
         ("ps", "-eo", "pid=,ppid=,sid="): process_table,
-        ("nvidia-smi", "--query-gpu=index,uuid,name", "--format=csv,noheader,nounits"):
-            inventory,
         (
-            "nvidia-smi", "--query-compute-apps=gpu_uuid,pid",
+            "nvidia-smi",
+            "--query-gpu=index,uuid,name",
+            "--format=csv,noheader,nounits",
+        ): inventory,
+        (
+            "nvidia-smi",
+            "--query-compute-apps=gpu_uuid,pid",
             "--format=csv,noheader,nounits",
         ): compute,
-        ("nvidia-smi", "-q", "-x"):
-            "<nvidia_smi_log><gpu><uuid>GPU-owned</uuid><processes>"
-            f"<process_info><pid>{graphics_pid}</pid><process_type>G</process_type>"
-            "</process_info></processes></gpu></nvidia_smi_log>",
+        (
+            "nvidia-smi",
+            "-q",
+            "-x",
+        ): "<nvidia_smi_log><gpu><uuid>GPU-owned</uuid><processes>"
+        f"<process_info><pid>{graphics_pid}</pid><process_type>G</process_type>"
+        "</process_info></processes></gpu></nvidia_smi_log>",
     }
 
     def run(command, **options):
@@ -308,7 +330,10 @@ def _gpu_preflight_commands(
     [(100, "2"), (101, "2"), (102, "2"), (103, "2"), (104, "2"), (102, "GPU-owned")],
 )
 def test_release_all_rejects_work_processes_and_descendants(
-    tmp_path: Path, monkeypatch, pid: int, selector: str,
+    tmp_path: Path,
+    monkeypatch,
+    pid: int,
+    selector: str,
 ) -> None:
     runtime = _single_node_gpu_runtime(tmp_path, monkeypatch, selector=selector)
     _gpu_preflight_commands(monkeypatch, compute=f"GPU-owned, {pid}\n")
@@ -326,7 +351,8 @@ def test_release_all_rejects_work_graphics_process(tmp_path: Path, monkeypatch) 
 
 
 def test_release_all_ignores_unrelated_processes_and_unallocated_gpus(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path,
+    monkeypatch,
 ) -> None:
     runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
     _gpu_preflight_commands(monkeypatch, compute="GPU-owned, 999\nGPU-other, 102\n")
@@ -336,7 +362,9 @@ def test_release_all_ignores_unrelated_processes_and_unallocated_gpus(
 
 @pytest.mark.parametrize("mode", [JudgeGPUMode.FREEZE_ONLY, JudgeGPUMode.DISJOINT])
 def test_nonsharing_modes_do_not_query_work_gpu_processes(
-    tmp_path: Path, monkeypatch, mode,
+    tmp_path: Path,
+    monkeypatch,
+    mode,
 ) -> None:
     runtime = _single_node_gpu_runtime(tmp_path, monkeypatch, mode=mode)
 
@@ -368,7 +396,10 @@ def test_cpu_work_does_not_query_gpu_processes(tmp_path: Path, monkeypatch) -> N
     ],
 )
 def test_unproven_work_gpu_release_rejects_submission(
-    tmp_path: Path, monkeypatch, ps, failure,
+    tmp_path: Path,
+    monkeypatch,
+    ps,
+    failure,
 ) -> None:
     runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
     _gpu_preflight_commands(monkeypatch, ps=ps, failure=failure)
@@ -379,7 +410,9 @@ def test_unproven_work_gpu_release_rejects_submission(
 
 @pytest.mark.parametrize("inventory", ["malformed\n", "3, GPU-other, NVIDIA H100\n"])
 def test_unresolved_work_gpu_allocation_rejects_submission(
-    tmp_path: Path, monkeypatch, inventory,
+    tmp_path: Path,
+    monkeypatch,
+    inventory,
 ) -> None:
     runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
     _gpu_preflight_commands(monkeypatch, inventory=inventory)
@@ -389,7 +422,8 @@ def test_unresolved_work_gpu_allocation_rejects_submission(
 
 
 def test_busy_single_node_submission_is_retryable_before_snapshot(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path,
+    monkeypatch,
 ) -> None:
     runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
     runtime.workspace.mkdir()
@@ -425,12 +459,20 @@ def test_busy_single_node_submission_is_retryable_before_snapshot(
 
 @pytest.mark.parametrize("phase", ["work", "judge"])
 def test_task_runtime_resets_private_controller_umask(
-    tmp_path: Path, monkeypatch, phase,
+    tmp_path: Path,
+    monkeypatch,
+    phase,
 ) -> None:
     runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
     command = runtime._base_command(
-        devices=(), environment=None, extra_binds=(), mount_workspace=False,
-        mount_agent_home=False, containall=True, network_mode="public", phase=phase,
+        devices=(),
+        environment=None,
+        extra_binds=(),
+        mount_workspace=False,
+        mount_agent_home=False,
+        containall=True,
+        network_mode="public",
+        phase=phase,
     )
 
     assert "--no-umask" in command
@@ -468,9 +510,7 @@ def test_judge_gets_fresh_writable_tmp_without_mutating_preserved_assets(
     def fake_run(command, **options):
         del command
         tmp_binds = [
-            bind
-            for bind in options["extra_binds"]
-            if bind[1] == PurePosixPath("/tmp")
+            bind for bind in options["extra_binds"] if bind[1] == PurePosixPath("/tmp")
         ]
         assert len(tmp_binds) == 1
         judge_tmp, _target, read_only = tmp_binds[0]
@@ -504,10 +544,12 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
     node_tmp.mkdir()
     monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
     profile = load_cluster_profile("bluevela", {"USER": "alice"})
-    profile = profile.model_copy(update={
-        "adapter": cluster_name,
-        "scheduler": load_cluster_profile(cluster_name).scheduler,
-    })
+    profile = profile.model_copy(
+        update={
+            "adapter": cluster_name,
+            "scheduler": load_cluster_profile(cluster_name).scheduler,
+        }
+    )
     profile = profile.model_copy(
         update={
             "scheduler": profile.scheduler.model_copy(
@@ -516,12 +558,8 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
                     "remote_host_flag": "--host",
                 }
             ),
-            "apptainer": profile.apptainer.model_copy(
-                update={"temp_root": node_tmp}
-            ),
-            "resources": profile.resources.model_copy(
-                update={"gpus_per_node": 4}
-            ),
+            "apptainer": profile.apptainer.model_copy(update={"temp_root": node_tmp}),
+            "resources": profile.resources.model_copy(update={"gpus_per_node": 4}),
         }
     )
     sif = tmp_path / "task.sif"
@@ -560,14 +598,11 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
         observed.append(command)
         assert runtime.judge_broker is not None
         assert runtime.judge_broker.remote_args == profile.scheduler.remote_args
-        assert tuple(node.host for node in runtime.judge_broker.nodes) == (
-            "judge-a",
-        )
+        assert tuple(node.host for node in runtime.judge_broker.nodes) == ("judge-a",)
         control_path = Path(command[command.index("--control") + 1])
         control = judge_controller.load_control(control_path)
         binds = {
-            (item.source, item.target): item.read_only
-            for item in control.worker.binds
+            (item.source, item.target): item.read_only for item in control.worker.binds
         }
         assert binds[(snapshot, plan.workdir)] is True
         assert binds[(plan.task.source_dir / "tests", PurePosixPath("/tests"))] is True
@@ -606,9 +641,7 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
     assert runtime.judge_broker is None
 
 
-def test_apptainer_commands_use_run_plan_workdir(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_apptainer_commands_use_run_plan_workdir(tmp_path: Path, monkeypatch) -> None:
     node_tmp = tmp_path / "node-tmp"
     node_tmp.mkdir()
     monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
@@ -645,9 +678,10 @@ def test_apptainer_commands_use_run_plan_workdir(
     }
     assert environment["HF_HOME"] == "/rsi-cache/huggingface"
     assert environment["HF_DATASETS_CACHE"] == "/rsi-cache/datasets"
-    assert environment["RSI_SHARED_DATA_ROOT"] == runtime.profile.apptainer.environment[
-        "RSI_SHARED_DATA_ROOT"
-    ]
+    assert (
+        environment["RSI_SHARED_DATA_ROOT"]
+        == runtime.profile.apptainer.environment["RSI_SHARED_DATA_ROOT"]
+    )
     assert environment["TMPDIR"] == "/tmp"
     assert environment["XDG_CACHE_HOME"] == "/tmp/.cache"
     assert environment["TRITON_CACHE_DIR"] == "/tmp/.cache/triton"
@@ -659,9 +693,7 @@ def test_apptainer_commands_use_run_plan_workdir(
     assert "/proj:/proj" not in bind_values
     assert any("/rsi-data" in value for value in bind_values)
     assert not any("paloma" in value for value in bind_values)
-    assert (
-        f"{runtime.profile.storage.hf_home}:/rsi-cache/huggingface"
-    ) in bind_values
+    assert (f"{runtime.profile.storage.hf_home}:/rsi-cache/huggingface") in bind_values
     assert (
         f"{runtime.profile.storage.hf_datasets_cache}:/rsi-cache/datasets"
     ) in bind_values
@@ -690,7 +722,10 @@ def test_apptainer_commands_use_run_plan_workdir(
 @pytest.mark.parametrize("network_mode", ("public", "no-network"))
 @pytest.mark.parametrize("phase", ("work", "judge"))
 def test_legacy_single_node_retains_mounts_cache_paths_and_environment(
-    tmp_path: Path, monkeypatch, network_mode: str, phase: str,
+    tmp_path: Path,
+    monkeypatch,
+    network_mode: str,
+    phase: str,
 ) -> None:
     node_tmp = tmp_path / "node-tmp"
     monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
@@ -733,17 +768,20 @@ def test_legacy_single_node_retains_mounts_cache_paths_and_environment(
     assert mounts == expected
     environment = {
         value.split("=", 1)[0]: value.split("=", 1)[1]
-        for option, value in pairs if option == "--env"
+        for option, value in pairs
+        if option == "--env"
     }
     assert environment["SITE_DATA"] == "/shared/project/data"
     assert environment["TASK_SETTING"] == "preserved"
     assert environment["CUDA_VISIBLE_DEVICES"] == "GPU-fixture"
     assert environment["HF_HOME"] == (
-        str(profile.storage.hf_home) if network_mode == "public"
+        str(profile.storage.hf_home)
+        if network_mode == "public"
         else "/tmp/.cache/huggingface"
     )
     assert environment["HF_DATASETS_CACHE"] == (
-        str(profile.storage.hf_datasets_cache) if network_mode == "public"
+        str(profile.storage.hf_datasets_cache)
+        if network_mode == "public"
         else "/tmp/.cache/huggingface/datasets"
     )
 
@@ -752,7 +790,11 @@ def test_legacy_single_node_retains_mounts_cache_paths_and_environment(
 @pytest.mark.parametrize("network_mode", ["public", "no-network"])
 @pytest.mark.parametrize("devices", [(), ("GPU-fixture",)])
 def test_apptainer_enables_nvidia_only_for_the_phase_devices(
-    tmp_path, monkeypatch, phase, network_mode, devices,
+    tmp_path,
+    monkeypatch,
+    phase,
+    network_mode,
+    devices,
 ):
     monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(tmp_path / "node-tmp"))
     runtime = ApptainerAgentRuntime(
@@ -781,7 +823,8 @@ def test_apptainer_enables_nvidia_only_for_the_phase_devices(
     pairs = tuple(zip(command, command[1:], strict=False))
     environment = {
         value.split("=", 1)[0]: value.split("=", 1)[1]
-        for option, value in pairs if option == "--env"
+        for option, value in pairs
+        if option == "--env"
     }
     assert environment["CUDA_VISIBLE_DEVICES"] == ",".join(devices)
     assert ("--net" in command) is (network_mode == "no-network")
@@ -861,18 +904,16 @@ def test_multinode_work_runtime_injects_only_current_phase_broker(
     node_tmp.mkdir()
     monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
     profile = load_cluster_profile("bluevela", {"USER": "alice"})
-    profile = profile.model_copy(update={
-        "adapter": cluster_name,
-        "scheduler": load_cluster_profile(cluster_name).scheduler,
-    })
     profile = profile.model_copy(
         update={
-            "apptainer": profile.apptainer.model_copy(
-                update={"temp_root": node_tmp}
-            ),
-            "resources": profile.resources.model_copy(
-                update={"gpus_per_node": 4}
-            ),
+            "adapter": cluster_name,
+            "scheduler": load_cluster_profile(cluster_name).scheduler,
+        }
+    )
+    profile = profile.model_copy(
+        update={
+            "apptainer": profile.apptainer.model_copy(update={"temp_root": node_tmp}),
+            "resources": profile.resources.model_copy(update={"gpus_per_node": 4}),
         }
     )
     sif = tmp_path / "task.sif"
@@ -909,15 +950,17 @@ def test_multinode_work_runtime_injects_only_current_phase_broker(
         assert runtime.work_broker is not None
         assert runtime.work_broker.remote_args == profile.scheduler.remote_args
         assert runtime.work_broker.remote_binary == profile.scheduler.remote_binary
-        assert runtime.work_broker.worker_template.environment[
-            "RSI_SHARED_DATA_ROOT"
-        ] == profile.apptainer.work_environment["RSI_SHARED_DATA_ROOT"]
+        assert (
+            runtime.work_broker.worker_template.environment["RSI_SHARED_DATA_ROOT"]
+            == profile.apptainer.work_environment["RSI_SHARED_DATA_ROOT"]
+        )
         assert runtime.work_broker.worker_template.environment["HF_HOME"] == (
             "/tmp/.cache/huggingface"
         )
-        assert runtime.work_broker.worker_template.environment[
-            "HF_DATASETS_CACHE"
-        ] == "/tmp/.cache/huggingface/datasets"
+        assert (
+            runtime.work_broker.worker_template.environment["HF_DATASETS_CACHE"]
+            == "/tmp/.cache/huggingface/datasets"
+        )
         assert not any(
             "paloma" in str(binding.source)
             for binding in runtime.work_broker.worker_template.binds
@@ -950,9 +993,7 @@ def test_multinode_work_runtime_injects_only_current_phase_broker(
             for option, value in pairs
             if option == "--env"
         }
-        assert environment["RSI_MULTINODE_ROOT"] == (
-            "/run/rsi-harness/torchrun"
-        )
+        assert environment["RSI_MULTINODE_ROOT"] == ("/run/rsi-harness/torchrun")
         assert environment["RSI_LOCAL_WORLD_SIZE"] == "4"
         assert environment["PREPEND_PATH"] == "/usr/local/bin"
         serialized = " ".join(command)
@@ -1151,8 +1192,7 @@ def test_apptainer_network_policy_is_enforced_fail_closed(
     }
     assert isolated_environment["HF_HOME"] == "/tmp/.cache/huggingface"
     assert (
-        isolated_environment["HF_DATASETS_CACHE"]
-        == "/tmp/.cache/huggingface/datasets"
+        isolated_environment["HF_DATASETS_CACHE"] == "/tmp/.cache/huggingface/datasets"
     )
     with pytest.raises(SetupError, match="allowlist"):
         runtime._base_command(**options, network_mode="allowlist")

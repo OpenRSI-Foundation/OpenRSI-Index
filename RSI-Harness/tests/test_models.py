@@ -74,9 +74,7 @@ def test_run_gpu_plan_rejects_phase_devices_outside_authorized_pool(phase):
 
 def test_run_gpu_plan_rejects_gpus_for_freeze_only_judge():
     """A frozen judge must not receive a GPU device."""
-    judge = GPUAllocation(
-        devices=(GPUDevice(index=0, uuid="GPU-judge", name="H100"),)
-    )
+    judge = GPUAllocation(devices=(GPUDevice(index=0, uuid="GPU-judge", name="H100"),))
 
     with pytest.raises(ValidationError, match="freeze-only"):
         RunGPUPlan(
@@ -104,12 +102,8 @@ def test_run_gpu_plan_rejects_overlapping_disjoint_devices():
 
 def test_run_gpu_plan_rejects_non_overlapping_release_all_devices():
     """Release-all judging must reuse at least one work GPU."""
-    work = GPUAllocation(
-        devices=(GPUDevice(index=0, uuid="GPU-work", name="H100"),)
-    )
-    judge = GPUAllocation(
-        devices=(GPUDevice(index=1, uuid="GPU-judge", name="H100"),)
-    )
+    work = GPUAllocation(devices=(GPUDevice(index=0, uuid="GPU-work", name="H100"),))
+    judge = GPUAllocation(devices=(GPUDevice(index=1, uuid="GPU-judge", name="H100"),))
 
     with pytest.raises(ValidationError, match="release-all"):
         RunGPUPlan(
@@ -123,12 +117,8 @@ def test_run_gpu_plan_rejects_non_overlapping_release_all_devices():
 def test_run_plan_serializes_exact_gpu_plan_without_legacy_allocation(tmp_path):
     """Persisted plans must retain phase UUIDs without the retired allocation key."""
     plan = make_run_plan(tmp_path)
-    work = GPUAllocation(
-        devices=(GPUDevice(index=0, uuid="GPU-work", name="H100"),)
-    )
-    judge = GPUAllocation(
-        devices=(GPUDevice(index=1, uuid="GPU-judge", name="H100"),)
-    )
+    work = GPUAllocation(devices=(GPUDevice(index=0, uuid="GPU-work", name="H100"),))
+    judge = GPUAllocation(devices=(GPUDevice(index=1, uuid="GPU-judge", name="H100"),))
     gpu_plan = RunGPUPlan(
         authorized_pool=GPUAllocation(devices=work.devices + judge.devices),
         work=work,
@@ -387,9 +377,7 @@ def test_runtime_request_paths_are_absolute_path_instances(request_kind, tmp_pat
             work_container=container,
             round_id="agent-1",
             verifier_logs=path,
-            verifier_output=(
-                path if isinstance(path, str) else path / "agent-1.log"
-            ),
+            verifier_output=(path if isinstance(path, str) else path / "agent-1.log"),
         )
 
     with pytest.raises(ValueError, match="absolute"):

@@ -115,9 +115,7 @@ def build_apptainer_command(
     )
     for binding in control.worker.binds:
         suffix = ":ro" if binding.read_only else ""
-        command.extend(
-            ("--bind", f"{binding.source}:{binding.target}{suffix}")
-        )
+        command.extend(("--bind", f"{binding.source}:{binding.target}{suffix}"))
     command.extend(
         (
             "--bind",

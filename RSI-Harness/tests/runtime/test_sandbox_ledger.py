@@ -320,7 +320,9 @@ def test_a_pull_of_a_cached_image_records_nothing(kit, tmp_path):  # noqa: F811
     ],
 )
 def test_an_image_already_on_the_host_under_another_name_records_nothing(
-    kit, tmp_path, name  # noqa: F811
+    kit,  # noqa: F811
+    tmp_path,
+    name,
 ):
     ledger = ledger_at(tmp_path)
     kit.envs.images.ledger = ledger
@@ -333,7 +335,8 @@ def test_an_image_already_on_the_host_under_another_name_records_nothing(
 
 
 def test_a_pull_that_moves_an_operators_name_never_records_that_name(
-    kit, tmp_path  # noqa: F811
+    kit,  # noqa: F811
+    tmp_path,
 ):
     ledger = ledger_at(tmp_path)
     kit.envs.images.ledger = ledger
@@ -397,7 +400,10 @@ def test_a_busy_ledger_never_stalls_a_pull(kit, tmp_path, caplog):  # noqa: F811
 
 
 def test_unknown_host_images_record_nothing_and_never_fail_a_pull(
-    kit, tmp_path, caplog, monkeypatch  # noqa: F811
+    kit,  # noqa: F811
+    tmp_path,
+    caplog,
+    monkeypatch,
 ):
     ledger = ledger_at(tmp_path)
     kit.envs.images.ledger = ledger
@@ -734,9 +740,7 @@ def test_an_entry_without_references_waits_for_the_other_name_to_go(world):
     world.docker.add(ID_A, [python], digests=[])
     record(world.ledger, ID_A, "docker.io/library/" + python, before=ID_B)
     assert world.ledger.entries()[0].references == ()
-    assert actions(world.run()) == [
-        (ID_A, KEPT, "other tags remain: " + python)
-    ]
+    assert actions(world.run()) == [(ID_A, KEPT, "other tags remain: " + python)]
     assert world.docker.removed == []
     # Once the operator's name is gone, only removal by ID deletes it.
     world.docker.images[ID_A]["RepoTags"] = []

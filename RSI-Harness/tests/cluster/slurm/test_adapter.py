@@ -145,7 +145,10 @@ def test_slurm_reuses_build_run_and_artifact_lifecycle(
 @pytest.mark.parametrize("work_gpus,judge_gpus", [(0, 0), (0, 1), (1, 0)])
 @pytest.mark.parametrize("dry_run", [False, True])
 def test_slurm_cpu_phases_preserve_resources_and_native_lifecycle(
-    tmp_path, work_gpus, judge_gpus, dry_run,
+    tmp_path,
+    work_gpus,
+    judge_gpus,
+    dry_run,
 ):
     local = _profile(tmp_path)
     profile = load_cluster_profile("slurm", {"USER": "alice"}).model_copy(
@@ -153,9 +156,7 @@ def test_slurm_cpu_phases_preserve_resources_and_native_lifecycle(
             "storage": local.storage,
             "apptainer": local.apptainer,
             "builder": local.builder,
-            "resources": local.resources.model_copy(
-                update={"min_memory_mb": 32768}
-            ),
+            "resources": local.resources.model_copy(update={"min_memory_mb": 32768}),
         }
     )
     task_dir = write_harbor_task(
@@ -190,8 +191,12 @@ def test_slurm_cpu_phases_preserve_resources_and_native_lifecycle(
     else:
         assert result.status == RunStatus.COMPLETED
         assert scheduler.events == [
-            "check-build", "submit-build", "wait-build",
-            "check-run", "submit-run", "wait-run",
+            "check-build",
+            "submit-build",
+            "wait-build",
+            "check-run",
+            "submit-run",
+            "wait-run",
         ]
         spec = scheduler.specs[1]
         assert spec.gpu_count == work_gpus + judge_gpus
@@ -222,7 +227,9 @@ def test_failed_slurm_jobs_cannot_pass_artifact_validation(state, code):
 
 @pytest.mark.parametrize("judge_gpus,disjoint_nodes", [(9, False), (0, True)])
 def test_cpu_work_rejects_multinode_before_scheduling(
-    tmp_path, judge_gpus, disjoint_nodes,
+    tmp_path,
+    judge_gpus,
+    disjoint_nodes,
 ):
     task_dir = write_harbor_task(
         tmp_path / "multinode-cpu",
@@ -235,7 +242,8 @@ def test_cpu_work_rejects_multinode_before_scheduling(
     )
     scheduler = RecordingSlurmScheduler()
     adapter = SlurmClusterAdapter(
-        load_cluster_profile("slurm", {"USER": "alice"}), scheduler=scheduler,
+        load_cluster_profile("slurm", {"USER": "alice"}),
+        scheduler=scheduler,
     )
     request = _request(tmp_path, dry_run=True).model_copy(
         update={"task_dir": task_dir.resolve()}

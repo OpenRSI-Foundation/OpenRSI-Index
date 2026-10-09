@@ -109,9 +109,7 @@ class RunArtifactWriter:
         if not report.verifier_output_required and not feedback.exists():
             self._atomic_write_bytes(feedback, self._bounded_output(report.output))
             feedback.chmod(0o644)
-        self._hardlink_output(
-            feedback, submission_dir / "test_output.txt"
-        )
+        self._hardlink_output(feedback, submission_dir / "test_output.txt")
         self._reports[report.round_id] = report
         self._submitted_at[report.round_id] = submitted_at
         self.record_state(report)

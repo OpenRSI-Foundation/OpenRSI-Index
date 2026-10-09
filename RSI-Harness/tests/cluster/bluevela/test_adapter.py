@@ -88,9 +88,7 @@ def _profile(tmp_path: Path) -> ClusterProfile:
                 }
             ),
             "builder": base.builder.model_copy(update={"temp_root": tmp_path}),
-            "apptainer": base.apptainer.model_copy(
-                update={"binary": apptainer}
-            ),
+            "apptainer": base.apptainer.model_copy(update={"binary": apptainer}),
         }
     )
 
@@ -290,9 +288,7 @@ def test_dry_run_automatically_dispatches_task_gpu_fields_to_multinode(
         "build_walltime": "02:00",
         "run_walltime": "02:15",
     }
-    assert dry_run["pool_policy"] == (
-        "ordered Work prefix; ordered Judge suffix"
-    )
+    assert dry_run["pool_policy"] == ("ordered Work prefix; ordered Judge suffix")
     assert "48" in dry_run["run_argv"]
     resource = dry_run["run_argv"][dry_run["run_argv"].index("-R") + 1]
     assert "span[ptile=8]" in resource
@@ -567,7 +563,9 @@ def test_cache_miss_waits_for_build_then_run_and_records_manifest(
 
 @pytest.mark.parametrize("multi_node", (False, True))
 def test_missing_declared_asset_stops_after_cpu_build_before_gpu_submission(
-    tmp_path: Path, monkeypatch, multi_node: bool,
+    tmp_path: Path,
+    monkeypatch,
+    multi_node: bool,
 ) -> None:
     profile = _profile(tmp_path)
     asset_root = tmp_path / "assets"
@@ -620,7 +618,9 @@ def test_missing_declared_asset_stops_after_cpu_build_before_gpu_submission(
 
 @pytest.mark.parametrize("multi_node", (False, True))
 def test_valid_declared_assets_allow_gpu_submission(
-    tmp_path: Path, monkeypatch, multi_node: bool,
+    tmp_path: Path,
+    monkeypatch,
+    multi_node: bool,
 ) -> None:
     profile = _profile(tmp_path)
     asset_root = tmp_path / "assets"
@@ -688,9 +688,7 @@ def test_claude_run_resolves_registered_launcher_into_engine_payload(
         resolved.append(name)
         return sys.executable if name == "claude" else None
 
-    monkeypatch.setattr(
-        "rsi_harness.cluster.bluevela.adapter.shutil.which", which
-    )
+    monkeypatch.setattr("rsi_harness.cluster.bluevela.adapter.shutil.which", which)
     profile = _profile(tmp_path)
     scheduler = RecordingScheduler()
     adapter = BlueVelaClusterAdapter(
@@ -717,9 +715,7 @@ def test_job_names_distinguish_agents_for_concurrent_task_runs(tmp_path: Path) -
     )
 
     codex_name = adapter._job_name("vlmr1-rec-curriculum", "run", "codex")
-    claude_name = adapter._job_name(
-        "vlmr1-rec-curriculum", "run", "claude-code"
-    )
+    claude_name = adapter._job_name("vlmr1-rec-curriculum", "run", "claude-code")
 
     assert codex_name != claude_name
     assert "codex" in codex_name

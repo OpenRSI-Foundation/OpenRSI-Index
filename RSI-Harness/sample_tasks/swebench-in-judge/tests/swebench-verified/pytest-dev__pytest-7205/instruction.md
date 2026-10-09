@@ -4,7 +4,8 @@ With Python 3.8.2, pytest 5.4.1 (or latest master; stacktraces are from there) a
 ```python
 import pytest
 
-@pytest.mark.parametrize('data', [b'Hello World'])
+
+@pytest.mark.parametrize("data", [b"Hello World"])
 def test_data(data):
     pass
 ```

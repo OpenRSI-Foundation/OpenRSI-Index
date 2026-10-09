@@ -160,9 +160,7 @@ def test_numeric_count_without_selectors_allocates_exactly_the_first_devices():
         ("all", 2, ("2", "0"), "release-all", ("GPU-c", "GPU-a"), ("GPU-c", "GPU-a")),
     ],
 )
-def test_phase_aware_gpu_plan(
-    work_count, judge_count, requested, mode, work, judge
-):
+def test_phase_aware_gpu_plan(work_count, judge_count, requested, mode, work, judge):
     plan = resolve_gpu_plan(
         GPURequirement(count=work_count),
         judge_count=judge_count,

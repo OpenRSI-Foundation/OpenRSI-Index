@@ -207,9 +207,7 @@ def test_probe_and_partition_runs_one_fixed_blaunch_probe_per_host(
         output = json.dumps(
             {
                 "ipv4": f"10.0.0.{host_index}",
-                "cuda_devices": [
-                    f"GPU-{host_index}-{gpu}" for gpu in range(8)
-                ],
+                "cuda_devices": [f"GPU-{host_index}-{gpu}" for gpu in range(8)],
                 "sif_sha256": "a" * 64,
                 "gpfs_visible": True,
                 "infiniband_visible": True,
@@ -239,9 +237,7 @@ def test_probe_and_partition_runs_one_fixed_blaunch_probe_per_host(
         ("/site/bin/remote-launch", "--host", "work-b"),
         ("/site/bin/remote-launch", "--host", "judge-a"),
     )
-    assert all(
-        "rsi_harness.cluster.bluevela.allocation" in call for call in calls
-    )
+    assert all("rsi_harness.cluster.bluevela.allocation" in call for call in calls)
 
 
 def test_probe_and_partition_retries_a_transient_remote_launch_failure(
@@ -270,9 +266,7 @@ def test_probe_and_partition_retries_a_transient_remote_launch_failure(
         output = json.dumps(
             {
                 "ipv4": f"10.0.0.{host_index}",
-                "cuda_devices": [
-                    f"GPU-{host_index}-{gpu}" for gpu in range(8)
-                ],
+                "cuda_devices": [f"GPU-{host_index}-{gpu}" for gpu in range(8)],
                 "sif_sha256": "a" * 64,
                 "gpfs_visible": True,
                 "infiniband_visible": True,

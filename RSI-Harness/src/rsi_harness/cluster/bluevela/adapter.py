@@ -196,9 +196,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         run_id = self._run_id(definition.task_id)
         run_dir = self.profile.storage.run_root / run_id
         names = {
-            stage: self._job_name(
-                definition.task_id, stage, definition.agent.name
-            )
+            stage: self._job_name(definition.task_id, stage, definition.agent.name)
             for stage in ("build", "run")
         }
         planned_image = plan_image(build_context, self.profile.storage.image_cache)
@@ -349,9 +347,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                     resources if isinstance(resources, ClusterResources) else None
                 ),
                 multi_node=(
-                    resources
-                    if isinstance(resources, MultiNodeResources)
-                    else None
+                    resources if isinstance(resources, MultiNodeResources) else None
                 ),
                 profile=self.profile,
                 options=request.options,
@@ -375,9 +371,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             manifest["run_job_id"] = run_job_id
             manifest["state"] = "running"
             _atomic_json(manifest_path, manifest)
-            self.event_callback(
-                "job_submitted", {"stage": "run", "job_id": run_job_id}
-            )
+            self.event_callback("job_submitted", {"stage": "run", "job_id": run_job_id})
             run_result = self.scheduler.wait(
                 run_job_id,
                 poll_seconds=self.profile.scheduler.poll_seconds,
@@ -458,9 +452,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             )
         launcher = _agent_launcher(request.agent_name)
         if shutil.which(launcher) is None:
-            raise SetupError(
-                f"cluster agent executable is unavailable: {launcher}"
-            )
+            raise SetupError(f"cluster agent executable is unavailable: {launcher}")
         for label, path in (("Apptainer", self.profile.apptainer.binary),):
             if not path.is_file():
                 raise SetupError(f"{label} binary does not exist: {path}")
@@ -520,9 +512,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 name=name,
                 queue=self.profile.scheduler.queue,
                 group=self.profile.scheduler.group,
-                cpu_slots=(
-                    resources.total_nodes * resources.cpu_slots_per_node
-                ),
+                cpu_slots=(resources.total_nodes * resources.cpu_slots_per_node),
                 memory_mb=resources.memory_mb_per_node,
                 walltime=resources.run_walltime,
                 stdout_path=(
@@ -662,9 +652,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             symlinks=True,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
         )
-        (control / "profile.json").write_text(
-            self.profile.model_dump_json(indent=2)
-        )
+        (control / "profile.json").write_text(self.profile.model_dump_json(indent=2))
         _atomic_json(control / "source.json", self._source_metadata())
         return frozen_task.resolve(), frozen_source.resolve()
 
@@ -692,9 +680,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         frozen_task: Path,
     ) -> TaskDefinition:
         build_context = frozen_task / "environment"
-        service = definition.service.model_copy(
-            update={"build_context": build_context}
-        )
+        service = definition.service.model_copy(update={"build_context": build_context})
         return definition.model_copy(
             update={"source_dir": frozen_task, "service": service}
         )
@@ -720,9 +706,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             judge_devices = tuple(
                 GPUDevice(
                     index=(
-                        judge_offset
-                        + node_rank * resources.gpus_per_node
-                        + local_rank
+                        judge_offset + node_rank * resources.gpus_per_node + local_rank
                     ),
                     uuid=f"JUDGE-{node_rank:03d}:GPU-{local_rank}",
                     name="planned Blue Vela Judge GPU",
@@ -733,11 +717,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             devices = work_devices + judge_devices
             work = GPUAllocation(devices=work_devices)
             verifier = GPUAllocation(devices=judge_devices)
-            mode = (
-                JudgeGPUMode.DISJOINT
-                if judge_devices
-                else JudgeGPUMode.FREEZE_ONLY
-            )
+            mode = JudgeGPUMode.DISJOINT if judge_devices else JudgeGPUMode.FREEZE_ONLY
         else:
             devices = tuple(
                 GPUDevice(
@@ -753,9 +733,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 verifier = GPUAllocation()
                 mode = JudgeGPUMode.FREEZE_ONLY
             elif resources.verifier_gpus <= len(spares):
-                verifier = GPUAllocation(
-                    devices=spares[: resources.verifier_gpus]
-                )
+                verifier = GPUAllocation(devices=spares[: resources.verifier_gpus])
                 mode = JudgeGPUMode.DISJOINT
             else:
                 verifier = GPUAllocation(
@@ -806,12 +784,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         image: SIFImagePlan,
         agent_version: str | None,
     ) -> dict[str, object]:
-        leaf = (
-            self.profile.storage.logs_root
-            / "runs"
-            / run_id
-            / definition.task_id
-        )
+        leaf = self.profile.storage.logs_root / "runs" / run_id / definition.task_id
         return {
             "run_id": run_id,
             "owner": self.profile.owner,

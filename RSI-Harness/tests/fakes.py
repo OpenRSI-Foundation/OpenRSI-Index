@@ -156,9 +156,7 @@ class FakeJudgeRuntime:
             self.work_paused = False
             self._raise("unpause")
 
-    def inspect_quiescence(
-        self, container: ContainerRef
-    ) -> WorkQuiescence | None:
+    def inspect_quiescence(self, container: ContainerRef) -> WorkQuiescence | None:
         self.events.append(("inspect_quiescence", container.container_id))
         self._raise("inspect_quiescence")
         return WorkQuiescence.PAUSED if self.work_paused else None
@@ -212,9 +210,7 @@ class FakeJudgeRuntime:
             self.verifier_modified_tests = target.read_text() == payload
         if self.reward_payload is not None and self._log_dir is not None:
             self._log_dir.mkdir(parents=True, exist_ok=True)
-            (self._log_dir / "reward.json").write_text(
-                json.dumps(self.reward_payload)
-            )
+            (self._log_dir / "reward.json").write_text(json.dumps(self.reward_payload))
         self._raise("exec")
         return self.exec_result
 
@@ -290,9 +286,7 @@ class FakeJudgeSnapshotBackend:
         if self.fail_at == "acquire":
             raise RootfsSnapshotNotCreatedError("acquire failed before commit")
         if self.fail_at == "acquire_ambiguous":
-            raise RuntimeError(
-                "recovery_required: rootfs commit response is ambiguous"
-            )
+            raise RuntimeError("recovery_required: rootfs commit response is ambiguous")
         expected_ref = self.planned_ref(
             run_id=run_id,
             task_id=task_id,
@@ -534,9 +528,7 @@ class FakeDockerContainers:
             if container.removed_kwargs is None
         ]
         if "label" in filters:
-            required = tuple(
-                label.split("=", 1) for label in filters["label"]
-            )
+            required = tuple(label.split("=", 1) for label in filters["label"])
             found = [
                 container
                 for container in found
@@ -549,8 +541,7 @@ class FakeDockerContainers:
             found = [
                 container
                 for container in found
-                if container.attrs["Config"].get("Image")
-                == filters["ancestor"]
+                if container.attrs["Config"].get("Image") == filters["ancestor"]
             ]
         if "volume" in filters:
             found = [
@@ -753,17 +744,13 @@ class FakeDockerImages:
         return image
 
     def list(self, *, filters: dict[str, list[str]]) -> list[FakeDockerImage]:
-        required = tuple(
-            label.split("=", 1) for label in filters.get("label", ())
-        )
+        required = tuple(label.split("=", 1) for label in filters.get("label", ()))
         return list(
             dict.fromkeys(
                 image
                 for image in self.by_ref.values()
                 if all(
-                    (image.attrs.get("Config") or {})
-                    .get("Labels", {})
-                    .get(key)
+                    (image.attrs.get("Config") or {}).get("Labels", {}).get(key)
                     == value
                     for key, value in required
                 )
@@ -776,8 +763,7 @@ class FakeDockerImages:
         self.by_ref = {
             ref: image
             for ref, image in self.by_ref.items()
-            if image.id != image_id
-            and image.attrs.get("Id") != image_id
+            if image.id != image_id and image.attrs.get("Id") != image_id
         }
 
     def build(self, **kwargs: Any):

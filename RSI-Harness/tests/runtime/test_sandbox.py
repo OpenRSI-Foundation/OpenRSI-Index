@@ -410,7 +410,10 @@ def test_failed_download_charges_only_known_transfer_usage(
 
     def failed(*args, **kwargs):
         raise SandboxDownloadError(
-            "invalid", "paths", "missing file", download_bytes=observed,
+            "invalid",
+            "paths",
+            "missing file",
+            download_bytes=observed,
             operation_started=started,
         )
 
@@ -420,12 +423,14 @@ def test_failed_download_charges_only_known_transfer_usage(
     for usage in (broker._usage, broker._sessions["work"].usage):
         assert usage["max_download_bytes"] == observed
         assert usage["max_operations"] == initial_operations + int(started)
-    monkeypatch.setattr(backend, "download", lambda *a, **kw: (
-        SandboxBundleEntry(path="out", kind="file", mode=0o644, data=b"ok"),
-    ))
-    result = broker.download(
-        work.credential, child.child_id, "/workspace", ["out"], 1
+    monkeypatch.setattr(
+        backend,
+        "download",
+        lambda *a, **kw: (
+            SandboxBundleEntry(path="out", kind="file", mode=0o644, data=b"ok"),
+        ),
     )
+    result = broker.download(work.credential, child.child_id, "/workspace", ["out"], 1)
     assert result[0].data == b"ok"
     assert broker._usage["max_download_bytes"] == observed + 2
 
