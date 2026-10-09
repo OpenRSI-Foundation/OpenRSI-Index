@@ -236,7 +236,8 @@ gpus = 2
 - Type: positive integer.
 - Meaning: number of GPUs visible to Work.
 - A GPU task must declare its Work GPU count either here or in the Compose
-  NVIDIA reservation.
+  NVIDIA reservation. AMD GPU tasks declare it here; the Compose reservation
+  is NVIDIA-only.
 - If both this field and Compose `devices[].count` are present, their values
   must match.
 - Work receives the first matching devices from the ordered GPU pool supplied
@@ -258,7 +259,10 @@ gpu_types = ["NVIDIA H100 NVL"]
 - Type: list of strings.
 - Optional.
 - RSI Harness currently accepts at most one required Work GPU type.
-- The selected Work devices must match it.
+- The selected Work devices must match it: the value must appear,
+  case-insensitively, in each device's name. NVIDIA names come from
+  `nvidia-smi`. AMD names are the `amd-smi` market name followed by the ISA,
+  such as `AMD Instinct MI355X (gfx950)`, so `MI355X` and `gfx950` both match.
 - Judge-specific GPU type selection is not currently supported.
 
 ### `workdir`

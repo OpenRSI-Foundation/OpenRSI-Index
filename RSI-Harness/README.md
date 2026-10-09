@@ -47,8 +47,10 @@ tests.
 ## Requirements
 
 - Linux with a working `docker` command
-- for GPU tasks, NVIDIA GPUs, the NVIDIA Container Toolkit, and a working
-  `nvidia-smi` command
+- for GPU tasks, either NVIDIA GPUs, the NVIDIA Container Toolkit, and a
+  working `nvidia-smi` command; or AMD Instinct GPUs, the `amdgpu` kernel
+  driver (`/dev/kfd` and `/dev/dri`), and a working `amd-smi` command
+  (see [AMD GPUs](#amd-gpus))
 - Python 3.12 or 3.13
 - permission to manage Docker and the host `DOCKER-USER` and `INPUT` iptables
   chains (usually by running the command with `sudo -E`)
@@ -140,7 +142,31 @@ CPU-only tasks reject `--gpus`; `--gpus 0` selects physical GPU index 0.
 An omitted Work count remains unspecified and must inherit a Compose GPU
 reservation. Explicit Work zero cannot conflict with a positive reservation.
 CPU Work with a GPU Judge is supported when an explicit `--gpus` pool is
-provided. GPU requirements still fail if NVIDIA devices are unavailable.
+provided. GPU requirements still fail if no supported GPUs are available.
+
+### AMD GPUs
+
+Local Docker runs also support AMD Instinct GPUs. The host is treated as AMD
+when it has `amd-smi` and `/dev/kfd` but no `nvidia-smi`; otherwise the NVIDIA
+path is used unchanged.
+
+- `--gpus` accepts the indexes and UUIDs printed by `amd-smi list`.
+- Work and Judge each receive `/dev/kfd` and only the DRM render nodes of their
+  allocated GPUs, plus the groups that own those nodes, so a non-root task user
+  can open them. No privileges, capabilities, or NVIDIA runtime are involved.
+- The task image must provide the ROCm user space it needs (for example
+  PyTorch for ROCm); nothing is injected from the host.
+- Declare GPUs in `task.toml` with `environment.gpus` and, when the task needs
+  a specific GPU, `gpu_types`. The Compose GPU reservation is NVIDIA-only.
+  A GPU's type is its `amd-smi` market name followed by its ISA, for example
+  `AMD Instinct MI355X (gfx950)`, so `gpu_types = ["MI355X"]` and
+  `gpu_types = ["gfx950"]` both match it.
+- Before release-all Judge reuse, Work processes holding a KFD context on an
+  allocated GPU block the submission, read from `/sys/class/kfd/kfd/proc`.
+- Only unpartitioned (SPX) GPUs are supported; a compute-partitioned GPU stops
+  the run during setup.
+
+The Slurm and Blue Vela cluster runtimes remain NVIDIA-only.
 
 CPU-only tasks run with local Docker or single-node Slurm/Apptainer.
 For Slurm, use a site profile with a CPU partition and omit `--gpus`;

@@ -39,6 +39,7 @@ from rsi_harness.models import (
 from rsi_harness.runtime.gpu import (
     NVIDIA_VISIBLE_DEVICES_ENV,
     NVIDIA_VISIBLE_DEVICES_VOID,
+    amd_container_device_nodes,
     nvidia_visible_devices_value,
 )
 from rsi_harness.runtime.local_auth import AgentAuthMaterial
@@ -504,14 +505,18 @@ class DockerContainerRuntime:
             raise SetupError("runtime recovery labels cannot be overridden")
         labels.update(self.recovery_labels)
         device_requests: list[DeviceRequest] = []
+        amd_device_nodes: tuple[Path, ...] = ()
         if spec.gpu_allocation.devices and not self._omit_gpu_device_requests_for_tests:
-            device_requests.append(
-                DeviceRequest(
-                    driver="nvidia",
-                    device_ids=list(spec.gpu_allocation.uuids),
-                    capabilities=[["gpu"]],
+            if spec.gpu_allocation.vendor == "amd":
+                amd_device_nodes = amd_container_device_nodes(spec.gpu_allocation)
+            else:
+                device_requests.append(
+                    DeviceRequest(
+                        driver="nvidia",
+                        device_ids=list(spec.gpu_allocation.uuids),
+                        capabilities=[["gpu"]],
+                    )
                 )
-            )
         environment = dict(spec.environment)
         environment[NVIDIA_VISIBLE_DEVICES_ENV] = (
             NVIDIA_VISIBLE_DEVICES_VOID
@@ -529,6 +534,16 @@ class DockerContainerRuntime:
             "cap_drop": ["NET_RAW"],
             "detach": True,
         }
+        if amd_device_nodes:
+            kwargs["devices"] = [f"{node}:{node}:rwm" for node in amd_device_nodes]
+            # A non-root task user reaches the nodes through their owning groups.
+            try:
+                group_ids = {node.stat().st_gid for node in amd_device_nodes}
+            except OSError as error:
+                raise SetupError(
+                    f"AMD GPU device node is unavailable: {error}"
+                ) from error
+            kwargs["group_add"] = [str(gid) for gid in sorted(group_ids)]
         if spec.shm_size is not None:
             kwargs["shm_size"] = spec.shm_size
         if spec.extra_hosts:

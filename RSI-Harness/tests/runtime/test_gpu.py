@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+import json
 import subprocess
+from pathlib import Path
 
 import pytest
 
 from rsi_harness.errors import SetupError, SubmissionError
 from rsi_harness.models import GPUAllocation, GPUDevice, GPURequirement
 from rsi_harness.runtime.gpu import (
+    AmdSmiInventory,
     NvidiaSmiInventory,
     assert_work_gpu_quiescent,
+    host_gpu_inventory,
+    nvidia_visible_devices_value,
     resolve_allocation,
     resolve_gpu_plan,
 )
@@ -365,3 +370,215 @@ def test_docker_top_failure_is_a_submission_error():
             FailingTopContainer(),
             runner=RecordingCommandRunner([]),
         )
+
+
+# Two MI355X GPUs as amd-smi 26 and the KFD topology describe them; node 0 is
+# the CPU, which KFD lists with gpu_id 0.
+AMD_GPUS = (
+    {"bdf": "0000:05:00.0", "location_id": 0x0500, "gpu_id": 42583, "minor": 128},
+    {"bdf": "0000:75:00.0", "location_id": 0x7500, "gpu_id": 17010, "minor": 152},
+)
+
+
+def amd_smi_list(**overrides: object) -> str:
+    rows = [
+        {
+            "gpu": index,
+            "bdf": gpu["bdf"],
+            "uuid": f"{index}aff75a3-0000-1000-80e8-c5cd3767811a",
+            "kfd_id": gpu["gpu_id"],
+            "node_id": index + 1,
+            "partition_id": 0,
+        }
+        for index, gpu in enumerate(AMD_GPUS)
+    ]
+    rows[-1].update(overrides)
+    return json.dumps(rows)
+
+
+def amd_smi_asic(market_name: str = "AMD Instinct MI355X") -> str:
+    return json.dumps(
+        {
+            "gpu_data": [
+                {
+                    "gpu": index,
+                    "asic": {
+                        "market_name": market_name,
+                        "target_graphics_version": "gfx950",
+                    },
+                }
+                for index in range(len(AMD_GPUS))
+            ]
+        }
+    )
+
+
+def amd_host(tmp_path: Path, *, render_nodes: bool = True) -> tuple[Path, Path]:
+    kfd_root = tmp_path / "kfd"
+    cpu = kfd_root / "topology" / "nodes" / "0"
+    cpu.mkdir(parents=True)
+    (cpu / "gpu_id").write_text("0\n")
+    (cpu / "properties").write_text("cpu_cores_count 128\n")
+    for number, gpu in enumerate(AMD_GPUS, start=1):
+        node = kfd_root / "topology" / "nodes" / str(number)
+        node.mkdir()
+        (node / "gpu_id").write_text(f"{gpu['gpu_id']}\n")
+        (node / "properties").write_text(
+            f"location_id {gpu['location_id']}\n"
+            "domain 0\n"
+            f"drm_render_minor {gpu['minor']}\n"
+        )
+    (kfd_root / "proc").mkdir()
+    dev_root = tmp_path / "dev"
+    (dev_root / "dri").mkdir(parents=True)
+    if render_nodes:
+        for gpu in AMD_GPUS:
+            (dev_root / "dri" / f"renderD{gpu['minor']}").touch()
+    return kfd_root, dev_root
+
+
+def amd_inventory(
+    tmp_path: Path, listed: str, asic: str | None = None, **host: bool
+) -> AmdSmiInventory:
+    kfd_root, dev_root = amd_host(tmp_path, **host)
+    runner = RecordingCommandRunner(
+        [
+            subprocess.CompletedProcess([], 0, listed, ""),
+            subprocess.CompletedProcess([], 0, asic or amd_smi_asic(), ""),
+        ]
+    )
+    return AmdSmiInventory(runner=runner, kfd_root=kfd_root, dev_root=dev_root)
+
+
+def test_amd_inventory_binds_amd_smi_rows_to_kfd_render_nodes(tmp_path):
+    devices = amd_inventory(tmp_path, amd_smi_list()).list_devices()
+
+    assert [
+        (device.index, device.name, device.render_node, device.kfd_gpu_id)
+        for device in devices
+    ] == [
+        (0, "AMD Instinct MI355X (gfx950)", tmp_path / "dev/dri/renderD128", 42583),
+        (1, "AMD Instinct MI355X (gfx950)", tmp_path / "dev/dri/renderD152", 17010),
+    ]
+    assert {device.vendor for device in devices} == {"amd"}
+
+
+@pytest.mark.parametrize(
+    ("listed", "host", "message"),
+    [
+        (amd_smi_list(partition_id=1), {}, "compute partition"),
+        (amd_smi_list(bdf="0000:76:00.0"), {}, "matches 0 KFD nodes"),
+        (amd_smi_list(), {"render_nodes": False}, "render node .* is missing"),
+        (amd_smi_list(gpu="1"), {}, "'gpu' is not an integer"),
+        (json.dumps({"gpu": 0}), {}, "not a list"),
+    ],
+)
+def test_amd_inventory_refuses_what_it_cannot_bind_exactly(
+    tmp_path, listed, host, message
+):
+    with pytest.raises(SetupError, match=message):
+        amd_inventory(tmp_path, listed, **host).list_devices()
+
+
+def test_amd_inventory_reports_amd_smi_failure(tmp_path):
+    runner = RecordingCommandRunner(
+        [subprocess.CompletedProcess([], 2, "", "amdgpu driver not loaded")]
+    )
+
+    with pytest.raises(SetupError, match="unavailable: amdgpu driver not loaded"):
+        AmdSmiInventory(runner=runner, kfd_root=tmp_path).list_devices()
+
+
+@pytest.mark.parametrize(
+    ("market_name", "required", "matches"),
+    [
+        ("AMD Instinct MI355X", "MI355X", True),
+        ("AMD Instinct MI355X", "gfx950", True),
+        ("AMD Instinct MI355X", "MI300X", False),
+        # One amd-smi release names a MI355X only "AMD Radeon Graphics".
+        ("AMD Radeon Graphics", "gfx950", True),
+        ("AMD Radeon Graphics", "MI355X", False),
+    ],
+)
+def test_amd_gpu_type_matches_market_name_or_isa(
+    tmp_path, market_name, required, matches
+):
+    inventory = amd_inventory(
+        tmp_path, amd_smi_list(), amd_smi_asic(market_name)
+    ).list_devices()
+    requirement = GPURequirement(count=1, name=required)
+
+    if matches:
+        allocation = resolve_allocation(
+            requirement, requested=("1",), inventory=inventory
+        )
+        assert allocation.devices == (inventory[1],)
+    else:
+        with pytest.raises(SetupError, match="does not match"):
+            resolve_allocation(requirement, requested=("1",), inventory=inventory)
+
+
+def test_one_allocation_cannot_mix_gpu_vendors(tmp_path):
+    amd = amd_inventory(tmp_path, amd_smi_list()).list_devices()[0]
+
+    with pytest.raises(ValueError, match="mix vendors"):
+        GPUAllocation(devices=(eight_h100_inventory()[1], amd))
+
+
+def test_amd_allocation_is_void_to_the_nvidia_runtime(tmp_path):
+    amd = amd_inventory(tmp_path, amd_smi_list()).list_devices()
+
+    assert nvidia_visible_devices_value(GPUAllocation(devices=amd)) == "void"
+
+
+def test_amd_quiescence_reads_kfd_contexts_of_work_pids_only(tmp_path):
+    inventory = amd_inventory(tmp_path, amd_smi_list()).list_devices()
+    kfd_root = tmp_path / "kfd"
+    for pid, gpu_ids in {41: (17010,), 42: (42583,), 43: (17010, 42583)}.items():
+        process = kfd_root / "proc" / str(pid)
+        process.mkdir()
+        for gpu_id in gpu_ids:
+            (process / f"vram_{gpu_id}").write_text("0\n")
+    allocated = GPUAllocation(devices=(inventory[1],))
+
+    # 42 holds only an unallocated GPU and 43 belongs to another container.
+    assert_work_gpu_quiescent(allocated, TopContainer((42, 99)), kfd_root=kfd_root)
+    with pytest.raises(SubmissionError, match=r"PID 41 is still active"):
+        assert_work_gpu_quiescent(allocated, TopContainer((41,)), kfd_root=kfd_root)
+
+
+def test_amd_quiescence_fails_closed_when_an_allocated_gpu_left_topology(tmp_path):
+    inventory = amd_inventory(tmp_path, amd_smi_list()).list_devices()
+    kfd_root = tmp_path / "kfd"
+    (kfd_root / "topology" / "nodes" / "2" / "gpu_id").write_text("9\n")
+
+    with pytest.raises(SubmissionError, match="17010 appeared 0 times"):
+        assert_work_gpu_quiescent(
+            GPUAllocation(devices=(inventory[1],)),
+            TopContainer((41,)),
+            kfd_root=kfd_root,
+        )
+
+
+@pytest.mark.parametrize(
+    ("tools", "kfd", "expected"),
+    [
+        ({"nvidia-smi", "amd-smi"}, True, NvidiaSmiInventory),
+        ({"amd-smi"}, True, AmdSmiInventory),
+        ({"amd-smi"}, False, NvidiaSmiInventory),
+        (set(), False, NvidiaSmiInventory),
+    ],
+)
+def test_host_inventory_keeps_nvidia_default_and_finds_amd(
+    tmp_path, tools, kfd, expected
+):
+    kfd_device = tmp_path / "kfd"
+    if kfd:
+        kfd_device.touch()
+
+    inventory = host_gpu_inventory(
+        which=lambda tool: f"/usr/bin/{tool}" if tool in tools else None,
+        kfd_device=kfd_device,
+    )
+
+    assert type(inventory) is expected

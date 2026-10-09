@@ -67,6 +67,27 @@ def allocation() -> GPUAllocation:
     )
 
 
+def amd_host_allocation(tmp_path) -> tuple[Path, GPUAllocation]:
+    dri = tmp_path / "dev" / "dri"
+    dri.mkdir(parents=True)
+    kfd = tmp_path / "dev" / "kfd"
+    kfd.touch()
+    devices = []
+    for index, (minor, gpu_id) in enumerate(((128, 42583), (152, 17010))):
+        (dri / f"renderD{minor}").touch()
+        devices.append(
+            GPUDevice(
+                index=index,
+                uuid=f"c{index}ff75a3-0000-1000-80f4-5338dc68744c",
+                name="AMD Instinct MI355X (gfx950)",
+                vendor="amd",
+                render_node=dri / f"renderD{minor}",
+                kfd_gpu_id=gpu_id,
+            )
+        )
+    return kfd, GPUAllocation(devices=tuple(devices))
+
+
 def make_runtime(
     client,
     tmp_path,
@@ -170,6 +191,59 @@ def test_create_omits_extra_hosts_without_pinned_mappings(tmp_path):
     runtime.create(ContainerSpec(image="work@sha256:abc"))
 
     assert "extra_hosts" not in client.containers.created[0]
+
+
+def test_create_gives_an_amd_allocation_only_its_device_nodes(tmp_path, monkeypatch):
+    kfd, gpus = amd_host_allocation(tmp_path)
+    monkeypatch.setattr("rsi_harness.runtime.gpu.AMD_KFD_DEVICE", kfd)
+    client = FakeDockerClient()
+    runtime = make_runtime(client, tmp_path)
+
+    runtime.create(
+        ContainerSpec(
+            image="work@sha256:abc",
+            gpu_allocation=GPUAllocation(devices=(gpus.devices[1],)),
+        )
+    )
+
+    create = client.containers.created[0]
+    render = gpus.devices[1].render_node
+    assert create["devices"] == [f"{kfd}:{kfd}:rwm", f"{render}:{render}:rwm"]
+    assert create["group_add"] == [str(kfd.stat().st_gid)]
+    assert create["device_requests"] == []
+    assert create["environment"]["NVIDIA_VISIBLE_DEVICES"] == "void"
+    assert create["privileged"] is False
+
+
+def test_create_without_gpu_or_with_omitted_gpus_adds_no_amd_devices(
+    tmp_path, monkeypatch
+):
+    kfd, gpus = amd_host_allocation(tmp_path)
+    monkeypatch.setattr("rsi_harness.runtime.gpu.AMD_KFD_DEVICE", kfd)
+    client = FakeDockerClient()
+
+    make_runtime(client, tmp_path).create(ContainerSpec(image="helper"))
+    make_runtime(client, tmp_path, omit_gpu_device_requests_for_tests=True).create(
+        ContainerSpec(image="work", gpu_allocation=gpus)
+    )
+
+    for create in client.containers.created:
+        assert "devices" not in create
+        assert "group_add" not in create
+        assert create["environment"]["NVIDIA_VISIBLE_DEVICES"] == "void"
+
+
+def test_create_fails_setup_when_an_amd_device_node_vanished(tmp_path, monkeypatch):
+    kfd, gpus = amd_host_allocation(tmp_path)
+    monkeypatch.setattr("rsi_harness.runtime.gpu.AMD_KFD_DEVICE", kfd)
+    gpus.devices[0].render_node.unlink()
+    client = FakeDockerClient()
+
+    with pytest.raises(SetupError, match="AMD GPU device node is unavailable"):
+        make_runtime(client, tmp_path).create(
+            ContainerSpec(image="work", gpu_allocation=gpus)
+        )
+    assert client.containers.created == []
 
 
 def test_work_feedback_mount_requires_exact_read_only_authority(tmp_path):

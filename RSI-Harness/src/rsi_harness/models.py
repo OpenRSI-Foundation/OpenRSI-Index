@@ -10,7 +10,15 @@ from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    field_validator,
+    model_serializer,
+    model_validator,
+)
 from pydantic_core import core_schema
 
 from rsi_harness.runtime.sandbox_contracts import (
@@ -203,10 +211,43 @@ class GPURequirement(PersistedModel):
         return value
 
 
+GPUVendor = Literal["nvidia", "amd"]
+_AMD_RENDER_NODE = re.compile(r"renderD[0-9]+")
+
+
 class GPUDevice(PersistedModel):
     index: int
     uuid: str
     name: str
+    vendor: GPUVendor = "nvidia"
+    # AMD only. A container is given exactly this DRM render node, and
+    # /sys/class/kfd/kfd/proc/<pid>/ names the device by this KFD GPU id.
+    render_node: Path | None = None
+    kfd_gpu_id: int | None = None
+
+    @model_validator(mode="after")
+    def require_vendor_identity(self) -> GPUDevice:
+        if self.vendor == "amd":
+            if self.render_node is None or self.kfd_gpu_id is None:
+                raise ValueError("an AMD GPU requires a render node and a KFD GPU id")
+            if not self.render_node.is_absolute() or not _AMD_RENDER_NODE.fullmatch(
+                self.render_node.name
+            ):
+                raise ValueError("AMD render node must be an absolute renderD path")
+            if self.kfd_gpu_id <= 0:
+                raise ValueError("AMD KFD GPU id must be positive")
+        elif self.render_node is not None or self.kfd_gpu_id is not None:
+            raise ValueError("render nodes and KFD GPU ids are AMD-only")
+        return self
+
+    @model_serializer(mode="wrap")
+    def keep_nvidia_shape(self, handler: SerializerFunctionWrapHandler) -> Any:
+        # Persisted NVIDIA plans keep the shape they had before AMD support.
+        data = handler(self)
+        if self.vendor == "nvidia":
+            for key in ("vendor", "render_node", "kfd_gpu_id"):
+                data.pop(key, None)
+        return data
 
 
 class GPUAllocation(PersistedModel):
@@ -217,11 +258,17 @@ class GPUAllocation(PersistedModel):
         uuids = tuple(device.uuid for device in self.devices)
         if len(uuids) != len(set(uuids)):
             raise ValueError("duplicate physical GPU UUID")
+        if len({device.vendor for device in self.devices}) > 1:
+            raise ValueError("one GPU allocation cannot mix vendors")
         return self
 
     @property
     def uuids(self) -> tuple[str, ...]:
         return tuple(device.uuid for device in self.devices)
+
+    @property
+    def vendor(self) -> GPUVendor | None:
+        return self.devices[0].vendor if self.devices else None
 
 
 class JudgeGPUMode(StrEnum):

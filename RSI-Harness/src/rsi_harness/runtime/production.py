@@ -60,8 +60,8 @@ from rsi_harness.runtime.environment import (
 )
 from rsi_harness.runtime.gpu import (
     NVIDIA_VISIBLE_DEVICES_ENV,
-    NvidiaSmiInventory,
     assert_work_gpu_quiescent,
+    host_gpu_inventory,
     nvidia_visible_devices_value,
     resolve_gpu_plan,
 )
@@ -1855,7 +1855,7 @@ class ProductionRuntimeServices:
         self.data_root = Path(data_root).expanduser().resolve()
         self.logs_root = Path(logs_root).expanduser().resolve()
         self.client = docker_client
-        self.inventory = inventory or NvidiaSmiInventory()
+        self.inventory = inventory or host_gpu_inventory()
         self.rsi_loop_config = rsi_loop_config or load_config()
         self.snapshot = snapshot_backend
         self.firewall = firewall_backend

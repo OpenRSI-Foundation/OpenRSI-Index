@@ -71,7 +71,7 @@ def build_runtime_services(
     event_callback: Callable[[str, object], None] | None = None,
     engine_config: EngineConfig | None = None,
 ) -> RuntimeServicesPort:
-    """Build the concrete Docker/NVIDIA/RSI Loop production runtime."""
+    """Build the concrete Docker/GPU/RSI Loop production runtime."""
     from rsi_harness.runtime.production import ProductionRuntimeServices
 
     return ProductionRuntimeServices(

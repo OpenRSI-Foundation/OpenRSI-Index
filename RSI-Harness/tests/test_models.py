@@ -144,6 +144,61 @@ def test_run_plan_serializes_exact_gpu_plan_without_legacy_allocation(tmp_path):
     assert "allocation" not in payload
 
 
+def test_run_plan_round_trips_amd_device_nodes(tmp_path):
+    """Recovery reads back the exact render node and KFD id a run was given."""
+    plan = make_run_plan(tmp_path)
+    work = GPUAllocation(
+        devices=(
+            GPUDevice(
+                index=3,
+                uuid="c7ff75a3-0000-1000-80f4-5338dc68744c",
+                name="AMD Instinct MI355X (gfx950)",
+                vendor="amd",
+                render_node=Path("/dev/dri/renderD152"),
+                kfd_gpu_id=17010,
+            ),
+        )
+    )
+    gpu_plan = RunGPUPlan(
+        authorized_pool=work,
+        work=work,
+        judge=work,
+        judge_mode=JudgeGPUMode.RELEASE_ALL,
+    )
+
+    restored = type(plan).model_validate(
+        {**plan.model_dump(), "gpu_plan": json.loads(gpu_plan.model_dump_json())}
+    )
+
+    assert restored.gpu_plan == gpu_plan
+    assert json.loads(restored.model_dump_json())["gpu_plan"]["work"]["devices"] == [
+        {
+            "index": 3,
+            "uuid": "c7ff75a3-0000-1000-80f4-5338dc68744c",
+            "name": "AMD Instinct MI355X (gfx950)",
+            "vendor": "amd",
+            "render_node": "/dev/dri/renderD152",
+            "kfd_gpu_id": 17010,
+        }
+    ]
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ({"vendor": "amd"}, "requires a render node"),
+        (
+            {"vendor": "amd", "render_node": "/dev/dri/card1", "kfd_gpu_id": 1},
+            "renderD",
+        ),
+        ({"render_node": "/dev/dri/renderD128"}, "AMD-only"),
+    ],
+)
+def test_gpu_device_requires_exactly_its_vendors_identity(fields, message):
+    with pytest.raises(ValidationError, match=message):
+        GPUDevice(index=0, uuid="u", name="n", **fields)
+
+
 @pytest.mark.parametrize(
     "value",
     ("", ".", "workspace", "//", "/workspace/..", "/workspace/../"),
