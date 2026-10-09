@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
+import re
 import shlex
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Annotated, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Literal, Protocol
 
 import typer
 
 from rsi_harness.cluster.base import ClusterRunRequest
 from rsi_harness.cluster.bluevela.adapter import build_cluster_adapter
+from rsi_harness.config import EngineConfig
 from rsi_harness.errors import HarnessError, SetupError
 from rsi_harness.models import (
     AgentAuthSource,
@@ -24,8 +26,19 @@ from rsi_harness.models import (
     RunStatus,
 )
 from rsi_harness.runtime.redaction import redact_text
+from rsi_harness.runtime.sandbox_policy import load_sandbox_policy
+
+if TYPE_CHECKING:
+    # The ledger imports the docker SDK: loaded only by prune-images.
+    from rsi_harness.runtime.sandbox_ledger import PruneRow
 
 app = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
+sandbox_app = typer.Typer(
+    no_args_is_help=True,
+    pretty_exceptions_enable=False,
+    help="Operator commands for managed sandboxes.",
+)
+app.add_typer(sandbox_app, name="sandbox")
 
 
 class RuntimeServicesPort(Protocol):
@@ -36,6 +49,14 @@ class RuntimeServicesPort(Protocol):
     def recover(self, run_id: str | None) -> tuple[str, ...]: ...
 
     def cleanup(self, run_id: str, *, delete_workspace: bool) -> None: ...
+
+    def prune_images(
+        self,
+        *,
+        older_than_seconds: float | None,
+        dry_run: bool,
+        confirm: Callable[[tuple[PruneRow, ...]], bool],
+    ) -> tuple[PruneRow, ...] | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,6 +69,7 @@ def build_runtime_services(
     *,
     roots: RuntimeRoots,
     event_callback: Callable[[str, object], None] | None = None,
+    engine_config: EngineConfig | None = None,
 ) -> RuntimeServicesPort:
     """Build the concrete Docker/NVIDIA/RSI Loop production runtime."""
     from rsi_harness.runtime.production import ProductionRuntimeServices
@@ -56,6 +78,7 @@ def build_runtime_services(
         data_root=roots.data,
         logs_root=roots.logs,
         event_callback=event_callback,
+        engine_config=engine_config,
     )
 
 
@@ -74,11 +97,16 @@ def _services(
     logs_root: Path,
     *,
     event_callback: Callable[[str, object], None] | None = None,
+    engine_config: EngineConfig | None = None,
 ) -> RuntimeServicesPort:
     roots = RuntimeRoots(
         data=data_root.expanduser().resolve(),
         logs=logs_root.expanduser().resolve(),
     )
+    if engine_config is not None:
+        return build_runtime_services(
+            roots=roots, event_callback=event_callback, engine_config=engine_config,
+        )
     if event_callback is None:
         return build_runtime_services(roots=roots)
     return build_runtime_services(roots=roots, event_callback=event_callback)
@@ -95,6 +123,11 @@ class _RunConsole:
             typer.echo(f"Judge GPU mode: {value.judge_mode.value}")
             typer.echo(
                 "Preparing task images (the first run may take several minutes)..."
+            )
+        elif name == "sandbox_reserved" and isinstance(value, Mapping):
+            typer.echo(
+                f"Sandbox envelope: {value['cpus']} CPUs, {value['memory_mb']} MiB "
+                "(parents + children + broker)"
             )
         elif name == "images_ready":
             typer.echo("Task images ready; preparing Work container...")
@@ -273,6 +306,12 @@ def run_command(
     cooldown: Annotated[float, typer.Option("--cooldown", min=0.0)] = 0.0,
     data_root: Annotated[Path, typer.Option("--data-root")] = Path(".rsi-harness"),
     logs_root: Annotated[Path, typer.Option("--logs-root")] = Path("logs"),
+    sandbox_policy: Annotated[
+        Path | None,
+        typer.Option(
+            "--sandbox-policy", help="Operator-approved local CPU sandbox policy TOML"
+        ),
+    ] = None,
     model: Annotated[str | None, typer.Option("--model")] = None,
     reasoning_effort: Annotated[
         str | None,
@@ -335,6 +374,21 @@ def run_command(
             err=True,
         )
         raise typer.Exit(2)
+    cluster_policy = None
+    if cluster is not None and sandbox_policy is not None:
+        try:
+            cluster_policy = load_sandbox_policy(sandbox_policy)
+        except BaseException as error:
+            _fail(error, verbose=verbose)
+            return
+        environments = cluster_policy.environments
+        if environments is None or environments.host.backend != "e2b":
+            typer.echo(
+                "Error: --sandbox-policy with --cluster requires "
+                '[environments.host] backend = "e2b"; Docker envs are local-only',
+                err=True,
+            )
+            raise typer.Exit(2)
     if dry_run and cluster is None:
         typer.echo("Error: --dry-run requires --cluster", err=True)
         raise typer.Exit(2)
@@ -358,6 +412,7 @@ def run_command(
             reasoning_effort=reasoning_effort,
             agent_auth=agent_auth,
             dry_run=dry_run,
+            sandbox_policy=cluster_policy,
         )
         typer.echo(f"Running Agent {agent!r} on cluster {cluster!r}: {task.name}")
         try:
@@ -384,10 +439,17 @@ def run_command(
         return
 
     try:
+        service_options = {}
+        if sandbox_policy is not None:
+            service_options["engine_config"] = EngineConfig(
+                data_root=roots.data, logs_root=roots.logs,
+                sandbox_policy=load_sandbox_policy(sandbox_policy),
+            )
         services = _services(
             roots.data,
             roots.logs,
             event_callback=_RunConsole(),
+            **service_options,
         )
         available = services.available_agents()
     except BaseException as error:
@@ -485,15 +547,36 @@ def visualize_command(
     uvicorn.run(visualizer, host=host, port=port)
 
 
+_CLUSTER_RECOVERY_HELP = (
+    "Cluster name or profile TOML: kill the run's E2B sandboxes "
+    "(after its scheduler job has ended)"
+)
+
+
+def _recover_cluster(cluster: str, run_id: str | None) -> tuple[str, ...]:
+    from rsi_harness.cluster.bluevela.sandbox import recover_cluster_sandboxes
+    from rsi_harness.cluster.config import load_cluster_profile
+
+    profile = load_cluster_profile(cluster)
+    return recover_cluster_sandboxes(profile.storage.run_root, run_id)
+
+
 @app.command("recover")
 def recover_command(
     run_id: Annotated[str | None, typer.Argument()] = None,
     data_root: Annotated[Path, typer.Option("--data-root")] = Path(".rsi-harness"),
     logs_root: Annotated[Path, typer.Option("--logs-root")] = Path("logs"),
+    cluster: Annotated[
+        str | None, typer.Option("--cluster", help=_CLUSTER_RECOVERY_HELP)
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
 ) -> None:
     try:
-        recovered = _services(data_root, logs_root).recover(run_id)
+        recovered = (
+            _recover_cluster(cluster, run_id)
+            if cluster is not None
+            else _services(data_root, logs_root).recover(run_id)
+        )
     except BaseException as error:
         _fail(error, verbose=verbose)
         return
@@ -508,8 +591,26 @@ def cleanup_command(
     yes: Annotated[bool, typer.Option("--yes")] = False,
     data_root: Annotated[Path, typer.Option("--data-root")] = Path(".rsi-harness"),
     logs_root: Annotated[Path, typer.Option("--logs-root")] = Path("logs"),
+    cluster: Annotated[
+        str | None, typer.Option("--cluster", help=_CLUSTER_RECOVERY_HELP)
+    ] = None,
     verbose: Annotated[bool, typer.Option("--verbose")] = False,
 ) -> None:
+    if cluster is not None:
+        if delete_workspace:
+            typer.echo(
+                "Error: --delete-workspace is local-only and cannot be used "
+                "with --cluster",
+                err=True,
+            )
+            raise typer.Exit(2)
+        try:
+            _recover_cluster(cluster, run_id)
+        except BaseException as error:
+            _fail(error, verbose=verbose)
+            return
+        typer.echo(f"cleaned: {run_id}")
+        return
     if delete_workspace and not yes:
         confirmed = typer.confirm(
             f"Delete the retained workspace for {run_id}?",
@@ -526,6 +627,113 @@ def cleanup_command(
         _fail(error, verbose=verbose)
         return
     typer.echo(f"cleaned: {run_id}")
+
+
+_DURATION = re.compile(r"([1-9][0-9]{0,8})([smhdw])")
+_DURATION_UNITS = {"s": 1, "m": 60, "h": 3600, "d": 86400, "w": 604800}
+
+
+def _duration(value: str) -> float:
+    match = _DURATION.fullmatch(value.strip())
+    if match is None:
+        raise typer.BadParameter("expected a duration such as 45m, 12h, 7d or 2w")
+    return float(int(match.group(1)) * _DURATION_UNITS[match.group(2)])
+
+
+def _size(value: int) -> str:
+    if value < 1024:
+        return f"{value} B"
+    size = float(value)
+    for unit in ("KiB", "MiB", "GiB"):
+        size /= 1024
+        if size < 1024:
+            break
+    return f"{size:.1f} {unit}"
+
+
+def _prune_table(rows: tuple[PruneRow, ...]) -> None:
+    typer.echo(
+        f"{'IMAGE':<12}  {'SIZE':>10}  {'LAST USED':<20}  {'ACTION':<12}  "
+        f"{'REASON':<40}  REFERENCES"
+    )
+    for row in rows:
+        image = row.image
+        typer.echo(
+            f"{image.image_id.removeprefix('sha256:')[:12]:<12}  "
+            f"{_size(row.bytes) if row.bytes else '-':>10}  "
+            f"{image.last_used_at.strftime('%Y-%m-%d %H:%M UTC'):<20}  "
+            f"{row.action:<12}  {row.reason or '-':<40}  "
+            f"{', '.join(image.references) or '-'}"
+        )
+
+
+@sandbox_app.command("prune-images")
+def prune_images_command(
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="List what would be removed; change nothing"),
+    ] = False,
+    older_than: Annotated[
+        str | None,
+        typer.Option(
+            "--older-than",
+            metavar="DURATION",
+            help="Only images last used longer ago than this (45m, 12h, 7d, 2w)",
+        ),
+    ] = None,
+    yes: Annotated[
+        bool, typer.Option("--yes", help="Remove without asking for confirmation")
+    ] = False,
+    data_root: Annotated[Path, typer.Option("--data-root")] = Path(".rsi-harness"),
+    logs_root: Annotated[Path, typer.Option("--logs-root")] = Path("logs"),
+    verbose: Annotated[bool, typer.Option("--verbose")] = False,
+) -> None:
+    """Remove the images brokered pulls first brought to this host.
+
+    Only images in the data root's pull ledger are candidates; images that
+    were on the host before the sandbox first pulled them are never touched.
+    Only this data root's run leases are checked: do not prune while runs
+    under another data root use the same images.
+    """
+    from rsi_harness.runtime.sandbox_ledger import REMOVED, WOULD_REMOVE
+
+    try:
+        older_than_seconds = None if older_than is None else _duration(older_than)
+    except typer.BadParameter as error:
+        typer.echo(f"Error: --older-than: {error}", err=True)
+        raise typer.Exit(2) from None
+
+    asked = False
+
+    def confirm(rows: tuple[PruneRow, ...]) -> bool:
+        nonlocal asked
+        if yes:
+            return True
+        asked = True
+        _prune_table(rows)
+        count = sum(1 for row in rows if row.action == WOULD_REMOVE)
+        return typer.confirm(f"Remove {count} pulled image(s)?", default=False)
+
+    try:
+        rows = _services(data_root, logs_root).prune_images(
+            older_than_seconds=older_than_seconds, dry_run=dry_run, confirm=confirm
+        )
+    except BaseException as error:
+        _fail(error, verbose=verbose)
+        return
+    if rows is None:
+        typer.echo("Prune cancelled", err=True)
+        raise typer.Exit(1)
+    if not rows:
+        typer.echo("No pulled images are recorded in the pull ledger.")
+        return
+    if asked:
+        typer.echo("Result:")
+    _prune_table(rows)
+    action = WOULD_REMOVE if dry_run else REMOVED
+    freed = sum(row.bytes for row in rows if row.action == action)
+    label = "Would free" if dry_run else "Freed"
+    typer.echo(f"{label}: {freed} bytes ({_size(freed)})")
 
 
 if __name__ == "__main__":

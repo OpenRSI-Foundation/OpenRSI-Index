@@ -1,0 +1,16 @@
+schema_version = "1.4"
+
+[task]
+name = "rsi/harbor-env-busybox"
+
+[environment]
+docker_image = "busybox:1.37.0"
+os = "linux"
+cpus = 1
+memory_mb = 256
+
+[agent]
+timeout_sec = 60
+
+[verifier]
+timeout_sec = 60

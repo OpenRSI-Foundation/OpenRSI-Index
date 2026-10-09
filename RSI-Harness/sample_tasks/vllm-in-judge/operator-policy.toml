@@ -1,0 +1,58 @@
+# Operator policy (--sandbox-policy) for sample_tasks/vllm-in-judge: the
+# one-time grant of brokered environments to every Judge round (Work gets
+# none). Review and sign it before use (docs/sandbox-operator-guide.md, "Operator steps"):
+# - nothing is built, so there is no builder exception;
+# - granting public children to a no-network Judge lets it reach the
+#   internet indirectly (RFC1918, metadata and the host stay blocked);
+# - pre-pull python:3.13-slim-bookworm and alexgshaw/regex-log:20251031.
+# Reservation (Judge 8 CPUs, 24576 MiB): 20 CPUs, 59648 MiB, 24576 MiB of
+# (soft) disk.
+pool_cpus = 32
+pool_memory_mb = 65536
+
+[environments.host]
+pool_disk_mb = 65536
+disk_floor_mb = 10240
+disk_hard_floor_mb = 4096
+request_slots_active = 8
+request_slots_queued = 32
+waiters = 64
+no_new_privileges = true
+
+[environments.judge]
+network = ["public"]
+pull = true
+registries = ["docker.io"]
+max_envs_live = 2
+max_envs_created = 16
+max_services_per_env = 2
+max_containers_live = 4
+max_cpus_live = 4
+max_memory_mb_live = 8192
+max_disk_mb_live = 24576
+cpus_per_container = 2
+memory_mb_per_container = 4096
+# Swap per service as a fraction of its memory (1: as much as memory, like
+# Docker and stock Harbor; 0: none).
+swap_ratio = 1.0
+pids_per_container = 4096
+disk_mb_per_container = 12288
+max_env_lifetime_sec = 7200
+max_wait_timeout_sec = 900
+max_execs_running = 32
+max_exec_output_bytes = 16777216
+max_jobs_running = 2
+max_pull_mb = 4096
+max_log_bytes = 1073741824
+max_upload_bytes = 4294967296
+max_download_bytes = 4294967296
+max_operations = 100000
+
+[environments.run_limits]
+max_envs_created = 32
+max_operations = 200000
+max_builds = 1
+max_pull_mb = 8192
+max_upload_bytes = 8589934592
+max_download_bytes = 8589934592
+max_log_bytes = 2147483648

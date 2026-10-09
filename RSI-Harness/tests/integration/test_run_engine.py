@@ -3287,3 +3287,75 @@ def test_real_docker_split_workdir_fake_agent_submits_two_fresh_judges(
             ]
         }
     ) == []
+
+
+@pytest.mark.integration
+def test_real_work_left_paused_by_ended_round_is_stopped_and_removed(
+    tmp_path: Path,
+) -> None:
+    """A round that outlived Work leaves it paused for run-end cleanup."""
+    from rsi_harness.runtime.production import _ProductionRunComposition
+
+    try:
+        client = docker.from_env()
+        client.ping()
+        client.images.get("busybox:1.37.0")
+    except Exception as error:
+        pytest.skip(f"local cached busybox Docker authority unavailable: {error}")
+
+    engine_root = tmp_path / "engine"
+    engine_root.mkdir()
+    work_runtime = DockerContainerRuntime(
+        client,
+        run_id=f"paused-work-{uuid4().hex}",
+        task_id="paused-work",
+        role="work",
+        task_source_dir=engine_root,
+        allowed_mount_roots=(engine_root,),
+    )
+    composition = _ProductionRunComposition(
+        client=client,
+        data_root=tmp_path / "data",
+        logs_root=tmp_path / "logs",
+        inventory=object(),
+        rsi_loop_config=RSILoopConfig(),
+        snapshot=object(),
+        firewall=object(),
+        bind_host="127.0.0.1",
+        bridge_gateway="127.0.0.1",
+        omit_gpu_device_requests_for_tests=True,
+        agent_adapter_factory=lambda _config, _runtime: object(),
+        quiescence_checker=None,
+        api_endpoints=(),
+        agent_secret_env={},
+        verifier_secret_env={},
+    )
+    composition.work_runtime = work_runtime
+    labels = work_runtime.recovery_labels
+    owned = {"label": [f"{key}={value}" for key, value in labels.items()]}
+    container = client.containers.create(
+        "busybox:1.37.0",
+        ["sh", "-c", 'trap "exit 0" TERM; while :; do sleep 1 & wait $!; done'],
+        network_mode="none",
+        labels=labels,
+        detach=True,
+    )
+    work = ContainerRef(container_id=container.id, role="work")
+    try:
+        container.start()
+        work_runtime.pause(work)
+        assert work_runtime.inspect_quiescence(work) is WorkQuiescence.PAUSED
+
+        # The coordinator's end-of-run order for a still-paused Work.
+        composition.stop_agent(work)
+        assert work_runtime.is_stopped_or_gone(work)
+        assert composition.quiesce_work(work) is WorkQuiescence.STOPPED
+        composition.remove_work(work)
+        assert client.containers.list(all=True, filters=owned) == []
+    finally:
+        for leftover in client.containers.list(all=True, filters=owned):
+            leftover.reload()
+            if leftover.attrs["State"].get("Paused"):
+                leftover.unpause()
+            leftover.remove(force=True, v=True)
+        client.close()

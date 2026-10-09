@@ -1,0 +1,21 @@
+# main is Harbor's prebuilt docker_image; kv is a sidecar with an image
+# VOLUME (/data), a healthcheck and a DNS alias.
+services:
+  main:
+    depends_on:
+      kv:
+        condition: service_healthy
+    volumes:
+      - ./seed/value.txt:/seed/value.txt:ro
+  kv:
+    image: redis:7-alpine
+    cpus: 0.5
+    mem_limit: 256m
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+    networks:
+      default:
+        aliases: [kvstore]
