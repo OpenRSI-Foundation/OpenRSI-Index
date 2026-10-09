@@ -33,6 +33,7 @@ from rsi_harness.models import (
     RunGPUPlan,
     RunPlan,
 )
+from rsi_harness.runtime.sandbox_policy import _tuples, validate_cluster_sandbox
 
 
 class EnginePayload(PersistedModel):
@@ -87,6 +88,14 @@ def load_engine_payload(path: Path) -> EnginePayload:
         value = json.loads(Path(path).read_text())
     except (OSError, json.JSONDecodeError) as error:
         raise SetupError(f"invalid cluster Engine payload {path}: {error}") from error
+    # The strict sandbox contracts take tuples, which JSON spells as arrays.
+    plan = value.get("run_plan") if isinstance(value, dict) else None
+    if isinstance(plan, dict):
+        if plan.get("sandbox") is not None:
+            plan["sandbox"] = _tuples(plan["sandbox"])
+        task = plan.get("task")
+        if isinstance(task, dict) and task.get("sandbox") is not None:
+            task["sandbox"] = _tuples(task["sandbox"])
     return EnginePayload.model_validate(value)
 
 
@@ -310,6 +319,11 @@ test -s {_quote(leaf / 'final_result.json')}
 
 def run_engine_payload(payload: EnginePayload) -> None:
     """Run the native RSI-Harness Engine inside the current scheduler allocation."""
+    validate_cluster_sandbox(
+        payload.run_plan.task.sandbox,
+        payload.run_plan.sandbox,
+        multi_node=payload.multi_node is not None,
+    )
     allocated_pools: AllocatedPools | None = None
     if payload.resources is not None:
         raw = os.environ.get("CUDA_VISIBLE_DEVICES", "")

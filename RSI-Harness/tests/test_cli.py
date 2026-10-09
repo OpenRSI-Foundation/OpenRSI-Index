@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import re
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -20,6 +21,7 @@ from rsi_harness.models import (
     RunResult,
     RunStatus,
 )
+from rsi_harness.runtime.sandbox_ledger import PruneRow
 
 
 @dataclass
@@ -28,6 +30,7 @@ class FakeServices:
     requests: list[RunRequest] = field(default_factory=list)
     recovered: list[str | None] = field(default_factory=list)
     cleaned: list[tuple[str, bool]] = field(default_factory=list)
+    pruned: list[tuple[float | None, bool]] = field(default_factory=list)
     event_callback: Callable[[str, object], None] | None = None
 
     def available_agents(self) -> tuple[str, ...]:
@@ -63,6 +66,38 @@ class FakeServices:
 
     def cleanup(self, run_id: str, *, delete_workspace: bool) -> None:
         self.cleaned.append((run_id, delete_workspace))
+
+    def prune_images(self, *, older_than_seconds, dry_run, confirm):
+        from rsi_harness.runtime.sandbox_ledger import KEPT, REMOVED, WOULD_REMOVE
+
+        self.pruned.append((older_than_seconds, dry_run))
+        rows = tuple(
+            PruneRow(image, action, reason, size)
+            for image, action, reason, size in (
+                (_pulled("a"), WOULD_REMOVE, "", 3 * 1024**2),
+                (_pulled("b"), KEPT, "used by container cccccccccccc", 0),
+            )
+        )
+        if dry_run:
+            return rows
+        if not confirm(rows):
+            return None
+        return (replace(rows[0], action=REMOVED), rows[1])
+
+
+def _pulled(letter: str):
+    from rsi_harness.runtime.sandbox_ledger import PulledImage
+
+    when = datetime(2026, 9, 30, 12, 0, tzinfo=UTC)
+    return PulledImage(
+        image_id="sha256:" + letter * 64,
+        references=(f"public.ecr.aws/docker/library/busybox:{letter}",),
+        registry="public.ecr.aws",
+        run_id="run-1",
+        last_run_id="run-1",
+        first_pulled_at=when,
+        last_used_at=when,
+    )
 
 
 @pytest.fixture
@@ -697,6 +732,7 @@ def test_run_redacts_service_construction_and_registry_failures(
     (
         ("recover", ("run-one",)),
         ("cleanup", ("run-one",)),
+        ("sandbox", ("prune-images", "--dry-run")),
     ),
 )
 def test_recovery_commands_expand_home_before_service_construction(
@@ -762,6 +798,95 @@ def test_recover_supports_one_or_all_and_cleanup_requires_confirmation(
     assert cancelled.exit_code != 0
     assert services.cleaned == [("run-one", True)]
     assert confirmed.exit_code == 0
+
+
+def test_prune_images_dry_run_lists_candidates_and_what_it_would_free(cli) -> None:
+    cli_module, services = cli
+    result = CliRunner().invoke(
+        cli_module.app,
+        ["sandbox", "prune-images", "--dry-run", "--older-than", "7d"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert services.pruned == [(7 * 86400.0, True)]
+    lines = result.output.splitlines()
+    assert lines[0].split()[:4] == ["IMAGE", "SIZE", "LAST", "USED"]
+    assert lines[1].split()[:8] == [
+        "a" * 12, "3.0", "MiB", "2026-09-30", "12:00", "UTC", "would", "remove",
+    ]
+    assert lines[1].endswith("public.ecr.aws/docker/library/busybox:a")
+    assert "kept" in lines[2] and "used by container cccccccccccc" in lines[2]
+    assert lines[3] == "Would free: 3145728 bytes (3.0 MiB)"
+
+
+def test_prune_images_asks_before_removing_unless_yes(cli) -> None:
+    cli_module, services = cli
+    runner = CliRunner()
+
+    cancelled = runner.invoke(
+        cli_module.app, ["sandbox", "prune-images"], input="n\n"
+    )
+    confirmed = runner.invoke(
+        cli_module.app, ["sandbox", "prune-images"], input="y\n"
+    )
+    unattended = runner.invoke(cli_module.app, ["sandbox", "prune-images", "--yes"])
+
+    assert cancelled.exit_code == 1
+    assert "Remove 1 pulled image(s)? [y/N]" in cancelled.output
+    assert "Prune cancelled" in cancelled.output
+    assert confirmed.exit_code == 0, confirmed.output
+    assert "Freed: 3145728 bytes (3.0 MiB)" in confirmed.output
+    # The plan before the prompt, then the result under its own header.
+    plan, result = confirmed.output.split("Result:\n")
+    assert "would remove" in plan and "removed" not in plan
+    assert result.splitlines()[0].startswith("IMAGE")
+    assert "removed" in result.splitlines()[1]
+    assert unattended.exit_code == 0, unattended.output
+    assert "[y/N]" not in unattended.output and "Result:" not in unattended.output
+    assert "removed" in unattended.output.splitlines()[1]
+    assert services.pruned == [(None, False)] * 3
+
+
+def test_the_cli_loads_the_sandbox_runtime_only_for_prune_images(
+    tmp_path: Path,
+) -> None:
+    import subprocess
+    import sys
+
+    probe = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, rsi_harness.cli; print(sorted({'docker', "
+            "'rsi_harness.runtime.sandbox_ledger'} & set(sys.modules)))",
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert probe.stdout == "[]\n"
+
+
+@pytest.mark.parametrize("duration", ["7", "0d", "1y", "-3h", "1.5h", "d"])
+def test_prune_images_rejects_a_malformed_duration(cli, duration) -> None:
+    cli_module, services = cli
+    result = CliRunner().invoke(
+        cli_module.app, ["sandbox", "prune-images", "--older-than", duration]
+    )
+    assert result.exit_code == 2
+    assert "--older-than" in result.output
+    assert services.pruned == []
+
+
+def test_prune_images_with_an_empty_ledger(cli, monkeypatch) -> None:
+    cli_module, services = cli
+    monkeypatch.setattr(
+        services, "prune_images", lambda **_: (), raising=False
+    )
+    result = CliRunner().invoke(cli_module.app, ["sandbox", "prune-images"])
+    assert result.exit_code == 0
+    assert result.output == "No pulled images are recorded in the pull ledger.\n"
 
 
 def test_visualize_runs_stock_rsi_loop_app_with_generated_task_metadata(

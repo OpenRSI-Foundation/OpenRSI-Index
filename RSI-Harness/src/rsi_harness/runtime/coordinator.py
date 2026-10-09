@@ -39,6 +39,7 @@ from rsi_harness.runtime.recovery import (
     WorkdirVolumeResourceLease,
 )
 from rsi_harness.runtime.redaction import redact_text
+from rsi_harness.runtime.sandbox_budget import LeaseMutator
 from rsi_harness.runtime.submissions import (
     EmbeddedJudgeServer,
     JudgeEndpoint,
@@ -510,7 +511,10 @@ class _RoundEvaluator:
         persist_recovery: Callable[[str], None],
         update_work: Callable[..., None],
         update_judge: Callable[..., None],
+        sandbox_lifecycle: Any = None,
     ) -> None:
+        from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
+        self._sandbox_lifecycle = sandbox_lifecycle or NullSandboxLifecycle()
         self._backend = backend
         self._state = state
         self._transition = transition
@@ -534,14 +538,23 @@ class _RoundEvaluator:
         except StateTransitionError:
             raise
         except Exception:
-            if not self.recovery_required and self._state.status in {
+            if (not self.recovery_required and self._sandbox_lifecycle.can_resume
+                    and self._state.status in {
                 RunStatus.SNAPSHOTTING,
                 RunStatus.JUDGING,
-            }:
+            }):
                 self._transition(RunStatus.AGENT_RUNNING)
                 self._backend.record_event(
                     "work_resume", request.work_container.container_id
                 )
+            elif (not self.recovery_required
+                  and self._sandbox_lifecycle.work_ended_normally
+                  and self._state.status in {
+                      RunStatus.SNAPSHOTTING,
+                      RunStatus.JUDGING,
+                  }):
+                # As below: Work ended during this round and stays paused.
+                self._transition(RunStatus.AGENT_RUNNING)
             raise
         if not isinstance(report, SubmissionReport):
             raise TypeError("submission evaluator must return SubmissionReport")
@@ -554,11 +567,20 @@ class _RoundEvaluator:
         if self.recovery_required:
             self.recovery_error = report.error
             self._persist_recovery(report.error or "recovery_required")
-        elif self._state.status != RunStatus.AGENT_RUNNING:
+        elif (self._sandbox_lifecycle.can_resume
+              and self._state.status != RunStatus.AGENT_RUNNING):
             self._transition(RunStatus.AGENT_RUNNING)
             self._backend.record_event(
                 "work_resume", request.work_container.container_id
             )
+        elif (self._sandbox_lifecycle.work_ended_normally
+              and self._state.status in {
+                  RunStatus.SNAPSHOTTING,
+                  RunStatus.JUDGING,
+              }):
+            # Work ended during this round and stays paused for removal;
+            # only the round phase closes, nothing is resumed.
+            self._transition(RunStatus.AGENT_RUNNING)
         return report
 
     def resource_event(self, name: str, **values: object) -> None:
@@ -823,11 +845,16 @@ class RunCoordinator:
         lease_store: LeaseStore,
         run_id_factory: Callable[[], str] = lambda: uuid.uuid4().hex,
         clock: Any,
+        on_lease_ready: Callable[[LeaseMutator], None] | None = None,
+        sandbox_lifecycle: Any = None,
     ) -> None:
+        from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
+        self._sandbox_lifecycle = sandbox_lifecycle or NullSandboxLifecycle()
         self._backend = backend
         self._leases = lease_store
         self._run_id_factory = run_id_factory
         self._clock = clock
+        self._on_lease_ready = on_lease_ready
         self.phase_history: tuple[RunStatus, ...] = ()
 
     def run(self, request: RunRequest) -> RunResult:
@@ -942,34 +969,39 @@ class RunCoordinator:
                 self._leases.write(updated)
                 lease = updated
 
+        def mutate_lease(
+            transform: Callable[[ResourceLease], ResourceLease],
+        ) -> ResourceLease:
+            with authority:
+                if lease is None:
+                    raise InfrastructureError("run lease is not initialized")
+                updated = transform(lease)
+                if updated is not lease:
+                    write(updated)
+                assert lease is not None
+                return lease
+
         def transition(status: RunStatus) -> None:
-            state.transition(status)
-            if lease is None:
-                return
-            history = lease.phase_history
-            if history[-1:] != (status.value,):
-                history += (status.value,)
-            write(
-                lease.model_copy(
+            with authority:
+                state.transition(status)
+                if lease is None:
+                    return
+                history = lease.phase_history
+                if history[-1:] != (status.value,):
+                    history += (status.value,)
+                mutate_lease(lambda current: current.model_copy(
                     update={"phase": status.value, "phase_history": history}
-                )
-            )
+                ))
 
         def update_work(**updates: object) -> None:
-            assert lease is not None
-            write(
-                lease.model_copy(
-                    update={"work": lease.work.model_copy(update=updates)}
-                )
-            )
+            mutate_lease(lambda current: current.model_copy(
+                update={"work": current.work.model_copy(update=updates)}
+            ))
 
         def update_judge(**updates: object) -> None:
-            assert lease is not None
-            write(
-                lease.model_copy(
-                    update={"judge": lease.judge.model_copy(update=updates)}
-                )
-            )
+            mutate_lease(lambda current: current.model_copy(
+                update={"judge": current.judge.model_copy(update=updates)}
+            ))
 
         def persist_recovery(message: str) -> None:
             assert lease is not None
@@ -1024,11 +1056,11 @@ class RunCoordinator:
                         image_ref=retained_work_rollback.image_ref,
                     )
                 )
-            write(
-                lease.model_copy(
+            mutate_lease(
+                lambda current: current.model_copy(
                     update={
                         "recovery_required": True,
-                        "work": lease.work.model_copy(update=work_updates),
+                        "work": current.work.model_copy(update=work_updates),
                         "error": redact_text(message),
                     }
                 )
@@ -1044,23 +1076,54 @@ class RunCoordinator:
             )
             persist_recovery(setup_recovery_error)
 
-        def emergency_cleanup() -> None:
+        sandbox_cancelled = sandbox_closed = sandbox_released = False
+
+        def quiesce_parent() -> bool:
+            """Contain execution even when resource deletion must remain blocked."""
+            nonlocal work_quiescence, cleanup_blocked
+            if work is None or work_removed or work_quiescence is not None:
+                return True
+            try:
+                update_work(planned_quiescence="pause-if-running")
+                observed = self._backend.quiesce_work(work)
+                work_quiescence = WorkQuiescence(observed)
+                update_work(
+                    planned_quiescence=None,
+                    paused=work_quiescence is WorkQuiescence.PAUSED,
+                    stopped=work_quiescence is WorkQuiescence.STOPPED,
+                )
+                return True
+            except BaseException as error:
+                cleanup_errors.append(self._error(error))
+                cleanup_blocked = True
+                if lease is not None:
+                    persist_recovery(f"Work quiescence is unproven: {error}")
+                return False
+
+        def cleanup_resources() -> None:
             nonlocal drained, drain_failed, work_removed, network_removed
             nonlocal work_policy_removed, agent_stopped, work_quiescence
             nonlocal planned_retained_work, retained_work, retention_attempted
             nonlocal retained_work_rollback
             nonlocal cleanup_blocked, retained_identity_durable
-            if (
-                drain_failed
-                or cleanup_blocked
-                or (
-                    work is not None
-                    and retention_attempted
-                    and not retained_identity_durable
-                )
-            ):
-                return
-            if server is not None and not drained:
+            nonlocal sandbox_cancelled, sandbox_closed, sandbox_released
+            if not sandbox_cancelled:
+                sandbox_cancelled = True
+                try:
+                    # Retire only Work so an accepted round is judged to
+                    # completion under its own deadline during the drain;
+                    # close() below still cancels the whole sandbox run.
+                    if cancelled:
+                        self._sandbox_lifecycle.cancel_run()
+                    else:
+                        self._sandbox_lifecycle.cancel_work()
+                except BaseException as error:
+                    cleanup_errors.append(self._error(error))
+                    cleanup_blocked = True
+                    if lease is not None:
+                        persist_recovery(f"sandbox revocation unproven: {error}")
+            # Even failed submission drains must revoke and stop endpoint services.
+            if server is not None and not drained and not drain_failed:
                 try:
                     server.owner.stop()
                     drained = True
@@ -1069,12 +1132,30 @@ class RunCoordinator:
                     cleanup_errors.append(self._error(error))
                     if lease is not None:
                         persist_recovery(f"server drain unproven: {error}")
-                    return
+            if not sandbox_closed:
+                sandbox_closed = True
+                try:
+                    self._sandbox_lifecycle.close()
+                except BaseException as error:
+                    cleanup_errors.append(self._error(error))
+                    cleanup_blocked = True
+                    if lease is not None:
+                        persist_recovery(f"sandbox cleanup unproven: {error}")
             if (
-                (lease is not None and lease.recovery_required)
+                drain_failed
+                or cleanup_blocked
+                or (
+                    work is not None
+                    and retention_attempted
+                    and not retained_identity_durable
+                )
+                or (lease is not None and lease.recovery_required)
                 or (evaluator is not None and evaluator.recovery_required)
                 or setup_recovery_required
             ):
+                # Do not stop/unpause a paused parent while child containment is
+                # uncertain. Quiescence only pauses running Work or attests stop.
+                quiesce_parent()
                 return
             if work is not None and not work_removed and not agent_stopped:
                 try:
@@ -1085,23 +1166,10 @@ class RunCoordinator:
                     cleanup_blocked = True
                     if lease is not None:
                         persist_recovery(f"Agent stop is unproven: {error}")
+                    quiesce_parent()
                     return
-            if work is not None and not work_removed and work_quiescence is None:
-                try:
-                    update_work(planned_quiescence="pause-if-running")
-                    observed = self._backend.quiesce_work(work)
-                    work_quiescence = WorkQuiescence(observed)
-                    update_work(
-                        planned_quiescence=None,
-                        paused=work_quiescence is WorkQuiescence.PAUSED,
-                        stopped=work_quiescence is WorkQuiescence.STOPPED,
-                    )
-                except BaseException as error:
-                    cleanup_errors.append(self._error(error))
-                    cleanup_blocked = True
-                    if lease is not None:
-                        persist_recovery(f"Work quiescence is unproven: {error}")
-                    return
+            if not quiesce_parent():
+                return
             if (
                 work is not None
                 and not work_removed
@@ -1214,6 +1282,43 @@ class RunCoordinator:
                     cleanup_errors.append(self._error(error))
                     if lease is not None:
                         persist_recovery(f"Work network removal unproven: {error}")
+                    return
+            if not sandbox_released:
+                try:
+                    self._sandbox_lifecycle.release_resources()
+                    sandbox_released = True
+                except BaseException as error:
+                    cleanup_errors.append(self._error(error))
+                    if lease is not None:
+                        persist_recovery(
+                            f"sandbox reservation release unproven: {error}"
+                        )
+
+        def emergency_cleanup() -> None:
+            nonlocal cleanup_blocked, work_quiescence
+            try:
+                cleanup_resources()
+            except BaseException:
+                cleanup_blocked = True
+                # A failed lease write must not leave already-owned Work
+                # executing. The last successful write remains our authority;
+                # this fallback only contains it, never releases resources or
+                # invents a durable observation. Unknown identities still fail
+                # closed before mutation.
+                if (
+                    work is not None
+                    and not work_removed
+                    and work_quiescence is None
+                    and lease is not None
+                    and lease.work.container_id == work.container_id
+                ):
+                    try:
+                        work_quiescence = WorkQuiescence(
+                            self._backend.quiesce_work(work)
+                        )
+                    except BaseException as error:
+                        cleanup_errors.append(self._error(error))
+                raise
 
         try:
             with _cancellation_signals(), self._leases.lock(run_id):
@@ -1231,14 +1336,16 @@ class RunCoordinator:
                         gpu_plan=gpu_plan,
                     )
                     write(lease)
+                    if self._on_lease_ready is not None:
+                        self._on_lease_ready(mutate_lease)
                     self._backend.record_event("gpu_plan", gpu_plan)
                     images = self._backend.prepare_images(definition)
                     plan = self._backend.prepare_plan(
                         definition, images, gpu_plan, request, run_id
                     )
                     validate_run_plan_mount_topology(plan)
-                    write(
-                        lease.model_copy(
+                    mutate_lease(
+                        lambda current: current.model_copy(
                             update={
                                 "rootfs_snapshot_mode": plan.rootfs_snapshot_mode
                             }
@@ -1252,6 +1359,7 @@ class RunCoordinator:
                         persist_recovery=persist_recovery,
                         update_work=update_work,
                         update_judge=update_judge,
+                        sandbox_lifecycle=self._sandbox_lifecycle,
                     )
                     server = self._backend.start_server(
                         evaluator, artifacts, self._clock
@@ -1525,8 +1633,8 @@ class RunCoordinator:
                             + (() if captured is None else (self._error(captured),))
                         )
                     )
-                    write(
-                        lease.model_copy(
+                    mutate_lease(
+                        lambda current: current.model_copy(
                             update={
                                 "phase": state.status.value,
                                 "status": state.status,

@@ -819,6 +819,72 @@ def test_run_copies_prompt_and_executes_prepared_command(tmp_path: Path) -> None
     assert result == AgentRunResult(exit_code=7, output="agent output")
 
 
+def test_run_forwards_exec_start_callback_only_after_prompt_copy(
+    tmp_path: Path,
+) -> None:
+    events: list[str] = []
+
+    class DeadlineAwareRuntime(RecordingAgentRuntime):
+        def copy_to(
+            self,
+            container: ContainerRef,
+            source: Path,
+            target: PurePosixPath,
+        ) -> None:
+            super().copy_to(container, source, target)
+            events.append("prompt_copied")
+
+        def exec(self, *args: object, on_exec_start=None, **kwargs: object):
+            events.append("exec_entered")
+            assert on_exec_start is not None
+            on_exec_start(4321.5)
+            return self.result
+
+    runtime = DeadlineAwareRuntime()
+    plan = make_run_plan(tmp_path)
+    plan = plan.model_copy(
+        update={
+            "task": plan.task.model_copy(
+                update={
+                    "agent": plan.task.agent.model_copy(
+                        update={"install_stop_hook": False}
+                    )
+                }
+            )
+        }
+    )
+    adapter = RSILoopAgentAdapter(RSILoopConfig(), runtime=runtime)
+    prepared = adapter.prepare(
+        AgentPrepareRequest(
+            run_plan=plan,
+            prompt_path=(tmp_path / "prompt.md").resolve(),
+        )
+    )
+    container = ContainerRef(container_id="work-1", role="work")
+    adapter.install_hooks(
+        AgentHookRequest(
+            run_plan=plan,
+            container=container,
+            submit_url="http://control.internal:8123",
+            token="runtime-only-token",
+        )
+    )
+
+    def record_deadline(deadline: float) -> None:
+        events.append(f"deadline:{deadline}")
+
+    adapter.run(
+        AgentRunRequest(
+            prepared=prepared,
+            container=container,
+            timeout_seconds=12.5,
+            on_exec_start=record_deadline,
+        )
+    )
+
+    assert events == ["prompt_copied", "exec_entered", "deadline:4321.5"]
+
+
 def test_run_live_output_callback_is_protected_by_runtime_redaction(
     tmp_path: Path,
 ) -> None:

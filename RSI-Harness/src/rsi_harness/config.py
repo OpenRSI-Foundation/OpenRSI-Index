@@ -4,6 +4,8 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from rsi_harness.runtime.sandbox_contracts import SandboxPolicy
+
 
 class EngineConfig(BaseModel):
     """Runtime settings that must never be serialized into a :class:`RunPlan`."""
@@ -14,6 +16,7 @@ class EngineConfig(BaseModel):
     logs_root: Path = Path("logs")
     secret_env: dict[str, str] = Field(default_factory=dict)
     verifier_secret_env: dict[str, str] = Field(default_factory=dict)
+    sandbox_policy: SandboxPolicy | None = None
 
     @field_validator("data_root", "logs_root", mode="after")
     @classmethod

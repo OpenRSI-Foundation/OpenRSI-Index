@@ -1,0 +1,9 @@
+# Images of sample_tasks/swebench-in-judge for prepull_images.sh, by the
+# digests the tasks name (their docker_image): the SWE-bench Verified
+# evaluation images of the vendored tasks, the `latest` tags on Docker Hub
+# as of 2026-10-01. About 1.5 GB to download and 4 GB unpacked; the two
+# pytest images share all but their last layer. The sample's policy
+# (sample_tasks/swebench-in-judge/operator-policy.toml) downloads nothing, so pull these first.
+docker.io/swebench/sweb.eval.x86_64.pallets_1776_flask-5014@sha256:bde4fbdafa36141d4396944da88ec37aabdef612ed36920090675bccd0ca5d72
+docker.io/swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7205@sha256:1c6124cd5254db8831df455575eff2795b0cbeb849d10846388e30e00870e495
+docker.io/swebench/sweb.eval.x86_64.pytest-dev_1776_pytest-7236@sha256:54f89a5c1611eac42d3d7b7c03e17a43e9e70c604cd8439f45bf68102fc3ff09

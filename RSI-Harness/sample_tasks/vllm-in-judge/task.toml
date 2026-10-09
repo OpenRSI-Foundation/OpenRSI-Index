@@ -1,0 +1,56 @@
+schema_version = "1.4"
+
+[task]
+name = "rsi/vllm-in-judge"
+
+# Work and the Judge share this image (the Judge is derived from Work): vLLM,
+# Harbor 0.21.0 and the Hub CLI. Work needs no GPU; it places a checkpoint in
+# the WORKDIR, the Judge's read-only snapshot of which vLLM serves on the
+# Judge's own GPU.
+[environment]
+os = "linux"
+workdir = "/workspace"
+cpus = 8
+memory_mb = 24576
+gpus = 0
+build_timeout_sec = 3600
+network_mode = "no-network"
+
+# Work fetches the checkpoint from the Hugging Face Hub. Its submit waits
+# for the Judge round, so its time covers the download and a whole round
+# (the verifier's timeout_sec) with room to spare.
+[agent]
+timeout_sec = 5400
+network_mode = "public"
+
+# The Judge has no network of its own: vLLM listens on its loopback, and
+# only the task environments the broker creates get public egress.
+[verifier]
+timeout_sec = 3600
+network_mode = "no-network"
+
+# The fixed procedure (/tests/test.sh) runs terminus-2 over every task in
+# /tests/harbor-tasks; the operator may narrow or tune one run through the
+# host environment, e.g. RSI_VLLM_TASKS=rsi/hello-file.
+[verifier.env]
+RSI_VLLM_TASKS = "${RSI_VLLM_TASKS:-}"
+RSI_VLLM_MAX_TURNS = "${RSI_VLLM_MAX_TURNS:-12}"
+RSI_VLLM_CONCURRENCY = "${RSI_VLLM_CONCURRENCY:-2}"
+
+# One GPU for each Judge round (with CPU-only Work the run needs an explicit
+# pool: rsi-harness run --gpus 4).
+[metadata.rsi_harness.verifier]
+gpus = 1
+
+# Brokered environments (metadata version 2) for the Judge only: Harbor
+# pulls the tasks' images (cached python:3.13-slim-bookworm and
+# alexgshaw/regex-log) and runs them with public egress, which terminus-2
+# needs to install tmux and the TB2 verifier needs for uv. Nothing is built.
+# The operator approves this once per run with --sandbox-policy (see
+# sample_tasks/vllm-in-judge/operator-policy.toml).
+[metadata.rsi_harness.sandbox]
+version = 2
+
+[metadata.rsi_harness.sandbox.environments.judge]
+network = ["public"]
+pull = true

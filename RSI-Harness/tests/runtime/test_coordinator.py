@@ -1790,7 +1790,7 @@ def test_terminal_work_is_quiesced_retained_and_removed_in_exact_order(
     )
 
 
-def test_unproven_agent_stop_blocks_quiescence_retention_and_removal(
+def test_unproven_agent_stop_quiesces_work_but_blocks_retention_and_removal(
     tmp_path,
 ) -> None:
     backend = ScriptedBackend(tmp_path)
@@ -1814,11 +1814,10 @@ def test_unproven_agent_stop_blocks_quiescence_retention_and_removal(
     assert retained.work.network_id == "network-work-1"
     assert "Agent stop authority is unproven" in (retained.error or "")
     assert ("agent_stop", "work-1") in backend.events
+    assert retained.work.paused
     assert not any(
         name
         in {
-            "work_pause",
-            "work_stopped",
             "retained_plan",
             "retained_acquire",
             "work_remove",
