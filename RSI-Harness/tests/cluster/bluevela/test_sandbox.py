@@ -42,7 +42,14 @@ from rsi_harness.runtime.sandbox_policy import (
     validate_sandbox_policy,
 )
 from rsi_harness.runtime.sandbox_server import SANDBOX_TARGET
-from tests.cluster.bluevela.test_adapter import RecordingScheduler, _profile, _request
+from tests.cluster.bluevela.test_adapter import (
+    RecordingScheduler,
+    _profile,
+    _request,
+)
+from tests.cluster.bluevela.test_adapter import (
+    _fake_codex_runtime as _fake_codex_runtime,
+)
 from tests.cluster.bluevela.test_engine import _multi_payload, _payload
 from tests.e2b_fake import FakeE2B
 from tests.factories import make_run_plan, write_harbor_task
