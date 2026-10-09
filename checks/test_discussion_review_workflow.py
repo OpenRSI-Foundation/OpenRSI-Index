@@ -1,5 +1,7 @@
+import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -66,6 +68,91 @@ def test_review_requires_dedicated_proxy_config_before_calling_api(tmp_path, mis
     assert not (tmp_path / "review.log").exists()
 
 
+@pytest.mark.parametrize("exit_code", [0, 1])
+def test_review_streams_diagnostics_and_preserves_the_reviewer_exit_status(tmp_path, exit_code):
+    review = step_named("Run rubric review")
+    uv = tmp_path / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        "echo 'OpenAI temporary error (status=502); retrying.' >&2\n"
+        "echo '{\"decision\":\"Pass\",\"review\":\"Decision: Pass\"}'\n"
+        f"exit {exit_code}\n"
+    )
+    uv.chmod(0o755)
+    output = tmp_path / "output"
+    result = subprocess.run(
+        ["bash", "-e", "-c", review["run"]],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+            "REUSED_REVIEW_ID": "",
+            "OPENAI_API_KEY": "test-key",
+            "OPENAI_BASE_URL": "https://proxy.example/v1",
+            "GITHUB_OUTPUT": str(output),
+        },
+        capture_output=True, text=True,
+    )
+    assert result.returncode == exit_code
+    assert "status=502" in result.stderr
+    assert "status=502" in (tmp_path / "review.log").read_text()
+    assert result.stdout == ""
+    assert output.exists() == (exit_code == 0)
+    assert (tmp_path / "review_text.md").exists() == (exit_code == 0)
+    assert review["env"]["PYTHONUNBUFFERED"] == "1"
+
+
+@pytest.mark.parametrize("progress_id", ["", "current-review-comment"])
+@pytest.mark.parametrize(
+    "kind,expected",
+    [
+        ("provider_authentication", "repair the service credentials"),
+        ("provider", "once the service is available"),
+        ("", "inspect the workflow run"),
+    ],
+)
+def test_failed_review_publishes_recovery_guidance_and_exact_attempt_link(
+    tmp_path, progress_id, kind, expected
+):
+    failure = step_named("Post or update failed review comment")
+    python = tmp_path / "python3"
+    python.write_text(
+        f"#!{sys.executable}\n"
+        "import json, pathlib, sys\n"
+        "bodies = [arg[5:] for arg in sys.argv if arg.startswith('body=')]\n"
+        "if bodies:\n"
+        "    pathlib.Path('published.json').write_text(json.dumps(bodies))\n"
+        "else:\n"
+        "    print('<!-- rubric-review-status:running -->')\n"
+    )
+    python.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-e", "-c", failure["run"]],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+            "FAILURE_KIND": kind,
+            "PROGRESS_COMMENT_ID": progress_id,
+            "DISCUSSION_ID": "discussion-id",
+            "GITHUB_SERVER_URL": "https://github.com",
+            "GITHUB_REPOSITORY": "OpenRSI-Foundation/OpenRSI-Index",
+            "GITHUB_RUN_ID": "37943648243",
+            "GITHUB_RUN_ATTEMPT": "2",
+        },
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    [body] = json.loads((tmp_path / "published.json").read_text())
+    assert expected in body
+    assert "<!-- rubric-review-status:failed -->" in body
+    assert "actions/runs/37943648243/attempts/2" in body
+    assert "Edit the proposal to retry" not in body
+    if kind:
+        assert "Your proposal has not been evaluated; no proposal edit is needed" in body
+    assert failure["env"]["FAILURE_KIND"] == "${{ steps.review.outputs.failure_kind }}"
+
+
 def test_review_workflow_supersedes_only_unfinished_reviews_then_posts_fresh_progress():
     steps = parsed_steps()
     progress = step_named("Post or update running review comment")
@@ -94,7 +181,7 @@ def test_review_workflow_supersedes_only_unfinished_reviews_then_posts_fresh_pro
     assert "<!-- rubric-review-status:running -->" in progress["run"]
     assert "<!-- rubric-review-status:superseded -->" in progress["run"]
     assert "Proposal review is running" in progress["run"]
-    assert "usually takes about 1 minute" in progress["run"]
+    assert "Provider errors are retried automatically" in progress["run"]
     assert "This comment will update when the review finishes" not in progress["run"]
     assert "updateDiscussionComment" in progress["run"]
     assert "addDiscussionComment" in progress["run"]
@@ -147,6 +234,7 @@ def test_review_workflow_replaces_only_current_progress_with_generic_failure():
     )
     assert steps.index(failure) == steps.index(failure_token) + 1
     assert "Proposal review failed before completion" in failure["run"]
+    assert "Edit the proposal to retry" not in failure["run"]
     assert "updateDiscussionComment" in failure["run"]
     assert "addDiscussionComment" in failure["run"]
     assert "EXISTING_COMMENT_ID" not in failure["run"]

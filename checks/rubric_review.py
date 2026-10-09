@@ -27,7 +27,7 @@ from typing import NamedTuple
 from urllib.parse import quote, unquote, urlsplit
 
 import httpx
-from openai import AsyncOpenAI, OpenAI
+from openai import APIConnectionError, APIStatusError, AsyncOpenAI, OpenAI
 
 if __name__ == "__main__":
     from openai_retry import async_retry_openai, retry_openai
@@ -276,11 +276,16 @@ def _clean_field_value(value: str) -> str | None:
     sha = re.search(r"\b[0-9a-fA-F]{40}(?:[0-9a-fA-F]{24})?\b", value)
     if sha:
         return sha.group()
-    value = _MARKDOWN_LINK_RE.sub(r"\1", value)
-    cleaned = value.strip().strip("`*_ ")
+    # A formatted ref can be followed by explanatory prose. An unformatted
+    # multi-word field is not a ref: taking its first word turns placeholders
+    # such as "Pinned at submission" into a nonexistent branch named "Pinned".
+    explicit = re.search(r"`([^`\n]+)`", value) or _MARKDOWN_LINK_RE.search(value)
+    if explicit:
+        value = explicit.group(1)
+    cleaned = unquote(value.strip().strip("`*_ ").rstrip(",.;"))
     if not cleaned or cleaned.lower() in {"-", "n/a", "none", "tbd"}:
         return None
-    return unquote(cleaned.split()[0].rstrip(",.;")) or None
+    return None if re.search(r"\s", cleaned) else cleaned
 
 
 def _clean_repo_path(value: str) -> str | None:
@@ -837,6 +842,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def report_provider_failure(error: APIConnectionError | APIStatusError) -> None:
+    """Report a failed review without turning a provider outage into a verdict."""
+    status = getattr(error, "status_code", None)
+    authentication_failed = status in (401, 403) or (
+        status == 502 and "upstream authentication failed" in error.message.lower()
+    )
+    kind = "provider_authentication" if authentication_failed else "provider"
+    if output_path := os.environ.get("GITHUB_OUTPUT"):
+        with Path(output_path).open("a", encoding="utf-8") as output:
+            output.write(f"failure_kind={kind}\n")
+    # Only fixed diagnostics leave this boundary. Provider response bodies may
+    # contain credentials, request content, or internal routing information.
+    detail = "connection error" if status is None else f"HTTP {status}"
+    print(f"Review provider request failed ({detail}). No review was completed.",
+          file=sys.stderr, flush=True)
+    if authentication_failed:
+        print("A maintainer must repair the review provider authentication before rerunning.",
+              file=sys.stderr, flush=True)
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -880,7 +905,11 @@ def main(argv: list[str] | None = None) -> None:
             file=sys.stderr,
         )
 
-    review = call_openai(rubric, user_input)
+    try:
+        review = call_openai(rubric, user_input)
+    except (APIConnectionError, APIStatusError) as error:
+        report_provider_failure(error)
+        raise SystemExit(1) from None
     decision = extract_decision(review)
     if decision is None:
         print(

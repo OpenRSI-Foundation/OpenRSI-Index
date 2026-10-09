@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 import pytest
 import httpx
-from openai import RateLimitError
+from openai import APIConnectionError, APIStatusError, RateLimitError
 
 from checks.github_retry import GitHubTransientError, retry_call
 
@@ -212,6 +212,45 @@ def test_parse_repository_reference_reads_table_paths_and_tag(review, ref_value)
         "v1.2.3",
         ("configs/train.yaml", "scripts/train.py", "README.md", "evals/run.py"),
     )
+
+
+@pytest.mark.parametrize(
+    "ref_value",
+    [
+        "Pinned at submission; the task vendors the complete loop, scorer, and dataset.",
+        "To be pinned before execution.",
+        "N/A (not yet pinned)",
+        "`Pinned at submission`",
+    ],
+)
+@pytest.mark.parametrize("table", [False, True])
+def test_repository_ref_prose_is_not_truncated_into_a_branch(review, ref_value, table):
+    field = (
+        f"| Research Question | Exact commit/tag | {ref_value} |"
+        if table else f"Exact commit/tag: {ref_value}"
+    )
+    reference = review.parse_repository_reference(
+        f"Repository URL: https://github.com/aujurd22/selflearner\n{field}"
+    )
+    assert reference.ref is None
+
+
+@pytest.mark.parametrize(
+    "ref_value,expected",
+    [
+        ("main", "main"),
+        ("feature/new-eval", "feature/new-eval"),
+        ("`feature/new-eval` (candidate branch)", "feature/new-eval"),
+        ("Pinned to `v1.2.3` for the pilot.", "v1.2.3"),
+        ("[v1.2.3](https://github.com/example/repo/tree/v1.2.3) (release)", "v1.2.3"),
+    ],
+)
+def test_repository_ref_preserves_explicit_refs_with_annotations(review, ref_value, expected):
+    reference = review.parse_repository_reference(
+        "Repository URL: https://github.com/example/repo\n"
+        f"Exact commit/tag: {ref_value}"
+    )
+    assert reference.ref == expected
 
 
 @pytest.mark.parametrize(
@@ -451,6 +490,33 @@ def test_fetch_repository_evidence_uses_default_branch_but_records_missing_ref(r
     assert "Requested ref: main" in evidence
     assert f"Resolved commit SHA: {resolved_sha}" in evidence
     assert "Proposal supplied ref: no" in evidence
+
+
+def test_submission_placeholder_resolves_default_branch_and_fetches_pinned_files(review):
+    proposal = """
+| Research Question | Repository URL | https://github.com/aujurd22/selflearner |
+| Research Question | Exact commit/tag | Pinned at submission; the task vendors the complete loop, scorer, and dataset. |
+| Reference Baseline | Repository evidence paths | `propose_check.py` (arm-switchable gates at SELFLEARNER_ARM), `run_overnight.py` |
+"""
+    api = "https://api.github.com/repos/aujurd22/selflearner"
+    sha = "d" * 40
+    client = FakeGitHubClient({
+        (api, ()): {"default_branch": "master"},
+        (f"{api}/commits/master", ()): {"sha": sha},
+        (f"{api}/git/trees/{sha}", (("recursive", "1"),)): {"tree": []},
+        (f"{api}/contents/propose_check.py", (("ref", sha),)): encoded_file("# admission loop"),
+        (f"{api}/contents/run_overnight.py", (("ref", sha),)): encoded_file("# run loop"),
+    })
+    evidence = review.fetch_repository_evidence(
+        review.parse_repository_reference(proposal), client=client
+    )
+    assert "Repository evidence status: fetched" in evidence
+    assert "Proposal supplied ref: no" in evidence
+    assert "Requested ref: master" in evidence
+    assert f"Resolved commit SHA: {sha}" in evidence
+    assert "# admission loop" in evidence and "# run loop" in evidence
+    assert not any("/commits/Pinned" in url for url, _ in client.calls)
+    assert len([url for url, _ in client.calls if "/commits/" in url]) == 1
 
 
 def test_fetch_repository_evidence_resolves_slash_branch_once(review):
@@ -1141,3 +1207,61 @@ def test_main_exits_unsuccessfully_when_judge_has_no_canonical_decision(
         review.main([str(proposal), "--rubric", str(rubric)])
 
     assert exc.value.code != 0
+
+
+@pytest.mark.parametrize(
+    "status,message,kind",
+    [
+        (502, "Upstream authentication failed, please contact administrator", "provider_authentication"),
+        (401, "Invalid key", "provider_authentication"),
+        (403, "Forbidden", "provider_authentication"),
+        (502, "Upstream service temporarily unavailable", "provider"),
+        (503, "Service temporarily unavailable", "provider"),
+        (429, "Rate limited", "provider"),
+        (400, "Invalid provider request", "provider"),
+        (None, "Connection failed", "provider"),
+    ],
+)
+def test_main_reports_provider_failure_without_a_verdict_or_response_body(
+    review, monkeypatch, tmp_path, capsys, status, message, kind
+):
+    proposal = tmp_path / "proposal.md"
+    rubric = tmp_path / "rubric.md"
+    output = tmp_path / "output"
+    proposal.write_text("A proposal with no repository yet.")
+    rubric.write_text("A private rubric.")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    request = httpx.Request("POST", "https://proxy.example/v1/responses")
+    if status is None:
+        error = APIConnectionError(request=request)
+    else:
+        error = APIStatusError(
+            message + " sensitive-provider-body",
+            response=httpx.Response(status, request=request),
+            body={"message": message + " sensitive-provider-body"},
+        )
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(review, "call_openai", fail)
+    with pytest.raises(SystemExit) as exc:
+        review.main([str(proposal), "--rubric", str(rubric)])
+
+    assert exc.value.code == 1
+    assert output.read_text() == f"failure_kind={kind}\n"
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "No review was completed" in captured.err
+    assert "sensitive-provider-body" not in captured.err
+    assert ("repair the review provider authentication" in captured.err) == (
+        kind == "provider_authentication"
+    )
+
+
+def test_provider_failure_reporting_also_works_outside_actions(review, monkeypatch, capsys):
+    monkeypatch.delenv("GITHUB_OUTPUT", raising=False)
+    review.report_provider_failure(
+        APIConnectionError(request=httpx.Request("POST", "https://proxy.example/v1/responses"))
+    )
+    assert "connection error" in capsys.readouterr().err

@@ -65,7 +65,7 @@ jobs:
           <!-- rubric-review-status:running -->
           ## 📋 Task Proposal Rubric Review
 
-          ⏳ Proposal review is running. This usually takes about 1 minute.
+          ⏳ Proposal review is running. Provider errors are retried automatically; this can take 30 minutes or longer.
           COMMENT_EOF
           )
 
@@ -166,6 +166,7 @@ jobs:
         env:
           REUSED_REVIEW_ID: ${{ steps.reuse.outputs.review_comment_id }}
           REUSED_DECISION: ${{ steps.reuse.outputs.decision }}
+          PYTHONUNBUFFERED: "1"
           # Proxy credentials shared with the PR trial workflows.
           OPENAI_API_KEY: ${{ secrets.RUBRIC_API_KEY }}
           OPENAI_BASE_URL: ${{ vars.RUBRIC_BASE_URL || secrets.RUBRIC_BASE_URL }}
@@ -178,8 +179,7 @@ jobs:
           fi
           : "${OPENAI_API_KEY:?Set the RUBRIC_API_KEY repository secret}"
           : "${OPENAI_BASE_URL:?Set the RUBRIC_BASE_URL repository variable or secret including /v1}"
-          if ! uv run checks/rubric_review.py proposal.md > result.json 2> review.log; then
-            cat review.log
+          if ! uv run checks/rubric_review.py proposal.md > result.json 2> >(tee review.log >&2); then
             exit 1
           fi
 
@@ -423,14 +423,29 @@ jobs:
           BOT_LOGIN: ${{ steps.failure-token.outputs.app-slug }}
           DISCUSSION_ID: ${{ github.event.discussion.node_id }}
           PROGRESS_COMMENT_ID: ${{ steps.progress.outputs.comment_id }}
+          FAILURE_KIND: ${{ steps.review.outputs.failure_kind }}
         run: |
           set -euo pipefail
-          BODY=$(cat <<'COMMENT_EOF'
+          case "$FAILURE_KIND" in
+            provider_authentication)
+              FAILURE_MESSAGE="The review service could not authenticate with its provider. A maintainer must repair the service credentials and rerun this workflow. Your proposal has not been evaluated; no proposal edit is needed."
+              ;;
+            provider)
+              FAILURE_MESSAGE="The review service could not complete the provider request. A maintainer can rerun this workflow once the service is available. Your proposal has not been evaluated; no proposal edit is needed."
+              ;;
+            *)
+              FAILURE_MESSAGE="A maintainer can inspect the workflow run and rerun it after resolving the error."
+              ;;
+          esac
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
+          BODY=$(cat <<COMMENT_EOF
           <!-- rubric-review-bot -->
           <!-- rubric-review-status:failed -->
           ## 📋 Task Proposal Rubric Review
 
-          ⚠️ Proposal review failed before completion. Edit the proposal to retry.
+          ⚠️ Proposal review failed before completion. $FAILURE_MESSAGE
+
+          [View workflow run]($RUN_URL)
           COMMENT_EOF
           )
 

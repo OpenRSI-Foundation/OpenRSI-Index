@@ -41,3 +41,26 @@ The proxy must be reachable from GitHub-hosted runners and support Responses,
 web search, strict JSON output, and image inputs when a proposal contains images.
 Existing API exponential backoff, rubric content, and review output format are
 unchanged. Never commit API keys.
+
+Repository refs may be a bare SHA/branch/tag, an inline-code ref, or a linked
+ref label. Multi-word prose such as "Pinned at submission" is treated as a
+missing ref, not truncated into a branch name. With no ref, the reviewer resolves
+the repository's default branch once to an immutable SHA and records that the
+proposal did not supply a ref. An explicit ref that cannot be resolved still
+produces an evidence limitation; it does not fall back to another revision.
+
+## Recovering a failed Discussion review
+
+The workflow streams retry diagnostics to its Actions log while the review runs.
+Provider failures do not produce a Pass/Reject decision. The failed review comment
+links to the exact workflow attempt and distinguishes authentication failures
+(including a proxy's `502 Upstream authentication failed`) from other provider
+request failures. Raw provider response bodies are not included in the comment.
+
+For an upstream authentication failure, repair the proxy's upstream credentials
+or routing first; changing the proposal will not fix it. If the proxy rejects
+its client credentials instead, correct `RUBRIC_API_KEY`. After restoring service,
+use **Re-run failed jobs** on the linked Actions run. This preserves the submitted
+proposal and does not require its author to edit it. GitHub secrets cannot be
+read back through the API; use the configured provider's administration interface
+to diagnose or rotate its credentials.
