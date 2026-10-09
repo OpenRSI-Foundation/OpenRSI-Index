@@ -70,7 +70,7 @@ We are actively developing this project and welcome [contributions](https://gith
 
 ### How an evaluation works: RSI-Harness
 
-[RSI-Harness](RSI-Harness/) powers OpenRSI Index for ultra-long-horizon RSI runs, natively supporting [Harbor-format tasks](rsi-tasks) from single-node local Docker to multi-node clusters.
+[RSI-Harness](RSI-Harness/) powers OpenRSI Index for ultra-long-horizon RSI runs, natively supporting [Harbor-format tasks](rsi-tasks) from single-node local Docker to multi-node clusters. See its [README](RSI-Harness/README.md) to run a task.
 
 ## 🤝 Contributors
 
