@@ -516,9 +516,9 @@ class EnvE2BHost(SandboxModel):
     template_prefix: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,19}$")] = "rsi"
     # An HTTP(S) or SOCKS5 proxy for every E2B call, e.g. from cluster
     # compute nodes; no credentials (it is persisted with the plan).
-    proxy: (
-        Annotated[str, Field(pattern=r"^(https?|socks5h?)://[^@/\s]+/?$")] | None
-    ) = None
+    proxy: Annotated[str, Field(pattern=r"^(https?|socks5h?)://[^@/\s]+/?$")] | None = (
+        None
+    )
     # The account's maximum sandbox length (E2B refuses a longer timeout and
     # kills a sandbox that has run this long).
     max_sandbox_hours: Annotated[int, Field(strict=True, ge=1, le=24)] = 1

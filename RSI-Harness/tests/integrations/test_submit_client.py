@@ -197,9 +197,7 @@ def test_client_does_not_depend_on_curl(tmp_path: Path) -> None:
     bin_dir.mkdir()
     curl_marker = tmp_path / "curl-was-called"
     fake_curl = bin_dir / "curl"
-    fake_curl.write_text(
-        f"#!/bin/sh\nprintf called > {curl_marker!s}\nexit 99\n"
-    )
+    fake_curl.write_text(f"#!/bin/sh\nprintf called > {curl_marker!s}\nexit 99\n")
     fake_curl.chmod(0o755)
     result, captures, _ = run_submit_client_against_capture_server(
         tmp_path,

@@ -15,9 +15,7 @@ _ASSIGNMENT = re.compile(
     r"""(?<![\w-])(?P<prefix>(?P<quote>["']?)(?P<key>[\w-]+)(?P=quote)"""
     r"""[ \t]*[:=][ \t]*)"""
 )
-_VALUE = re.compile(
-    _QUOTED_VALUE + r"""|\[REDACTED\]|(?:(?!\\[nr])[^\s,;&}\]"'])+"""
-)
+_VALUE = re.compile(_QUOTED_VALUE + r"""|\[REDACTED\]|(?:(?!\\[nr])[^\s,;&}\]"'])+""")
 _URL_TOKEN = re.compile(
     r"(?i)(?P<prefix>[?&]token=)(?P<value>(?:(?!\\[nr])[^\s&#\"'])+)"
 )
@@ -85,7 +83,7 @@ def _redact_line(value: str) -> str:
         if field is None:
             continue
         quote = field[0][0] if field[0].startswith(('"', "'")) else ""
-        parts.extend((value[end:match.end()], f"{quote}[REDACTED]{quote}"))
+        parts.extend((value[end : match.end()], f"{quote}[REDACTED]{quote}"))
         end = field.end()
     parts.append(value[end:])
     return _URL_TOKEN.sub(_masked_assignment, "".join(parts))

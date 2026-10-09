@@ -182,9 +182,7 @@ class DockerIptablesFirewallBackend:
                     comment=f"{rule_id}:{kind}",
                     policy_chain=policy_chain,
                 )
-                self._checked(
-                    ["iptables", "--wait", "-I", host_chain, "1", *jump]
-                )
+                self._checked(["iptables", "--wait", "-I", host_chain, "1", *jump])
                 jumps.append((host_chain, jump))
         except Exception as primary:
             rollback_errors: list[str] = []
@@ -194,12 +192,8 @@ class DockerIptablesFirewallBackend:
                     rollback_errors,
                 )
             for chain in reversed(created):
-                self._rollback(
-                    ["iptables", "--wait", "-F", chain], rollback_errors
-                )
-                self._rollback(
-                    ["iptables", "--wait", "-X", chain], rollback_errors
-                )
+                self._rollback(["iptables", "--wait", "-F", chain], rollback_errors)
+                self._rollback(["iptables", "--wait", "-X", chain], rollback_errors)
             try:
                 residual = self.exists(rule_id)
             except Exception as error:
@@ -269,9 +263,7 @@ class DockerIptablesFirewallBackend:
 
     def _all_rules(self) -> list[str]:
         try:
-            return self._checked(
-                ["iptables", "--wait", "-S"]
-            ).stdout.splitlines()
+            return self._checked(["iptables", "--wait", "-S"]).stdout.splitlines()
         except Exception as error:
             raise SetupError(f"cannot inspect firewall rules: {error}") from error
 
@@ -283,11 +275,7 @@ class DockerIptablesFirewallBackend:
             if chain not in line:
                 continue
             tokens = shlex.split(line)
-            if (
-                len(tokens) >= 2
-                and tokens[0] in {"-N", "-A"}
-                and tokens[1] == chain
-            ):
+            if len(tokens) >= 2 and tokens[0] in {"-N", "-A"} and tokens[1] == chain:
                 return True
         return False
 
@@ -326,7 +314,7 @@ class DockerIptablesFirewallBackend:
             owned = self._owned_jump_lines(listing, rule_id)
             if [shlex.split(line) for line in owned] != [expected_jump]:
                 return False
-            for preceding in host_rules[:host_rules.index(expected_jump)]:
+            for preceding in host_rules[: host_rules.index(expected_jump)]:
                 if not self._disjoint_policy_jump(
                     preceding,
                     host_chain=host_chain,
@@ -811,9 +799,7 @@ class NetworkPolicyEnforcer:
                 f"failed to attest network policy {lease.rule_id}: {error}"
             ) from error
         if not installed:
-            raise SetupError(
-                f"network policy {lease.rule_id} is no longer installed"
-            )
+            raise SetupError(f"network policy {lease.rule_id} is no longer installed")
 
     def cleanup(self, lease: NetworkPolicyLease) -> None:
         try:

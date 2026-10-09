@@ -34,6 +34,7 @@ def test_publisher_environment_and_archive_are_checked_before_test_dependencies(
     archive = named["Archive Harness exactly as the task publisher does"]
     install = named["Install the publisher compiler environment"]
     compile_step = named["Compile CPU and GPU tasks without running them"]
+    lint = named["Lint Harness"]
     tests = named["Test Harness without Docker or GPUs"]
 
     assert "git archive HEAD RSI-Harness" in archive["run"]
@@ -43,8 +44,17 @@ def test_publisher_environment_and_archive_are_checked_before_test_dependencies(
     assert "for gpu_count in (0, 1)" in compile_step["run"]
     assert "HarborTaskCompiler().compile(" in compile_step["run"]
     assert "not integration and not gpu" in tests["run"]
-    assert steps.index(archive) < steps.index(install) < steps.index(compile_step) < steps.index(tests)
-    for step in (install, compile_step, tests):
+    assert "ruff check ." in lint["run"]
+    assert "ruff format --check ." in lint["run"]
+    assert "--frozen" in lint["run"]
+    assert (
+        steps.index(archive)
+        < steps.index(install)
+        < steps.index(compile_step)
+        < steps.index(lint)
+        < steps.index(tests)
+    )
+    for step in (install, compile_step, lint, tests):
         assert step["working-directory"] == "${{ steps.archive.outputs.root }}/RSI-Harness"
 
 

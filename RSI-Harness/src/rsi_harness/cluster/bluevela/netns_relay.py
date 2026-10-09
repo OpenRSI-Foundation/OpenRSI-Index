@@ -72,9 +72,7 @@ class _TcpToUnixRelay:
             with upstream:
                 sockets = (client, upstream)
                 while not self._stopping.is_set():
-                    readable, _writable, _errors = select.select(
-                        sockets, (), (), 0.2
-                    )
+                    readable, _writable, _errors = select.select(sockets, (), (), 0.2)
                     for source in readable:
                         target = upstream if source is client else client
                         content = source.recv(64 * 1024)

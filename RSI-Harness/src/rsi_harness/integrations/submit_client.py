@@ -5,7 +5,7 @@ from __future__ import annotations
 
 def generate_submit_client() -> str:
     """Return a synchronous, curl-free client that carries no workspace data."""
-    return r'''#!/bin/sh
+    return r"""#!/bin/sh
 set -eu
 
 mode=submit
@@ -92,4 +92,4 @@ if response.status >= 400:
     )
     raise SystemExit(22)
 PY
-'''
+"""

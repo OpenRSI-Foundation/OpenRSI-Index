@@ -59,9 +59,7 @@ class CopyingHelperContainers:
 
 class CopyingHelperClient:
     def __init__(self, source: Path, *, reject_symlink: bool = False) -> None:
-        self.containers = CopyingHelperContainers(
-            source, reject_symlink=reject_symlink
-        )
+        self.containers = CopyingHelperContainers(source, reject_symlink=reject_symlink)
 
 
 def managed_plan(tmp_path: Path, *, work_user: str | None = None):
@@ -106,9 +104,7 @@ def test_initialize_copies_clean_base_once_and_reuses_verified_manifest(tmp_path
     data_root, plan = managed_plan(tmp_path)
     source = source_tree(tmp_path)
     client = CopyingHelperClient(source)
-    manager = WorkspaceManager(
-        client, plan=plan, run_id="run-7", data_root=data_root
-    )
+    manager = WorkspaceManager(client, plan=plan, run_id="run-7", data_root=data_root)
 
     first = manager.initialize()
     second = manager.initialize()
@@ -157,15 +153,11 @@ def test_initialize_copies_clean_base_once_and_reuses_verified_manifest(tmp_path
 def test_reuse_rejects_manifest_that_no_longer_proves_fixed_image(tmp_path):
     data_root, plan = managed_plan(tmp_path)
     client = CopyingHelperClient(source_tree(tmp_path))
-    manager = WorkspaceManager(
-        client, plan=plan, run_id="run-7", data_root=data_root
-    )
+    manager = WorkspaceManager(client, plan=plan, run_id="run-7", data_root=data_root)
     manager.initialize()
     changed_plan = plan.model_copy(
         update={
-            "images": plan.images.model_copy(
-                update={"base_digest": "sha256:different"}
-            )
+            "images": plan.images.model_copy(update={"base_digest": "sha256:different"})
         }
     )
 
@@ -183,9 +175,7 @@ def test_reuse_rejects_manifest_that_no_longer_proves_fixed_image(tmp_path):
 def test_incomplete_manifest_is_not_reinitialized_over_partial_workspace(tmp_path):
     data_root, plan = managed_plan(tmp_path)
     client = CopyingHelperClient(source_tree(tmp_path))
-    manager = WorkspaceManager(
-        client, plan=plan, run_id="run-7", data_root=data_root
-    )
+    manager = WorkspaceManager(client, plan=plan, run_id="run-7", data_root=data_root)
     plan.paths.workspace.mkdir(parents=True)
     manager.manifest_path.write_text(
         json.dumps(
@@ -217,9 +207,7 @@ def test_image_workdir_symlink_is_rejected_by_isolated_helper(tmp_path):
 
 
 @pytest.mark.parametrize("unsafe_path", ("workspace", "root"))
-def test_engine_workspace_paths_outside_data_root_are_rejected(
-    tmp_path, unsafe_path
-):
+def test_engine_workspace_paths_outside_data_root_are_rejected(tmp_path, unsafe_path):
     data_root, plan = managed_plan(tmp_path)
     paths = plan.paths.model_copy(
         update={unsafe_path: tmp_path / "outside" / unsafe_path}
@@ -238,9 +226,7 @@ def test_engine_workspace_paths_outside_data_root_are_rejected(
 def test_workspace_is_retained_by_default_and_deleted_only_explicitly(tmp_path):
     data_root, plan = managed_plan(tmp_path)
     client = CopyingHelperClient(source_tree(tmp_path))
-    manager = WorkspaceManager(
-        client, plan=plan, run_id="run-7", data_root=data_root
-    )
+    manager = WorkspaceManager(client, plan=plan, run_id="run-7", data_root=data_root)
     workspace = manager.initialize()
 
     assert manager.retain() == workspace
@@ -272,9 +258,7 @@ def test_judge_handoff_fails_closed_when_posix_acl_removal_is_unsupported(
 
     data_root, plan = managed_plan(tmp_path)
     client = CopyingHelperClient(source_tree(tmp_path))
-    manager = WorkspaceManager(
-        client, plan=plan, run_id="run-7", data_root=data_root
-    )
+    manager = WorkspaceManager(client, plan=plan, run_id="run-7", data_root=data_root)
     manager.initialize()
 
     def reject_acl_removal(*_args, **_kwargs):
@@ -311,17 +295,13 @@ def test_non_absolute_or_separator_run_id_is_rejected(tmp_path):
 
     for run_id in ("../escape", "nested/run", "nested\\run", "", "."):
         with pytest.raises(SetupError, match="run ID"):
-            WorkspaceManager(
-                client, plan=plan, run_id=run_id, data_root=data_root
-            )
+            WorkspaceManager(client, plan=plan, run_id=run_id, data_root=data_root)
 
 
 def test_workdir_value_passed_to_helper_is_exact_posix_path(tmp_path):
     data_root, plan = managed_plan(tmp_path)
     client = CopyingHelperClient(source_tree(tmp_path))
-    manager = WorkspaceManager(
-        client, plan=plan, run_id="run-7", data_root=data_root
-    )
+    manager = WorkspaceManager(client, plan=plan, run_id="run-7", data_root=data_root)
 
     manager.initialize()
 
@@ -354,9 +334,7 @@ def test_real_helper_overrides_hostile_base_entrypoint(tmp_path):
         "WORKDIR /workspace\n"
         'ENTRYPOINT ["/bin/sh", "-c", "exit 77"]\n'
     )
-    image, _ = client.images.build(
-        path=str(context), rm=True, forcerm=True, pull=False
-    )
+    image, _ = client.images.build(path=str(context), rm=True, forcerm=True, pull=False)
     data_root, plan = managed_plan(tmp_path)
     plan = plan.model_copy(
         update={
@@ -372,9 +350,7 @@ def test_real_helper_overrides_hostile_base_entrypoint(tmp_path):
             )
         }
     )
-    manager = WorkspaceManager(
-        client, plan=plan, run_id="run-7", data_root=data_root
-    )
+    manager = WorkspaceManager(client, plan=plan, run_id="run-7", data_root=data_root)
     workspace = plan.paths.workspace
     try:
         workspace = manager.initialize()
@@ -423,9 +399,7 @@ def test_real_non_host_uid_can_write_initialized_bind_workspace(tmp_path):
             )
         }
     )
-    manager = WorkspaceManager(
-        client, plan=plan, run_id="run-7", data_root=data_root
-    )
+    manager = WorkspaceManager(client, plan=plan, run_id="run-7", data_root=data_root)
     workspace = plan.paths.workspace
     try:
         workspace = manager.initialize()
@@ -461,16 +435,19 @@ def test_real_non_host_uid_can_write_initialized_bind_workspace(tmp_path):
 
         assert result == b""
         assert (workspace / "judge-output").read_text() == "judged"
-        assert client.containers.list(
-            all=True,
-            filters={
-                "label": [
-                    "rsi-harness.run-id=run-7",
-                    f"rsi-harness.task-id={plan.task.task_id}",
-                    "rsi-harness.role=helper",
-                ]
-            },
-        ) == []
+        assert (
+            client.containers.list(
+                all=True,
+                filters={
+                    "label": [
+                        "rsi-harness.run-id=run-7",
+                        f"rsi-harness.task-id={plan.task.task_id}",
+                        "rsi-harness.role=helper",
+                    ]
+                },
+            )
+            == []
+        )
     finally:
         if workspace.exists():
             manager.delete()
@@ -520,9 +497,7 @@ def test_real_paused_work_workspace_mode_is_restored_before_distinct_judge(
             )
         }
     )
-    manager = WorkspaceManager(
-        client, plan=plan, run_id="run-7", data_root=data_root
-    )
+    manager = WorkspaceManager(client, plan=plan, run_id="run-7", data_root=data_root)
     workspace = plan.paths.workspace
     try:
         workspace = manager.initialize()
@@ -532,7 +507,7 @@ def test_real_paused_work_workspace_mode_is_restored_before_distinct_judge(
                 "/bin/sh",
                 "-c",
                 "setfacl -m u:2003:--- /workspace && "
-                "chmod 0777 /workspace && test \"$(stat -c %a /workspace)\" = 777",
+                'chmod 0777 /workspace && test "$(stat -c %a /workspace)" = 777',
             ],
             user=work_user,
             network_mode="none",
@@ -557,16 +532,19 @@ def test_real_paused_work_workspace_mode_is_restored_before_distinct_judge(
         )
         assert result == b""
         assert (workspace / "judge-output").read_text() == "judged"
-        assert client.containers.list(
-            all=True,
-            filters={
-                "label": [
-                    "rsi-harness.run-id=run-7",
-                    f"rsi-harness.task-id={plan.task.task_id}",
-                    "rsi-harness.role=helper",
-                ]
-            },
-        ) == []
+        assert (
+            client.containers.list(
+                all=True,
+                filters={
+                    "label": [
+                        "rsi-harness.run-id=run-7",
+                        f"rsi-harness.task-id={plan.task.task_id}",
+                        "rsi-harness.role=helper",
+                    ]
+                },
+            )
+            == []
+        )
     finally:
         if workspace.exists():
             manager.delete()
@@ -581,9 +559,7 @@ def test_real_paused_work_workspace_mode_is_restored_before_distinct_judge(
         PurePosixPath("/rsi-init"),
     ),
 )
-def test_helper_target_is_selected_disjoint_from_every_valid_workdir(
-    tmp_path, workdir
-):
+def test_helper_target_is_selected_disjoint_from_every_valid_workdir(tmp_path, workdir):
     data_root, plan = managed_plan(tmp_path)
     plan = plan.model_copy(update={"workdir": workdir})
     client = CopyingHelperClient(source_tree(tmp_path))

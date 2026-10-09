@@ -70,6 +70,12 @@ jobs:
                   assert definition.gpu_requirement.count == gpu_count
                   print(f"Publisher compilation passed: Work GPUs={gpu_count}, Judge GPUs={definition.verifier.gpu_count}")
           PY
+      - name: Lint Harness
+        working-directory: ${{ steps.archive.outputs.root }}/RSI-Harness
+        run: |
+          uv sync --frozen --group test --python 3.12
+          uv run --frozen --group test ruff check .
+          uv run --frozen --group test ruff format --check .
       - name: Test Harness without Docker or GPUs
         working-directory: ${{ steps.archive.outputs.root }}/RSI-Harness
         run: |

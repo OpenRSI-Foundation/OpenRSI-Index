@@ -80,13 +80,9 @@ class LSFJobSpec(PersistedModel):
                 raise ValueError("per-host memory requires a multi-host LSF spec")
             return self
         if self.hosts <= 1 or self.slots_per_host is None:
-            raise ValueError(
-                "multi-host LSF specs require hosts>1 and slots_per_host"
-            )
+            raise ValueError("multi-host LSF specs require hosts>1 and slots_per_host")
         if self.cpu_slots != self.hosts * self.slots_per_host:
-            raise ValueError(
-                "multi-host cpu_slots must equal hosts * slots_per_host"
-            )
+            raise ValueError("multi-host cpu_slots must equal hosts * slots_per_host")
         return self
 
 
@@ -132,9 +128,7 @@ class LSFScheduler:
         select_conditions = []
         if spec.local_tmp_mb:
             select_conditions.append(f"tmp>={spec.local_tmp_mb}")
-        select_conditions.extend(
-            f"hname!='{host}'" for host in spec.excluded_hosts
-        )
+        select_conditions.extend(f"hname!='{host}'" for host in spec.excluded_hosts)
         if select_conditions:
             resource_terms.append(f"select[{' && '.join(select_conditions)}]")
         if spec.one_host:
@@ -224,8 +218,7 @@ class LSFScheduler:
                 if completed.returncode != 0:
                     detail = completed.stderr.strip() or completed.stdout.strip()
                     if any(
-                        marker in detail.lower()
-                        for marker in _TRANSIENT_STATUS_ERRORS
+                        marker in detail.lower() for marker in _TRANSIENT_STATUS_ERRORS
                     ):
                         self._sleeper(poll_seconds)
                         continue

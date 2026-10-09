@@ -210,9 +210,7 @@ def test_client_emits_rank_output_in_deterministic_order_and_returns_status(
     tmp_path: Path,
 ) -> None:
     shim = _module()
-    multinode = importlib.import_module(
-        "rsi_harness.cluster.bluevela.multinode"
-    )
+    multinode = importlib.import_module("rsi_harness.cluster.bluevela.multinode")
     results = tmp_path / "results"
     heartbeats = tmp_path / "heartbeats"
     results.mkdir()
@@ -297,9 +295,7 @@ def test_one_node_cli_publishes_to_the_phase_broker(
         json.dumps(
             {
                 "request_id": request_id,
-                "ranks": [
-                    {"pool_rank": 1, "node_rank": 0, "returncode": 0}
-                ],
+                "ranks": [{"pool_rank": 1, "node_rank": 0, "returncode": 0}],
                 "cancelled": False,
                 "timed_out": False,
             }

@@ -147,12 +147,8 @@ def test_stock_visualizer_loads_run_trajectory_and_two_archive_free_rounds(
     trajectory = client.get("/run/run-two-rounds/minimal-gpu/trajectory")
     first = client.get("/run/run-two-rounds/minimal-gpu/submission/agent-1/raw")
     second = client.get("/run/run-two-rounds/minimal-gpu/submission/agent-2/raw")
-    first_detail = client.get(
-        "/run/run-two-rounds/minimal-gpu/submission/agent-1"
-    )
-    second_detail = client.get(
-        "/run/run-two-rounds/minimal-gpu/submission/agent-2"
-    )
+    first_detail = client.get("/run/run-two-rounds/minimal-gpu/submission/agent-1")
+    second_detail = client.get("/run/run-two-rounds/minimal-gpu/submission/agent-2")
     archive = client.get("/run/run-two-rounds/minimal-gpu/submission/agent-2/archive")
 
     assert detail.status_code == 200
@@ -187,9 +183,10 @@ def test_runtime_container_names_match_producers_scanner_and_k8s(
         "rsi-loop.run.task-name.run-id",
         "rsi-loop.evolve.task-name.run-id",
     )
-    assert _sanitize_k8s_name(
-        "rsi-loop.run.task-with-long-name.run-id"
-    ) == "run-task-with-long-run-id"
+    assert (
+        _sanitize_k8s_name("rsi-loop.run.task-with-long-name.run-id")
+        == "run-task-with-long-run-id"
+    )
 
     commands: list[list[str]] = []
 
@@ -235,16 +232,10 @@ def test_rendered_visualizer_migrates_valid_legacy_browser_state(
     assert "legacy === 'raw' || legacy === 'rescaled'" in html
     assert score_read < score_write < score_remove
 
-    state_read = html.index(
-        "parseState(sessionStorage.getItem(legacyStateKey))"
-    )
-    state_write = html.index(
-        "sessionStorage.setItem(stateKey, JSON.stringify(legacy))"
-    )
+    state_read = html.index("parseState(sessionStorage.getItem(legacyStateKey))")
+    state_write = html.index("sessionStorage.setItem(stateKey, JSON.stringify(legacy))")
     state_remove = html.index("sessionStorage.removeItem(legacyStateKey)")
-    assert (
-        'const legacyStateKey = "sforge.visualizer.index.state.v1";' in html
-    )
+    assert 'const legacyStateKey = "sforge.visualizer.index.state.v1";' in html
     assert 'typeof runId === "string"' in html
     assert "Number.isFinite(state.scrollY)" in html
     assert state_read < state_write < state_remove

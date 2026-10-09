@@ -105,7 +105,9 @@ def _services(
     )
     if engine_config is not None:
         return build_runtime_services(
-            roots=roots, event_callback=event_callback, engine_config=engine_config,
+            roots=roots,
+            event_callback=event_callback,
+            engine_config=engine_config,
         )
     if event_callback is None:
         return build_runtime_services(roots=roots)
@@ -186,9 +188,7 @@ class _ClusterConsole:
             resources = details.get("resources", {})
             resources = resources if isinstance(resources, Mapping) else {}
             multi_node = details.get("multi_node", {})
-            multi_node = (
-                multi_node if isinstance(multi_node, Mapping) else {}
-            )
+            multi_node = multi_node if isinstance(multi_node, Mapping) else {}
             label = "Slurm" if details.get("adapter") == "slurm" else "Blue Vela"
             typer.echo(f"{label} dry-run:")
             typer.echo(_field("Run ID:", details.get("run_id")))
@@ -205,15 +205,9 @@ class _ClusterConsole:
                 typer.echo(_field("Work nodes:", work.get("node_count")))
                 typer.echo(_field("Judge nodes:", verifier.get("node_count")))
                 typer.echo(_field("Total nodes:", multi_node.get("total_nodes")))
-                typer.echo(
-                    _field("GPUs per node:", multi_node.get("gpus_per_node"))
-                )
-                typer.echo(
-                    _field("CPU/node:", multi_node.get("cpu_slots_per_node"))
-                )
-                typer.echo(
-                    _field("Memory/node:", multi_node.get("memory_mb_per_node"))
-                )
+                typer.echo(_field("GPUs per node:", multi_node.get("gpus_per_node")))
+                typer.echo(_field("CPU/node:", multi_node.get("cpu_slots_per_node")))
+                typer.echo(_field("Memory/node:", multi_node.get("memory_mb_per_node")))
                 typer.echo(
                     _field(
                         "Shared workspace:",
@@ -229,9 +223,7 @@ class _ClusterConsole:
                 typer.echo(_field("Pool policy:", details.get("pool_policy")))
             else:
                 typer.echo(_field("Work GPUs:", resources.get("work_gpus")))
-                typer.echo(
-                    _field("Verifier GPUs:", resources.get("verifier_gpus"))
-                )
+                typer.echo(_field("Verifier GPUs:", resources.get("verifier_gpus")))
                 typer.echo(_field("Total GPUs:", resources.get("total_gpus")))
                 typer.echo(_field("CPU slots:", resources.get("cpu_slots")))
                 typer.echo(_field("Memory MB:", resources.get("memory_mb")))
@@ -259,9 +251,7 @@ class _ClusterConsole:
                         )
                     )
         elif name == "job_submitted":
-            typer.echo(
-                f"Submitted {details.get('stage')} job: {details.get('job_id')}"
-            )
+            typer.echo(f"Submitted {details.get('stage')} job: {details.get('job_id')}")
         elif name == "job_state":
             typer.echo(f"{details.get('stage')} job state: {details.get('state')}")
 
@@ -442,7 +432,8 @@ def run_command(
         service_options = {}
         if sandbox_policy is not None:
             service_options["engine_config"] = EngineConfig(
-                data_root=roots.data, logs_root=roots.logs,
+                data_root=roots.data,
+                logs_root=roots.logs,
                 sandbox_policy=load_sandbox_policy(sandbox_policy),
             )
         services = _services(

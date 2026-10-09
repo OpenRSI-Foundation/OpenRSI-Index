@@ -241,8 +241,7 @@ def test_acquire_rejects_mismatched_planned_ref_before_commit() -> None:
 
     with pytest.raises(SetupError, match="planned rootfs image reference"):
         backend.acquire(
-            work,
-            run_id="run", task_id="task", round_id="1", planned_ref="wrong:tag"
+            work, run_id="run", task_id="task", round_id="1", planned_ref="wrong:tag"
         )
 
     assert client.containers.by_id["work-123"].commits == []
@@ -305,8 +304,9 @@ def test_acquire_rejects_returned_container_with_a_different_id() -> None:
     assert client.containers.by_id[work.container_id].commits == []
 
 
-def test_acquire_container_inspection_failure_cancels_only_after_absence_proof(
-) -> None:
+def test_acquire_container_inspection_failure_cancels_only_after_absence_proof() -> (
+    None
+):
     backend, client, work = _backend_and_work()
     client.containers.get = lambda _container_id: (_ for _ in ()).throw(  # type: ignore[method-assign]
         APIError("secret=value")
@@ -606,11 +606,11 @@ def test_real_docker_commit_snapshot_preserves_complete_work_rootfs(
             [
                 "/bin/sh",
                 "-c",
-                "test \"$(cat /etc/rsi-rootfs-cow)\" = etc && "
-                "test \"$(cat /usr/local/bin/rsi-rootfs-cow)\" = bin && "
-                "test \"$(cat /tmp/rsi-rootfs-cow)\" = tmp && "
-                "test \"$(cat /testbed/rsi-rootfs-cow)\" = testbed && "
-                "test \"$(stat -c %s /testbed/rsi-rootfs-cow.sparse)\" = 8589934592",
+                'test "$(cat /etc/rsi-rootfs-cow)" = etc && '
+                'test "$(cat /usr/local/bin/rsi-rootfs-cow)" = bin && '
+                'test "$(cat /tmp/rsi-rootfs-cow)" = tmp && '
+                'test "$(cat /testbed/rsi-rootfs-cow)" = testbed && '
+                'test "$(stat -c %s /testbed/rsi-rootfs-cow.sparse)" = 8589934592',
             ]
         )
         assert verified.exit_code == 0

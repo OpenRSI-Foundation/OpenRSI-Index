@@ -30,8 +30,10 @@ def _digest(*values: str) -> str:
 
 
 def _require_label_value(value: str, *, field: str) -> str:
-    if not isinstance(value, str) or not value or any(
-        character in value for character in ("\0", "\n", "\r")
+    if (
+        not isinstance(value, str)
+        or not value
+        or any(character in value for character in ("\0", "\n", "\r"))
     ):
         raise SetupError(f"unsafe rootfs snapshot {field}")
     return value
@@ -201,9 +203,7 @@ class DockerRootfsSnapshotBackend:
         except (AttributeError, KeyError, TypeError):
             attestation_error = True
         if attestation_error:
-            raise InfrastructureError(
-                "rootfs snapshot image attestation failed"
-            )
+            raise InfrastructureError("rootfs snapshot image attestation failed")
         if image_id != lease.image_id:
             raise InfrastructureError("rootfs snapshot image attestation failed")
         containers: Any = None
@@ -216,8 +216,7 @@ class DockerRootfsSnapshotBackend:
             container_listing_error = True
         if container_listing_error:
             raise InfrastructureError(
-                "recovery_required: rootfs snapshot container references are "
-                "unproven"
+                "recovery_required: rootfs snapshot container references are unproven"
             )
         if not isinstance(containers, list):
             raise InfrastructureError(
@@ -349,9 +348,7 @@ class DockerRootfsSnapshotBackend:
         self._require_new_snapshot_identity(reference, labels)
         raise RootfsSnapshotNotCreatedError(message)
 
-    def _inspect_ambiguous_commit(
-        self, reference: str, labels: dict[str, str]
-    ) -> None:
+    def _inspect_ambiguous_commit(self, reference: str, labels: dict[str, str]) -> None:
         try:
             image = self._client.images.get(reference)
             self._attest(image, reference=reference, labels=labels)
@@ -376,9 +373,7 @@ class DockerRootfsSnapshotBackend:
         if listed_id != image_id:
             raise TypeError("exact-labeled rootfs image ID changed")
 
-    def _attest(
-        self, image: Any, *, reference: str, labels: dict[str, str]
-    ) -> str:
+    def _attest(self, image: Any, *, reference: str, labels: dict[str, str]) -> str:
         attrs = image.attrs
         image_id = attrs["Id"]
         if not isinstance(image_id, str) or _IMAGE_ID.fullmatch(image_id) is None:
@@ -399,8 +394,7 @@ class DockerRootfsSnapshotBackend:
         images = self._exact_labeled_images(labels)
         if images:
             raise InfrastructureError(
-                "recovery_required: rootfs exact-labeled image remained after "
-                "removal"
+                "recovery_required: rootfs exact-labeled image remained after removal"
             )
 
     def _exact_labeled_images(self, labels: dict[str, str]) -> list[Any]:
@@ -414,8 +408,7 @@ class DockerRootfsSnapshotBackend:
             listing_error = True
         if listing_error:
             raise InfrastructureError(
-                "recovery_required: exact-labeled rootfs image results are "
-                "unproven"
+                "recovery_required: exact-labeled rootfs image results are unproven"
             )
         if not isinstance(images, list):
             raise InfrastructureError(
@@ -425,9 +418,7 @@ class DockerRootfsSnapshotBackend:
         return images
 
     @staticmethod
-    def _reference(
-        *, run_id: str, task_id: str, round_id: str, purpose: str
-    ) -> str:
+    def _reference(*, run_id: str, task_id: str, round_id: str, purpose: str) -> str:
         return f"{_REPOSITORY}:{purpose}-{_digest(run_id, task_id, round_id, purpose)}"
 
     @staticmethod

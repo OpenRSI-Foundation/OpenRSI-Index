@@ -85,13 +85,15 @@ class SlurmSchedulerProfile(SchedulerProfile):
     remote_host_flag: str = "--nodelist"
     # Controllers and cleanup steps must coexist with their rank workers.
     remote_args: tuple[str, ...] = (
-        "--overlap", "--exact", "--nodes=1", "--ntasks=1", "--cpu-bind=none",
+        "--overlap",
+        "--exact",
+        "--nodes=1",
+        "--ntasks=1",
+        "--cpu-bind=none",
         "--export=ALL",
     )
     queue: str = Field(validation_alias=AliasChoices("partition", "queue"))
-    group: str = Field(
-        default="", validation_alias=AliasChoices("account", "group")
-    )
+    group: str = Field(default="", validation_alias=AliasChoices("account", "group"))
     qos: str | None = None
     constraint: str | None = None
 
@@ -160,9 +162,7 @@ class ApptainerBindProfile(_ProfileModel):
             or value == PurePosixPath("/")
             or ".." in value.parts
         ):
-            raise ValueError(
-                "Apptainer bind targets must be absolute non-root paths"
-            )
+            raise ValueError("Apptainer bind targets must be absolute non-root paths")
         return value
 
 
@@ -191,13 +191,9 @@ class ApptainerProfile(_ProfileModel):
     def _runtime_environment(cls, value: dict[str, str]) -> dict[str, str]:
         for name, item in value.items():
             if re.fullmatch(r"[A-Z_][A-Z0-9_]*", name) is None:
-                raise ValueError(
-                    f"Apptainer environment name is invalid: {name!r}"
-                )
+                raise ValueError(f"Apptainer environment name is invalid: {name!r}")
             if "\0" in item:
-                raise ValueError(
-                    f"Apptainer environment value contains NUL: {name}"
-                )
+                raise ValueError(f"Apptainer environment value contains NUL: {name}")
         return value
 
     @field_validator("workspace_target", "container_python")
@@ -266,6 +262,7 @@ class ClusterProfile(_ProfileModel):
 
 def _expand(value: Any, environ: Mapping[str, str]) -> Any:
     if isinstance(value, str):
+
         def replace(match: re.Match[str]) -> str:
             name = match.group(1)
             if name not in environ:

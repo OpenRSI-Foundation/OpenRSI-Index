@@ -63,29 +63,28 @@ def test_build_driver_executes_archive_conversion_and_publishes_atomically(
         '[[ -n "${XDG_RUNTIME_DIR:-}" && -d "$XDG_RUNTIME_DIR" ]] || exit 42\n'
         '[[ -f "${CONTAINERS_REGISTRIES_CONF:-}" ]] || exit 43\n'
         'grep -q \'short-name-mode = "disabled"\' "$CONTAINERS_REGISTRIES_CONF"\n'
-        f'printf \'podman %s\\n\' "$*" >> {calls}\n'
+        f"printf 'podman %s\\n' \"$*\" >> {calls}\n"
         'if [[ " $* " == *" save "* ]]; then\n'
-        '  while (($#)); do\n'
+        "  while (($#)); do\n"
         '    if [[ "$1" == "-o" ]]; then printf archive > "$2"; exit 0; fi\n'
-        '    shift\n'
-        '  done\n'
+        "    shift\n"
+        "  done\n"
         "fi\n",
     )
     apptainer = _executable(
         tmp_path / "apptainer",
-        f'printf \'apptainer %s\\n\' "$*" >> {calls}\n'
+        f"printf 'apptainer %s\\n' \"$*\" >> {calls}\n"
         'if [[ "$1" == "build" ]]; then\n'
-        '  shift\n'
+        "  shift\n"
         '  while [[ "$1" == --* ]]; do\n'
         '    if [[ "$1" == "--mksquashfs-args" ]]; then shift 2; else shift; fi\n'
-        '  done\n'
+        "  done\n"
         '  printf sif > "$1"\n'
         "fi\n",
     )
     faked = _executable(
         tmp_path / "faked",
-        "sleep 300 >/dev/null 2>&1 &\n"
-        "printf '12345:%s\\n' \"$!\"\n",
+        "sleep 300 >/dev/null 2>&1 &\nprintf '12345:%s\\n' \"$!\"\n",
     )
     fakeroot_library = tmp_path / "libfakeroot-sysv.so"
     fakeroot_library.write_bytes(b"fake library")
@@ -101,19 +100,13 @@ def test_build_driver_executes_archive_conversion_and_publishes_atomically(
                     "fakeroot_library": fakeroot_library,
                 }
             ),
-            "apptainer": base.apptainer.model_copy(
-                update={"binary": apptainer}
-            ),
+            "apptainer": base.apptainer.model_copy(update={"binary": apptainer}),
         }
     )
     plan = plan_image(context, tmp_path / "cache")
     driver = tmp_path / "build.sh"
     render_build_driver(plan, profile, context, driver, 1)
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if key != "XDG_RUNTIME_DIR"
-    }
+    env = {key: value for key, value in os.environ.items() if key != "XDG_RUNTIME_DIR"}
 
     completed = subprocess.run(
         (str(driver),),

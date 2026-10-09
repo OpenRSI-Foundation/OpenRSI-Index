@@ -125,9 +125,7 @@ def test_rank_environments_are_relative_to_only_the_selected_phase_subpool() -> 
         "3",
         "4",
     )
-    assert {item["RSI_MASTER_ADDR"] for item in environments} == {
-        selected[0].ipv4
-    }
+    assert {item["RSI_MASTER_ADDR"] for item in environments} == {selected[0].ipv4}
     assert {item["RSI_MASTER_PORT"] for item in environments}.__len__() == 1
     assert all(item["RSI_NUM_NODES"] == "3" for item in environments)
     assert all(item["RSI_POOL_SIZE"] == "5" for item in environments)
@@ -419,9 +417,7 @@ def test_no_network_policy_remote_rank_still_inherits_host_network_for_rendezvou
         ),
     )
     broker.initialize()
-    control = remote.load_control(
-        broker.reserve(_request(multinode)).control_path
-    )
+    control = remote.load_control(broker.reserve(_request(multinode)).control_path)
 
     command = remote.build_apptainer_command(
         control,
@@ -505,9 +501,7 @@ def test_remote_worker_rejects_identity_outside_frozen_control(
         worker_template=_worker(multinode, tmp_path),
     )
     broker.initialize()
-    control = remote.load_control(
-        broker.reserve(_request(multinode)).control_path
-    )
+    control = remote.load_control(broker.reserve(_request(multinode)).control_path)
 
     with pytest.raises(InfrastructureError, match=match):
         remote.build_apptainer_command(
@@ -566,9 +560,7 @@ def test_broker_executes_all_ranks_publishes_fsynced_result_and_releases(
         ),
     )
     status = tmp_path / "client/results" / ("b" * 32 + ".json")
-    assert multinode.MultiNodeResult.model_validate_json(
-        status.read_text()
-    ) == result
+    assert multinode.MultiNodeResult.model_validate_json(status.read_text()) == result
     first_output = tmp_path / "client/results" / ("b" * 32 + ".rank-0000.out")
     second_output = tmp_path / "client/results" / ("b" * 32 + ".rank-0001.out")
     assert first_output.read_bytes() == b"rank-0\n"
@@ -690,9 +682,7 @@ def test_private_file_protocol_runs_without_any_additional_user_cli(
     tmp_path: Path,
 ) -> None:
     multinode = _module()
-    shim = importlib.import_module(
-        "rsi_harness.cluster.bluevela.torchrun_shim"
-    )
+    shim = importlib.import_module("rsi_harness.cluster.bluevela.torchrun_shim")
     broker = multinode.MultiNodeBroker(
         phase="verifier",
         run_id="run-123",

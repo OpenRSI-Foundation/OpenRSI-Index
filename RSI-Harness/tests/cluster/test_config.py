@@ -36,33 +36,27 @@ def test_packaged_bluevela_profile_contains_cluster_policy() -> None:
     assert profile.apptainer.work_binds
     assert profile.apptainer.judge_binds
     assert not any(
-        "paloma" in str(binding.source)
-        for binding in profile.apptainer.work_binds
+        "paloma" in str(binding.source) for binding in profile.apptainer.work_binds
     )
     assert any(
-        "paloma" in str(binding.source)
-        for binding in profile.apptainer.judge_binds
+        "paloma" in str(binding.source) for binding in profile.apptainer.judge_binds
     )
     assert all(binding.read_only for binding in profile.apptainer.work_binds)
     assert all(binding.read_only for binding in profile.apptainer.judge_binds)
     assert all(
         binding.source.is_relative_to("/srv/rsi")
-        for binding in (
-            *profile.apptainer.work_binds, *profile.apptainer.judge_binds
-        )
+        for binding in (*profile.apptainer.work_binds, *profile.apptainer.judge_binds)
     )
     assert profile.resources.gpus_per_node == 8
 
 
 def test_profile_runtime_environment_is_expanded_and_portable(tmp_path) -> None:
-    packaged = resources.files("rsi_harness.cluster.bluevela").joinpath(
-        "profile.toml"
-    )
+    packaged = resources.files("rsi_harness.cluster.bluevela").joinpath("profile.toml")
     profile_path = tmp_path / "profile.toml"
     profile_path.write_text(
         packaged.read_text().replace(
             'RSI_SHARED_DATA_ROOT = "/rsi-data"',
-            "RSI_SHARED_DATA_ROOT = \"${DATA_ROOT}\"",
+            'RSI_SHARED_DATA_ROOT = "${DATA_ROOT}"',
             1,
         )
     )
@@ -78,9 +72,7 @@ def test_profile_runtime_environment_is_expanded_and_portable(tmp_path) -> None:
 
 
 def test_profile_expands_only_explicit_environment_references(tmp_path) -> None:
-    packaged = resources.files("rsi_harness.cluster.bluevela").joinpath(
-        "profile.toml"
-    )
+    packaged = resources.files("rsi_harness.cluster.bluevela").joinpath("profile.toml")
     profile_path = tmp_path / "profile.toml"
     profile_path.write_text(
         packaged.read_text().replace(
@@ -95,9 +87,7 @@ def test_profile_expands_only_explicit_environment_references(tmp_path) -> None:
 
 
 def test_profile_rejects_unknown_environment_reference(tmp_path) -> None:
-    packaged = resources.files("rsi_harness.cluster.bluevela").joinpath(
-        "profile.toml"
-    )
+    packaged = resources.files("rsi_harness.cluster.bluevela").joinpath("profile.toml")
     profile_path = tmp_path / "profile.toml"
     profile_path.write_text(
         packaged.read_text().replace(
@@ -116,9 +106,7 @@ def test_profile_rejects_unknown_cluster_name() -> None:
 
 
 def test_profile_rejects_legacy_shared_root_mounts(tmp_path: Path) -> None:
-    packaged = resources.files("rsi_harness.cluster.bluevela").joinpath(
-        "profile.toml"
-    )
+    packaged = resources.files("rsi_harness.cluster.bluevela").joinpath("profile.toml")
     profile_path = tmp_path / "profile.toml"
     profile_path.write_text(
         packaged.read_text().replace(
@@ -131,9 +119,7 @@ def test_profile_rejects_legacy_shared_root_mounts(tmp_path: Path) -> None:
 
 
 def test_existing_profile_retains_legacy_mount_policy(tmp_path: Path) -> None:
-    packaged = resources.files("rsi_harness.cluster.bluevela").joinpath(
-        "profile.toml"
-    )
+    packaged = resources.files("rsi_harness.cluster.bluevela").joinpath("profile.toml")
     profile_path = tmp_path / "profile.toml"
     profile_path.write_text(
         packaged.read_text()

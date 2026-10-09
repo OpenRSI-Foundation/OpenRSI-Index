@@ -147,10 +147,7 @@ def test_disabled_or_api_key_auth_never_reads_local_file(tmp_path: Path) -> None
         "effective_uid": os.geteuid(),
         "user_lookup": forbidden,
     }
-    assert (
-        resolve_agent_auth(source=None, agent_api_key=None, **common)
-        is None
-    )
+    assert resolve_agent_auth(source=None, agent_api_key=None, **common) is None
     assert (
         resolve_agent_auth(
             source=AgentAuthSource.LOCAL,
@@ -195,10 +192,13 @@ def test_claude_provider_reads_standard_login_into_private_work_tmpfs(
     assert "claude-local-refresh-secret" in auth.secret_values
     from rsi_harness.runtime.redaction import redact_exact_values
 
-    assert redact_exact_values(
-        "softmax(x); max_tokens=2048; user:inference claude-local-access-secret",
-        auth.secret_values,
-    ) == "softmax(x); max_tokens=2048; user:inference [REDACTED]"
+    assert (
+        redact_exact_values(
+            "softmax(x); max_tokens=2048; user:inference claude-local-access-secret",
+            auth.secret_values,
+        )
+        == "softmax(x); max_tokens=2048; user:inference [REDACTED]"
+    )
     safe_auth = json.loads(redact_exact_values(source.read_text(), auth.secret_values))
     assert safe_auth["claudeAiOauth"]["subscriptionType"] == "max"
     assert safe_auth["claudeAiOauth"]["accessToken"] == "[REDACTED]"

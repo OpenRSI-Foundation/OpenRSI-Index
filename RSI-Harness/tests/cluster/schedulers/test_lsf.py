@@ -98,8 +98,7 @@ def test_submit_can_exclude_profile_selected_unhealthy_hosts(
 
     resource = argv[argv.index("-R") + 1]
     assert resource == (
-        "select[tmp>=512000 && hname!='worker-a' && "
-        "hname!='worker-b'] span[hosts=1]"
+        "select[tmp>=512000 && hname!='worker-a' && hname!='worker-b'] span[hosts=1]"
     )
 
 
@@ -172,9 +171,7 @@ def test_excluded_hosts_reject_unsafe_or_duplicate_names(tmp_path: Path) -> None
 
 
 def test_submit_parses_exact_job_id(tmp_path: Path) -> None:
-    runner = FakeRunner(
-        [_completed("Job <678901> is submitted to queue <normal>.\n")]
-    )
+    runner = FakeRunner([_completed("Job <678901> is submitted to queue <normal>.\n")])
     scheduler = LSFScheduler(runner=runner)
 
     assert scheduler.submit(_spec(tmp_path, gpu_count=0)) == "678901"
@@ -205,9 +202,7 @@ def test_wait_retries_transient_lsf_communication_timeout() -> None:
     runner = FakeRunner(
         [
             _completed(
-                stderr=(
-                    "Failed in an LSF library call: Communication time out\n"
-                ),
+                stderr=("Failed in an LSF library call: Communication time out\n"),
                 returncode=255,
             ),
             _completed("RUN -\n"),

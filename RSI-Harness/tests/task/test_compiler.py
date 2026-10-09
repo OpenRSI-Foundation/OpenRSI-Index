@@ -165,8 +165,7 @@ def test_compiles_namespaced_verifier_gpu_count(tmp_path):
     """The approved verifier extension must reach the compiled plan."""
     task = write_harbor_task(
         tmp_path,
-        task_toml=DEFAULT_TASK_TOML
-        + "\n[metadata.rsi_harness.verifier]\ngpus = 4\n",
+        task_toml=DEFAULT_TASK_TOML + "\n[metadata.rsi_harness.verifier]\ngpus = 4\n",
     )
 
     definition = HarborTaskCompiler().compile(task, CompileOptions())

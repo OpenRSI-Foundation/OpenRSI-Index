@@ -19,8 +19,10 @@ from typing import BinaryIO
 try:
     from rsi_harness.errors import SetupError
 except ModuleNotFoundError:  # The installed in-container shim is standalone.
+
     class SetupError(RuntimeError):
         pass
+
 
 _ENVIRONMENT_NAME = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _BLOCKED_PREFIXES = (
@@ -179,13 +181,9 @@ def parse_torchrun_invocation(
         if name in _NODE_RANK_FLAGS:
             raise SetupError("task torchrun arguments cannot set the node rank")
         if name in _TOPOLOGY_FLAGS or name == "--standalone":
-            raise SetupError(
-                "task torchrun arguments cannot set rendezvous topology"
-            )
+            raise SetupError("task torchrun arguments cannot set rendezvous topology")
         if name == "--nnodes":
-            node_count, offset = _integer_value(
-                argv, offset, label="node count"
-            )
+            node_count, offset = _integer_value(argv, offset, label="node count")
             continue
         if name in {"--nproc-per-node", "--nproc_per_node"}:
             local_world_size, offset = _integer_value(
@@ -381,11 +379,7 @@ def wait_for_result(
         if actual_ranks != expected_ranks:
             raise SetupError("Blue Vela multi-node result has incomplete ranks")
         for node_rank in expected_ranks:
-            rank_output = (
-                root
-                / "results"
-                / f"{request_id}.rank-{node_rank:04d}.out"
-            )
+            rank_output = root / "results" / f"{request_id}.rank-{node_rank:04d}.out"
             try:
                 output.write(rank_output.read_bytes())
                 output.flush()

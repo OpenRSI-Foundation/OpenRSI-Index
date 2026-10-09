@@ -294,9 +294,10 @@ def resolve_sandbox_grant(
     # models and journal serialization copies; do not borrow transfer headroom.
     # Live backend image environments may expand from 64 KiB UTF-8 to wider
     # Python strings/dicts, so also reserve 512 KiB per live child.
-    metadata_bytes = 64 * 1024 * (
-        policy.run_limits.max_operations + policy.run_limits.max_created
-    ) + 512 * 1024 * policy.run_limits.max_live
+    metadata_bytes = (
+        64 * 1024 * (policy.run_limits.max_operations + policy.run_limits.max_created)
+        + 512 * 1024 * policy.run_limits.max_live
+    )
     metadata_mb = (metadata_bytes + 1024**2 - 1) // 1024**2
     memory = (
         2 * parent_memory_mb

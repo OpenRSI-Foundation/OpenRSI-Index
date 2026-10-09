@@ -125,9 +125,7 @@ def delete_managed_workspace(
                 f"managed workspace cleanup helper failed: {error}"
             ) from error
         workspace.rmdir()
-    workspace.parent.joinpath("workspace-initialization.json").unlink(
-        missing_ok=True
-    )
+    workspace.parent.joinpath("workspace-initialization.json").unlink(missing_ok=True)
     fsync_directory(workspace.parent)
 
 

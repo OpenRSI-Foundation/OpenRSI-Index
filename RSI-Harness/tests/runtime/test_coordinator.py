@@ -535,9 +535,7 @@ class Service:
                 work_container=self.work,
                 round_id=round_id,
                 verifier_logs=self.plan.paths.logs / "verifier" / round_id,
-                verifier_output=(
-                    self.plan.paths.logs / "feedback" / f"{round_id}.log"
-                ),
+                verifier_output=(self.plan.paths.logs / "feedback" / f"{round_id}.log"),
             )
         )
         self.reports.append(report)
@@ -597,9 +595,7 @@ def test_one_gpu_plan_is_durable_before_all_runtime_consumers(tmp_path) -> None:
             assert definition is self.plan.task
             assert allocation is self.gpu_plan
             self.plan = self.plan.model_copy(update={"gpu_plan": allocation})
-            return super().prepare_plan(
-                definition, images, allocation, request, run_id
-            )
+            return super().prepare_plan(definition, images, allocation, request, run_id)
 
         def create_work(self, plan, run_id, network, planned_name, workdir_volume):
             assert plan.gpu_plan is self.gpu_plan
@@ -700,9 +696,7 @@ def test_gpu_plan_event_is_published_once_after_durable_lease_before_images(
     assert gpu_events == [backend.gpu_plan]
     names = [name for name, _ in backend.events]
     assert (
-        names.index("lease_gpu_plan")
-        < names.index("gpu_plan")
-        < names.index("images")
+        names.index("lease_gpu_plan") < names.index("gpu_plan") < names.index("images")
     )
     assert result.status is RunStatus.COMPLETED
 

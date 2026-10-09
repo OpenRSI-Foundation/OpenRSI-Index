@@ -536,8 +536,7 @@ def test_run_help_explains_ordered_gpu_pool() -> None:
     plain_output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.output)
     assert (
         "Ordered GPU pool authorized for this run; Work sees only its "
-        "task-declared count"
-        in re.sub(r"[│\s]+", " ", plain_output)
+        "task-declared count" in re.sub(r"[│\s]+", " ", plain_output)
     )
 
 
@@ -703,11 +702,13 @@ def test_run_redacts_service_construction_and_registry_failures(
     secret = "BOUNDARY-TOP-SECRET"
 
     if phase == "construction":
+
         def fail_build(**_kwargs):
             raise RuntimeError(f"Authorization: Bearer {secret}")
 
         monkeypatch.setattr(cli_module, "build_runtime_services", fail_build)
     else:
+
         def fail_registry():
             raise RuntimeError(f"registry access_token={secret}")
 
@@ -812,7 +813,14 @@ def test_prune_images_dry_run_lists_candidates_and_what_it_would_free(cli) -> No
     lines = result.output.splitlines()
     assert lines[0].split()[:4] == ["IMAGE", "SIZE", "LAST", "USED"]
     assert lines[1].split()[:8] == [
-        "a" * 12, "3.0", "MiB", "2026-09-30", "12:00", "UTC", "would", "remove",
+        "a" * 12,
+        "3.0",
+        "MiB",
+        "2026-09-30",
+        "12:00",
+        "UTC",
+        "would",
+        "remove",
     ]
     assert lines[1].endswith("public.ecr.aws/docker/library/busybox:a")
     assert "kept" in lines[2] and "used by container cccccccccccc" in lines[2]
@@ -823,12 +831,8 @@ def test_prune_images_asks_before_removing_unless_yes(cli) -> None:
     cli_module, services = cli
     runner = CliRunner()
 
-    cancelled = runner.invoke(
-        cli_module.app, ["sandbox", "prune-images"], input="n\n"
-    )
-    confirmed = runner.invoke(
-        cli_module.app, ["sandbox", "prune-images"], input="y\n"
-    )
+    cancelled = runner.invoke(cli_module.app, ["sandbox", "prune-images"], input="n\n")
+    confirmed = runner.invoke(cli_module.app, ["sandbox", "prune-images"], input="y\n")
     unattended = runner.invoke(cli_module.app, ["sandbox", "prune-images", "--yes"])
 
     assert cancelled.exit_code == 1
@@ -881,9 +885,7 @@ def test_prune_images_rejects_a_malformed_duration(cli, duration) -> None:
 
 def test_prune_images_with_an_empty_ledger(cli, monkeypatch) -> None:
     cli_module, services = cli
-    monkeypatch.setattr(
-        services, "prune_images", lambda **_: (), raising=False
-    )
+    monkeypatch.setattr(services, "prune_images", lambda **_: (), raising=False)
     result = CliRunner().invoke(cli_module.app, ["sandbox", "prune-images"])
     assert result.exit_code == 0
     assert result.output == "No pulled images are recorded in the pull ledger.\n"

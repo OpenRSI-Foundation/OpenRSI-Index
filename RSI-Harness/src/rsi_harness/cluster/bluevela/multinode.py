@@ -21,9 +21,7 @@ from rsi_harness.cluster.bluevela.allocation import AllocatedNode
 from rsi_harness.errors import InfrastructureError
 from rsi_harness.models import PersistedModel
 
-RankRunner = Callable[
-    [tuple[str, ...], threading.Event], tuple[int, bytes]
-]
+RankRunner = Callable[[tuple[str, ...], threading.Event], tuple[int, bytes]]
 
 _REMOTE_OUTPUT_LIMIT = 16_000_000
 _REMOTE_OUTPUT_READ_SIZE = 1024 * 1024
@@ -59,9 +57,7 @@ class MultiNodeRequest(PersistedModel):
 
     @field_validator("working_directory")
     @classmethod
-    def _absolute_working_directory(
-        cls, value: PurePosixPath
-    ) -> PurePosixPath:
+    def _absolute_working_directory(cls, value: PurePosixPath) -> PurePosixPath:
         if not value.is_absolute() or ".." in value.parts:
             raise ValueError("multi-node working directory must be absolute")
         return value
@@ -127,9 +123,7 @@ class RemoteWorkerTemplate(PersistedModel):
 
     @field_validator("container_python", "container_workdir")
     @classmethod
-    def _absolute_container_path(
-        cls, value: PurePosixPath
-    ) -> PurePosixPath:
+    def _absolute_container_path(cls, value: PurePosixPath) -> PurePosixPath:
         if not value.is_absolute() or ".." in value.parts:
             raise ValueError("remote worker container paths must be absolute")
         return value
@@ -174,9 +168,7 @@ class SubpoolAllocator:
         if node_count <= 0:
             raise InfrastructureError("subpool node count must be positive")
         with self._lock:
-            occupied = {
-                rank for ranks in self._leases.values() for rank in ranks
-            }
+            occupied = {rank for ranks in self._leases.values() for rank in ranks}
             available = tuple(
                 rank for rank in range(len(self._nodes)) if rank not in occupied
             )
@@ -197,17 +189,13 @@ class SubpoolAllocator:
     def release(self, lease_id: str) -> None:
         with self._lock:
             if self._leases.pop(lease_id, None) is None:
-                raise InfrastructureError(
-                    f"unknown subpool lease {lease_id!r}"
-                )
+                raise InfrastructureError(f"unknown subpool lease {lease_id!r}")
 
 
 def _atomic_json(path: Path, value: PersistedModel | dict[str, object]) -> None:
     path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     payload = (
-        value.model_dump(mode="json")
-        if isinstance(value, PersistedModel)
-        else value
+        value.model_dump(mode="json") if isinstance(value, PersistedModel) else value
     )
     temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}.{time_ns()}")
     descriptor = os.open(
@@ -501,9 +489,7 @@ class MultiNodeBroker:
                 futures = {future for future in futures if not future.done()}
                 time.sleep(0.01)
             for request_id in tuple(self._active):
-                (self.root / "cancel" / request_id).touch(
-                    mode=0o600, exist_ok=True
-                )
+                (self.root / "cancel" / request_id).touch(mode=0o600, exist_ok=True)
 
     def _handle_claimed(self, path: Path) -> None:
         request_id = path.stem
@@ -677,13 +663,13 @@ def stop_command(
     action = len(prefix) + 4
     if (
         len(command) <= action
-        or command[:len(prefix)] != prefix
+        or command[: len(prefix)] != prefix
         or command[action - 2] != "-m"
         or command[action - 1] != module
         or command[action] != "run"
     ):
         raise InfrastructureError("cannot derive cleanup from an unsafe rank command")
-    return (*command[:action], "stop", *command[action + 1:])
+    return (*command[:action], "stop", *command[action + 1 :])
 
 
 def rank_environments(

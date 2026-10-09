@@ -105,8 +105,8 @@ final_sif={_quote(plan.sif_path)}
 final_sha={_quote(plan.sha256_path)}
 image_name={_quote(image_name)}
 builder_tmp_root={_quote(profile.builder.temp_root)}
-faked={_quote(profile.builder.faked_binary or '')}
-fakeroot_library={_quote(profile.builder.fakeroot_library or '')}
+faked={_quote(profile.builder.faked_binary or "")}
+fakeroot_library={_quote(profile.builder.fakeroot_library or "")}
 available_tmp_kb="$(df -Pk -- "$builder_tmp_root" | awk 'NR == 2 {{print $4}}')"
 required_tmp_kb=$(({minimum_tmp_mb} * 1024))
 if [[ ! "$available_tmp_kb" =~ ^[0-9]+$ ]] || \

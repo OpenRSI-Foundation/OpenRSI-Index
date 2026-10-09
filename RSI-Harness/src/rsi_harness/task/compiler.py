@@ -89,7 +89,9 @@ class HarborTaskCompiler:
                 instruction=task.instruction,
                 source_dir=task.task_dir,
                 source_digest=source_digest,
-                instruction_digest=hashlib.sha256(task.instruction.encode()).hexdigest(),
+                instruction_digest=hashlib.sha256(
+                    task.instruction.encode()
+                ).hexdigest(),
                 tests_digest=hash_tree(task.paths.tests_dir),
                 environment_digest=hash_tree(task.paths.environment_dir),
                 workdir=workdir,
@@ -335,9 +337,7 @@ class HarborTaskCompiler:
             )
         gpu_types = task.config.environment.gpu_types
         if count == 0 and gpu_types is not None:
-            raise UnsupportedTaskError(
-                "environment.gpus = 0 cannot declare gpu_types"
-            )
+            raise UnsupportedTaskError("environment.gpus = 0 cannot declare gpu_types")
         return GPURequirement(
             count=count,
             name=gpu_types[0] if gpu_types else None,

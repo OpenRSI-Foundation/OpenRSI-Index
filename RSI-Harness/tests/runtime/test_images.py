@@ -194,9 +194,7 @@ def test_image_builds_use_harbor_environment_timeout(tmp_path) -> None:
     task = task_definition(tmp_path)
     task = task.model_copy(
         update={
-            "service": task.service.model_copy(
-                update={"build_timeout_seconds": 1800.0}
-            )
+            "service": task.service.model_copy(update={"build_timeout_seconds": 1800.0})
         }
     )
 
@@ -484,11 +482,7 @@ def test_disabled_stop_hook_skips_image_hook_preflight(tmp_path) -> None:
     client = FakeDockerClient()
     task = task_definition(tmp_path)
     task = task.model_copy(
-        update={
-            "agent": task.agent.model_copy(
-                update={"install_stop_hook": False}
-            )
-        }
+        update={"agent": task.agent.model_copy(update={"install_stop_hook": False})}
     )
 
     DockerImageBuilder(client).prepare(
@@ -576,9 +570,7 @@ def test_work_cache_changes_with_base_user_workdir_and_generated_client(
     )
     configuration_tag = client.images.built[-1]["tag"]
 
-    assert len(
-        {first_tag, second_tag, user_tag, client_tag, configuration_tag}
-    ) == 5
+    assert len({first_tag, second_tag, user_tag, client_tag, configuration_tag}) == 5
 
 
 def test_build_failure_reports_the_agent_setup_boundary(tmp_path):

@@ -56,9 +56,7 @@ def read_reward(log_dir: Path, primary_key: str | None) -> RewardResult:
         return _invalid("Harbor reward dictionary is empty")
 
     try:
-        rewards = {
-            name: float(value) for name, value in verified.rewards.items()
-        }
+        rewards = {name: float(value) for name, value in verified.rewards.items()}
     except (OverflowError, ValueError):
         return _invalid("every Harbor reward must be finite")
     if any(not math.isfinite(value) for value in rewards.values()):

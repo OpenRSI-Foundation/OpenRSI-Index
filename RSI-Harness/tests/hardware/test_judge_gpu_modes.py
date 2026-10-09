@@ -422,6 +422,7 @@ def _submission_http_status(output: str) -> int:
     )
     return statuses[0]
 
+
 def _observe_holder(
     runtime: object,
     client: docker.DockerClient,
@@ -451,12 +452,7 @@ def _observe_holder(
 
 
 def _run_artifact_root(plan: RunPlan) -> Path:
-    return (
-        plan.paths.logs
-        / "runs"
-        / plan.paths.root.name
-        / plan.task.task_id
-    )
+    return plan.paths.logs / "runs" / plan.paths.root.name / plan.task.task_id
 
 
 def _run_verifier_dir(plan: RunPlan, round_id: str) -> Path:
@@ -775,9 +771,7 @@ def _run_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: Mode) -> No
                 "role": ref.role,
                 "gpu_allocation": spec.gpu_allocation,
                 "spec_gpu_uuids": spec.gpu_allocation.uuids,
-                "nvidia_visible_devices": config_environment[
-                    "NVIDIA_VISIBLE_DEVICES"
-                ],
+                "nvidia_visible_devices": config_environment["NVIDIA_VISIBLE_DEVICES"],
                 "workdir": spec.workdir,
                 "mounts": copy.deepcopy(container.attrs["Mounts"]),
                 "device_requests": _device_requests(container.attrs),
@@ -986,8 +980,7 @@ def test_freeze_only_is_gpu_void_with_default_nvidia_runtime(
     signature = f"{default} {runtime}".casefold()
     if "nvidia" not in signature:
         pytest.skip(
-            "Docker default runtime is not NVIDIA-backed: "
-            f"{default or 'unknown'}"
+            f"Docker default runtime is not NVIDIA-backed: {default or 'unknown'}"
         )
     try:
         client.images.get("ubuntu:24.04")
@@ -1027,9 +1020,9 @@ def test_freeze_only_is_gpu_void_with_default_nvidia_runtime(
                     "/bin/sh",
                     "-c",
                     "set -eu; "
-                    "test \"${NVIDIA_VISIBLE_DEVICES-}\" = void; "
+                    'test "${NVIDIA_VISIBLE_DEVICES-}" = void; '
                     "test -z \"$(find /dev -maxdepth 1 -name 'nvidia*' "
-                    "-print -quit)\"; "
+                    '-print -quit)"; '
                     "test ! -e /usr/bin/nvidia-smi",
                 ),
             )
@@ -1218,9 +1211,7 @@ def test_agent_cleanup_failure_preserves_primary_and_cleanup_evidence(
 
 
 def test_release_all_status_parser_requires_exact_409() -> None:
-    assert _submission_http_status(
-        "body\nrsi-submit: judge returned HTTP 409\n"
-    ) == 409
+    assert _submission_http_status("body\nrsi-submit: judge returned HTTP 409\n") == 409
     with pytest.raises(AssertionError, match="HTTP 409"):
         _submission_http_status("body\nrsi-submit: judge returned HTTP 500\n")
 

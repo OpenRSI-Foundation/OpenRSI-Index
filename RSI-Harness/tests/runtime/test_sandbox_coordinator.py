@@ -165,9 +165,7 @@ def test_round_in_flight_when_work_ends_keeps_reward_without_recovery(
         rounds[0].start()
         assert judging.wait(5)
         rounds[1].start()
-        return AgentRunResult(
-            exit_code=None if timed_out else 0, timed_out=timed_out
-        )
+        return AgentRunResult(exit_code=None if timed_out else 0, timed_out=timed_out)
 
     backend.evaluate_submission = judge_across_work_end
     backend.run_agent = agent_ends_mid_round
@@ -182,9 +180,7 @@ def test_round_in_flight_when_work_ends_keeps_reward_without_recovery(
 
     result = coordinator.run(RunRequest(task_dir=tmp_path))
 
-    assert [report.status for report in result.reports] == [
-        SubmissionStatus.COMPLETED
-    ]
+    assert [report.status for report in result.reports] == [SubmissionStatus.COMPLETED]
     assert result.best_score == 0.25
     # Reaching the Agent budget is the normal end of a run: the outcome
     # follows the accepted round either way.
@@ -292,6 +288,7 @@ def test_failed_sandbox_revocation_still_contains_work(tmp_path, cancelled):
         raise InfrastructureError("sandbox revocation failed")
 
     if cancelled:
+
         def interrupt(prepared, work, timeout):
             del prepared, timeout
             backend.events.append(("agent_start", work.container_id))
@@ -308,9 +305,7 @@ def test_failed_sandbox_revocation_still_contains_work(tmp_path, cancelled):
         clock=Clock(),
         sandbox_lifecycle=lifecycle,
     ).run(RunRequest(task_dir=tmp_path))
-    assert result.status == (
-        RunStatus.CANCELLED if cancelled else RunStatus.FAILED
-    )
+    assert result.status == (RunStatus.CANCELLED if cancelled else RunStatus.FAILED)
     retained = store.read("run-1")
     assert retained.recovery_required
     assert "sandbox revocation failed" in retained.error
@@ -368,9 +363,7 @@ def test_failed_cleanup_still_quiesces_work_without_releasing_authority(
 
 
 @pytest.mark.parametrize("failure", ["child", "cancel", "drain", "none"])
-def test_persistent_lease_write_failure_still_contains_durable_work(
-    tmp_path, failure
-):
+def test_persistent_lease_write_failure_still_contains_durable_work(tmp_path, failure):
     class FailingStore(LeaseStore):
         failed = False
 
@@ -392,8 +385,10 @@ def test_persistent_lease_write_failure_still_contains_durable_work(
     backend.fail_server_stop = failure == "drain"
     lifecycle = Lifecycle(backend.events, failure == "child")
     if failure == "cancel":
+
         def cancel_failure():
             raise InfrastructureError("sandbox revocation failed")
+
         lifecycle.cancel_work = cancel_failure
     with pytest.raises(OSError, match="lease storage unavailable"):
         RunCoordinator(
@@ -406,7 +401,10 @@ def test_persistent_lease_write_failure_still_contains_durable_work(
     names = [name for name, _ in backend.events]
     assert "work_pause" in names
     assert not {
-        "work_remove", "network_remove", "sandbox_release", "work_resume"
+        "work_remove",
+        "network_remove",
+        "sandbox_release",
+        "work_resume",
     } & set(names)
     retained = store.read("run-1")
     assert retained.work.container_id == "work-1"

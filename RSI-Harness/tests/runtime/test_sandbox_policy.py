@@ -220,7 +220,9 @@ def test_run_cumulative_metadata_is_reserved_independently_of_live_children(api,
         policy.resolve_sandbox_grant(
             task,
             raised.model_copy(update={"pool_memory_mb": base.reserved_memory_mb}),
-            {"offline": helpers.make_profile().image}, 1, 256,
+            {"offline": helpers.make_profile().image},
+            1,
+            256,
         )
 
 
@@ -232,7 +234,9 @@ def test_large_cumulative_metadata_cannot_borrow_fixed_transfer_headroom(api):
         policy.resolve_sandbox_grant(
             helpers.make_sandbox_task(),
             allowed.model_copy(update={"run_limits": limits}),
-            {"offline": helpers.make_profile().image}, 1, 256,
+            {"offline": helpers.make_profile().image},
+            1,
+            256,
         )
 
 
@@ -243,7 +247,9 @@ def test_live_backend_environment_metadata_has_separate_allowance(api):
     grant = policy.resolve_sandbox_grant(
         helpers.make_sandbox_task(),
         allowed.model_copy(update={"run_limits": limits}),
-        {"offline": helpers.make_profile().image}, 1, 256,
+        {"offline": helpers.make_profile().image},
+        1,
+        256,
     )
     assert grant.reserved_memory_mb == (
         helpers.make_sandbox_grant().reserved_memory_mb + 1

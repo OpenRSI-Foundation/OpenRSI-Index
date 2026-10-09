@@ -123,9 +123,10 @@ def test_a_cluster_accepts_only_environment_tasks_with_the_e2b_backend(tmp_path)
     with pytest.raises(SetupError, match="judge: unsupported on multi-node"):
         validate_cluster_sandbox(task, grant, multi_node=True)
     work_only = e2b_grant(tmp_path, task=WORK_ONLY)
-    assert validate_cluster_sandbox(
-        make_env_task(WORK_ONLY), work_only, multi_node=True
-    ) is work_only
+    assert (
+        validate_cluster_sandbox(make_env_task(WORK_ONLY), work_only, multi_node=True)
+        is work_only
+    )
 
 
 # -- submit host ----------------------------------------------------------------
@@ -215,8 +216,13 @@ def test_the_cli_hands_an_e2b_policy_to_the_cluster_adapter(tmp_path, monkeypatc
     result = CliRunner().invoke(
         cli.app,
         [
-            "run", str(tmp_path), "--cluster", "bluevela",
-            "--sandbox-policy", "policy.toml", "--dry-run",
+            "run",
+            str(tmp_path),
+            "--cluster",
+            "bluevela",
+            "--sandbox-policy",
+            "policy.toml",
+            "--dry-run",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -527,7 +533,6 @@ def test_the_cli_recovers_cluster_runs_through_the_profile(
     assert refused.exit_code == 2
 
 
-
 def test_compute_nodes_may_reach_e2b_through_a_credential_free_proxy():
     from pydantic import ValidationError
 
@@ -618,8 +623,10 @@ def test_run_native_engine_wires_the_sandbox_into_the_coordinator(
 
             runs = []
             composition.agent = SimpleNamespace(
-                run=lambda request: runs.append(request)
-                or AgentRunResult(exit_code=0, output="", full_output_captured=True)
+                run=lambda request: (
+                    runs.append(request)
+                    or AgentRunResult(exit_code=0, output="", full_output_captured=True)
+                )
             )
             composition.run_agent(prepared, composition.runtime.work_ref, 600)
             assert runs[0].on_exec_start == lifecycle.activate_work

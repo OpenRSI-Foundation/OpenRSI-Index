@@ -204,9 +204,7 @@ def _agent_endpoints(
     model = definition.agent.model or config.agent_model or selected.default_model
     environment = rsi_loop_agent_environment(config, selected, model)
     default_provider = (
-        environment.get(selected.api_base_env)
-        if selected.api_base_env
-        else None
+        environment.get(selected.api_base_env) if selected.api_base_env else None
     ) or getattr(selected, "default_api_base_url", None)
     providers = (
         agent_auth.provider_endpoints
@@ -234,15 +232,9 @@ def _agent_endpoints(
         ),
     )
     proxies = tuple(
-        dict.fromkeys(
-            environment[key]
-            for key in proxy_keys
-            if environment.get(key)
-        )
+        dict.fromkeys(environment[key] for key in proxy_keys if environment.get(key))
     )
-    if definition.agent.network.mode == "no-network" and not (
-        providers or proxies
-    ):
+    if definition.agent.network.mode == "no-network" and not (providers or proxies):
         raise SetupError(
             "no-network Agent requires a registered default API base URL, "
             "an explicit API base URL, or an HTTP/HTTPS proxy so provider "
@@ -295,9 +287,7 @@ def _agent_endpoints(
     return result
 
 
-def _provider_bypasses_proxy(
-    provider: str, environment: Mapping[str, str]
-) -> bool:
+def _provider_bypasses_proxy(provider: str, environment: Mapping[str, str]) -> bool:
     hostname = urlsplit(provider).hostname
     if hostname is None:
         return False
@@ -307,9 +297,7 @@ def _provider_bypasses_proxy(
     except ValueError:
         provider_address = None
     entries = tuple(
-        value
-        for key in ("no_proxy", "NO_PROXY")
-        if (value := environment.get(key))
+        value for key in ("no_proxy", "NO_PROXY") if (value := environment.get(key))
     )
     for entry in entries:
         for raw_token in entry.split(","):
@@ -368,9 +356,7 @@ SANDBOX_ENV_DOCKER_TIMEOUT_SECONDS = 60
 
 
 def _decode_mountinfo_field(value: str) -> str:
-    return _MOUNTINFO_ESCAPE.sub(
-        lambda match: chr(int(match.group(1), 8)), value
-    )
+    return _MOUNTINFO_ESCAPE.sub(lambda match: chr(int(match.group(1), 8)), value)
 
 
 def _mountinfo_references_workspace(text: str, workspace: Path) -> bool:
@@ -398,14 +384,11 @@ def _mountinfo_references_workspace(text: str, workspace: Path) -> bool:
                 "cannot inspect workspace mounts: malformed mountinfo"
             ) from error
         if len(fields) < 7 or separator + 3 >= len(fields):
-            raise SetupError(
-                "cannot inspect workspace mounts: malformed mountinfo"
-            )
+            raise SetupError("cannot inspect workspace mounts: malformed mountinfo")
         # mount root, mount target, and filesystem source may each reference a
         # managed tree.  Overlay/FUSE paths live in keyed mount/super options.
         if any(
-            references(value)
-            for value in (fields[3], fields[4], fields[separator + 2])
+            references(value) for value in (fields[3], fields[4], fields[separator + 2])
         ):
             return True
         for options in (fields[5], fields[separator + 3]):
@@ -679,9 +662,7 @@ class ProductionRecoveryBackend:
             return None
 
     def image_in_use(self, image_id: str) -> bool:
-        found = self._client.containers.list(
-            all=True, filters={"ancestor": image_id}
-        )
+        found = self._client.containers.list(all=True, filters={"ancestor": image_id})
         if not isinstance(found, list):
             raise TypeError("Docker returned malformed image references")
         return bool(found)
@@ -748,9 +729,7 @@ class ProductionRecoveryBackend:
             ),
         }
 
-    def _volume_container_references(
-        self, name: str
-    ) -> tuple[Mapping[str, Any], ...]:
+    def _volume_container_references(self, name: str) -> tuple[Mapping[str, Any], ...]:
         return normalized_workdir_volume_container_references(self._client, name)
 
     def list_networks(
@@ -890,9 +869,7 @@ class _ProductionRunComposition:
         self.compiler = compiler or HarborTaskCompiler()
         self.rootfs_snapshots = DockerRootfsSnapshotBackend(client)
         self.workdir_volumes = DockerWorkdirVolumeBackend(client)
-        self.definition: Any = (
-            None if preparation is None else preparation.definition
-        )
+        self.definition: Any = None if preparation is None else preparation.definition
         self.plan: Any = None
         self.run_id = ""
         self.artifacts: RunArtifactWriter | None = None
@@ -914,8 +891,8 @@ class _ProductionRunComposition:
         self._sandbox_broker = None
         self._sandbox_broker_factory: Callable[[], SandboxBroker] | None = None
         # (API key, [environments.host.e2b]) -> the E2B client (tests fake it).
-        self.e2b_client_factory: Callable[[str, Any], Any] = (
-            lambda key, settings: e2b_client(settings, key)
+        self.e2b_client_factory: Callable[[str, Any], Any] = lambda key, settings: (
+            e2b_client(settings, key)
         )
 
     def bind_sandbox_lease(self, mutate):
@@ -951,8 +928,11 @@ class _ProductionRunComposition:
             ):
                 # E2B envs: no env Docker client, firewall, builder or root.
                 grant = resolve_env_grant(
-                    task, self.sandbox_policy, {},
-                    self.definition.service.cpus, self.definition.service.memory_mb,
+                    task,
+                    self.sandbox_policy,
+                    {},
+                    self.definition.service.cpus,
+                    self.definition.service.memory_mb,
                 )
                 check_tools(grant.environments.host)
                 settings = grant.environments.host.e2b
@@ -969,15 +949,17 @@ class _ProductionRunComposition:
                         host=grant.environments.host,
                     )
                     return SandboxBroker(
-                        grant, backend, journal, time.monotonic, envs=runtime,
+                        grant,
+                        backend,
+                        journal,
+                        time.monotonic,
+                        envs=runtime,
                     )
 
                 self._sandbox_broker_factory = build_broker
                 reserved = {"disk_mb": grant.reserved_disk_mb}
             elif isinstance(task, SandboxEnvTask):
-                env_client = docker.from_env(
-                    timeout=SANDBOX_ENV_DOCKER_TIMEOUT_SECONDS
-                )
+                env_client = docker.from_env(timeout=SANDBOX_ENV_DOCKER_TIMEOUT_SECONDS)
                 if env_client.info().get("ID") != parent_id:
                     raise SetupError(
                         "sandbox parent and env Docker daemon identities differ"
@@ -986,9 +968,11 @@ class _ProductionRunComposition:
                 if not docker_root:
                     raise SetupError("sandbox Docker root directory is unknown")
                 grant = resolve_env_grant(
-                    task, self.sandbox_policy,
+                    task,
+                    self.sandbox_policy,
                     sandbox_builder_images(env_client, task, self.sandbox_policy),
-                    self.definition.service.cpus, self.definition.service.memory_mb,
+                    self.definition.service.cpus,
+                    self.definition.service.memory_mb,
                 )
                 check_tools(grant.environments.host)
                 journal = SandboxJournal(mutate)
@@ -1009,7 +993,11 @@ class _ProductionRunComposition:
                         data_root=self.data_root,
                     )
                     return SandboxBroker(
-                        grant, backend, journal, time.monotonic, envs=runtime,
+                        grant,
+                        backend,
+                        journal,
+                        time.monotonic,
+                        envs=runtime,
                     )
 
                 self._sandbox_broker_factory = build_broker
@@ -1017,16 +1005,24 @@ class _ProductionRunComposition:
             else:
                 images = {p.name: backend.preflight(p) for p in task.profiles}
                 grant = resolve_sandbox_grant(
-                    task, self.sandbox_policy, images,
-                    self.definition.service.cpus, self.definition.service.memory_mb,
+                    task,
+                    self.sandbox_policy,
+                    images,
+                    self.definition.service.cpus,
+                    self.definition.service.memory_mb,
                 )
                 self._sandbox_broker = SandboxBroker(
-                    grant, backend, SandboxJournal(mutate), time.monotonic,
+                    grant,
+                    backend,
+                    SandboxJournal(mutate),
+                    time.monotonic,
                 )
                 reserved = {}
             self.sandbox_lifecycle.reserve(
                 SandboxAdmissionPool(LeaseStore(self.data_root / "leases")),
-                grant, lease.run_id, mutate,
+                grant,
+                lease.run_id,
+                mutate,
             )
             self.sandbox_lifecycle.own_transport(
                 child_client, *(() if env_client is None else (env_client,))
@@ -1124,11 +1120,7 @@ class _ProductionRunComposition:
                 agent_updates["reasoning_effort"] = request.reasoning_effort
             if agent_updates:
                 definition = definition.model_copy(
-                    update={
-                        "agent": definition.agent.model_copy(
-                            update=agent_updates
-                        )
-                    }
+                    update={"agent": definition.agent.model_copy(update=agent_updates)}
                 )
         run_root = (self.data_root / run_id).resolve()
         run_root.mkdir(parents=True, mode=0o700, exist_ok=False)
@@ -1169,7 +1161,10 @@ class _ProductionRunComposition:
                 (run_root / "sb").mkdir(mode=0o700)
                 self._sandbox_broker = self._sandbox_broker_factory()
             self.sandbox_lifecycle.configure(
-                self._sandbox_broker, run_root / "sb", run_id, self.plan.task.task_id,
+                self._sandbox_broker,
+                run_root / "sb",
+                run_id,
+                self.plan.task.task_id,
             )
             self.sandbox_lifecycle.prepare_work()
         self.definition = self.plan.task
@@ -1218,9 +1213,7 @@ class _ProductionRunComposition:
         self.work_provisioner = DockerContainerRuntime(
             self.client, **self._runtime_common("work")
         )
-        self.planned_work_network = self.work_provisioner.planned_network_name(
-            "phase"
-        )
+        self.planned_work_network = self.work_provisioner.planned_network_name("phase")
         return self.planned_work_network
 
     def create_network(self, plan: Any, run_id: str, planned: str) -> ManagedNetwork:
@@ -1350,8 +1343,7 @@ class _ProductionRunComposition:
         except MissingRuntimeEnvironmentError as error:
             raise self._agent_failure(
                 InfrastructureError(
-                    "missing Agent runtime environment variable "
-                    f"'{error.name}'"
+                    f"missing Agent runtime environment variable '{error.name}'"
                 )
             ) from None
         container_environment = {
@@ -1414,7 +1406,8 @@ class _ProductionRunComposition:
                             target=WORK_FEEDBACK_ROOT,
                             read_only=True,
                         ),
-                    ) + ((endpoint.mount,) if endpoint else ()),
+                    )
+                    + ((endpoint.mount,) if endpoint else ()),
                     volume_mounts=volume_mounts,
                     tmpfs=(
                         tuple(mount.tmpfs for mount in self.agent_auth.mounts)
@@ -1529,9 +1522,7 @@ class _ProductionRunComposition:
         except Exception as error:
             raise self._agent_failure(error) from None
 
-    def prepare_agent(
-        self, plan: Any, max_submissions: int | None = None
-    ) -> Any:
+    def prepare_agent(self, plan: Any, max_submissions: int | None = None) -> Any:
         try:
             if self.agent is None or self.artifacts is None:
                 raise RuntimeError("Agent artifacts are unavailable")
@@ -1550,8 +1541,8 @@ class _ProductionRunComposition:
                 and runtime_template_name(template) is not None
             }
             exec_environment.update(prepared.environment)
-            exec_environment[NVIDIA_VISIBLE_DEVICES_ENV] = (
-                nvidia_visible_devices_value(plan.gpu_plan.work)
+            exec_environment[NVIDIA_VISIBLE_DEVICES_ENV] = nvidia_visible_devices_value(
+                plan.gpu_plan.work
             )
             endpoint = self.sandbox_lifecycle.prepare_work()
             if endpoint is not None:
@@ -1615,8 +1606,11 @@ class _ProductionRunComposition:
                     output_callback=lambda value: self.event_callback(
                         "agent_output", value
                     ),
-                    on_exec_start=(self.sandbox_lifecycle.activate_work
-                                   if self.sandbox_lifecycle.enabled else None),
+                    on_exec_start=(
+                        self.sandbox_lifecycle.activate_work
+                        if self.sandbox_lifecycle.enabled
+                        else None
+                    ),
                 )
             )
             safe_output = redact_text(
@@ -1632,9 +1626,7 @@ class _ProductionRunComposition:
                 exec_started=result.exec_started,
             )
             if not result.full_output_captured:
-                self.artifacts.root.joinpath("agent_output.txt").write_text(
-                    safe_output
-                )
+                self.artifacts.root.joinpath("agent_output.txt").write_text(safe_output)
             self.artifacts.root.joinpath("run_agent.log").write_text(safe_output)
             self.event_callback(
                 "agent_finished",
@@ -1714,9 +1706,7 @@ class _ProductionRunComposition:
             return WorkQuiescence.STOPPED
         if running is True and paused is True:
             return WorkQuiescence.PAUSED
-        raise InfrastructureError(
-            "ambiguous Work container state after final pause"
-        )
+        raise InfrastructureError("ambiguous Work container state after final pause")
 
     def plan_retained_work(self, plan: Any, work: ContainerRef) -> str:
         del work
@@ -1755,9 +1745,7 @@ class _ProductionRunComposition:
         secret_values: set[str] | None = None,
     ) -> InfrastructureError:
         values = (
-            self._agent_secret_snapshot()
-            if secret_values is None
-            else secret_values
+            self._agent_secret_snapshot() if secret_values is None else secret_values
         )
         safe_error = redact_text(redact_exact_values(str(error), values))
         return InfrastructureError(safe_error or type(error).__name__)
@@ -1776,9 +1764,7 @@ class _ProductionRunComposition:
         self, *, secret_values: set[str] | None = None
     ) -> InfrastructureError | None:
         values = (
-            self._agent_secret_snapshot()
-            if secret_values is None
-            else secret_values
+            self._agent_secret_snapshot() if secret_values is None else secret_values
         )
         try:
             if self.agent is not None:
@@ -1807,8 +1793,11 @@ class _ProductionRunComposition:
             lifecycle_observer=observer,
             work_container=request.work_container,
             omit_gpu_device_requests_for_tests=self.omit_gpu,
-            **({"sandbox_lifecycle": self.sandbox_lifecycle}
-               if self.sandbox_lifecycle.enabled else {}),
+            **(
+                {"sandbox_lifecycle": self.sandbox_lifecycle}
+                if self.sandbox_lifecycle.enabled
+                else {}
+            ),
         )
         self.event_callback("judge_started", {"round_id": request.round_id})
         runner = JudgeRunner(
@@ -1822,8 +1811,11 @@ class _ProductionRunComposition:
             lifecycle_observer=observer,
             verifier_secret_env=self.verifier_secret_env,
             event_callback=self.event_callback,
-            **({"sandbox_lifecycle": self.sandbox_lifecycle}
-               if self.sandbox_lifecycle.enabled else {}),
+            **(
+                {"sandbox_lifecycle": self.sandbox_lifecycle}
+                if self.sandbox_lifecycle.enabled
+                else {}
+            ),
         )
         report = runner.evaluate(request)
         self.event_callback(
@@ -1916,9 +1908,7 @@ class ProductionRuntimeServices:
         compiler = HarborTaskCompiler()
         definition = compiler.compile(request.task_dir, request.options)
         validate_sandbox_policy(definition.sandbox, self.sandbox_policy, "docker")
-        validate_agent_reasoning_effort(
-            definition.agent.name, request.reasoning_effort
-        )
+        validate_agent_reasoning_effort(definition.agent.name, request.reasoning_effort)
         agent_updates = {}
         if request.model is not None:
             agent_updates["model"] = request.model
@@ -1926,9 +1916,7 @@ class ProductionRuntimeServices:
             agent_updates["reasoning_effort"] = request.reasoning_effort
         if agent_updates:
             definition = definition.model_copy(
-                update={
-                    "agent": definition.agent.model_copy(update=agent_updates)
-                }
+                update={"agent": definition.agent.model_copy(update=agent_updates)}
             )
         needs_gpus = (
             definition.gpu_requirement.count != 0 or definition.verifier.gpu_count != 0
@@ -1949,9 +1937,7 @@ class ProductionRuntimeServices:
             agent_name=definition.agent.name,
             agent_api_key=self.rsi_loop_config.agent_api_key,
         )
-        api_endpoints = _agent_endpoints(
-            definition, self.rsi_loop_config, agent_auth
-        )
+        api_endpoints = _agent_endpoints(definition, self.rsi_loop_config, agent_auth)
         client = self._client()
         snapshot = self.snapshot or OverlaySnapshotBackend(self.data_root)
         firewall = self.firewall or DockerIptablesFirewallBackend(client)
@@ -1982,9 +1968,12 @@ class ProductionRuntimeServices:
             lease_store=LeaseStore(self.data_root / "leases"),
             clock=_Clock(),
             **(
-                {"on_lease_ready": ports.bind_sandbox_lease,
-                 "sandbox_lifecycle": ports.sandbox_lifecycle}
-                if definition.sandbox else {}
+                {
+                    "on_lease_ready": ports.bind_sandbox_lease,
+                    "sandbox_lifecycle": ports.sandbox_lifecycle,
+                }
+                if definition.sandbox
+                else {}
             ),
         )
         return coordinator.run(request)

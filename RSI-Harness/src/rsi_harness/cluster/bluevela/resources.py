@@ -154,9 +154,7 @@ def derive_resource_plan(
         max(work_gpus, verifier_gpus) <= gpus_per_node
         and not definition.require_disjoint_phase_nodes
     ):
-        return BlueVelaResourcePlan(
-            single_node=derive_resources(definition, profile)
-        )
+        return BlueVelaResourcePlan(single_node=derive_resources(definition, profile))
 
     invalid = tuple(
         (label, count)

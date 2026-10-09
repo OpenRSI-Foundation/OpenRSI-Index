@@ -271,9 +271,7 @@ def test_real_child_cannot_reach_host_peer_gpu_or_host_sockets_and_scratch_is_bo
 
     listener_thread = threading.Thread(target=accept_until_stopped, daemon=True)
     listener_thread.start()
-    with socket.create_connection(
-        (host_ip, listener.getsockname()[1]), timeout=1
-    ):
+    with socket.create_connection((host_ip, listener.getsockname()[1]), timeout=1):
         pass
     try:
         result = broker.execute(

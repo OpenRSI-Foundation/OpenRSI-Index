@@ -59,11 +59,7 @@ def test_task_build_timeout_expands_cluster_build_walltime() -> None:
 def test_task_storage_is_used_as_node_local_tmp_requirement() -> None:
     definition = _target_definition()
     definition = definition.model_copy(
-        update={
-            "service": definition.service.model_copy(
-                update={"storage_mb": 512000}
-            )
-        }
+        update={"service": definition.service.model_copy(update={"storage_mb": 512000})}
     )
 
     resources = derive_resources(
@@ -155,11 +151,7 @@ def test_explicit_disjoint_phases_stay_multinode_when_each_phase_fits() -> None:
     )
     profile = load_cluster_profile("bluevela", {"USER": "alice"})
     profile = profile.model_copy(
-        update={
-            "resources": profile.resources.model_copy(
-                update={"gpus_per_node": 16}
-            )
-        }
+        update={"resources": profile.resources.model_copy(update={"gpus_per_node": 16})}
     )
 
     plan = bluevela_adapter.derive_resource_plan(definition, profile)
@@ -207,11 +199,7 @@ def test_multinode_geometry_comes_from_profile_not_an_eight_gpu_constant() -> No
     )
     profile = load_cluster_profile("bluevela", {"USER": "alice"})
     profile = profile.model_copy(
-        update={
-            "resources": profile.resources.model_copy(
-                update={"gpus_per_node": 4}
-            )
-        }
+        update={"resources": profile.resources.model_copy(update={"gpus_per_node": 4})}
     )
 
     plan = bluevela_adapter.derive_resource_plan(definition, profile)

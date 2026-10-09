@@ -434,9 +434,10 @@ def test_teardown_order_is_containers_volumes_bridge_then_rule(tmp_path):
 
     removals = ("container-remove", "volume-remove", "network-remove", "remove")
     order = [event[0] for event in world.events if event[0] in removals]
-    assert order == ["container-remove"] * 3 + ["volume-remove"] * len(
-        plan.volumes
-    ) + ["network-remove", "remove"]
+    assert order == ["container-remove"] * 3 + ["volume-remove"] * len(plan.volumes) + [
+        "network-remove",
+        "remove",
+    ]
     assert ("remove", plan.network.rule_id) in world.events
     assert_nothing_left(world)
 
@@ -582,9 +583,7 @@ def test_a_foreign_object_holding_a_planned_name_is_never_removed(tmp_path, muta
 
     assert kv["Id"] in world.engine.containers
     assert not any(event[0].endswith("-remove") for event in world.events)
-    assert not any(
-        event == ("kill", kv["Name"][1:], False) for event in world.events
-    )
+    assert not any(event == ("kill", kv["Name"][1:], False) for event in world.events)
     retained = assert_retained(store)
     assert [record.env_id for record in retained.sandbox_envs] == [ENV_ID]
 
@@ -882,9 +881,9 @@ def test_another_runs_env_objects_are_left_alone(tmp_path):
     [
         (
             "container",
-            lambda world, plan: world.container(plan, "kv")["Config"][
-                "Labels"
-            ].update({"rsi-harness.task-id": "other-task"}),
+            lambda world, plan: world.container(plan, "kv")["Config"]["Labels"].update(
+                {"rsi-harness.task-id": "other-task"}
+            ),
         ),
         (
             "volume",

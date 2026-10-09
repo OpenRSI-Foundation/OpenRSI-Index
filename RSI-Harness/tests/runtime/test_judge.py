@@ -183,13 +183,9 @@ def make_harness(tmp_path: Path, *, event_callback=None):
         }
     )
     plan.paths.workspace.mkdir(parents=True)
-    (
-        plan.paths.logs
-        / "runs"
-        / "run-1"
-        / plan.task.task_id
-        / "feedback"
-    ).mkdir(parents=True)
+    (plan.paths.logs / "runs" / "run-1" / plan.task.task_id / "feedback").mkdir(
+        parents=True
+    )
     log_dir = plan.paths.logs / "verifier"
     runtime = FakeJudgeRuntime(tmp_path / "snapshots")
     snapshot = FakeJudgeSnapshotBackend(tmp_path / "snapshots", runtime)
@@ -371,7 +367,7 @@ def test_judge_gpu_freeze_only_omits_devices_and_expected_uuid_env(
                                 ),
                             )
                         }
-                    )
+                    ),
                 }
             ),
             "gpu_plan": plan.gpu_plan.model_copy(
@@ -383,7 +379,7 @@ def test_judge_gpu_freeze_only_omits_devices_and_expected_uuid_env(
                         GPUAllocation() if cpu_work else plan.gpu_plan.authorized_pool
                     ),
                 }
-            )
+            ),
         }
     )
 
@@ -1830,10 +1826,7 @@ def test_judge_rejects_traversing_round_before_output_or_pause(tmp_path):
     from rsi_harness.models import EvaluationRequest
 
     escaped = (
-        plan.paths.logs
-        / "runs/run-1"
-        / plan.task.task_id
-        / "feedback/../escaped.log"
+        plan.paths.logs / "runs/run-1" / plan.task.task_id / "feedback/../escaped.log"
     ).resolve()
     report = runner.evaluate(
         EvaluationRequest(
@@ -1856,9 +1849,7 @@ def test_judge_rejects_symlinked_feedback_directory_before_pause(tmp_path):
     plan, work, log_dir = request
     from rsi_harness.models import EvaluationRequest
 
-    feedback = (
-        plan.paths.logs / "runs/run-1" / plan.task.task_id / "feedback"
-    )
+    feedback = plan.paths.logs / "runs/run-1" / plan.task.task_id / "feedback"
     redirected = plan.paths.logs / "redirected-feedback"
     redirected.mkdir(parents=True)
     feedback.rmdir()

@@ -64,7 +64,8 @@ def write_cluster_task(tmp_path: Path) -> Path:
     """Self-contained two-GPU task for scheduler and profile regression tests."""
     fixture = Path(__file__).parent / "fixtures/tasks/minimal-bluevela-multinode"
     task_toml = (
-        (fixture / "task.toml").read_text()
+        (fixture / "task.toml")
+        .read_text()
         .replace("gpus = 16", "gpus = 2")
         .replace("gpus = 8", "gpus = 2")
         .replace("timeout_sec = 180", "timeout_sec = 3600")
@@ -73,9 +74,7 @@ def write_cluster_task(tmp_path: Path) -> Path:
     return write_harbor_task(tmp_path, task_toml=task_toml)
 
 
-def make_run_plan(
-    tmp_path: Path, *, secret_env_names: tuple[str, ...] = ()
-) -> RunPlan:
+def make_run_plan(tmp_path: Path, *, secret_env_names: tuple[str, ...] = ()) -> RunPlan:
     root = tmp_path.resolve()
     task = TaskDefinition(
         task_id="minimal-gpu",

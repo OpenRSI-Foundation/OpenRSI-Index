@@ -22,9 +22,7 @@ from rsi_harness.runtime.sandbox_contracts import (
 
 VERIFIER_OUTPUT_TRUNCATION_MARKER = "\n...[verifier output truncated]...\n"
 WORK_FEEDBACK_ROOT = PurePosixPath("/run/rsi-harness/feedback")
-MIN_VERIFIER_OUTPUT_LIMIT_BYTES = len(
-    VERIFIER_OUTPUT_TRUNCATION_MARKER.encode("utf-8")
-)
+MIN_VERIFIER_OUTPUT_LIMIT_BYTES = len(VERIFIER_OUTPUT_TRUNCATION_MARKER.encode("utf-8"))
 
 
 class PersistedModel(BaseModel):
@@ -247,9 +245,7 @@ class RunGPUPlan(PersistedModel):
             raise ValueError("phase GPU allocation escapes authorized pool")
         if self.judge_mode is JudgeGPUMode.FREEZE_ONLY and judge:
             raise ValueError("freeze-only Judge cannot receive GPUs")
-        if self.judge_mode is JudgeGPUMode.DISJOINT and (
-            not judge or work & judge
-        ):
+        if self.judge_mode is JudgeGPUMode.DISJOINT and (not judge or work & judge):
             raise ValueError("disjoint Judge allocation must be nonempty and disjoint")
         if self.judge_mode is JudgeGPUMode.RELEASE_ALL and (
             not judge or not work & judge
@@ -609,9 +605,7 @@ class EvaluationRequest:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "verifier_logs", _runtime_path(self.verifier_logs))
-        object.__setattr__(
-            self, "verifier_output", _runtime_path(self.verifier_output)
-        )
+        object.__setattr__(self, "verifier_output", _runtime_path(self.verifier_output))
 
 
 class RewardResult(PersistedModel):

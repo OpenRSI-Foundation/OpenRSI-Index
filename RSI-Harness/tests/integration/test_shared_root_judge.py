@@ -74,8 +74,7 @@ class _LifecycleObserver:
                 str(event_values["snapshot_image_id"])
                 for event_name, event_values in reversed(self.events)
                 if event_name == "snapshot_acquired"
-                and event_values["snapshot_lease_id"]
-                == values["snapshot_lease_id"]
+                and event_values["snapshot_lease_id"] == values["snapshot_lease_id"]
             )
             try:
                 self.client.images.get(image_id)
@@ -140,9 +139,7 @@ class _LifecycleObserver:
         self._record("judge_policy_removed", round_id=round_id, rule_id=rule_id)
 
     def judge_network_removed(self, round_id: str, network_id: str) -> None:
-        self._record(
-            "judge_network_removed", round_id=round_id, network_id=network_id
-        )
+        self._record("judge_network_removed", round_id=round_id, network_id=network_id)
 
 
 class _NetworkNoneJudgeRound:
@@ -201,9 +198,7 @@ class _NetworkNoneJudgeRound:
     def remove(self, container: ContainerRef) -> None:
         self._runtime.remove(container)
         self._safe_to_release_isolation = True
-        self._observer.judge_container_removed(
-            self._round_id, container.container_id
-        )
+        self._observer.judge_container_removed(self._round_id, container.container_id)
 
     def contain_after_remove_failure(self, container: ContainerRef) -> None:
         self._runtime.stop(container)
@@ -260,9 +255,7 @@ class _NetworkNoneJudgeFactory:
             allowed_mount_roots=(self._data_root,),
             omit_gpu_device_requests_for_tests=True,
             workdir_volume_references=(
-                ()
-                if self._work_container is None
-                else (self._work_container,)
+                () if self._work_container is None else (self._work_container,)
             ),
         )
         return _NetworkNoneJudgeRound(
@@ -332,9 +325,7 @@ def _assert_judge_spec(
     assert host_config["Memory"] == 128 * 1024**2
     assert host_config["ShmSize"] == 64 * 1024**2
     assert host_config.get("DeviceRequests") in (None, [])
-    assert host_config["Tmpfs"] == {
-        "/tests": "rw,exec,nosuid,nodev,mode=0755"
-    }
+    assert host_config["Tmpfs"] == {"/tests": "rw,exec,nosuid,nodev,mode=0755"}
     if not firewall_available:
         assert host_config["NetworkMode"] == "none"
     assert [
@@ -379,26 +370,26 @@ def test_real_two_round_judge_gpu_inherits_complete_work_rootfs_and_discards_wri
         test_script=(
             "#!/bin/bash\n"
             "set -euo pipefail\n"
-            "test \"$(cat /testbed/answer.txt)\" = \"$ROUND_EXPECTED\"\n"
-            "test \"$(stat -c %a /testbed/answer.txt)\" = 640\n"
-            "test \"$(cat /etc/rsi-agent.conf)\" = agent-config\n"
-            "test \"$(stat -c %a /etc/rsi-agent.conf)\" = 600\n"
-            "test \"$(/usr/local/bin/rsi-agent-tool)\" = agent-tool\n"
-            "test \"$(stat -c %a /usr/local/bin/rsi-agent-tool)\" = 755\n"
-            "test \"$(cat /tmp/rsi-agent-state)\" = agent-tmp\n"
-            "test \"$(stat -c %s /opt/checkpoints/sparse.bin)\" = 8589934592\n"
-            "test \"$SERVICE_LITERAL\" = service-exec-only\n"
-            "test \"$RSI_HARNESS_EXPECTED_GPU_UUIDS\" = "
+            'test "$(cat /testbed/answer.txt)" = "$ROUND_EXPECTED"\n'
+            'test "$(stat -c %a /testbed/answer.txt)" = 640\n'
+            'test "$(cat /etc/rsi-agent.conf)" = agent-config\n'
+            'test "$(stat -c %a /etc/rsi-agent.conf)" = 600\n'
+            'test "$(/usr/local/bin/rsi-agent-tool)" = agent-tool\n'
+            'test "$(stat -c %a /usr/local/bin/rsi-agent-tool)" = 755\n'
+            'test "$(cat /tmp/rsi-agent-state)" = agent-tmp\n'
+            'test "$(stat -c %s /opt/checkpoints/sparse.bin)" = 8589934592\n'
+            'test "$SERVICE_LITERAL" = service-exec-only\n'
+            'test "$RSI_HARNESS_EXPECTED_GPU_UUIDS" = '
             "GPU-task6-fake-c,GPU-task6-fake-d\n"
             "test ! -e /etc/rsi-judge-only\n"
-            "test ! -e \"/proc/$WORK_SLEEP_PID\"\n"
+            'test ! -e "/proc/$WORK_SLEEP_PID"\n'
             "for process in /proc/[0-9]*/cmdline; do\n"
             "  command=$(tr '\\0' ' ' < \"$process\" 2>/dev/null || true)\n"
-            "  test \"$command\" != \"sleep 424242 \"\n"
+            '  test "$command" != "sleep 424242 "\n'
             "done\n"
             "printf 'judge-only\\n' > /etc/rsi-judge-only\n"
             "printf 'judge-mutated\\n' > /testbed/answer.txt\n"
-            "printf '{\"reward\": 1, \"shared_root\": 1}\\n' > "
+            'printf \'{"reward": 1, "shared_root": 1}\\n\' > '
             "/logs/verifier/reward.json\n"
         ),
     )
@@ -562,9 +553,7 @@ def test_real_two_round_judge_gpu_inherits_complete_work_rootfs_and_discards_wri
                         "service": MainServiceConfig(
                             workdir=PurePosixPath("/"),
                             user="0:0",
-                            environment=(
-                                ("SERVICE_LITERAL", "service-exec-only"),
-                            ),
+                            environment=(("SERVICE_LITERAL", "service-exec-only"),),
                             shm_size="64m",
                             cpus=1,
                             memory_mb=128,
@@ -648,7 +637,7 @@ def test_real_two_round_judge_gpu_inherits_complete_work_rootfs_and_discards_wri
             [
                 "/bin/bash",
                 "-lc",
-                "test \"$(cat /testbed/answer.txt)\" = round-1 && "
+                'test "$(cat /testbed/answer.txt)" = round-1 && '
                 "test ! -e /etc/rsi-judge-only",
             ]
         )
@@ -699,24 +688,20 @@ def test_real_two_round_judge_gpu_inherits_complete_work_rootfs_and_discards_wri
             [
                 "/bin/bash",
                 "-lc",
-                "test \"$(cat /testbed/answer.txt)\" = round-2 && "
+                'test "$(cat /testbed/answer.txt)" = round-2 && '
                 "test ! -e /etc/rsi-judge-only && "
-                "test \"$(stat -c %s /opt/checkpoints/sparse.bin)\" = "
+                'test "$(stat -c %s /opt/checkpoints/sparse.bin)" = '
                 "8589934592 && "
-                "test \"$(stat -c %b /opt/checkpoints/sparse.bin)\" -le 16",
+                'test "$(stat -c %b /opt/checkpoints/sparse.bin)" -le 16',
             ]
         )
         assert second_work_state.exit_code == 0
 
         acquired = [
-            values
-            for name, values in observer.events
-            if name == "snapshot_acquired"
+            values for name, values in observer.events if name == "snapshot_acquired"
         ]
         released = [
-            values
-            for name, values in observer.events
-            if name == "snapshot_released"
+            values for name, values in observer.events if name == "snapshot_released"
         ]
         assert len(acquired) == len(released) == 2
         assert all(values["image_present"] is True for values in acquired)
@@ -740,24 +725,20 @@ def test_real_two_round_judge_gpu_inherits_complete_work_rootfs_and_discards_wri
             )
             _assert_judge_spec(
                 observer.judges[round_id],
-                expected_log_dir=(
-                    plan.paths.logs / "verifier" / round_id
-                ).resolve(),
+                expected_log_dir=(plan.paths.logs / "verifier" / round_id).resolve(),
                 expected_image_id=str(acquired_values["snapshot_image_id"]),
                 firewall_available=firewall_available,
             )
             removed_index = next(
                 index
                 for index, (name, values) in enumerate(observer.events)
-                if name == "judge_container_removed"
-                and values["round_id"] == round_id
+                if name == "judge_container_removed" and values["round_id"] == round_id
             )
             released_index = next(
                 index
                 for index, (name, values) in enumerate(observer.events)
                 if name == "snapshot_released"
-                and values["snapshot_lease_id"]
-                == acquired_values["snapshot_lease_id"]
+                and values["snapshot_lease_id"] == acquired_values["snapshot_lease_id"]
             )
             assert removed_index < released_index
 
@@ -801,26 +782,30 @@ def test_real_two_round_judge_gpu_inherits_complete_work_rootfs_and_discards_wri
             f"rsi-harness.run-id={run_id}",
             f"rsi-harness.task-id={task_id}",
         ]
-        assert client.containers.list(
-            all=True, filters={"label": exact_labels}
-        ) == []
+        assert client.containers.list(all=True, filters={"label": exact_labels}) == []
         assert client.networks.list(filters={"label": exact_labels}) == []
-        assert client.images.list(
-            filters={
-                "label": [
-                    *exact_labels,
-                    "rsi-harness.role=rootfs-snapshot",
-                ]
-            }
-        ) == []
-        assert client.images.list(
-            filters={
-                "label": [
-                    *exact_labels,
-                    "rsi-harness.role=retained-work-rootfs",
-                ]
-            }
-        ) == []
+        assert (
+            client.images.list(
+                filters={
+                    "label": [
+                        *exact_labels,
+                        "rsi-harness.role=rootfs-snapshot",
+                    ]
+                }
+            )
+            == []
+        )
+        assert (
+            client.images.list(
+                filters={
+                    "label": [
+                        *exact_labels,
+                        "rsi-harness.role=retained-work-rootfs",
+                    ]
+                }
+            )
+            == []
+        )
     finally:
         _remove_container(work)
         if retained is not None:

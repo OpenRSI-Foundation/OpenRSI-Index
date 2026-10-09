@@ -112,9 +112,7 @@ def _safe_ipv4(value: str, *, host: str) -> str:
         or address.is_link_local
         or address.is_multicast
     ):
-        raise InfrastructureError(
-            f"host {host} has no safe unique IPv4: {value!r}"
-        )
+        raise InfrastructureError(f"host {host} has no safe unique IPv4: {value!r}")
     return str(address)
 
 
@@ -136,9 +134,7 @@ def _allocated_node(
             f"{resources.gpus_per_node} unique allocated GPUs"
         )
     if probe.sif_sha256 != expected_sif_sha256:
-        raise InfrastructureError(
-            f"host {inventory.host} sees a different SIF digest"
-        )
+        raise InfrastructureError(f"host {inventory.host} sees a different SIF digest")
     if not probe.gpfs_visible:
         raise InfrastructureError(f"host {inventory.host} cannot see GPFS run state")
     if not probe.infiniband_visible:
@@ -298,10 +294,7 @@ def inspect_current_node(
     temp_root: Path,
 ) -> NodeProbe:
     """Collect facts on one blaunch-selected host without fallback values."""
-    addresses = {
-        item[4][0]
-        for item in socket.getaddrinfo(host, None, socket.AF_INET)
-    }
+    addresses = {item[4][0] for item in socket.getaddrinfo(host, None, socket.AF_INET)}
     if len(addresses) != 1:
         raise InfrastructureError(
             f"host {host} must resolve to one safe unique IPv4, got {addresses!r}"
@@ -316,8 +309,7 @@ def inspect_current_node(
         sif_sha256=_sha256(sif_path),
         gpfs_visible=run_dir.is_dir(),
         infiniband_visible=(
-            Path("/dev/infiniband").is_dir()
-            and Path("/sys/class/infiniband").is_dir()
+            Path("/dev/infiniband").is_dir() and Path("/sys/class/infiniband").is_dir()
         ),
         tmp_free_mb=shutil.disk_usage(temp_root).free // (1024 * 1024),
     )

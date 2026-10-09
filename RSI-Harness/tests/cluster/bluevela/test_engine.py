@@ -33,9 +33,7 @@ def _payload(tmp_path: Path) -> EnginePayload:
                     "authorized_pool": plan.gpu_plan.authorized_pool.model_copy(
                         update={"devices": devices * 2}
                     ),
-                    "work": plan.gpu_plan.work.model_copy(
-                        update={"devices": devices}
-                    ),
+                    "work": plan.gpu_plan.work.model_copy(update={"devices": devices}),
                     "judge": plan.gpu_plan.judge.model_copy(
                         update={"devices": devices[1:] or devices}
                     ),
@@ -175,7 +173,9 @@ def test_cpu_driver_omits_nvidia_preflight_and_clears_inherited_devices(
 
 @pytest.mark.parametrize("inherited_devices", [None, "GPU-inherited"])
 def test_cpu_driver_executes_without_nvidia_tools(
-    tmp_path: Path, monkeypatch, inherited_devices,
+    tmp_path: Path,
+    monkeypatch,
+    inherited_devices,
 ) -> None:
     import hashlib
     import os
@@ -188,13 +188,16 @@ def test_cpu_driver_executes_without_nvidia_tools(
         f"{hashlib.sha256(b'cpu-image').hexdigest()}  {payload.sif_path.name}\n"
     )
     result = (
-        payload.run_plan.paths.logs / "runs" / payload.run_id
-        / payload.run_plan.task.task_id / "final_result.json"
+        payload.run_plan.paths.logs
+        / "runs"
+        / payload.run_id
+        / payload.run_plan.task.task_id
+        / "final_result.json"
     )
     result.parent.mkdir(parents=True)
     engine = tmp_path / "fake-engine"
     engine.write_text(
-        '#!/bin/sh\nset -eu\n'
+        "#!/bin/sh\nset -eu\n"
         'test "${CUDA_VISIBLE_DEVICES-unset}" = unset\n'
         'test -z "$APPTAINERENV_CUDA_VISIBLE_DEVICES"\n'
         'test "$1" = -m\n'
@@ -207,9 +210,11 @@ def test_cpu_driver_executes_without_nvidia_tools(
     apptainer.write_text("#!/bin/sh\nexit 99\n")
     apptainer.chmod(0o700)
     profile = payload.profile.model_copy(
-        update={"apptainer": payload.profile.apptainer.model_copy(
-            update={"binary": apptainer, "temp_root": tmp_path}
-        )}
+        update={
+            "apptainer": payload.profile.apptainer.model_copy(
+                update={"binary": apptainer, "temp_root": tmp_path}
+            )
+        }
     )
     monkeypatch.setattr(
         "rsi_harness.cluster.bluevela.engine.sys.executable", str(engine)
@@ -223,7 +228,10 @@ def test_cpu_driver_executes_without_nvidia_tools(
         env["CUDA_VISIBLE_DEVICES"] = inherited_devices
 
     completed = subprocess.run(
-        ["/bin/bash", str(output)], env=env, capture_output=True, text=True,
+        ["/bin/bash", str(output)],
+        env=env,
+        capture_output=True,
+        text=True,
     )
 
     assert completed.returncode == 0, completed.stderr

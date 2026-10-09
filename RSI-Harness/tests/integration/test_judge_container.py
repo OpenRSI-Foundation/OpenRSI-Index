@@ -171,7 +171,7 @@ def test_real_rootfs_snapshot_upload_is_private_and_leaves_no_resources(tmp_path
                 (
                     "/bin/bash",
                     "-lc",
-                    "set -eux; test \"$(cat /workspace/agent-state)\" = "
+                    'set -eux; test "$(cat /workspace/agent-state)" = '
                     "complete-work-state "
                     "&& test -e /root-marker && test -f /tests/test.sh "
                     "&& grep -q '/logs/verifier/reward.json' /tests/test.sh "
@@ -243,7 +243,7 @@ def test_real_disposable_judge_uses_full_work_snapshot_and_discards_writes(tmp_p
         test_script=(
             "#!/bin/bash\n"
             "set -euo pipefail\n"
-            "test \"$(cat /workspace/answer.txt)\" = 42\n"
+            'test "$(cat /workspace/answer.txt)" = 42\n'
             "test -e /root-marker\n"
             "test ! -e /workspace/judge-only.txt\n"
             "printf 'private-tests-write\\n' > /tests/private-write\n"
@@ -251,7 +251,7 @@ def test_real_disposable_judge_uses_full_work_snapshot_and_discards_writes(tmp_p
             "2>/dev/null; then exit 1; fi\n"
             "printf 'stdout-one\\n'\n"
             "printf 'stderr-two\\n' >&2\n"
-            "printf '{\"reward\": 1, \"checks\": 4}\\n' > "
+            'printf \'{"reward": 1, "checks": 4}\\n\' > '
             "/logs/verifier/reward.json\n"
         ),
     )
@@ -394,7 +394,7 @@ def test_real_disposable_judge_uses_full_work_snapshot_and_discards_writes(tmp_p
                 "/bin/bash",
                 "-lc",
                 "test -e /root-marker && test ! -e /workspace/judge-only.txt "
-                "&& test \"$(cat /workspace/answer.txt)\" = 42",
+                '&& test "$(cat /workspace/answer.txt)" = 42',
             ]
         )
         assert work_state.exit_code == 0

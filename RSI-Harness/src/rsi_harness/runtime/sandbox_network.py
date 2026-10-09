@@ -490,9 +490,7 @@ class SandboxNetworkBackend:
                 f"sandbox network {plan.name} configuration mismatch: EnableIPv6"
             )
         ipam = attrs.get("IPAM") or {}
-        if ipam.get("Driver") != "default" or not _subnets_rejected(
-            ipam.get("Config")
-        ):
+        if ipam.get("Driver") != "default" or not _subnets_rejected(ipam.get("Config")):
             raise InfrastructureError(
                 f"sandbox network {plan.name} configuration mismatch: IPAM"
             )

@@ -290,9 +290,7 @@ it with `kwargs={"profile": "offline-python"}`, `force_build=False`, and
 from harbor.models.trial.config import EnvironmentConfig
 
 environment = EnvironmentConfig(
-    import_path=(
-        "rsi_harness.integrations.harbor_sandbox:ManagedSandboxEnvironment"
-    ),
+    import_path=("rsi_harness.integrations.harbor_sandbox:ManagedSandboxEnvironment"),
     kwargs={"profile": "offline-python"},
     force_build=False,
     delete=True,

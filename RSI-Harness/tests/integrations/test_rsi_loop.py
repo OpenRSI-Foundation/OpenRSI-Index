@@ -359,10 +359,13 @@ def test_claude_stop_hook_cap_is_disabled_without_redacting_zeroes() -> None:
     )
 
     assert environment["CLAUDE_CODE_STOP_HOOK_BLOCK_CAP"] == "0"
-    assert redact_exact_values(
-        "step 10, loss 0.01, provider-secret",
-        rsi_loop_runtime_secret_values(config),
-    ) == "step 10, loss 0.01, [REDACTED]"
+    assert (
+        redact_exact_values(
+            "step 10, loss 0.01, provider-secret",
+            rsi_loop_runtime_secret_values(config),
+        )
+        == "step 10, loss 0.01, [REDACTED]"
+    )
     codex_environment = rsi_loop_agent_environment(
         config, create_agent("codex", config), None
     )
@@ -440,7 +443,10 @@ def test_extra_env_authenticated_urls_still_redact_embedded_credentials() -> Non
     )
 
     assert rsi_loop_runtime_secret_values(config) == {
-        endpoint, "proxy-user", "p%40ssword", "p@ssword",
+        endpoint,
+        "proxy-user",
+        "p%40ssword",
+        "p@ssword",
     }
 
 
@@ -492,7 +498,7 @@ def test_extra_env_settings_preserve_streamed_trajectory_and_hide_credentials(
     writer = _RedactedOutputWriter(output_path, tuple(secrets), chunks.append)
     encoded = raw.encode()
     for offset in range(0, len(encoded), 7):
-        writer.append(encoded[offset:offset + 7])
+        writer.append(encoded[offset : offset + 7])
     writer.finish()
 
     assert json.loads(output_path.read_text()) == expected
@@ -609,13 +615,19 @@ def test_install_hooks_uses_rsi_loop_hook_through_engine_runtime(
     )
 
 
-@pytest.mark.parametrize("agent_name,settings_path", [
-    ("claude-code", "/home/agent/.claude/settings.json"),
-    ("codex", "/etc/codex/hooks.json"),
-])
+@pytest.mark.parametrize(
+    "agent_name,settings_path",
+    [
+        ("claude-code", "/home/agent/.claude/settings.json"),
+        ("codex", "/etc/codex/hooks.json"),
+    ],
+)
 @pytest.mark.parametrize("read_only_copy", [True, False])
 def test_stop_hook_runs_after_read_only_or_mode_reset_copy(
-    tmp_path: Path, read_only_copy: bool, agent_name: str, settings_path: str,
+    tmp_path: Path,
+    read_only_copy: bool,
+    agent_name: str,
+    settings_path: str,
 ) -> None:
     """Apptainer binds the source read-only; Docker installs a 0644 copy."""
     binaries = tmp_path / "bin"
@@ -660,17 +672,26 @@ def test_stop_hook_runs_after_read_only_or_mode_reset_copy(
             for target, destination in self.targets.items():
                 argv = [part.replace(str(target), str(destination)) for part in argv]
             result = subprocess.run(
-                argv, capture_output=True, text=True,
+                argv,
+                capture_output=True,
+                text=True,
                 env={**os.environ, "PATH": f"{binaries}:{os.environ['PATH']}"},
             )
             return AgentRunResult(
-                exit_code=result.returncode, output=result.stdout + result.stderr,
+                exit_code=result.returncode,
+                output=result.stdout + result.stderr,
             )
 
     plan = make_run_plan(tmp_path)
-    plan = plan.model_copy(update={"task": plan.task.model_copy(update={
-        "agent": plan.task.agent.model_copy(update={"name": agent_name}),
-    })})
+    plan = plan.model_copy(
+        update={
+            "task": plan.task.model_copy(
+                update={
+                    "agent": plan.task.agent.model_copy(update={"name": agent_name}),
+                }
+            )
+        }
+    )
     runtime = LocalRuntime()
     previous_umask = os.umask(0o077)
     try:
@@ -690,7 +711,11 @@ def test_stop_hook_runs_after_read_only_or_mode_reset_copy(
     command = settings["hooks"]["Stop"][0]["hooks"][0]["command"]
     hook = runtime.targets[PurePosixPath(command)]
     completed = subprocess.run(
-        [str(hook)], input="{}", capture_output=True, text=True, check=True,
+        [str(hook)],
+        input="{}",
+        capture_output=True,
+        text=True,
+        check=True,
     )
     assert json.loads(completed.stdout) == {
         "decision": "block",
@@ -700,13 +725,19 @@ def test_stop_hook_runs_after_read_only_or_mode_reset_copy(
     assert not chmod_attempt.exists()
 
 
-@pytest.mark.parametrize("agent_name,settings_filename", [
-    ("claude-code", "_claude_settings.json"),
-    ("codex", "_codex_hooks.json"),
-])
+@pytest.mark.parametrize(
+    "agent_name,settings_filename",
+    [
+        ("claude-code", "_claude_settings.json"),
+        ("codex", "_codex_hooks.json"),
+    ],
+)
 @pytest.mark.parametrize("successful_checks", [0, 1])
 def test_stop_hook_setup_failure_does_not_register_hook(
-    tmp_path: Path, successful_checks: int, agent_name: str, settings_filename: str,
+    tmp_path: Path,
+    successful_checks: int,
+    agent_name: str,
+    settings_filename: str,
 ) -> None:
     class FailingRuntime(RecordingAgentRuntime):
         def exec(self, container, command, **kwargs):
@@ -717,9 +748,15 @@ def test_stop_hook_setup_failure_does_not_register_hook(
             )
 
     plan = make_run_plan(tmp_path)
-    plan = plan.model_copy(update={"task": plan.task.model_copy(update={
-        "agent": plan.task.agent.model_copy(update={"name": agent_name}),
-    })})
+    plan = plan.model_copy(
+        update={
+            "task": plan.task.model_copy(
+                update={
+                    "agent": plan.task.agent.model_copy(update={"name": agent_name}),
+                }
+            )
+        }
+    )
     runtime = FailingRuntime()
     with pytest.raises(RuntimeError):
         RSILoopAgentAdapter(RSILoopConfig(), runtime=runtime).install_hooks(

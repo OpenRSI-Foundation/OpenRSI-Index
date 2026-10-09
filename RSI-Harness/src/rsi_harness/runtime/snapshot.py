@@ -27,9 +27,7 @@ _OVERLAY_OPTION_DELIMITERS = frozenset({",", ":", "\\", "\n", "\r", "\0"})
 
 def _validate_overlay_paths(*paths: Path) -> None:
     for path in paths:
-        if any(
-            delimiter in str(path) for delimiter in _OVERLAY_OPTION_DELIMITERS
-        ):
+        if any(delimiter in str(path) for delimiter in _OVERLAY_OPTION_DELIMITERS):
             raise SetupError(
                 f"overlay path contains unsupported overlay option delimiter: {path}"
             )
@@ -82,9 +80,7 @@ class NativeOverlayRunner:
         self._command_runner = command_runner
         self._mount_checker = mount_checker
 
-    def mount(
-        self, lower: Path, upper: Path, work: Path, merged: Path
-    ) -> None:
+    def mount(self, lower: Path, upper: Path, work: Path, merged: Path) -> None:
         _validate_overlay_paths(lower, upper, work, merged)
         _run_checked(
             self._command_runner,
@@ -120,6 +116,7 @@ class NativeOverlayRunner:
     def is_mounted(self, merged: Path) -> bool:
         return bool(self._mount_checker(merged))
 
+
 class FuseOverlayRunner:
     """Manage a foreground fuse-overlayfs process and fusermount3 release."""
 
@@ -143,9 +140,7 @@ class FuseOverlayRunner:
         self._pid_alive = pid_alive or self._default_pid_alive
         self._processes: dict[int, Any] = {}
 
-    def mount(
-        self, lower: Path, upper: Path, work: Path, merged: Path
-    ) -> int:
+    def mount(self, lower: Path, upper: Path, work: Path, merged: Path) -> int:
         _validate_overlay_paths(lower, upper, work, merged)
         command = [
             "fuse-overlayfs",
@@ -310,9 +305,7 @@ class OverlaySnapshotBackend:
             self._fuse.name: self._fuse,
         }
         self._sync_runner = sync_runner
-        self._fuse_process_finder = (
-            fuse_process_finder or self._system_fuse_processes
-        )
+        self._fuse_process_finder = fuse_process_finder or self._system_fuse_processes
         self._selected_backend: str | None = None
         self._probe_reasons: dict[str, str | None] = {
             self._native.name: None,
@@ -371,9 +364,7 @@ class OverlaySnapshotBackend:
             reason=combined,
         )
 
-    def acquire(
-        self, workspace: Path, *, run_id: str, round_id: str
-    ) -> SnapshotLease:
+    def acquire(self, workspace: Path, *, run_id: str, round_id: str) -> SnapshotLease:
         """Sync the paused Work tree, mount a COW view, and persist readiness."""
         self._validate_component(run_id, "run")
         self._validate_component(round_id, "round")
@@ -545,9 +536,8 @@ class OverlaySnapshotBackend:
                 raise InfrastructureError(
                     "snapshot mount is still active after release"
                 )
-            if (
-                lease.backend == self._fuse.name
-                and self._matching_fuse_processes(lease.merged_dir)
+            if lease.backend == self._fuse.name and self._matching_fuse_processes(
+                lease.merged_dir
             ):
                 raise InfrastructureError(
                     "matching fuse-overlayfs process remains after release"
@@ -625,9 +615,7 @@ class OverlaySnapshotBackend:
                 raise InfrastructureError(
                     f"snapshot discovery found invalid manifest: {error}"
                 ) from error
-            expected_path = self.lease_manifest_path(
-                persisted_run, persisted_round
-            )
+            expected_path = self.lease_manifest_path(persisted_run, persisted_round)
             expected_id = self._lease_id(persisted_run, persisted_round)
             if (
                 persisted_run != run_id
@@ -663,9 +651,7 @@ class OverlaySnapshotBackend:
             if lease.backend != self._fuse.name:
                 process_alive = lease.process_id is not None and not released
             requires_recovery = not released or state == "recovery_required"
-            if not (
-                requires_recovery or mounted or layers_present or process_alive
-            ):
+            if not (requires_recovery or mounted or layers_present or process_alive):
                 continue
             discovered.append(
                 SnapshotRecoveryAuthority(
@@ -692,9 +678,7 @@ class OverlaySnapshotBackend:
             raise InfrastructureError(
                 "snapshot recovery authority changed before release"
             )
-        manifest_path = self.lease_manifest_path(
-            authority.run_id, authority.round_id
-        )
+        manifest_path = self.lease_manifest_path(authority.run_id, authority.round_id)
         try:
             persisted = json.loads(manifest_path.read_text())
             lease = SnapshotLease.model_validate(persisted["lease"])
@@ -740,7 +724,6 @@ class OverlaySnapshotBackend:
             if executable == "fuse-overlayfs" and expected in arguments[1:]:
                 matched.append(int(entry.name))
         return tuple(sorted(matched))
-
 
     def lease_manifest_path(self, run_id: str, round_id: str) -> Path:
         self._validate_component(run_id, "run")
@@ -833,9 +816,7 @@ class OverlaySnapshotBackend:
             return detail, True
         return reason, False
 
-    def _load_lease_manifest(
-        self, lease: SnapshotLease
-    ) -> tuple[Path, dict[str, Any]]:
+    def _load_lease_manifest(self, lease: SnapshotLease) -> tuple[Path, dict[str, Any]]:
         manifest_path = self._lease_manifests.get(lease.lease_id)
         if manifest_path is None:
             leases_root = self._data_root / "snapshot-leases"
@@ -962,11 +943,7 @@ class OverlaySnapshotBackend:
         process_id: int | None,
         error: str,
     ) -> None:
-        path = (
-            self._data_root
-            / "snapshot-probe-failures"
-            / f"{uuid.uuid4().hex}.json"
-        )
+        path = self._data_root / "snapshot-probe-failures" / f"{uuid.uuid4().hex}.json"
         self._write_json(
             path,
             {
