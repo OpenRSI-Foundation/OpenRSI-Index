@@ -533,10 +533,11 @@ def test_run_help_explains_ordered_gpu_pool() -> None:
     result = CliRunner().invoke(cli_module.app, ["run", "--help"])
 
     assert result.exit_code == 0, result.output
+    plain_output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.output)
     assert (
         "Ordered GPU pool authorized for this run; Work sees only its "
         "task-declared count"
-        in re.sub(r"[│\s]+", " ", result.output)
+        in re.sub(r"[│\s]+", " ", plain_output)
     )
 
 
