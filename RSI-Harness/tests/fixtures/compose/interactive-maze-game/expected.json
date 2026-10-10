@@ -1,0 +1,98 @@
+{
+  "images": {
+    "client": {
+      "args": {},
+      "build": ".",
+      "dockerfile": "Dockerfile",
+      "dockerfile_inline": null,
+      "network": null,
+      "no_cache": false,
+      "target": null
+    },
+    "maze": {
+      "policy": "missing",
+      "pull": "python:3.13-slim-bookworm"
+    }
+  },
+  "notes": [
+    "services.client: no cpus limit; using 1.0",
+    "services.client: no memory limit; using 1024 MiB",
+    "services.client.volumes./logs: log mount dropped; logs are downloaded",
+    "services.client.volumes./agent-logs: log mount dropped; logs are downloaded",
+    "services.maze.ports: dropped; services reach each other on container ports",
+    "services.maze: no cpus limit; using 1.0",
+    "services.maze: no memory limit; using 1024 MiB",
+    "services.maze.volumes./app/maze_server.py: file bind becomes a copy before start",
+    "services.maze.volumes./app/gen_maze.py: file bind becomes a copy before start",
+    "services.maze.volumes./app/maze_connectivity.json: file bind becomes a copy before start"
+  ],
+  "seeds": [
+    {
+      "dest_dir": "/app",
+      "kind": "file",
+      "name": "maze_server.py",
+      "service": "maze",
+      "source": "./maze_server.py"
+    },
+    {
+      "dest_dir": "/app",
+      "kind": "file",
+      "name": "gen_maze.py",
+      "service": "maze",
+      "source": "./gen_maze.py"
+    },
+    {
+      "dest_dir": "/app",
+      "kind": "file",
+      "name": "maze_connectivity.json",
+      "service": "maze",
+      "source": "./maze_connectivity.json"
+    }
+  ],
+  "spec": {
+    "disk_mb": 2048,
+    "lifetime_sec": null,
+    "network": "public",
+    "services": {
+      "client": {
+        "aliases": [
+          "tb-client"
+        ],
+        "command": [
+          "sh",
+          "-c",
+          "sleep infinity"
+        ],
+        "cpus": 1.0,
+        "depends_on": {
+          "maze": {
+            "condition": "started",
+            "required": true
+          }
+        },
+        "env": {
+          "TEST_DIR": "/tests"
+        },
+        "image": null,
+        "memory_mb": 1024
+      },
+      "maze": {
+        "command": [
+          "sh",
+          "-c",
+          "pip install flask flask-cors && python /app/maze_server.py"
+        ],
+        "cpus": 1.0,
+        "env": {
+          "AUTO_GENERATE": "false",
+          "MAZE_SIZE_N": "9",
+          "PYTHONUNBUFFERED": "1"
+        },
+        "image": null,
+        "memory_mb": 1024
+      }
+    },
+    "version": 1,
+    "volumes": {}
+  }
+}

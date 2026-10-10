@@ -33,6 +33,7 @@ from rsi_harness.models import (
     RunGPUPlan,
     RunPlan,
 )
+from rsi_harness.runtime.sandbox_policy import _tuples, validate_cluster_sandbox
 
 
 class EnginePayload(PersistedModel):
@@ -50,9 +51,7 @@ class EnginePayload(PersistedModel):
     agent_auth: AgentAuthSource | None = None
     agent_version: str | None = None
     agent_binary: Path | None = None
-    agent_launcher: str = Field(
-        default="codex", pattern=r"[A-Za-z0-9][A-Za-z0-9._+-]*"
-    )
+    agent_launcher: str = Field(default="codex", pattern=r"[A-Za-z0-9][A-Za-z0-9._+-]*")
     agent_companions: tuple[Path, ...] = ()
 
     @model_validator(mode="after")
@@ -63,9 +62,7 @@ class EnginePayload(PersistedModel):
             )
         return self
 
-    @field_validator(
-        "sif_path", "sif_sha256_path", "source_root", "agent_binary"
-    )
+    @field_validator("sif_path", "sif_sha256_path", "source_root", "agent_binary")
     @classmethod
     def _absolute(cls, value: Path | None) -> Path | None:
         if value is None:
@@ -87,6 +84,14 @@ def load_engine_payload(path: Path) -> EnginePayload:
         value = json.loads(Path(path).read_text())
     except (OSError, json.JSONDecodeError) as error:
         raise SetupError(f"invalid cluster Engine payload {path}: {error}") from error
+    # The strict sandbox contracts take tuples, which JSON spells as arrays.
+    plan = value.get("run_plan") if isinstance(value, dict) else None
+    if isinstance(plan, dict):
+        if plan.get("sandbox") is not None:
+            plan["sandbox"] = _tuples(plan["sandbox"])
+        task = plan.get("task")
+        if isinstance(task, dict) and task.get("sandbox") is not None:
+            task["sandbox"] = _tuples(task["sandbox"])
     return EnginePayload.model_validate(value)
 
 
@@ -138,18 +143,14 @@ def bind_multinode_devices(
 ) -> RunPlan:
     """Bind phase placeholders to exact host-qualified allocated devices."""
     work_values = tuple(
-        (node.host, device)
-        for node in pools.work
-        for device in node.cuda_devices
+        (node.host, device) for node in pools.work for device in node.cuda_devices
     )
     judge_values = tuple(
-        (node.host, device)
-        for node in pools.verifier
-        for device in node.cuda_devices
+        (node.host, device) for node in pools.verifier for device in node.cuda_devices
     )
-    if len(work_values) != len(plan.gpu_plan.work.devices) or len(
-        judge_values
-    ) != len(plan.gpu_plan.judge.devices):
+    if len(work_values) != len(plan.gpu_plan.work.devices) or len(judge_values) != len(
+        plan.gpu_plan.judge.devices
+    ):
         raise SetupError(
             "frozen Blue Vela pools do not match planned Work/Judge devices"
         )
@@ -239,7 +240,7 @@ umask 077
 export APPTAINER_BIND={_quote(profile.apptainer.dns_bind)}
 export HF_HOME={_quote(profile.storage.hf_home)}
 export HF_DATASETS_CACHE={_quote(profile.storage.hf_datasets_cache)}
-export PYTHONPATH={_quote(payload.source_root / 'src')}
+export PYTHONPATH={_quote(payload.source_root / "src")}
 runtime_tmp_root={_quote(profile.apptainer.temp_root)}
 available_tmp_kb="$(df -Pk -- "$runtime_tmp_root" | awk 'NR == 2 {{print $4}}')"
 required_tmp_kb=$(({payload.resources.local_tmp_mb} * 1024))
@@ -263,12 +264,13 @@ trap cleanup EXIT
 
 {_quote(sys.executable)} -m rsi_harness.cluster.bluevela.engine \
   --payload {_quote(payload_path)}
-test -s {_quote(leaf / 'final_result.json')}
+test -s {_quote(leaf / "final_result.json")}
 """
     else:
         assert payload.multi_node is not None
         inventory_variable = (
-            "SLURM_JOB_NODELIST" if profile.scheduler.kind == "slurm"
+            "SLURM_JOB_NODELIST"
+            if profile.scheduler.kind == "slurm"
             else "LSB_MCPU_HOSTS"
         )
         script = f"""#!/usr/bin/env bash
@@ -279,7 +281,7 @@ test -n "${{{inventory_variable}:-}}"
 export APPTAINER_BIND={_quote(profile.apptainer.dns_bind)}
 export HF_HOME={_quote(profile.storage.hf_home)}
 export HF_DATASETS_CACHE={_quote(profile.storage.hf_datasets_cache)}
-export PYTHONPATH={_quote(payload.source_root / 'src')}
+export PYTHONPATH={_quote(payload.source_root / "src")}
 runtime_tmp_root={_quote(profile.apptainer.temp_root)}
 available_tmp_kb="$(df -Pk -- "$runtime_tmp_root" | awk 'NR == 2 {{print $4}}')"
 required_tmp_kb=$(({payload.multi_node.node_tmp_mb} * 1024))
@@ -301,7 +303,7 @@ trap cleanup EXIT
   sha256sum -c {_quote(payload.sif_sha256_path.name)})
 {_quote(sys.executable)} -m rsi_harness.cluster.bluevela.engine \
   --payload {_quote(payload_path)}
-test -s {_quote(leaf / 'final_result.json')}
+test -s {_quote(leaf / "final_result.json")}
 """
     output.write_text(script)
     output.chmod(0o700)
@@ -310,12 +312,18 @@ test -s {_quote(leaf / 'final_result.json')}
 
 def run_engine_payload(payload: EnginePayload) -> None:
     """Run the native RSI-Harness Engine inside the current scheduler allocation."""
+    validate_cluster_sandbox(
+        payload.run_plan.task.sandbox,
+        payload.run_plan.sandbox,
+        multi_node=payload.multi_node is not None,
+    )
     allocated_pools: AllocatedPools | None = None
     if payload.resources is not None:
         raw = os.environ.get("CUDA_VISIBLE_DEVICES", "")
         devices = tuple(item.strip() for item in raw.split(",") if item.strip())
         plan = bind_lsf_devices(
-            payload.run_plan, devices,
+            payload.run_plan,
+            devices,
             scheduler_name=payload.profile.scheduler.kind.upper(),
         )
     else:

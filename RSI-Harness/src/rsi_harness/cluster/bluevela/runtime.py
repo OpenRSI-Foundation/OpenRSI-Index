@@ -31,6 +31,7 @@ from rsi_harness.cluster.bluevela.multinode import (
     stop_command,
 )
 from rsi_harness.cluster.bluevela.network import AgentNetworkBroker
+from rsi_harness.cluster.bluevela.sandbox import ClusterSandbox
 from rsi_harness.errors import (
     InfrastructureError,
     RetryableSubmissionError,
@@ -80,6 +81,9 @@ from rsi_harness.runtime.network import NetworkPolicyEnforcer
 from rsi_harness.runtime.recovery import LeaseStore
 from rsi_harness.runtime.redaction import redact_exact_values, redact_text
 from rsi_harness.runtime.reward import read_reward
+from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
+from rsi_harness.runtime.sandbox_policy import validate_cluster_sandbox
+from rsi_harness.runtime.sandbox_server import SANDBOX_TARGET
 from rsi_loop.harness.agent import create_agent
 from rsi_loop.harness.config import load_config
 
@@ -96,7 +100,11 @@ def _safe_output(value: str, secrets: set[str]) -> str:
 def _gpu_preflight_command(command: list[str]) -> subprocess.CompletedProcess[str]:
     try:
         return subprocess.run(
-            command, capture_output=True, check=False, text=True, timeout=15,
+            command,
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
         raise SubmissionError(
@@ -153,11 +161,7 @@ class ApptainerAgentRuntime:
         self.work_tmp = self.node_tmp / "work"
         self.judge_tmp_root = self.node_tmp / "judge"
         self.feedback = (
-            plan.paths.logs
-            / "runs"
-            / payload.run_id
-            / plan.task.task_id
-            / "feedback"
+            plan.paths.logs / "runs" / payload.run_id / plan.task.task_id / "feedback"
         )
         self._copies: dict[PurePosixPath, Path] = {}
         self._agent_auth_binds: list[tuple[Path, PurePosixPath, bool]] = []
@@ -170,6 +174,8 @@ class ApptainerAgentRuntime:
         self.judge_broker: MultiNodeBroker | None = None
         self._paused = False
         self._lock = threading.RLock()
+        # The Work sandbox endpoint directory (cluster/bluevela/sandbox.py).
+        self.work_sandbox: Path | None = None
         if allocated_pools is not None:
             if allocated_pools.run_id != payload.run_id:
                 raise SetupError("allocated pools differ from the runtime run id")
@@ -272,9 +278,7 @@ class ApptainerAgentRuntime:
                 raise SetupError(
                     f"cluster Agent companion is unavailable: {companion.name}"
                 )
-            self._copies[PurePosixPath("/usr/local/bin") / companion.name] = (
-                companion
-            )
+            self._copies[PurePosixPath("/usr/local/bin") / companion.name] = companion
         relay = Path(__file__).with_name("netns_relay.py")
         if not relay.is_file():
             raise SetupError("cluster Agent network relay is unavailable")
@@ -440,7 +444,9 @@ class ApptainerAgentRuntime:
                 f"cannot resolve Work GPU allocation: {error}"
             ) from error
         assert_gpu_processes_quiescent(
-            allocation, work_pids, runner=_gpu_preflight_command,
+            allocation,
+            work_pids,
+            runner=_gpu_preflight_command,
         )
 
     def _work_process_ids(self) -> frozenset[int]:
@@ -452,9 +458,7 @@ class ApptainerAgentRuntime:
             root_pid = process.pid
         result = _gpu_preflight_command(["ps", "-eo", "pid=,ppid=,sid="])
         if result.returncode != 0:
-            raise SubmissionError(
-                f"Work process query failed: {result.stderr.strip()}"
-            )
+            raise SubmissionError(f"Work process query failed: {result.stderr.strip()}")
         parents: dict[int, tuple[int, int]] = {}
         try:
             for row in result.stdout.splitlines():
@@ -474,7 +478,8 @@ class ApptainerAgentRuntime:
             pid for pid, (_, session) in parents.items() if session == root_pid
         }
         while descendants := {
-            pid for pid, (parent, _) in parents.items()
+            pid
+            for pid, (parent, _) in parents.items()
             if parent in work_pids and pid not in work_pids
         }:
             work_pids.update(descendants)
@@ -516,9 +521,9 @@ class ApptainerAgentRuntime:
     ) -> None:
         if self._network_broker is not None:
             raise InfrastructureError("Agent network broker is already configured")
-        endpoints = NetworkPolicyEnforcer(
-            run_id=self.payload.run_id
-        ).pin_endpoints(provider_urls)
+        endpoints = NetworkPolicyEnforcer(run_id=self.payload.run_id).pin_endpoints(
+            provider_urls
+        )
         broker = AgentNetworkBroker(
             self.node_tmp / "network",
             endpoints=endpoints,
@@ -591,9 +596,15 @@ class ApptainerAgentRuntime:
         output_path: Path | None = None,
         output_redact_values: tuple[str, ...] = (),
         output_callback: Any = None,
+        on_exec_start: Callable[[float], None] | None = None,
     ) -> AgentRunResult:
         self._require_work(container)
         del user
+        if on_exec_start is not None:
+            # The sandbox Work deadline starts with the Agent process.
+            if timeout_seconds is None:
+                raise SetupError("exec start callback requires a bounded deadline")
+            on_exec_start(time.monotonic() + timeout_seconds)
         argv = (
             ("/bin/bash", "-lc", command)
             if isinstance(command, str)
@@ -627,9 +638,21 @@ class ApptainerAgentRuntime:
         workspace: Path,
         request: EvaluationRequest,
         environment: dict[str, str],
+        *,
+        sandbox_endpoint: Any = None,
     ) -> AgentRunResult:
         if self.allocated_pools is not None:
+            if sandbox_endpoint is not None:
+                raise SetupError("multi-node Judge cannot reach the sandbox broker")
             return self._run_multinode_judge(workspace, request, environment)
+        sandbox_binds: tuple[tuple[Path, PurePosixPath, bool], ...] = ()
+        redact: tuple[str, ...] = ()
+        if sandbox_endpoint is not None:
+            environment = {**environment, **sandbox_endpoint.environment}
+            sandbox_binds = (
+                (sandbox_endpoint.directory, PurePosixPath(SANDBOX_TARGET), True),
+            )
+            redact = (sandbox_endpoint.environment["RSI_SANDBOX_TOKEN"],)
         round_digest = hashlib.sha256(request.round_id.encode()).hexdigest()[:16]
         judge_tmp = self.judge_tmp_root / f"round-{round_digest}"
         shutil.copytree(self.task_assets, judge_tmp, symlinks=True)
@@ -653,10 +676,12 @@ class ApptainerAgentRuntime:
                         False,
                     ),
                     (judge_tmp, PurePosixPath("/tmp"), False),
+                    *sandbox_binds,
                 ),
                 mount_workspace=False,
                 mount_agent_home=False,
                 phase="judge",
+                output_redact_values=redact,
                 timeout_seconds=request.run_plan.task.verifier.timeout_seconds,
             )
         finally:
@@ -714,12 +739,10 @@ class ApptainerAgentRuntime:
         }
 
     def _cache_binds(
-        self, network_mode: str,
+        self,
+        network_mode: str,
     ) -> tuple[tuple[Path, PurePosixPath, bool], ...]:
-        if (
-            network_mode != "public"
-            or self.profile.apptainer.mount_policy != "scoped"
-        ):
+        if network_mode != "public" or self.profile.apptainer.mount_policy != "scoped":
             return ()
         return (
             (
@@ -781,9 +804,7 @@ class ApptainerAgentRuntime:
         authority = self._judge_authority_bind()
         if authority is not None:
             source, target, read_only = authority
-            binds.append(
-                WorkerBind(source=source, target=target, read_only=read_only)
-            )
+            binds.append(WorkerBind(source=source, target=target, read_only=read_only))
         binds.extend(
             WorkerBind(
                 source=binding.source,
@@ -864,9 +885,7 @@ class ApptainerAgentRuntime:
     @staticmethod
     def _atomic_control(path: Path, payload: str) -> None:
         path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-        temporary = path.with_name(
-            f".{path.name}.{secrets.token_hex(8)}.tmp"
-        )
+        temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
         descriptor = os.open(
             temporary,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL,
@@ -997,9 +1016,7 @@ class ApptainerAgentRuntime:
             "exec",
         ]
         if network_mode == "no-network":
-            command.extend(
-                ("--net", "--network", "none", "--hostname", "localhost")
-            )
+            command.extend(("--net", "--network", "none", "--hostname", "localhost"))
         elif network_mode == "allowlist":
             raise SetupError(
                 "Blue Vela Apptainer does not support allowlist network policy"
@@ -1037,13 +1054,13 @@ class ApptainerAgentRuntime:
                 (self.feedback, PurePosixPath("/run/rsi-harness/feedback"), True)
             )
         if mount_agent_home:
-            binds.append(
-                (self.agent_home, PurePosixPath("/home/agent"), False)
-            )
+            binds.append((self.agent_home, PurePosixPath("/home/agent"), False))
             binds.extend(self._agent_auth_binds)
             binds.extend(
                 (source, target, True) for target, source in self._copies.items()
             )
+            if self.work_sandbox is not None and phase == "work":
+                binds.append((self.work_sandbox, PurePosixPath(SANDBOX_TARGET), True))
             if self.work_broker is not None:
                 binds.append(
                     (
@@ -1112,9 +1129,7 @@ class ApptainerAgentRuntime:
                     # Harness-owned transparent launcher mounted above.
                     "PREPEND_PATH": "/usr/local/bin",
                     "RSI_MULTINODE_ROOT": "/run/rsi-harness/torchrun",
-                    "RSI_LOCAL_WORLD_SIZE": str(
-                        self.work_broker.local_world_size
-                    ),
+                    "RSI_LOCAL_WORLD_SIZE": str(self.work_broker.local_world_size),
                 }
             )
         for key, value in values.items():
@@ -1163,16 +1178,19 @@ class ApptainerAgentRuntime:
             network_mode=network_mode,
             mount_agent_home=mount_agent_home,
         )
-        argv = self._base_command(
-            devices=devices,
-            environment=environment,
-            extra_binds=extra_binds,
-            mount_workspace=mount_workspace,
-            mount_agent_home=mount_agent_home,
-            containall=containall,
-            network_mode=network_mode,
-            phase=phase,
-        ) + isolated_command
+        argv = (
+            self._base_command(
+                devices=devices,
+                environment=environment,
+                extra_binds=extra_binds,
+                mount_workspace=mount_workspace,
+                mount_agent_home=mount_agent_home,
+                containall=containall,
+                network_mode=network_mode,
+                phase=phase,
+            )
+            + isolated_command
+        )
         child_env = os.environ.copy()
         child_env["APPTAINER_BIND"] = str(self.profile.apptainer.dns_bind)
         child_env["CUDA_VISIBLE_DEVICES"] = ",".join(devices)
@@ -1249,22 +1267,37 @@ class ApptainerAgentRuntime:
 
 
 class NativeJudgeEvaluator:
+    """One Judge round. With a sandbox lifecycle it follows the local
+    ordering: freeze Work's envs, pause Work, run the round with its own
+    endpoint, close the round's envs, then resume Work's envs, unpause Work
+    and reopen its endpoint."""
+
     def __init__(
         self,
         runtime: ApptainerAgentRuntime,
         artifacts: RunArtifactWriter,
+        sandbox_lifecycle: Any = None,
     ) -> None:
         self.runtime = runtime
         self.artifacts = artifacts
+        self.sandbox = sandbox_lifecycle or NullSandboxLifecycle()
 
     def evaluate(self, request: EvaluationRequest, observer: Any) -> SubmissionReport:
         started = time.monotonic()
         snapshot = self.runtime.rounds / request.round_id / "workspace"
+        # Busy Work envs make the submission retryable before any pause.
+        self.sandbox.freeze_work()
+        frozen = self.sandbox.enabled
         observer.resource_event(
             "work_pause_planned",
             work_container_id=request.work_container.container_id,
         )
-        self.runtime.pause(request.work_container)
+        try:
+            self.runtime.pause(request.work_container)
+        except BaseException:
+            if frozen:
+                self._release_sandbox()
+            raise
         try:
             try:
                 self.runtime.require_work_idle()
@@ -1296,7 +1329,19 @@ class NativeJudgeEvaluator:
             environment = resolve_runtime_environment(
                 request.run_plan.task.verifier.environment, os.environ
             )
-            result = self.runtime.run_judge(snapshot, request, environment)
+            endpoint = None
+            if frozen:
+                endpoint = self.sandbox.prepare_judge(request.round_id)
+                self.sandbox.activate_judge(
+                    time.monotonic() + request.run_plan.task.verifier.timeout_seconds
+                )
+            result = (
+                self.runtime.run_judge(snapshot, request, environment)
+                if endpoint is None
+                else self.runtime.run_judge(
+                    snapshot, request, environment, sandbox_endpoint=endpoint
+                )
+            )
             reward = read_reward(
                 request.verifier_logs,
                 request.run_plan.task.verifier.primary_reward,
@@ -1333,11 +1378,36 @@ class NativeJudgeEvaluator:
             )
             return report
         finally:
-            self.runtime.unpause(request.work_container)
-            observer.resource_event(
-                "work_unpaused",
-                work_container_id=request.work_container.container_id,
+            # Work that ended (deadline or retired) during the round stays
+            # paused for the coordinator to stop.
+            if not frozen or self._release_sandbox():
+                self.runtime.unpause(request.work_container)
+                if frozen:
+                    self.sandbox.reopen_work()
+                observer.resource_event(
+                    "work_unpaused",
+                    work_container_id=request.work_container.container_id,
+                )
+
+    def _release_sandbox(self) -> bool:
+        """End the round's envs, then resume Work's; False when Work ended
+        normally meanwhile (nothing to resume)."""
+        try:
+            self.sandbox.close_judge()
+        except Exception as error:
+            self.sandbox.contain_work()
+            raise InfrastructureError(
+                f"recovery_required: sandbox Judge cleanup failed: {error}"
+            ) from error
+        if not self.sandbox.can_resume:
+            if self.sandbox.work_ended_normally:
+                return False
+            raise InfrastructureError(
+                "recovery_required: sandbox Work expired, was cancelled, or "
+                "requires recovery; Work family remains contained"
             )
+        self.sandbox.resume_work()
+        return True
 
 
 class NativeEngineComposition:
@@ -1366,6 +1436,28 @@ class NativeEngineComposition:
         self.evaluator: NativeJudgeEvaluator | None = None
         self.volume: ManagedWorkdirVolume | None = None
         self.secrets = rsi_loop_runtime_secret_values(config)
+        # E2B envs: the broker runs in this process, its endpoint on node tmp.
+        self.sandbox = (
+            None
+            if plan.sandbox is None
+            else ClusterSandbox(plan, payload.run_id, self.runtime.node_tmp / "sb")
+        )
+
+    def bind_sandbox(self, mutate: Any) -> None:
+        """``on_lease_ready``: start the broker and expose Work's endpoint."""
+        assert self.sandbox is not None
+        try:
+            self.runtime.work_sandbox = self.sandbox.bind(mutate)
+        finally:
+            self.secrets.update(self.sandbox.secrets)
+
+    def coordinator_options(self) -> dict[str, Any]:
+        if self.sandbox is None:
+            return {}
+        return {
+            "on_lease_ready": self.bind_sandbox,
+            "sandbox_lifecycle": self.sandbox.lifecycle,
+        }
 
     def request(self) -> RunRequest:
         return RunRequest(
@@ -1430,7 +1522,11 @@ class NativeEngineComposition:
     def start_artifacts(self, plan: RunPlan, run_id: str) -> RunArtifactWriter:
         self.artifacts = RunArtifactWriter(plan, run_id=run_id)
         self.artifacts.start()
-        self.evaluator = NativeJudgeEvaluator(self.runtime, self.artifacts)
+        self.evaluator = NativeJudgeEvaluator(
+            self.runtime,
+            self.artifacts,
+            None if self.sandbox is None else self.sandbox.lifecycle,
+        )
         return self.artifacts
 
     def create_network(
@@ -1517,6 +1613,8 @@ class NativeEngineComposition:
                 "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
             }
         )
+        if self.sandbox is not None:
+            environment.update(self.sandbox.work_environment())
         return replace(prepared, environment=tuple(sorted(environment.items())))
 
     def run_agent(
@@ -1524,6 +1622,8 @@ class NativeEngineComposition:
     ) -> AgentRunResult:
         if self.artifacts is None:
             raise RuntimeError("native artifacts are unavailable")
+        if self.sandbox is not None and timeout is None:
+            raise SetupError("sandbox requires a finite Work execution timeout")
         self._event("agent_started", {"name": prepared.agent_name})
         try:
             result = self.agent.run(
@@ -1535,6 +1635,11 @@ class NativeEngineComposition:
                     output_redact_values=tuple(sorted(self.secrets)),
                     output_callback=lambda value: self._event(
                         "agent_output", value.rstrip()
+                    ),
+                    on_exec_start=(
+                        None
+                        if self.sandbox is None
+                        else self.sandbox.lifecycle.activate_work
                     ),
                 )
             )
@@ -1610,6 +1715,9 @@ def run_native_engine(
     allocated_pools: AllocatedPools | None = None,
 ) -> None:
     """Compose and execute the same coordinator used by local Harness runs."""
+    validate_cluster_sandbox(
+        plan.task.sandbox, plan.sandbox, multi_node=allocated_pools is not None
+    )
     composition = NativeEngineComposition(
         payload,
         plan,
@@ -1621,6 +1729,7 @@ def run_native_engine(
             lease_store=LeaseStore(plan.paths.root / "leases"),
             run_id_factory=lambda: payload.run_id,
             clock=composition.clock,
+            **composition.coordinator_options(),
         ).run(composition.request())
     finally:
         composition.runtime.close_multinode()

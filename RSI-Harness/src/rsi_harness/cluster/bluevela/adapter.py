@@ -57,6 +57,12 @@ from rsi_harness.models import (
 )
 from rsi_harness.runtime.local_auth import resolve_agent_auth
 from rsi_harness.runtime.redaction import redact_text
+from rsi_harness.runtime.sandbox_contracts import SandboxEnvGrant
+from rsi_harness.runtime.sandbox_policy import (
+    resolve_env_grant,
+    validate_cluster_sandbox,
+    validate_sandbox_policy,
+)
 from rsi_harness.task.compiler import HarborTaskCompiler
 from rsi_loop.harness.agent import get_agent_class
 
@@ -168,6 +174,9 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         resource_plan = derive_resource_plan(definition, self.profile)
         resources = resource_plan.single_node or resource_plan.multi_node
         assert resources is not None
+        sandbox = self._sandbox_grant(
+            definition, request, multi_node=resource_plan.multi_node is not None
+        )
         build_context = definition.service.build_context
         if build_context is None:
             raise SetupError("Blue Vela cluster runs require a Docker build context")
@@ -187,9 +196,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         run_id = self._run_id(definition.task_id)
         run_dir = self.profile.storage.run_root / run_id
         names = {
-            stage: self._job_name(
-                definition.task_id, stage, definition.agent.name
-            )
+            stage: self._job_name(definition.task_id, stage, definition.agent.name)
             for stage in ("build", "run")
         }
         planned_image = plan_image(build_context, self.profile.storage.image_cache)
@@ -322,6 +329,8 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             _atomic_json(manifest_path, manifest)
 
             run_plan = self._run_plan(definition, image, resources, run_dir)
+            if sandbox is not None:
+                run_plan = run_plan.model_copy(update={"sandbox": sandbox})
             from rsi_harness.cluster.bluevela.engine import (
                 EnginePayload,
                 render_engine_driver,
@@ -338,9 +347,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                     resources if isinstance(resources, ClusterResources) else None
                 ),
                 multi_node=(
-                    resources
-                    if isinstance(resources, MultiNodeResources)
-                    else None
+                    resources if isinstance(resources, MultiNodeResources) else None
                 ),
                 profile=self.profile,
                 options=request.options,
@@ -364,9 +371,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             manifest["run_job_id"] = run_job_id
             manifest["state"] = "running"
             _atomic_json(manifest_path, manifest)
-            self.event_callback(
-                "job_submitted", {"stage": "run", "job_id": run_job_id}
-            )
+            self.event_callback("job_submitted", {"stage": "run", "job_id": run_job_id})
             run_result = self.scheduler.wait(
                 run_job_id,
                 poll_seconds=self.profile.scheduler.poll_seconds,
@@ -393,6 +398,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
 
     def _compile(self, request: ClusterRunRequest) -> TaskDefinition:
         definition = self.compiler.compile(request.task_dir, request.options)
+        validate_sandbox_policy(definition.sandbox, request.sandbox_policy, "cluster")
         if definition.gpu_requirement.count == 0 and not self.supports_cpu_work:
             raise SetupError(
                 "Blue Vela cluster runs require Work GPUs; "
@@ -409,6 +415,32 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             )
         return definition
 
+    @staticmethod
+    def _sandbox_grant(
+        definition: TaskDefinition,
+        request: ClusterRunRequest,
+        *,
+        multi_node: bool,
+    ) -> SandboxEnvGrant | None:
+        """The E2B env grant the Engine's broker enforces, frozen in the plan.
+
+        The parent envelope only sizes a host pool reservation, which a
+        cluster run never makes (Work is a job process, its envs are E2B
+        sandboxes): a unit parent keeps the host pool out of the way.
+        """
+        task = definition.sandbox
+        if task is None or request.sandbox_policy is None:
+            return None
+        grant = resolve_env_grant(
+            task,  # type: ignore[arg-type]  # validated in _compile
+            request.sandbox_policy,
+            {},
+            1,
+            1,
+        )
+        validate_cluster_sandbox(task, grant, multi_node=multi_node)
+        return grant
+
     def _validate_runtime_inputs(self, request: ClusterRunRequest) -> None:
         if request.agent_name == "codex" and request.model is None:
             raise SetupError("cluster Codex runs require an explicit --model")
@@ -420,9 +452,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             )
         launcher = _agent_launcher(request.agent_name)
         if shutil.which(launcher) is None:
-            raise SetupError(
-                f"cluster agent executable is unavailable: {launcher}"
-            )
+            raise SetupError(f"cluster agent executable is unavailable: {launcher}")
         for label, path in (("Apptainer", self.profile.apptainer.binary),):
             if not path.is_file():
                 raise SetupError(f"{label} binary does not exist: {path}")
@@ -482,9 +512,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 name=name,
                 queue=self.profile.scheduler.queue,
                 group=self.profile.scheduler.group,
-                cpu_slots=(
-                    resources.total_nodes * resources.cpu_slots_per_node
-                ),
+                cpu_slots=(resources.total_nodes * resources.cpu_slots_per_node),
                 memory_mb=resources.memory_mb_per_node,
                 walltime=resources.run_walltime,
                 stdout_path=(
@@ -624,9 +652,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             symlinks=True,
             ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo"),
         )
-        (control / "profile.json").write_text(
-            self.profile.model_dump_json(indent=2)
-        )
+        (control / "profile.json").write_text(self.profile.model_dump_json(indent=2))
         _atomic_json(control / "source.json", self._source_metadata())
         return frozen_task.resolve(), frozen_source.resolve()
 
@@ -654,9 +680,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         frozen_task: Path,
     ) -> TaskDefinition:
         build_context = frozen_task / "environment"
-        service = definition.service.model_copy(
-            update={"build_context": build_context}
-        )
+        service = definition.service.model_copy(update={"build_context": build_context})
         return definition.model_copy(
             update={"source_dir": frozen_task, "service": service}
         )
@@ -682,9 +706,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             judge_devices = tuple(
                 GPUDevice(
                     index=(
-                        judge_offset
-                        + node_rank * resources.gpus_per_node
-                        + local_rank
+                        judge_offset + node_rank * resources.gpus_per_node + local_rank
                     ),
                     uuid=f"JUDGE-{node_rank:03d}:GPU-{local_rank}",
                     name="planned Blue Vela Judge GPU",
@@ -695,11 +717,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             devices = work_devices + judge_devices
             work = GPUAllocation(devices=work_devices)
             verifier = GPUAllocation(devices=judge_devices)
-            mode = (
-                JudgeGPUMode.DISJOINT
-                if judge_devices
-                else JudgeGPUMode.FREEZE_ONLY
-            )
+            mode = JudgeGPUMode.DISJOINT if judge_devices else JudgeGPUMode.FREEZE_ONLY
         else:
             devices = tuple(
                 GPUDevice(
@@ -715,9 +733,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 verifier = GPUAllocation()
                 mode = JudgeGPUMode.FREEZE_ONLY
             elif resources.verifier_gpus <= len(spares):
-                verifier = GPUAllocation(
-                    devices=spares[: resources.verifier_gpus]
-                )
+                verifier = GPUAllocation(devices=spares[: resources.verifier_gpus])
                 mode = JudgeGPUMode.DISJOINT
             else:
                 verifier = GPUAllocation(
@@ -768,12 +784,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         image: SIFImagePlan,
         agent_version: str | None,
     ) -> dict[str, object]:
-        leaf = (
-            self.profile.storage.logs_root
-            / "runs"
-            / run_id
-            / definition.task_id
-        )
+        leaf = self.profile.storage.logs_root / "runs" / run_id / definition.task_id
         return {
             "run_id": run_id,
             "owner": self.profile.owner,

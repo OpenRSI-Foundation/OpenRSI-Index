@@ -1,0 +1,83 @@
+{
+  "images": {
+    "client": {
+      "args": {},
+      "build": "./client",
+      "dockerfile": "Dockerfile",
+      "dockerfile_inline": null,
+      "network": null,
+      "no_cache": false,
+      "target": null
+    },
+    "server": {
+      "args": {},
+      "build": "./server",
+      "dockerfile": "Dockerfile",
+      "dockerfile_inline": null,
+      "network": null,
+      "no_cache": false,
+      "target": null
+    }
+  },
+  "notes": [
+    "services.client: no cpus limit; using 1.0",
+    "services.client: no memory limit; using 1024 MiB",
+    "services.client.volumes./logs: log mount dropped; logs are downloaded",
+    "services.client.volumes./agent-logs: log mount dropped; logs are downloaded",
+    "services.server.ports: dropped; services reach each other on container ports",
+    "services.server: no cpus limit; using 1.0",
+    "services.server: no memory limit; using 1024 MiB"
+  ],
+  "seeds": [],
+  "spec": {
+    "disk_mb": 2048,
+    "lifetime_sec": null,
+    "network": "public",
+    "services": {
+      "client": {
+        "aliases": [
+          "tb-client"
+        ],
+        "command": [
+          "sh",
+          "-c",
+          "sleep infinity"
+        ],
+        "cpus": 1.0,
+        "depends_on": {
+          "server": {
+            "condition": "healthy",
+            "required": true
+          }
+        },
+        "env": {
+          "TEST_DIR": "/tests"
+        },
+        "image": null,
+        "memory_mb": 1024
+      },
+      "server": {
+        "command": [
+          "python",
+          "./mock_website.py"
+        ],
+        "cpus": 1.0,
+        "healthcheck": {
+          "interval_sec": 10.0,
+          "retries": 1,
+          "test": [
+            "CMD",
+            "curl",
+            "-f",
+            "http://localhost:8000"
+          ],
+          "timeout_sec": 5.0
+        },
+        "image": null,
+        "memory_mb": 1024
+      }
+    },
+    "version": 1,
+    "volumes": {}
+  }
+}

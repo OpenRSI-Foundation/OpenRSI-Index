@@ -79,6 +79,34 @@ def test_compile_uses_official_harbor_model_and_gpu_requirement(tmp_path):
     assert definition.service.build_context == (task_dir / "environment").resolve()
 
 
+def test_absent_sandbox_is_disabled(tmp_path):
+    definition = HarborTaskCompiler().compile(
+        write_harbor_task(tmp_path), CompileOptions()
+    )
+    assert hasattr(definition, "sandbox"), (
+        "compiler must carry the explicit opt-in contract"
+    )
+    assert definition.sandbox is None
+
+
+def test_compiler_preserves_sandbox_declaration(tmp_path):
+    from tests.sandbox_helpers import sandbox_toml
+
+    task = write_harbor_task(tmp_path, task_toml=DEFAULT_TASK_TOML + sandbox_toml())
+    definition = HarborTaskCompiler().compile(task, CompileOptions())
+    assert definition.sandbox.work.profiles == ("offline",)
+    assert definition.sandbox.judge is None
+
+
+def test_compiler_rejects_unknown_sandbox_version(tmp_path):
+    task = write_harbor_task(
+        tmp_path,
+        task_toml=DEFAULT_TASK_TOML + "\n[metadata.rsi_harness.sandbox]\nversion = 9\n",
+    )
+    with pytest.raises(UnsupportedTaskError, match="sandbox"):
+        HarborTaskCompiler().compile(task, CompileOptions())
+
+
 @pytest.mark.parametrize("judge_count", (None, 0, 1))
 def test_compile_accepts_explicit_cpu_work(tmp_path, judge_count):
     """Explicit zero must survive Harbor compilation without inheriting GPUs."""
@@ -137,8 +165,7 @@ def test_compiles_namespaced_verifier_gpu_count(tmp_path):
     """The approved verifier extension must reach the compiled plan."""
     task = write_harbor_task(
         tmp_path,
-        task_toml=DEFAULT_TASK_TOML
-        + "\n[metadata.rsi_harness.verifier]\ngpus = 4\n",
+        task_toml=DEFAULT_TASK_TOML + "\n[metadata.rsi_harness.verifier]\ngpus = 4\n",
     )
 
     definition = HarborTaskCompiler().compile(task, CompileOptions())

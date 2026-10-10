@@ -26,6 +26,7 @@ from rsi_harness.integrations.rsi_loop import (
     RSILoopContainerHandle,
 )
 from rsi_harness.models import (
+    AgentRunResult,
     ContainerMount,
     ContainerRef,
     ContainerSpec,
@@ -415,9 +416,7 @@ def _install_work_volume_reference(client, volume: ManagedWorkdirVolume):
     return ContainerRef(container_id=reference.id, role="work")
 
 
-@pytest.mark.parametrize(
-    ("role", "read_only"), (("work", False), ("judge", True))
-)
+@pytest.mark.parametrize(("role", "read_only"), (("work", False), ("judge", True)))
 def test_create_passes_exact_attested_workdir_volume_with_role_access(
     tmp_path, role, read_only
 ):
@@ -426,17 +425,13 @@ def test_create_passes_exact_attested_workdir_volume_with_role_access(
     volume = _workdir_volume()
     _install_workdir_volume(client, volume)
     work_reference = (
-        _install_work_volume_reference(client, volume)
-        if role == "judge"
-        else None
+        _install_work_volume_reference(client, volume) if role == "judge" else None
     )
     runtime = make_runtime(
         client,
         tmp_path,
         role=role,
-        workdir_volume_references=(
-            () if work_reference is None else (work_reference,)
-        ),
+        workdir_volume_references=(() if work_reference is None else (work_reference,)),
     )
 
     runtime.create(
@@ -564,9 +559,7 @@ def test_create_rejects_bind_mount_at_declared_workdir_for_every_role(tmp_path, 
                 image="image",
                 workdir=PurePosixPath("/workspace"),
                 mounts=(
-                    ContainerMount(
-                        source=source, target=PurePosixPath("/workspace")
-                    ),
+                    ContainerMount(source=source, target=PurePosixPath("/workspace")),
                 ),
             )
         )
@@ -592,9 +585,7 @@ def test_runtime_rejects_split_workdir_engine_mount_overlap_before_side_effects(
 ):
     """Runtime defense must run before staging creation or Docker create."""
     client = FakeDockerClient()
-    volume = _workdir_volume().model_copy(
-        update={"target": PurePosixPath(target)}
-    )
+    volume = _workdir_volume().model_copy(update={"target": PurePosixPath(target)})
     _install_workdir_volume(client, volume)
     runtime = make_runtime(client, tmp_path, role="work", staging=True)
 
@@ -727,9 +718,12 @@ def test_real_docker_volume_is_rw_for_work_ro_for_judge_and_removed(tmp_path):
             )
         )
         client.containers.get(work.container_id).start()
-        assert client.containers.get(work.container_id).exec_run(
-            ["sh", "-c", "printf work > /workspace/probe"]
-        ).exit_code == 0
+        assert (
+            client.containers.get(work.container_id)
+            .exec_run(["sh", "-c", "printf work > /workspace/probe"])
+            .exit_code
+            == 0
+        )
         judge_runtime = DockerContainerRuntime(
             client,
             run_id="real-volume",
@@ -754,25 +748,31 @@ def test_real_docker_volume_is_rw_for_work_ro_for_judge_and_removed(tmp_path):
             )
         )
         client.containers.get(judge.container_id).start()
-        assert client.containers.get(judge.container_id).exec_run(
-            ["sh", "-c", "printf judge > /workspace/probe"]
-        ).exit_code != 0
+        assert (
+            client.containers.get(judge.container_id)
+            .exec_run(["sh", "-c", "printf judge > /workspace/probe"])
+            .exit_code
+            != 0
+        )
     finally:
         if judge is not None and judge_runtime is not None:
             judge_runtime.remove(judge)
         if work is not None:
             work_runtime.remove(work)
         backend.remove(volume)
-    assert client.volumes.list(
-        filters={
-            "label": [
-                f"{key}={value}"
-                for key, value in sorted(
-                    managed_workdir_volume_labels(volume).items()
-                )
-            ]
-        }
-    ) == []
+    assert (
+        client.volumes.list(
+            filters={
+                "label": [
+                    f"{key}={value}"
+                    for key, value in sorted(
+                        managed_workdir_volume_labels(volume).items()
+                    )
+                ]
+            }
+        )
+        == []
+    )
 
 
 def test_gpu_device_request_can_only_be_omitted_by_explicit_test_injection(
@@ -862,9 +862,7 @@ def test_inject_agent_auth_uses_declared_work_tmpfs_and_memory_stream(
         )
     )
     container = client.containers.by_id[ref.container_id]
-    container.attrs["HostConfig"] = {
-        "Tmpfs": {"/home/agent/.codex": options}
-    }
+    container.attrs["HostConfig"] = {"Tmpfs": {"/home/agent/.codex": options}}
     container.attrs["Mounts"].append(
         {
             "Type": "tmpfs",
@@ -919,8 +917,7 @@ def test_inject_agent_auth_uses_declared_work_tmpfs_and_memory_stream(
         (
             "/bin/sh",
             "-c",
-            'mode="$(/usr/bin/stat -c %a:%u:%g -- "$1")" && '
-            '[ "$mode" = "700:0:0" ]',
+            'mode="$(/usr/bin/stat -c %a:%u:%g -- "$1")" && [ "$mode" = "700:0:0" ]',
             "rsi-agent-auth-directory",
             "/home/agent/.codex",
         ),
@@ -1042,7 +1039,7 @@ def test_real_agent_auth_tmpfs_is_excluded_from_rootfs_snapshot(
                 "/bin/sh",
                 "-c",
                 "test -s /home/agent/.codex/auth.json && "
-                "test \"$(stat -c %a /home/agent/.codex/auth.json)\" = 600",
+                'test "$(stat -c %a /home/agent/.codex/auth.json)" = 600',
             ]
         )
         assert visible.exit_code == 0, visible.output
@@ -1064,9 +1061,7 @@ def test_real_agent_auth_tmpfs_is_excluded_from_rootfs_snapshot(
             network_mode="none",
         )
         judge.start()
-        absent = judge.exec_run(
-            ["test", "!", "-e", "/home/agent/.codex/auth.json"]
-        )
+        absent = judge.exec_run(["test", "!", "-e", "/home/agent/.codex/auth.json"])
         assert absent.exit_code == 0, absent.output
     finally:
         if judge is not None:
@@ -1403,9 +1398,7 @@ def test_engine_container_cannot_open_raw_socket_for_spoofed_source_packet(tmp_p
         text=True,
     )
     if compile_result.returncode != 0:
-        pytest.skip(
-            f"raw-socket probe build unavailable: {compile_result.stderr}"
-        )
+        pytest.skip(f"raw-socket probe build unavailable: {compile_result.stderr}")
 
     provisioner = DockerContainerRuntime(
         client,
@@ -1443,9 +1436,9 @@ def test_engine_container_cannot_open_raw_socket_for_spoofed_source_packet(tmp_p
     control = None
     try:
         container.reload()
-        gateway = client.networks.get(network.network_id).attrs["IPAM"]["Config"][
-            0
-        ]["Gateway"]
+        gateway = client.networks.get(network.network_id).attrs["IPAM"]["Config"][0][
+            "Gateway"
+        ]
         control = client.containers.create(
             "ubuntu:24.04",
             ["/probe/spoof", gateway],
@@ -1581,6 +1574,235 @@ def test_exec_continuously_drains_and_keeps_bounded_head_and_tail(tmp_path):
     ]
 
 
+@pytest.mark.parametrize("role", ["work", "judge"])
+@pytest.mark.parametrize("explicit", [None, "", "/opt/venv/bin:/bin"])
+def test_sandbox_exec_prefix_preserves_effective_container_path(
+    tmp_path, role, explicit
+):
+    client = FakeDockerClient()
+    parent = FakeDockerContainer(role)
+    inherited = "/opt/image-conda/bin:/usr/local/bin:/usr/bin:/bin"
+    parent.attrs["Config"] = {"Env": ["PATH=" + inherited, "OTHER=unchanged"]}
+    client.containers.by_id[role] = parent
+    runtime = make_runtime(client, tmp_path, role=role)
+    environment = {
+        "RSI_SANDBOX_SOCKET": "/run/rsi-harness/sandbox/s",
+        "RSI_SANDBOX_TOKEN": "ephemeral-token",
+    }
+    if explicit is not None:
+        environment["PATH"] = explicit
+    original = dict(environment)
+
+    runtime.exec(
+        ContainerRef(container_id=role, role=role), ["true"], environment=environment
+    )
+
+    actual = client.api.exec_create_calls[-1]["environment"]
+    expected = inherited if explicit is None else explicit
+    assert actual["PATH"] == "/run/rsi-harness/sandbox:" + expected
+    assert environment == original
+
+
+def test_sandbox_exec_does_not_duplicate_existing_path_prefix(tmp_path):
+    client = FakeDockerClient()
+    client.containers.by_id["work"] = FakeDockerContainer("work")
+    runtime = make_runtime(client, tmp_path)
+    path = "/run/rsi-harness/sandbox:/opt/venv/bin:/bin"
+    runtime.exec(
+        ContainerRef(container_id="work", role="work"),
+        ["true"],
+        environment={"RSI_SANDBOX_SOCKET": "/run/rsi-harness/sandbox/s", "PATH": path},
+    )
+    assert client.api.exec_create_calls[-1]["environment"]["PATH"] == path
+
+
+def test_exec_start_callback_receives_boundary_deadline_and_waits_remaining_time(
+    tmp_path, monkeypatch
+):
+    client = FakeDockerClient()
+    client.containers.by_id["work"] = FakeDockerContainer("work")
+    runtime = make_runtime(client, tmp_path)
+    now = [100.0]
+    events: list[tuple[str, float]] = []
+    join_timeouts: list[float | None] = []
+    original_create = client.api.exec_create
+    original_start = client.api.exec_start
+    original_join = threading.Thread.join
+
+    monkeypatch.setattr(docker_runtime.time, "monotonic", lambda: now[0])
+
+    def delayed_create(*args, **kwargs):
+        events.append(("create", now[0]))
+        now[0] += 4.0
+        return original_create(*args, **kwargs)
+
+    def delayed_start(*args, **kwargs):
+        events.append(("start", now[0]))
+        now[0] += 2.0
+        return original_start(*args, **kwargs)
+
+    def recording_join(thread, timeout=None):
+        join_timeouts.append(timeout)
+        return original_join(thread, timeout)
+
+    monkeypatch.setattr(client.api, "exec_create", delayed_create)
+    monkeypatch.setattr(client.api, "exec_start", delayed_start)
+    monkeypatch.setattr(threading.Thread, "join", recording_join)
+
+    result = runtime.exec(
+        ContainerRef(container_id="work", role="work"),
+        ("run-agent",),
+        timeout_seconds=10.0,
+        on_exec_start=lambda deadline: events.append(("callback", deadline)),
+    )
+
+    assert result.exit_code == 0
+    assert events == [
+        ("callback", 110.0),
+        ("create", 100.0),
+        ("start", 104.0),
+    ]
+    assert join_timeouts[0] == 4.0
+
+
+def test_exec_explicit_deadline_covers_startup_and_output_wait(tmp_path, monkeypatch):
+    client = FakeDockerClient()
+    client.containers.by_id["judge"] = FakeDockerContainer("judge")
+    runtime = make_runtime(client, tmp_path, role="judge")
+    now = [200.0]
+    join_timeouts: list[float | None] = []
+    original_create = client.api.exec_create
+    original_start = client.api.exec_start
+    original_join = threading.Thread.join
+
+    monkeypatch.setattr(docker_runtime.time, "monotonic", lambda: now[0])
+
+    def delayed_create(*args, **kwargs):
+        now[0] += 2.0
+        return original_create(*args, **kwargs)
+
+    def delayed_start(*args, **kwargs):
+        now[0] += 3.0
+        return original_start(*args, **kwargs)
+
+    def recording_join(thread, timeout=None):
+        join_timeouts.append(timeout)
+        return original_join(thread, timeout)
+
+    monkeypatch.setattr(client.api, "exec_create", delayed_create)
+    monkeypatch.setattr(client.api, "exec_start", delayed_start)
+    monkeypatch.setattr(threading.Thread, "join", recording_join)
+
+    result = runtime.exec(
+        ContainerRef(container_id="judge", role="judge"),
+        ("run-verifier",),
+        timeout_seconds=50.0,
+        deadline=210.0,
+    )
+
+    assert result.exit_code == 0
+    assert join_timeouts[0] == 5.0
+
+
+def test_exec_create_finishing_after_deadline_never_starts_command(
+    tmp_path, monkeypatch
+):
+    client = FakeDockerClient()
+    client.containers.by_id["work"] = FakeDockerContainer("work")
+    runtime = make_runtime(client, tmp_path)
+    now = [300.0]
+    original_create = client.api.exec_create
+    start_calls = 0
+
+    monkeypatch.setattr(docker_runtime.time, "monotonic", lambda: now[0])
+
+    def delayed_create(*args, **kwargs):
+        now[0] += 11.0
+        return original_create(*args, **kwargs)
+
+    def forbidden_start(*_args, **_kwargs):
+        nonlocal start_calls
+        start_calls += 1
+        raise AssertionError("expired Docker exec must not start")
+
+    monkeypatch.setattr(client.api, "exec_create", delayed_create)
+    monkeypatch.setattr(client.api, "exec_start", forbidden_start)
+
+    result = runtime.exec(
+        ContainerRef(container_id="work", role="work"),
+        ("run-agent",),
+        timeout_seconds=10.0,
+        on_exec_start=lambda _deadline: None,
+    )
+
+    assert result == AgentRunResult(
+        exit_code=None,
+        timed_out=True,
+        exec_started=False,
+    )
+    assert start_calls == 0
+
+
+def test_exec_callback_consuming_deadline_never_creates_candidate(
+    tmp_path, monkeypatch
+):
+    client = FakeDockerClient()
+    client.containers.by_id["work"] = FakeDockerContainer("work")
+    runtime = make_runtime(client, tmp_path)
+    now = [400.0]
+
+    monkeypatch.setattr(docker_runtime.time, "monotonic", lambda: now[0])
+
+    def consume_deadline(_deadline: float) -> None:
+        now[0] += 10.0
+
+    result = runtime.exec(
+        ContainerRef(container_id="work", role="work"),
+        ("run-agent",),
+        timeout_seconds=10.0,
+        on_exec_start=consume_deadline,
+    )
+
+    assert result == AgentRunResult(
+        exit_code=None,
+        timed_out=True,
+        exec_started=False,
+    )
+    assert client.api.exec_create_calls == []
+
+
+def test_exec_start_callback_failure_aborts_writer_before_candidate_exec(
+    tmp_path, monkeypatch
+):
+    client = FakeDockerClient()
+    client.containers.by_id["work"] = FakeDockerContainer("work")
+    runtime = make_runtime(client, tmp_path)
+    output_path = (tmp_path / "engine-root" / "agent-output.txt").resolve()
+    aborts: list[Path] = []
+    original_abort = docker_runtime._RedactedOutputWriter.abort
+
+    def recording_abort(writer):
+        aborts.append(output_path)
+        return original_abort(writer)
+
+    def fail_callback(_deadline: float) -> None:
+        raise RuntimeError("sandbox activation failed")
+
+    monkeypatch.setattr(docker_runtime._RedactedOutputWriter, "abort", recording_abort)
+
+    with pytest.raises(RuntimeError, match="sandbox activation failed"):
+        runtime.exec(
+            ContainerRef(container_id="work", role="work"),
+            ("run-agent",),
+            timeout_seconds=10.0,
+            output_path=output_path,
+            on_exec_start=fail_callback,
+        )
+
+    assert aborts == [output_path]
+    assert client.api.exec_create_calls == []
+
+
 def test_exec_streams_complete_redacted_output_while_return_stays_bounded(tmp_path):
     client = FakeDockerClient(
         chunks=(b"abcd", b"runtime-", b"secret access_token=opaque\n", b"ijkl"),
@@ -1602,9 +1824,7 @@ def test_exec_streams_complete_redacted_output_while_return_stays_bounded(tmp_pa
     assert result.output == "abcdijkl"
     assert result.output_truncated is True
     assert result.full_output_captured is True
-    assert output_path.read_text() == (
-        "abcd[REDACTED] access_token=[REDACTED]\nijkl"
-    )
+    assert output_path.read_text() == ("abcd[REDACTED] access_token=[REDACTED]\nijkl")
     assert "".join(live_output) == output_path.read_text()
 
 
@@ -1633,9 +1853,7 @@ def test_exec_streams_complete_task_output_without_redaction(tmp_path):
     authored = b"Authorization: Bearer task-literal\naccess_token=visible\n"
     client = FakeDockerClient(chunks=(authored,), exit_code=0)
     client.containers.by_id["judge"] = FakeDockerContainer("judge")
-    runtime = make_runtime(
-        client, tmp_path, role="judge", exec_output_limit_bytes=8
-    )
+    runtime = make_runtime(client, tmp_path, role="judge", exec_output_limit_bytes=8)
     output_path = (tmp_path / "engine-root" / "agent-1.log").resolve()
 
     result = runtime.exec(
@@ -1649,6 +1867,81 @@ def test_exec_streams_complete_task_output_without_redaction(tmp_path):
     assert result.full_output_captured is True
     assert output_path.read_bytes() == authored
     assert output_path.stat().st_mode & 0o777 == 0o644
+
+
+@pytest.mark.parametrize("split", range(1, len("sandbox-private-token")))
+def test_raw_output_redacts_only_explicit_token_across_chunk_boundaries(
+    tmp_path, split
+):
+    token = b"sandbox-private-token"
+    prefix = b"\xffAuthorization: Bearer task-literal\r\naccess_token=visible\n"
+    client = FakeDockerClient(
+        chunks=(prefix + token[:split], token[split:] + b"\x00end"), exit_code=0
+    )
+    client.containers.by_id["judge"] = FakeDockerContainer("judge")
+    runtime = make_runtime(client, tmp_path, role="judge")
+    output_path = tmp_path / "engine-root" / "agent-1.log"
+
+    result = runtime.exec(
+        ContainerRef(container_id="judge", role="judge"),
+        ("/bin/bash", "/tests/test.sh"),
+        output_path=output_path,
+        redact_output=False,
+        output_redact_values=(token.decode(),),
+    )
+
+    assert output_path.read_bytes() == prefix + b"[REDACTED]\x00end"
+    assert token.decode() not in result.output
+    assert "access_token=visible" in result.output
+    assert result.full_output_captured
+
+
+def test_raw_token_redaction_streams_without_unbounded_line_buffer(tmp_path):
+    token = "sandbox-private-token"
+    client = FakeDockerClient(chunks=())
+    client.containers.by_id["judge"] = FakeDockerContainer("judge")
+    runtime = make_runtime(client, tmp_path, role="judge", exec_output_limit_bytes=32)
+    output_path = tmp_path / "engine-root" / "agent-1.log"
+
+    def stream():
+        for index in range(16):
+            yield b"x" * 65536
+            # Atomic capture remains unpublished, but already streams to disk.
+            temporary = list(output_path.parent.glob(".agent-1.log.*"))
+            assert len(temporary) == 1
+            assert temporary[0].stat().st_size >= (index + 1) * 65536 - 8192
+        yield token.encode()
+
+    client.api.exec_start = lambda *_args, **_kwargs: stream()
+    result = runtime.exec(
+        ContainerRef(container_id="judge", role="judge"),
+        ("/bin/bash", "/tests/test.sh"),
+        output_path=output_path,
+        redact_output=False,
+        output_redact_values=(token,),
+    )
+
+    assert output_path.read_bytes() == b"x" * (16 * 65536) + b"[REDACTED]"
+    assert token not in result.output
+    assert result.output_truncated
+
+
+def test_raw_token_redaction_preserves_a_nonmatching_final_prefix(tmp_path):
+    client = FakeDockerClient(chunks=(b"sandbox-private-to",))
+    client.containers.by_id["judge"] = FakeDockerContainer("judge")
+    runtime = make_runtime(client, tmp_path, role="judge")
+    output_path = tmp_path / "engine-root" / "agent-1.log"
+
+    result = runtime.exec(
+        ContainerRef(container_id="judge", role="judge"),
+        ("true",),
+        output_path=output_path,
+        redact_output=False,
+        output_redact_values=("sandbox-private-token",),
+    )
+
+    assert result.output == "sandbox-private-to"
+    assert output_path.read_bytes() == b"sandbox-private-to"
 
 
 @pytest.mark.parametrize("timeout_seconds", (None, 0.01))
@@ -1700,9 +1993,7 @@ def test_exec_raw_output_rejects_symlinked_parent_directory(tmp_path):
     assert not (redirected / "agent-1.log").exists()
 
 
-def test_exec_raw_output_open_failure_cleans_temporary_file(
-    tmp_path, monkeypatch
-):
+def test_exec_raw_output_open_failure_cleans_temporary_file(tmp_path, monkeypatch):
     client = FakeDockerClient(chunks=(b"verifier output",), exit_code=0)
     client.containers.by_id["judge"] = FakeDockerContainer("judge")
     runtime = make_runtime(client, tmp_path, role="judge")
@@ -1766,14 +2057,10 @@ def test_exec_timeout_forced_stream_close_never_publishes_raw_output(tmp_path):
         chunks=(b"daemon-buffered output",), chunk_delay_seconds=0.5
     )
     client.containers.by_id["judge"] = FakeDockerContainer("judge")
-    runtime = make_runtime(
-        client, tmp_path, role="judge", pause_timeout_seconds=0.02
-    )
+    runtime = make_runtime(client, tmp_path, role="judge", pause_timeout_seconds=0.02)
     output_path = tmp_path / "engine-root" / "agent-1.log"
 
-    with pytest.raises(
-        InfrastructureError, match="recovery_required.*natural EOF"
-    ):
+    with pytest.raises(InfrastructureError, match="recovery_required.*natural EOF"):
         runtime.exec(
             ContainerRef(container_id="judge", role="judge"),
             ("/bin/bash", "/tests/test.sh"),
@@ -1786,9 +2073,7 @@ def test_exec_timeout_forced_stream_close_never_publishes_raw_output(tmp_path):
     assert not tuple(output_path.parent.glob(".agent-1.log.*"))
 
 
-def test_exec_timeout_stop_failure_aborts_unpublished_output(
-    tmp_path, monkeypatch
-):
+def test_exec_timeout_stop_failure_aborts_unpublished_output(tmp_path, monkeypatch):
     client = FakeDockerClient(
         chunks=(b"late verifier output",), chunk_delay_seconds=0.5
     )
@@ -1812,19 +2097,13 @@ def test_exec_timeout_stop_failure_aborts_unpublished_output(
 
     assert not output_path.exists()
     assert not tuple(output_path.parent.glob(".agent-1.log.*"))
-    assert not any(
-        thread.name == "exec-exec-1" for thread in threading.enumerate()
-    )
+    assert not any(thread.name == "exec-exec-1" for thread in threading.enumerate())
 
 
-def test_exec_timeout_does_not_block_on_stuck_output_fsync(
-    tmp_path, monkeypatch
-):
+def test_exec_timeout_does_not_block_on_stuck_output_fsync(tmp_path, monkeypatch):
     client = FakeDockerClient(chunks=(b"verifier output",), exit_code=0)
     client.containers.by_id["judge"] = FakeDockerContainer("judge")
-    runtime = make_runtime(
-        client, tmp_path, role="judge", pause_timeout_seconds=0.02
-    )
+    runtime = make_runtime(client, tmp_path, role="judge", pause_timeout_seconds=0.02)
     output_path = tmp_path / "engine-root" / "agent-1.log"
     fsync_started = threading.Event()
     release_fsync = threading.Event()
@@ -1858,9 +2137,10 @@ def test_exec_timeout_does_not_block_on_stuck_output_fsync(
     release_fsync.set()
     caller.join(timeout=1)
     deadline = time.monotonic() + 1
-    while any(
-        thread.name == "exec-exec-1" for thread in threading.enumerate()
-    ) and time.monotonic() < deadline:
+    while (
+        any(thread.name == "exec-exec-1" for thread in threading.enumerate())
+        and time.monotonic() < deadline
+    ):
         time.sleep(0.01)
 
     assert bounded is True
@@ -1893,6 +2173,7 @@ def test_exec_returns_at_wall_clock_timeout_when_stream_blocks(tmp_path):
     assert time.monotonic() - started < 0.3
     assert result.exit_code is None
     assert result.timed_out is True
+    assert result.exec_started is True
     container = client.containers.by_id["work"]
     assert "stop" in container.events
     assert container.attrs["State"]["Running"] is False
@@ -2026,9 +2307,7 @@ def test_real_claude_hook_copy_installs_settings_in_real_container(tmp_path):
             logging.getLogger("real-hook-copy-test"),
         )
 
-        result = container.exec_run(
-            ["test", "-s", "/home/agent/.claude/settings.json"]
-        )
+        result = container.exec_run(["test", "-s", "/home/agent/.claude/settings.json"])
         assert result.exit_code == 0, result.output
     finally:
         runtime.stop(ref)
@@ -2366,9 +2645,7 @@ def configured_runtime_and_lease(tmp_path):
         ),
     ],
 )
-def test_forged_or_internally_inconsistent_lease_cannot_unlock_start(
-    tmp_path, forge
-):
+def test_forged_or_internally_inconsistent_lease_cannot_unlock_start(tmp_path, forge):
     client, runtime, ref, _, _, _, lease = configured_runtime_and_lease(tmp_path)
 
     with pytest.raises(SetupError, match="authoritative|match"):
@@ -2391,8 +2668,8 @@ def test_container_role_mismatch_cannot_register_an_otherwise_valid_lease(tmp_pa
 def test_start_rechecks_policy_is_still_installed_after_registration(
     tmp_path, remove_through_enforcer
 ):
-    client, runtime, ref, _, enforcer, firewall, lease = (
-        configured_runtime_and_lease(tmp_path)
+    client, runtime, ref, _, enforcer, firewall, lease = configured_runtime_and_lease(
+        tmp_path
     )
     runtime.install_network_policy(ref, lease)
     if remove_through_enforcer:

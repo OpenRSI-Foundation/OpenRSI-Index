@@ -45,19 +45,23 @@ def test_rsi_harness_distribution_owns_complete_rsi_loop_package() -> None:
     scripts = {
         entry.name: (entry.value, entry.dist.name)
         for entry in metadata.entry_points(group="console_scripts")
-        if entry.name in {"rsi-harness", "rsi-submit", "sforge", "rsi-loop"}
+        if entry.name
+        in {"rsi-harness", "rsi-sandbox", "rsi-submit", "sforge", "rsi-loop"}
     }
     assert scripts == {
         "rsi-harness": ("rsi_harness.cli:app", "rsi-harness"),
+        "rsi-sandbox": ("rsi_harness.integrations.sandbox_client:main", "rsi-harness"),
     }
 
     package = resources.files("rsi_loop")
     assert package.joinpath("LICENSE").is_file()
     assert package.joinpath("NOTICE").is_file()
-    assert package.joinpath(
-        "visualizer", "templates", "trajectory.html"
-    ).is_file()
+    assert package.joinpath("visualizer", "templates", "trajectory.html").is_file()
 
     for adapter in ("bluevela", "slurm"):
         cluster_package = resources.files(f"rsi_harness.cluster.{adapter}")
         assert cluster_package.joinpath("profile.toml").is_file()
+
+    integrations = resources.files("rsi_harness.integrations")
+    assert integrations.joinpath("sandbox_client.py").is_file()
+    assert integrations.joinpath("harbor_sandbox.py").is_file()

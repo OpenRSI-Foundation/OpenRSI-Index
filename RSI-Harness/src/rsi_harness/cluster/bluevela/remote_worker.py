@@ -53,9 +53,9 @@ def request_tmp_dir(
     *,
     pool_rank: int,
 ) -> Path:
-    run_hash = __import__("hashlib").sha256(
-        control.request.run_id.encode()
-    ).hexdigest()[:16]
+    run_hash = (
+        __import__("hashlib").sha256(control.request.run_id.encode()).hexdigest()[:16]
+    )
     return (
         control.worker.temp_root
         / "rsi-harness"
@@ -92,9 +92,7 @@ def _task_torchrun_argv(argv: tuple[str, ...]) -> tuple[str, ...]:
         result.append(item)
         if not separator and name in _TORCHRUN_VALUE_FLAGS:
             if offset + 1 >= len(argv):
-                raise InfrastructureError(
-                    f"frozen torchrun option {name} has no value"
-                )
+                raise InfrastructureError(f"frozen torchrun option {name} has no value")
             result.append(argv[offset + 1])
             offset += 2
             continue
@@ -128,10 +126,9 @@ def _rank_authority(
     if len(control.rank_environment) != len(control.lease.nodes):
         raise InfrastructureError("remote worker rank environments are incomplete")
     environment = control.rank_environment[node_rank]
-    if (
-        environment.get("RSI_NODE_RANK") != str(node_rank)
-        or environment.get("RSI_POOL_RANK") != str(pool_rank)
-    ):
+    if environment.get("RSI_NODE_RANK") != str(node_rank) or environment.get(
+        "RSI_POOL_RANK"
+    ) != str(pool_rank):
         raise InfrastructureError("remote worker rank environment differs")
     return node, environment
 
@@ -183,9 +180,7 @@ def build_apptainer_command(
     )
     for binding in control.worker.binds:
         suffix = ":ro" if binding.read_only else ""
-        command.extend(
-            ("--bind", f"{binding.source}:{binding.target}{suffix}")
-        )
+        command.extend(("--bind", f"{binding.source}:{binding.target}{suffix}"))
     command.extend(("--bind", f"{expected_tmp}:/tmp"))
     command.extend(
         (
@@ -242,9 +237,7 @@ def _pid_start_time(pid: int) -> str:
 
 def _atomic_pid(path: Path, *, pid: int, start_time: str) -> None:
     temporary = path.with_name(f".{path.name}.tmp.{os.getpid()}")
-    descriptor = os.open(
-        temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-    )
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         with os.fdopen(descriptor, "w") as stream:
             json.dump({"pid": pid, "start_time": start_time}, stream)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import subprocess
 import threading
 import time
@@ -15,7 +16,9 @@ from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.models import ContainerRef, ManagedNetwork, NetworkPolicy
 from rsi_harness.runtime.network import (
     DockerIptablesFirewallBackend,
+    FirewallRuleNotFound,
     NetworkPolicyEnforcer,
+    NetworkRuleSet,
     managed_bridge_interface,
 )
 from tests.fakes import FakeDockerClient, FakeDockerContainer, FakeFirewallBackend
@@ -285,6 +288,7 @@ def test_policy_identity_can_be_planned_before_firewall_mutation():
     assert installed == planned
     assert ("install", planned.rule_id) in firewall.events
 
+
 class RecordingFirewallRunner:
     def __init__(self) -> None:
         self.commands: list[tuple[str, ...]] = []
@@ -412,10 +416,7 @@ class InMemoryIptablesRunner:
         if operation == "-S":
             if chain not in self.chains:
                 return subprocess.CompletedProcess(command, 1, "", "missing")
-            if (
-                self.fail_managed_chain_query
-                and chain not in {"DOCKER-USER", "INPUT"}
-            ):
+            if self.fail_managed_chain_query and chain not in {"DOCKER-USER", "INPUT"}:
                 return subprocess.CompletedProcess(command, 4, "", "inspection denied")
             lines = [] if chain in {"DOCKER-USER", "INPUT"} else [f"-N {chain}"]
             lines.extend(
@@ -440,8 +441,12 @@ class InMemoryIptablesRunner:
             if self.fail_forward_jump_delete and chain == "DOCKER-USER":
                 return subprocess.CompletedProcess(command, 4, "", "denied")
             try:
-                self.chains[chain].remove(command[4:])
-            except (KeyError, ValueError):
+                if len(command) == 5 and command[4].isdigit():
+                    # By position, as iptables numbers rules from 1.
+                    del self.chains[chain][int(command[4]) - 1]
+                else:
+                    self.chains[chain].remove(command[4:])
+            except (KeyError, ValueError, IndexError):
                 return subprocess.CompletedProcess(command, 1, "", "missing")
         elif operation == "-F":
             if chain not in self.chains:
@@ -450,7 +455,12 @@ class InMemoryIptablesRunner:
         elif operation == "-X":
             if self.fail_chain_delete:
                 return subprocess.CompletedProcess(command, 4, "", "delete denied")
-            if chain not in self.chains or self.chains[chain]:
+            referenced = any(
+                rule[-2:] == ["-j", chain]
+                for rules in self.chains.values()
+                for rule in rules
+            )
+            if chain not in self.chains or self.chains[chain] or referenced:
                 return subprocess.CompletedProcess(command, 1, "", "busy")
             del self.chains[chain]
         return subprocess.CompletedProcess(command, 0, "", "")
@@ -504,8 +514,7 @@ def test_firewall_attestation_compares_both_exact_ordered_chains_and_jumps():
     backend, enforcer, lease, runner = exact_firewall_harness()
     enforcer.attest(lease)
     pristine = {
-        name: [list(rule) for rule in rules]
-        for name, rules in runner.chains.items()
+        name: [list(rule) for rule in rules] for name, rules in runner.chains.items()
     }
     forward_chain = next(
         rule[-1]
@@ -513,9 +522,7 @@ def test_firewall_attestation_compares_both_exact_ordered_chains_and_jumps():
         if f"{lease.rule_id}:forward" in rule
     )
     input_chain = next(
-        rule[-1]
-        for rule in runner.chains["INPUT"]
-        if f"{lease.rule_id}:input" in rule
+        rule[-1] for rule in runner.chains["INPUT"] if f"{lease.rule_id}:input" in rule
     )
 
     mutations = (
@@ -566,8 +573,7 @@ def test_firewall_attestation_accepts_canonical_siblings_and_scoped_cleanup():
         enforcer.attest(lease)
     for host_chain in ("DOCKER-USER", "INPUT"):
         comments = [
-            rule[rule.index("--comment") + 1]
-            for rule in runner.chains[host_chain]
+            rule[rule.index("--comment") + 1] for rule in runner.chains[host_chain]
         ]
         assert len(comments) == 2
         assert all(leases[1].rule_id not in comment for comment in comments)
@@ -718,9 +724,7 @@ def test_partial_install_rollback_failure_is_recovery_required_and_discoverable(
 def test_partial_policy_state_remains_discoverable_and_remove_cleans_everything():
     backend, _enforcer, lease, runner = exact_firewall_harness()
     input_chain = next(
-        rule[-1]
-        for rule in runner.chains["INPUT"]
-        if f"{lease.rule_id}:input" in rule
+        rule[-1] for rule in runner.chains["INPUT"] if f"{lease.rule_id}:input" in rule
     )
     runner.chains["INPUT"].clear()
     runner.chains[input_chain].clear()
@@ -742,6 +746,16 @@ def test_exists_never_treats_managed_chain_query_failure_as_absence():
 
     with pytest.raises(SetupError, match="inspect.*firewall"):
         backend.exists(lease.rule_id)
+
+
+def test_a_rule_id_inside_another_rules_names_owns_nothing_of_it():
+    # Listings are filtered by substring before parsing; ownership stays exact.
+    backend, _enforcer, lease, runner = exact_firewall_harness()
+    assert backend.exists(lease.rule_id) is True
+    assert backend.exists(lease.rule_id[:-1]) is False
+    with pytest.raises(FirewallRuleNotFound):
+        backend.remove(lease.rule_id[:-1])
+    assert backend.exists(lease.rule_id) is True
 
 
 @pytest.mark.parametrize("failure_kind", ("chain-delete", "final-inspection"))
@@ -840,6 +854,151 @@ def test_firewall_install_errors_are_setup_errors_and_absent_cleanup_is_success(
         )
 
 
+ENV_BRIDGE = "rsi-sbnet-1111111111111111"
+ENV_RULE_ID = "rsi-run-1-sbx-1111111111111111"
+
+
+def env_bridge_rules(*, mode="public", accept=True):
+    return NetworkRuleSet(
+        container_id="e" + "1" * 32,
+        network_id=ENV_BRIDGE,
+        network_name=ENV_BRIDGE,
+        bridge_interface=managed_bridge_interface(ENV_BRIDGE),
+        role="sandbox-env-net",
+        mode=mode,
+        exact_endpoints=(),
+        allow_networks=(),
+        engine_destinations=(ipaddress.ip_address("172.30.0.1"),),
+        dns_resolvers=(),
+        intra_bridge_accept=accept,
+    )
+
+
+def reject(destination):
+    return ["-d", destination, "-j", "REJECT", "--reject-with", "icmp-port-unreachable"]
+
+
+def policy_chain(runner, rule_id, kind):
+    host_chain = "DOCKER-USER" if kind == "forward" else "INPUT"
+    return next(
+        rule[-1] for rule in runner.chains[host_chain] if f"{rule_id}:{kind}" in rule
+    )
+
+
+@pytest.mark.parametrize("mode", ("public", "no-network"))
+def test_intra_bridge_accept_follows_common_accepts_and_precedes_every_reject(mode):
+    commands = []
+    state = InMemoryIptablesRunner()
+
+    def runner(command):
+        commands.append(command)
+        return state(command)
+
+    backend = DockerIptablesFirewallBackend(FakeDockerClient(), runner=runner)
+    rules = env_bridge_rules(mode=mode)
+
+    backend.install(ENV_RULE_ID, rules)
+
+    forward = policy_chain(state, ENV_RULE_ID, "forward")
+    appended = [command[4:] for command in commands if command[2:4] == ["-A", forward]]
+    accept = ["-o", rules.bridge_interface, "-j", "ACCEPT"]
+    assert appended == state.chains[forward]
+    assert appended[0][:4] == ["-m", "conntrack", "--ctstate", "RELATED,ESTABLISHED"]
+    assert appended[1] == accept
+    assert appended.index(accept) < appended.index(reject("172.30.0.1/32"))
+    assert appended.index(accept) < appended.index(reject("172.16.0.0/12"))
+    assert appended.count(accept) == 1
+    assert appended[-1][:2] == ["-j", "ACCEPT" if mode == "public" else "REJECT"]
+    input_chain = policy_chain(state, ENV_RULE_ID, "input")
+    assert all("-o" not in rule for rule in state.chains[input_chain])
+    assert backend.is_installed(ENV_RULE_ID, rules) is True
+
+
+def test_intra_bridge_accept_only_adds_one_rule_to_the_plain_rule_set():
+    accepted = InMemoryIptablesRunner()
+    plain = InMemoryIptablesRunner()
+    rules = env_bridge_rules()
+    DockerIptablesFirewallBackend(FakeDockerClient(), runner=accepted).install(
+        ENV_RULE_ID, rules
+    )
+    DockerIptablesFirewallBackend(FakeDockerClient(), runner=plain).install(
+        ENV_RULE_ID, replace(rules, intra_bridge_accept=False)
+    )
+
+    forward = policy_chain(accepted, ENV_RULE_ID, "forward")
+    expected = list(plain.chains[forward])
+    expected.insert(1, ["-o", rules.bridge_interface, "-j", "ACCEPT"])
+    assert accepted.chains[forward] == expected
+    input_chain = policy_chain(accepted, ENV_RULE_ID, "input")
+    assert accepted.chains[input_chain] == plain.chains[input_chain]
+    assert accepted.chains["DOCKER-USER"] == plain.chains["DOCKER-USER"]
+    assert accepted.chains["INPUT"] == plain.chains["INPUT"]
+
+
+def test_attestation_compares_the_intra_bridge_accept_exactly():
+    runner = InMemoryIptablesRunner(canonicalize_rules=True)
+    backend = DockerIptablesFirewallBackend(FakeDockerClient(), runner=runner)
+    accepted = env_bridge_rules()
+    plain = replace(accepted, intra_bridge_accept=False)
+    backend.install(ENV_RULE_ID, accepted)
+    forward = policy_chain(runner, ENV_RULE_ID, "forward")
+    pristine = [list(rule) for rule in runner.chains[forward]]
+    accept = ["-o", accepted.bridge_interface, "-j", "ACCEPT"]
+
+    assert backend.is_installed(ENV_RULE_ID, accepted) is True
+    assert backend.is_installed(ENV_RULE_ID, plain) is False
+    mutations = (
+        lambda chain: chain.remove(accept),
+        lambda chain: chain.insert(chain.index(accept), list(accept)),
+        lambda chain: chain.append(chain.pop(chain.index(accept))),
+        lambda chain: chain[chain.index(accept)].__setitem__(1, "rsi0123456789ab"),
+    )
+    for mutate in mutations:
+        runner.chains[forward] = [list(rule) for rule in pristine]
+        mutate(runner.chains[forward])
+        assert backend.is_installed(ENV_RULE_ID, accepted) is False
+
+    backend.remove(ENV_RULE_ID)
+    backend.install(ENV_RULE_ID, plain)
+    assert backend.is_installed(ENV_RULE_ID, plain) is True
+    assert backend.is_installed(ENV_RULE_ID, accepted) is False
+
+
+@pytest.mark.parametrize(
+    ("role", "mode", "rule_id"),
+    (
+        ("work", "public", "rsi-run-1-work-dd3010086d83"),
+        ("work", "no-network", "rsi-run-1-work-673fe5a33e71"),
+        ("judge", "public", "rsi-run-1-judge-8b3271bb0b62"),
+        ("judge", "no-network", "rsi-run-1-judge-44489ccb1b72"),
+    ),
+)
+def test_parent_phase_policies_never_compile_an_intra_bridge_accept(
+    role, mode, rule_id
+):
+    runner = InMemoryIptablesRunner()
+    enforcer = NetworkPolicyEnforcer(
+        run_id="run-1",
+        firewall=DockerIptablesFirewallBackend(FakeDockerClient(), runner=runner),
+        resolver=StaticResolver({"model.test": ("8.8.8.8",)}),
+        engine_destinations=("172.30.0.1",),
+        dns_resolvers=("127.0.0.11",),
+    )
+
+    lease = enforcer.apply(
+        ContainerRef(container_id=role, role=role),
+        NetworkPolicy(mode=mode),
+        network=managed(f"{role}-{mode}", role),
+        api_endpoints=("https://model.test/v1",),
+    )
+
+    assert lease.rules.intra_bridge_accept is False
+    assert not any("-o" in rule for rules in runner.chains.values() for rule in rules)
+    # Pinned: the env-only flag stays out of the parent rule ID fingerprint.
+    assert "intra_bridge_accept" not in repr(lease.rules)
+    assert lease.rule_id == rule_id
+
+
 @pytest.mark.integration
 def test_real_firewall_allows_exact_endpoint_and_blocks_unrelated_container():
     try:
@@ -901,9 +1060,7 @@ def test_real_firewall_allows_exact_endpoint_and_blocks_unrelated_container():
         ]
         for peer in containers[:2]:
             for _attempt in range(50):
-                readiness = peer.exec_run(
-                    ["nc", "-z", "-w", "1", "127.0.0.1", "8080"]
-                )
+                readiness = peer.exec_run(["nc", "-z", "-w", "1", "127.0.0.1", "8080"])
                 if readiness.exit_code == 0:
                     break
                 time.sleep(0.1)
@@ -927,10 +1084,7 @@ def test_real_firewall_allows_exact_endpoint_and_blocks_unrelated_container():
         )
         work.start()
         assert work.exec_run(["nc", "-z", "-w", "1", allowed_ip, "8080"])[0] == 0
-        assert (
-            work.exec_run(["nc", "-z", "-w", "1", blocked_ip, "8080"])[0]
-            != 0
-        )
+        assert work.exec_run(["nc", "-z", "-w", "1", blocked_ip, "8080"])[0] != 0
     finally:
         if lease is not None:
             try:
@@ -981,9 +1135,7 @@ def test_real_internal_bridge_reaches_host_before_policy_then_input_blocks_it():
         driver="bridge",
         internal=True,
         labels=labels,
-        options={
-            "com.docker.network.bridge.name": managed_bridge_interface(name)
-        },
+        options={"com.docker.network.bridge.name": managed_bridge_interface(name)},
     )
     container = None
     lease = None

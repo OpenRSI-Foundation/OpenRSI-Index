@@ -158,9 +158,7 @@ def rsi_loop_agent_environment(
 class _ControlBinding:
     __slots__ = ("container", "submit_url", "token")
 
-    def __init__(
-        self, *, container: ContainerRef, submit_url: str, token: str
-    ) -> None:
+    def __init__(self, *, container: ContainerRef, submit_url: str, token: str) -> None:
         self.container = container
         self.submit_url = submit_url
         self.token = token
@@ -184,6 +182,7 @@ class AgentRuntime(Protocol):
         output_path: Path | None = None,
         output_redact_values: tuple[str, ...] = (),
         output_callback: Callable[[str], None] | None = None,
+        on_exec_start: Callable[[float], None] | None = None,
     ) -> AgentRunResult: ...
 
 
@@ -265,9 +264,7 @@ class RSILoopAgentAdapter:
     def prepare(self, request: AgentPrepareRequest) -> PreparedAgent:
         plan = request.run_plan
         agent_plan = plan.task.agent
-        validate_agent_reasoning_effort(
-            agent_plan.name, agent_plan.reasoning_effort
-        )
+        validate_agent_reasoning_effort(agent_plan.name, agent_plan.reasoning_effort)
         agent = create_agent(agent_plan.name, self._config)
         model = agent_plan.model or self._config.agent_model or agent.default_model
         prompt = self._prompt(
@@ -360,6 +357,8 @@ class RSILoopAgentAdapter:
                 )
             if request.output_callback is not None:
                 exec_options["output_callback"] = request.output_callback
+            if request.on_exec_start is not None:
+                exec_options["on_exec_start"] = request.on_exec_start
             result = runtime.exec(
                 request.container,
                 request.prepared.command,
@@ -379,12 +378,8 @@ class RSILoopAgentAdapter:
             secret_values = set(rsi_loop_runtime_secret_values(self._config))
             if control is not None:
                 secret_values.update((control.submit_url, control.token))
-            safe_error = redact_text(
-                redact_exact_values(str(error), secret_values)
-            )
-            raise InfrastructureError(
-                safe_error or type(error).__name__
-            ) from error
+            safe_error = redact_text(redact_exact_values(str(error), secret_values))
+            raise InfrastructureError(safe_error or type(error).__name__) from error
         finally:
             self.clear_transient_bindings()
 

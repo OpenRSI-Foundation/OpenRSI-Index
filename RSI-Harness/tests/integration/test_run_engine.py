@@ -209,9 +209,7 @@ def test_production_installs_hooks_before_securing_generic_agent_auth(
         ("chatgpt.com", "203.0.113.81"),
         ("auth.openai.com", "203.0.113.82"),
     )
-    composition.install_hooks(
-        plan, work, "http://172.30.0.1:9020", "control-token"
-    )
+    composition.install_hooks(plan, work, "http://172.30.0.1:9020", "control-token")
 
     assert events == ["hooks", "auth"]
     assert secret in composition.agent_output_secrets
@@ -255,9 +253,7 @@ def test_production_services_resolve_explicit_agent_auth_before_composition(
         bridge_gateway="127.0.0.1",
     )
     services.run(
-        RunRequest(
-            task_dir=FIXTURE.resolve(), agent_auth=AgentAuthSource.LOCAL
-        )
+        RunRequest(task_dir=FIXTURE.resolve(), agent_auth=AgentAuthSource.LOCAL)
     )
 
     assert len(calls) == 1
@@ -602,9 +598,7 @@ def test_provider_dns_is_pinned_before_docker_or_data_root_mutation(
     )
 
     with pytest.raises(SetupError, match="cannot resolve.*unresolvable-provider"):
-        services.run(
-            RunRequest(task_dir=_no_network_task(tmp_path).resolve())
-        )
+        services.run(RunRequest(task_dir=_no_network_task(tmp_path).resolve()))
 
     assert not data.exists()
 
@@ -665,9 +659,7 @@ def test_invalid_provider_endpoint_error_excludes_credentials_before_mutation(
     )
 
     with pytest.raises(SetupError) as caught:
-        services.run(
-            RunRequest(task_dir=_no_network_task(tmp_path).resolve())
-        )
+        services.run(RunRequest(task_dir=_no_network_task(tmp_path).resolve()))
 
     assert "opaque-password" not in str(caught.value)
     assert not data.exists()
@@ -763,9 +755,7 @@ def test_effective_claude_extra_env_base_satisfies_no_network_preflight(
         docker_client=object(),
         inventory=_OneDeviceInventory(),
         rsi_loop_config=RSILoopConfig(
-            agent_extra_env={
-                "ANTHROPIC_BASE_URL": "https://203.0.113.31:9443"
-            }
+            agent_extra_env={"ANTHROPIC_BASE_URL": "https://203.0.113.31:9443"}
         ),
         coordinator_factory=Coordinator,
         bridge_gateway="127.0.0.1",
@@ -778,9 +768,7 @@ def test_effective_claude_extra_env_base_satisfies_no_network_preflight(
         )
     )
 
-    assert [(item.hostname, item.port) for item in captured] == [
-        ("203.0.113.31", 9443)
-    ]
+    assert [(item.hostname, item.port) for item in captured] == [("203.0.113.31", 9443)]
 
 
 @pytest.mark.parametrize(
@@ -909,9 +897,7 @@ def test_allowlist_cidr_union_covers_all_pinned_provider_addresses(
         logs_root=tmp_path / "logs",
         docker_client=object(),
         inventory=_OneDeviceInventory(),
-        rsi_loop_config=RSILoopConfig(
-            agent_api_base_url="https://provider.example/v1"
-        ),
+        rsi_loop_config=RSILoopConfig(agent_api_base_url="https://provider.example/v1"),
         coordinator_factory=Coordinator,
         bridge_gateway="127.0.0.1",
     )
@@ -936,17 +922,13 @@ def test_allowlist_rejects_implicit_provider_endpoint_before_runtime_mutation(
         logs_root=tmp_path / "logs",
         docker_client=object(),
         inventory=_OneDeviceInventory(),
-        rsi_loop_config=RSILoopConfig(
-            agent_api_base_url="https://203.0.113.41/v1"
-        ),
+        rsi_loop_config=RSILoopConfig(agent_api_base_url="https://203.0.113.41/v1"),
         bridge_gateway="127.0.0.1",
     )
 
     with pytest.raises(SetupError, match="allowlist.*203.0.113.41"):
         services.run(
-            RunRequest(
-                task_dir=_allowlist_task(tmp_path, "packages.example").resolve()
-            )
+            RunRequest(task_dir=_allowlist_task(tmp_path, "packages.example").resolve())
         )
 
     assert not data.exists()
@@ -1026,9 +1008,7 @@ def test_requested_model_selects_provider_endpoint_before_runtime_mutation(
         )
     )
 
-    assert [(item.hostname, item.port) for item in captured] == [
-        ("203.0.113.81", 9443)
-    ]
+    assert [(item.hostname, item.port) for item in captured] == [("203.0.113.81", 9443)]
 
 
 class _DockerObjectCollection:
@@ -1134,14 +1114,10 @@ def _production_recovery_client(*, removable_work=True):
         collection=containers,
         removable=removable_work,
     )
-    judge = _DockerContainer(
-        "judge-real", labels("judge"), collection=containers
-    )
+    judge = _DockerContainer("judge-real", labels("judge"), collection=containers)
     containers.objects = {work.id: work, judge.id: judge}
     networks = _DockerObjectCollection()
-    work_network = _DockerNetwork(
-        "network-work", labels("work"), collection=networks
-    )
+    work_network = _DockerNetwork("network-work", labels("work"), collection=networks)
     judge_network = _DockerNetwork(
         "network-judge", labels("judge"), collection=networks
     )
@@ -1329,9 +1305,7 @@ def test_production_agent_artifacts_exclude_runtime_control_values(
         "prefix [REDACTED]::[REDACTED] full trajectory suffix"
     )
     assert (artifact_root / "run_agent.log").read_text() == expected
-    assert runtime.exec_kwargs["output_path"] == (
-        artifact_root / "agent_output.txt"
-    )
+    assert runtime.exec_kwargs["output_path"] == (artifact_root / "agent_output.txt")
     assert submit_url in runtime.exec_kwargs["output_redact_values"]
     assert token in runtime.exec_kwargs["output_redact_values"]
     assert callable(runtime.exec_kwargs["output_callback"])
@@ -1795,9 +1769,7 @@ def test_real_work_snapshot_and_judge_configs_exclude_exec_only_task_secret(
     plan = make_run_plan(tmp_path / "plan")
     plan = plan.model_copy(
         update={
-            "images": plan.images.model_copy(
-                update={"work_ref": "ubuntu:24.04"}
-            ),
+            "images": plan.images.model_copy(update={"work_ref": "ubuntu:24.04"}),
             "task": plan.task.model_copy(
                 update={
                     "source_dir": FIXTURE.resolve(),
@@ -1954,8 +1926,7 @@ def test_production_clears_transient_agent_secrets_when_agent_run_raises(
     class FailingAgent:
         def run(self, _request):
             raise RuntimeError(
-                "agent process failed with transient-provider-secret and "
-                f"{task_secret}"
+                f"agent process failed with transient-provider-secret and {task_secret}"
             )
 
     artifact_root = tmp_path / "failure-artifacts"
@@ -2083,9 +2054,7 @@ def test_production_agent_boundaries_redact_complete_runtime_secret_set(
         inventory=_OneDeviceInventory(),
         rsi_loop_config=RSILoopConfig(
             agent_api_key=provider_secret,
-            https_proxy=(
-                f"http://proxy-user:{proxy_secret}@203.0.113.91:8080"
-            ),
+            https_proxy=(f"http://proxy-user:{proxy_secret}@203.0.113.91:8080"),
             agent_extra_env={
                 "CUSTOM_RUNTIME_VALUE": custom_secret,
                 "DISABLE_AUTOUPDATER": "1",
@@ -2110,9 +2079,7 @@ def test_production_agent_boundaries_redact_complete_runtime_secret_set(
                 update={
                     "agent": plan.task.agent.model_copy(
                         update={
-                            "environment": (
-                                ("TASK_TOKEN", "${TASK_RUNTIME_SECRET}"),
-                            ),
+                            "environment": (("TASK_TOKEN", "${TASK_RUNTIME_SECRET}"),),
                             "secret_env_names": ("TASK_RUNTIME_SECRET",),
                         }
                     )
@@ -2189,12 +2156,8 @@ def test_production_agent_boundaries_redact_complete_runtime_secret_set(
     )
 
     with pytest.raises(InfrastructureError, match="boundary failed") as caught:
-        work = composition.create_work(
-            plan, "run-1", network, "planned-work", volume
-        )
-        composition.install_hooks(
-            plan, work, "http://172.30.0.1:9020", control_secret
-        )
+        work = composition.create_work(plan, "run-1", network, "planned-work", volume)
+        composition.install_hooks(plan, work, "http://172.30.0.1:9020", control_secret)
         prepared = composition.prepare_agent(plan)
         if failure_stage == "run_agent":
             composition.run_agent(prepared, work, None)
@@ -2462,9 +2425,7 @@ def test_production_service_rejects_unknown_gpu_before_runtime_mutation(
     )
 
     with pytest.raises(SetupError, match="unknown GPU selector"):
-        services.run(
-            RunRequest(task_dir=FIXTURE.resolve(), gpu_selectors=("9",))
-        )
+        services.run(RunRequest(task_dir=FIXTURE.resolve(), gpu_selectors=("9",)))
 
     assert not data.exists()
 
@@ -2475,10 +2436,7 @@ def _gpu_pool_task(tmp_path: Path, *, judge_gpus: int = 0) -> Path:
     config = task / "task.toml"
     metadata = ""
     if judge_gpus:
-        metadata = (
-            "\n[metadata.rsi_harness.verifier]\n"
-            f"gpus = {judge_gpus}\n"
-        )
+        metadata = f"\n[metadata.rsi_harness.verifier]\ngpus = {judge_gpus}\n"
     config.write_text(config.read_text().replace("gpus = 1", "gpus = 2") + metadata)
     return task
 
@@ -2504,9 +2462,7 @@ def test_gpu_pool_prevalidation_accepts_extra_selectors_and_plans_work_slice(
 
         def run(self, request: RunRequest) -> RunResult:
             definition = self.backend.compile(request)
-            captured.append(
-                self.backend.allocate(definition, request.gpu_selectors)
-            )
+            captured.append(self.backend.allocate(definition, request.gpu_selectors))
             return RunResult(run_id="gpu-pool", status=RunStatus.COMPLETED)
 
     services = ProductionRuntimeServices(
@@ -2724,9 +2680,7 @@ def test_production_recovery_normalizes_docker_labels_and_finds_all_resources(
         "rsi-harness.source-container-id": "work-real",
         "rsi-harness.role": "retained-work-rootfs",
     }
-    client.images.objects[image_id] = _DockerImage(
-        image_id, image_labels, image_ref
-    )
+    client.images.objects[image_id] = _DockerImage(image_id, image_labels, image_ref)
     images = backend.list_images(labels=image_labels)
     inspected_image = backend.inspect_image(image_id)
 
@@ -2825,9 +2779,7 @@ def test_mountinfo_workspace_reference_detects_overlay_lowerdir_not_mount_target
 
     assert _mountinfo_references_workspace(mountinfo, workspace) is True
     assert (
-        _mountinfo_references_workspace(
-            mountinfo, tmp_path / "different" / "workspace"
-        )
+        _mountinfo_references_workspace(mountinfo, tmp_path / "different" / "workspace")
         is False
     )
     with pytest.raises(SetupError, match="malformed mountinfo"):
@@ -3051,28 +3003,28 @@ def test_real_docker_recovery_owns_round_and_retained_rootfs_images(
             store=store, backend=backend, managed_root=tmp_path / "managed"
         )
         with pytest.raises(RuntimeError, match="referenced"):
-            referenced_manager.cleanup(
-                run_ids["referenced"], delete_workspace=True
-            )
+            referenced_manager.cleanup(run_ids["referenced"], delete_workspace=True)
         assert client.images.get(referenced_image.image_id).id == (
             referenced_image.image_id
         )
         dependent.remove(force=True)
         disposable_containers.discard(dependent.id)
-        referenced_manager.cleanup(
-            run_ids["referenced"], delete_workspace=True
-        )
+        referenced_manager.cleanup(run_ids["referenced"], delete_workspace=True)
         with pytest.raises(ImageNotFound):
             client.images.get(referenced_image.image_id)
 
         for run_id in run_ids.values():
-            assert client.images.list(
-                filters={"label": f"rsi-harness.run-id={run_id}"}
-            ) == []
-            assert client.containers.list(
-                all=True,
-                filters={"label": f"rsi-harness.run-id={run_id}"},
-            ) == []
+            assert (
+                client.images.list(filters={"label": f"rsi-harness.run-id={run_id}"})
+                == []
+            )
+            assert (
+                client.containers.list(
+                    all=True,
+                    filters={"label": f"rsi-harness.run-id={run_id}"},
+                )
+                == []
+            )
     finally:
         for container_id in tuple(disposable_containers):
             try:
@@ -3205,21 +3157,14 @@ def test_real_docker_split_workdir_fake_agent_submits_two_fresh_judges(
     assert result.best_round == "agent-2"
     assert result.best_score == 1
     agent_output = (
-        tmp_path
-        / "logs"
-        / "runs"
-        / result.run_id
-        / "minimal-gpu"
-        / "agent_output.txt"
+        tmp_path / "logs" / "runs" / result.run_id / "minimal-gpu" / "agent_output.txt"
     ).read_text()
-    assert "reward: {\"answer_length\": 5.0, \"reward\": 0.0}" in agent_output
+    assert 'reward: {"answer_length": 5.0, "reward": 0.0}' in agent_output
     assert "expected the two-character answer 42" in agent_output
-    assert "reward: {\"answer_length\": 2.0, \"reward\": 1.0}" in agent_output
+    assert 'reward: {"answer_length": 2.0, "reward": 1.0}' in agent_output
     assert "scripted fake Agent fixed after feedback" in agent_output
     run_created = [
-        entry
-        for entry in created_containers
-        if entry["run_id"] == result.run_id
+        entry for entry in created_containers if entry["run_id"] == result.run_id
     ]
     work_entries = [entry for entry in run_created if entry["role"] == "work"]
     judge_entries = [entry for entry in run_created if entry["role"] == "judge"]
@@ -3238,9 +3183,7 @@ def test_real_docker_split_workdir_fake_agent_submits_two_fresh_judges(
     )
     for entry in (*work_entries, *judge_entries):
         workdir_mounts = [
-            mount
-            for mount in entry["mounts"]
-            if mount[2] == str(workdir_volume.target)
+            mount for mount in entry["mounts"] if mount[2] == str(workdir_volume.target)
         ]
         assert workdir_mounts == [
             (
@@ -3252,9 +3195,7 @@ def test_real_docker_split_workdir_fake_agent_submits_two_fresh_judges(
         ]
     work_container_id = work_entries[0]["container_id"]
     judge_image_ids = []
-    for round_id, entry in zip(
-        ("agent-1", "agent-2"), judge_entries, strict=True
-    ):
+    for round_id, entry in zip(("agent-1", "agent-2"), judge_entries, strict=True):
         labels = entry["image_labels"]
         assert labels["rsi-harness.run-id"] == result.run_id
         assert labels["rsi-harness.task-id"] == "minimal-gpu"
@@ -3279,11 +3220,86 @@ def test_real_docker_split_workdir_fake_agent_submits_two_fresh_judges(
     labels = {"label": f"rsi-harness.run-id={result.run_id}"}
     assert client.containers.list(all=True, filters=labels) == []
     assert client.networks.list(filters=labels) == []
-    assert client.images.list(
-        filters={
-            "label": [
-                f"rsi-harness.run-id={result.run_id}",
-                "rsi-harness.role=rootfs-snapshot",
-            ]
-        }
-    ) == []
+    assert (
+        client.images.list(
+            filters={
+                "label": [
+                    f"rsi-harness.run-id={result.run_id}",
+                    "rsi-harness.role=rootfs-snapshot",
+                ]
+            }
+        )
+        == []
+    )
+
+
+@pytest.mark.integration
+def test_real_work_left_paused_by_ended_round_is_stopped_and_removed(
+    tmp_path: Path,
+) -> None:
+    """A round that outlived Work leaves it paused for run-end cleanup."""
+    from rsi_harness.runtime.production import _ProductionRunComposition
+
+    try:
+        client = docker.from_env()
+        client.ping()
+        client.images.get("busybox:1.37.0")
+    except Exception as error:
+        pytest.skip(f"local cached busybox Docker authority unavailable: {error}")
+
+    engine_root = tmp_path / "engine"
+    engine_root.mkdir()
+    work_runtime = DockerContainerRuntime(
+        client,
+        run_id=f"paused-work-{uuid4().hex}",
+        task_id="paused-work",
+        role="work",
+        task_source_dir=engine_root,
+        allowed_mount_roots=(engine_root,),
+    )
+    composition = _ProductionRunComposition(
+        client=client,
+        data_root=tmp_path / "data",
+        logs_root=tmp_path / "logs",
+        inventory=object(),
+        rsi_loop_config=RSILoopConfig(),
+        snapshot=object(),
+        firewall=object(),
+        bind_host="127.0.0.1",
+        bridge_gateway="127.0.0.1",
+        omit_gpu_device_requests_for_tests=True,
+        agent_adapter_factory=lambda _config, _runtime: object(),
+        quiescence_checker=None,
+        api_endpoints=(),
+        agent_secret_env={},
+        verifier_secret_env={},
+    )
+    composition.work_runtime = work_runtime
+    labels = work_runtime.recovery_labels
+    owned = {"label": [f"{key}={value}" for key, value in labels.items()]}
+    container = client.containers.create(
+        "busybox:1.37.0",
+        ["sh", "-c", 'trap "exit 0" TERM; while :; do sleep 1 & wait $!; done'],
+        network_mode="none",
+        labels=labels,
+        detach=True,
+    )
+    work = ContainerRef(container_id=container.id, role="work")
+    try:
+        container.start()
+        work_runtime.pause(work)
+        assert work_runtime.inspect_quiescence(work) is WorkQuiescence.PAUSED
+
+        # The coordinator's end-of-run order for a still-paused Work.
+        composition.stop_agent(work)
+        assert work_runtime.is_stopped_or_gone(work)
+        assert composition.quiesce_work(work) is WorkQuiescence.STOPPED
+        composition.remove_work(work)
+        assert client.containers.list(all=True, filters=owned) == []
+    finally:
+        for leftover in client.containers.list(all=True, filters=owned):
+            leftover.reload()
+            if leftover.attrs["State"].get("Paused"):
+                leftover.unpause()
+            leftover.remove(force=True, v=True)
+        client.close()

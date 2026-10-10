@@ -1,0 +1,83 @@
+name: Harness publication checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - RSI-Harness/**
+      - .github/workflows/harness-publication-checks.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-publication-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publication-compatibility:
+    name: Harness publication compatibility
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Archive Harness exactly as the task publisher does
+        id: archive
+        run: |
+          set -euo pipefail
+          archive_root=$(mktemp -d "$RUNNER_TEMP/rsi-publication-check.XXXXXX")
+          git archive HEAD RSI-Harness | tar -x -C "$archive_root"
+          for required in pyproject.toml uv.lock logs/runs/.gitkeep src/rsi_harness/task/compiler.py; do
+            if [ ! -f "$archive_root/RSI-Harness/$required" ]; then
+              printf '::error::Harness publication requires %s\n' "$required"
+              exit 1
+            fi
+          done
+          printf 'root=%s\n' "$archive_root" >> "$GITHUB_OUTPUT"
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+        with:
+          version: "0.6.5"
+      - name: Install the publisher compiler environment
+        working-directory: ${{ steps.archive.outputs.root }}/RSI-Harness
+        run: uv sync --frozen --no-dev --python 3.12
+      - name: Compile CPU and GPU tasks without running them
+        working-directory: ${{ steps.archive.outputs.root }}/RSI-Harness
+        run: |
+          uv run --frozen --no-dev python - <<'PY'
+          import shutil
+          import tempfile
+          from pathlib import Path
+          from rsi_harness.models import CompileOptions
+          from rsi_harness.task.compiler import HarborTaskCompiler
+
+          fixture = Path("tests/fixtures/tasks/minimal-gpu").resolve()
+          for gpu_count in (0, 1):
+              with tempfile.TemporaryDirectory() as temporary:
+                  task = Path(temporary) / fixture.name
+                  shutil.copytree(fixture, task)
+                  config = task / "task.toml"
+                  config.write_text(config.read_text().replace("gpus = 1", f"gpus = {gpu_count}"))
+                  definition = HarborTaskCompiler().compile(
+                      task,
+                      CompileOptions(primary_reward="reward", score_direction="maximize", max_submissions=None),
+                  )
+                  assert definition.task_id == task.name
+                  assert str(definition.workdir) == "/workspace"
+                  assert definition.gpu_requirement.count == gpu_count
+                  print(f"Publisher compilation passed: Work GPUs={gpu_count}, Judge GPUs={definition.verifier.gpu_count}")
+          PY
+      - name: Lint Harness
+        working-directory: ${{ steps.archive.outputs.root }}/RSI-Harness
+        run: |
+          uv sync --frozen --group test --python 3.12
+          uv run --frozen --group test ruff check .
+          uv run --frozen --group test ruff format --check .
+      - name: Test Harness without Docker or GPUs
+        working-directory: ${{ steps.archive.outputs.root }}/RSI-Harness
+        run: |
+          uv sync --frozen --group test --python 3.12
+          uv run --frozen --group test python -m pytest -m 'not integration and not gpu' -q

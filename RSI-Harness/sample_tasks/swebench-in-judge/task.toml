@@ -1,0 +1,50 @@
+schema_version = "1.4"
+
+[task]
+name = "rsi/swebench-in-judge"
+
+# Work installs Harbor; the Judge is derived from Work. Neither has network
+# of its own, and neither has the task environments: Harbor reaches the host
+# broker through the injected endpoint, and every environment it creates
+# has no network either.
+[environment]
+os = "linux"
+workdir = "/workspace"
+cpus = 2
+memory_mb = 4096
+gpus = 0
+build_timeout_sec = 1800
+network_mode = "no-network"
+
+[agent]
+timeout_sec = 3600
+network_mode = "no-network"
+
+# The fixed procedure (/tests/test.sh) runs the oracle and nop agents over
+# the SWE-bench Verified tasks in /tests/swebench-verified; the operator may
+# narrow one run through the host environment, e.g.
+# RSI_SWEBENCH_TASKS=pallets__flask-5014.
+[verifier]
+timeout_sec = 3600
+network_mode = "no-network"
+
+[verifier.env]
+RSI_SWEBENCH_TASKS = "${RSI_SWEBENCH_TASKS:-}"
+RSI_SWEBENCH_CONCURRENCY = "${RSI_SWEBENCH_CONCURRENCY:-3}"
+
+# Brokered environments (metadata version 2) for both phases, network none
+# only. Each task names its swebench/sweb.eval.x86_64.* image by digest; the
+# operator pre-pulls them (sample_tasks/swebench-in-judge/images.manifest), so
+# the broker binds the cached images and downloads nothing. Nothing is
+# built. The operator approves this once per run with --sandbox-policy (see
+# sample_tasks/swebench-in-judge/operator-policy.toml).
+[metadata.rsi_harness.sandbox]
+version = 2
+
+[metadata.rsi_harness.sandbox.environments.work]
+network = ["none"]
+pull = true
+
+[metadata.rsi_harness.sandbox.environments.judge]
+network = ["none"]
+pull = true

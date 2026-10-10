@@ -13,11 +13,16 @@ from typing import Annotated, Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic_core import core_schema
 
+from rsi_harness.runtime.sandbox_contracts import (
+    SandboxEnvGrant,
+    SandboxEnvTask,
+    SandboxGrant,
+    SandboxTask,
+)
+
 VERIFIER_OUTPUT_TRUNCATION_MARKER = "\n...[verifier output truncated]...\n"
 WORK_FEEDBACK_ROOT = PurePosixPath("/run/rsi-harness/feedback")
-MIN_VERIFIER_OUTPUT_LIMIT_BYTES = len(
-    VERIFIER_OUTPUT_TRUNCATION_MARKER.encode("utf-8")
-)
+MIN_VERIFIER_OUTPUT_LIMIT_BYTES = len(VERIFIER_OUTPUT_TRUNCATION_MARKER.encode("utf-8"))
 
 
 class PersistedModel(BaseModel):
@@ -240,9 +245,7 @@ class RunGPUPlan(PersistedModel):
             raise ValueError("phase GPU allocation escapes authorized pool")
         if self.judge_mode is JudgeGPUMode.FREEZE_ONLY and judge:
             raise ValueError("freeze-only Judge cannot receive GPUs")
-        if self.judge_mode is JudgeGPUMode.DISJOINT and (
-            not judge or work & judge
-        ):
+        if self.judge_mode is JudgeGPUMode.DISJOINT and (not judge or work & judge):
             raise ValueError("disjoint Judge allocation must be nonempty and disjoint")
         if self.judge_mode is JudgeGPUMode.RELEASE_ALL and (
             not judge or not work & judge
@@ -352,6 +355,7 @@ class TaskDefinition(PersistedModel):
     agent: AgentPlan
     assets: tuple[AssetRequirement, ...] = ()
     require_disjoint_phase_nodes: bool = False
+    sandbox: SandboxTask | SandboxEnvTask | None = None
     environment_digest: str | None = None
     score_direction: Literal["maximize", "minimize"] = "maximize"
 
@@ -370,6 +374,7 @@ class RunPlan(PersistedModel):
     gpu_plan: RunGPUPlan
     paths: RunPaths
     snapshot_kind: str
+    sandbox: SandboxGrant | SandboxEnvGrant | None = None
 
     _valid_workdir = field_validator("workdir", mode="before")(_workdir)
 
@@ -564,6 +569,7 @@ class AgentRunRequest:
     prepared: PreparedAgent
     container: ContainerRef
     timeout_seconds: float | None = None
+    on_exec_start: Callable[[float], None] | None = None
     output_path: Path | None = None
     output_redact_values: tuple[str, ...] = ()
     output_callback: Callable[[str], None] | None = None
@@ -581,6 +587,7 @@ class AgentRunRequest:
 @dataclass(frozen=True, slots=True)
 class AgentRunResult:
     exit_code: int | None
+    exec_started: bool = True
     output: str = ""
     output_truncated: bool = False
     full_output_captured: bool = False
@@ -598,9 +605,7 @@ class EvaluationRequest:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "verifier_logs", _runtime_path(self.verifier_logs))
-        object.__setattr__(
-            self, "verifier_output", _runtime_path(self.verifier_output)
-        )
+        object.__setattr__(self, "verifier_output", _runtime_path(self.verifier_output))
 
 
 class RewardResult(PersistedModel):

@@ -535,9 +535,7 @@ class Service:
                 work_container=self.work,
                 round_id=round_id,
                 verifier_logs=self.plan.paths.logs / "verifier" / round_id,
-                verifier_output=(
-                    self.plan.paths.logs / "feedback" / f"{round_id}.log"
-                ),
+                verifier_output=(self.plan.paths.logs / "feedback" / f"{round_id}.log"),
             )
         )
         self.reports.append(report)
@@ -597,9 +595,7 @@ def test_one_gpu_plan_is_durable_before_all_runtime_consumers(tmp_path) -> None:
             assert definition is self.plan.task
             assert allocation is self.gpu_plan
             self.plan = self.plan.model_copy(update={"gpu_plan": allocation})
-            return super().prepare_plan(
-                definition, images, allocation, request, run_id
-            )
+            return super().prepare_plan(definition, images, allocation, request, run_id)
 
         def create_work(self, plan, run_id, network, planned_name, workdir_volume):
             assert plan.gpu_plan is self.gpu_plan
@@ -700,9 +696,7 @@ def test_gpu_plan_event_is_published_once_after_durable_lease_before_images(
     assert gpu_events == [backend.gpu_plan]
     names = [name for name, _ in backend.events]
     assert (
-        names.index("lease_gpu_plan")
-        < names.index("gpu_plan")
-        < names.index("images")
+        names.index("lease_gpu_plan") < names.index("gpu_plan") < names.index("images")
     )
     assert result.status is RunStatus.COMPLETED
 
@@ -1790,7 +1784,7 @@ def test_terminal_work_is_quiesced_retained_and_removed_in_exact_order(
     )
 
 
-def test_unproven_agent_stop_blocks_quiescence_retention_and_removal(
+def test_unproven_agent_stop_quiesces_work_but_blocks_retention_and_removal(
     tmp_path,
 ) -> None:
     backend = ScriptedBackend(tmp_path)
@@ -1814,11 +1808,10 @@ def test_unproven_agent_stop_blocks_quiescence_retention_and_removal(
     assert retained.work.network_id == "network-work-1"
     assert "Agent stop authority is unproven" in (retained.error or "")
     assert ("agent_stop", "work-1") in backend.events
+    assert retained.work.paused
     assert not any(
         name
         in {
-            "work_pause",
-            "work_stopped",
             "retained_plan",
             "retained_acquire",
             "work_remove",

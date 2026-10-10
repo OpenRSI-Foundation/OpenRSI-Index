@@ -5,11 +5,13 @@ on:
     branches: [main]
     paths:
       - .github/workflows/discussion-*.yml
+      - .github/workflows/harness-publication-checks.yml
       - checks/**
       - .agents/skills/proposal-agent/scripts/**
   pull_request:
     paths:
       - .github/workflows/discussion-*.yml
+      - .github/workflows/harness-publication-checks.yml
       - checks/**
       - .agents/skills/proposal-agent/scripts/**
   workflow_dispatch:

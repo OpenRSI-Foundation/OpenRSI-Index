@@ -395,9 +395,7 @@ fi
                 base_ref,
                 ["/bin/sh", "-c", f"test -d {shlex.quote(str(workdir))}"],
                 user=verifier_user,
-                environment={
-                    NVIDIA_VISIBLE_DEVICES_ENV: NVIDIA_VISIBLE_DEVICES_VOID
-                },
+                environment={NVIDIA_VISIBLE_DEVICES_ENV: NVIDIA_VISIBLE_DEVICES_VOID},
                 network_mode="none",
                 labels=self._labels(task, "judge"),
                 remove=True,

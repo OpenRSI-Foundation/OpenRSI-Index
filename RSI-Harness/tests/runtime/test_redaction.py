@@ -79,21 +79,27 @@ def test_repeated_redaction_preserves_existing_markers() -> None:
     assert redact_text(expected) == expected
 
 
-@pytest.mark.parametrize("text", [
-    "Engine bug: access_token=dummy-secret&safe=yes",
-    "Error: cannot normalize paths: credential=dummy-secret",
-    "https://example.test/?access_token=dummy-secret&safe=yes",
-    'config="HF_TOKEN=dummy-secret"',
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Engine bug: access_token=dummy-secret&safe=yes",
+        "Error: cannot normalize paths: credential=dummy-secret",
+        "https://example.test/?access_token=dummy-secret&safe=yes",
+        'config="HF_TOKEN=dummy-secret"',
+    ],
+)
 def test_diagnostic_prefix_does_not_hide_credential_assignment(text: str) -> None:
     assert redact_text(text) == text.replace("dummy-secret", "[REDACTED]")
 
 
-@pytest.mark.parametrize("text", [
-    r"export GH_TOKEN=dummy-secret\nwandb login <YOUR_WANDB_KEY>",
-    r"Authorization: Bearer dummy-secret\nloss=0.25",
-    r"https://example.test/?token=dummy-secret\nnext command",
-])
+@pytest.mark.parametrize(
+    "text",
+    [
+        r"export GH_TOKEN=dummy-secret\nwandb login <YOUR_WANDB_KEY>",
+        r"Authorization: Bearer dummy-secret\nloss=0.25",
+        r"https://example.test/?token=dummy-secret\nnext command",
+    ],
+)
 def test_escaped_newline_keeps_following_commands_and_feedback(text: str) -> None:
     assert redact_text(text) == text.replace("dummy-secret", "[REDACTED]").replace(
         "Bearer [REDACTED]", "[REDACTED]"

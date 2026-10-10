@@ -9,7 +9,7 @@ import shlex
 import socket
 import subprocess
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -32,6 +32,11 @@ class FirewallBackend(Protocol):
     def exists(self, rule_id: str) -> bool: ...
 
     def remove(self, rule_id: str) -> None: ...
+
+    # Brokered allowlist envs only: replace the rule's allow chain with
+    # ``rules.allow_rules`` (the firewall is never opened beyond the union
+    # of the old and new sets while it runs).
+    def update(self, rule_id: str, rules: NetworkRuleSet) -> None: ...
 
 
 class NetworkPolicyMutationObserver(Protocol):
@@ -61,6 +66,9 @@ class _UnavailableFirewall:
 
     def remove(self, rule_id: str) -> None:
         raise SetupError("no firewall backend was configured")
+
+    def update(self, rule_id: str, rules: NetworkRuleSet) -> None:
+        raise AssertionError("firewall update called after failed probe")
 
 
 def _system_resolver(hostname: str) -> tuple[str, ...]:
@@ -95,6 +103,19 @@ class NetworkRuleSet:
     allow_networks: tuple[IPNetwork, ...]
     engine_destinations: tuple[IPAddress, ...]
     dns_resolvers: tuple[IPAddress, ...]
+    # Brokered env bridges only: services of one env reach each other. With
+    # bridge-nf-call-iptables, same-bridge frames traverse FORWARD, where the
+    # private-range rejects would otherwise drop them (env subnets are in
+    # 172.16/12). Docker parents and builders never set it. Kept out of the
+    # repr that fingerprints parent rule IDs, so those stay unchanged.
+    intra_bridge_accept: bool = field(default=False, repr=False)
+    # Brokered allowlist envs only: (destination, TCP port or None) accepts
+    # in the rule's own allow chain, jumped to after the engine rejects and
+    # before the private-range rejects. The broker admits only public
+    # destinations and operator-approved private CIDRs. None: no allow chain.
+    allow_rules: tuple[tuple[ipaddress.IPv4Network, int | None], ...] | None = field(
+        default=None, repr=False
+    )
 
 
 class DockerIptablesFirewallBackend:
@@ -134,14 +155,21 @@ class DockerIptablesFirewallBackend:
         return True
 
     def install(self, rule_id: str, rules: NetworkRuleSet) -> None:
-        forward_chain, input_chain = self._chains(rule_id)
+        forward_chain, input_chain, allow_chain = self._chains(rule_id)
+        # The allow chain first: rollback deletes in reverse, so the forward
+        # chain that jumps to it is gone before it.
+        chains = (forward_chain, input_chain)
+        if rules.allow_rules is not None:
+            chains = (allow_chain, *chains)
         created: list[str] = []
         jumps: list[tuple[str, list[str]]] = []
         try:
-            for chain in (forward_chain, input_chain):
+            for chain in chains:
                 self._checked(["iptables", "--wait", "-N", chain])
                 created.append(chain)
-            for match, target in self._compiled_forward_rules(rules):
+            for match, target in self._compiled_allow_rules(rules):
+                self._append(allow_chain, list(match), target)
+            for match, target in self._compiled_forward_rules(rules, rule_id):
                 self._append(forward_chain, list(match), target)
             for match, target in self._compiled_input_rules(rules):
                 self._append(input_chain, list(match), target)
@@ -154,9 +182,7 @@ class DockerIptablesFirewallBackend:
                     comment=f"{rule_id}:{kind}",
                     policy_chain=policy_chain,
                 )
-                self._checked(
-                    ["iptables", "--wait", "-I", host_chain, "1", *jump]
-                )
+                self._checked(["iptables", "--wait", "-I", host_chain, "1", *jump])
                 jumps.append((host_chain, jump))
         except Exception as primary:
             rollback_errors: list[str] = []
@@ -166,12 +192,8 @@ class DockerIptablesFirewallBackend:
                     rollback_errors,
                 )
             for chain in reversed(created):
-                self._rollback(
-                    ["iptables", "--wait", "-F", chain], rollback_errors
-                )
-                self._rollback(
-                    ["iptables", "--wait", "-X", chain], rollback_errors
-                )
+                self._rollback(["iptables", "--wait", "-F", chain], rollback_errors)
+                self._rollback(["iptables", "--wait", "-X", chain], rollback_errors)
             try:
                 residual = self.exists(rule_id)
             except Exception as error:
@@ -241,32 +263,34 @@ class DockerIptablesFirewallBackend:
 
     def _all_rules(self) -> list[str]:
         try:
-            return self._checked(
-                ["iptables", "--wait", "-S"]
-            ).stdout.splitlines()
+            return self._checked(["iptables", "--wait", "-S"]).stdout.splitlines()
         except Exception as error:
             raise SetupError(f"cannot inspect firewall rules: {error}") from error
 
     @staticmethod
     def _chain_exists_in_listing(listing: Sequence[str], chain: str) -> bool:
+        # Only lines naming the chain are parsed: a host with many brokered
+        # envs lists thousands of rules for every removal.
         for line in listing:
+            if chain not in line:
+                continue
             tokens = shlex.split(line)
-            if (
-                len(tokens) >= 2
-                and tokens[0] in {"-N", "-A"}
-                and tokens[1] == chain
-            ):
+            if len(tokens) >= 2 and tokens[0] in {"-N", "-A"} and tokens[1] == chain:
                 return True
         return False
 
     def is_installed(self, rule_id: str, rules: NetworkRuleSet) -> bool:
-        forward_chain, input_chain = self._chains(rule_id)
+        forward_chain, input_chain, allow_chain = self._chains(rule_id)
+        if rules.allow_rules is not None and self._chain_rules(
+            allow_chain
+        ) != self._expected_rules(allow_chain, self._compiled_allow_rules(rules)):
+            return False
         for host_chain, policy_chain, kind, compiled in (
             (
                 "DOCKER-USER",
                 forward_chain,
                 "forward",
-                self._compiled_forward_rules(rules),
+                self._compiled_forward_rules(rules, rule_id),
             ),
             ("INPUT", input_chain, "input", self._compiled_input_rules(rules)),
         ):
@@ -290,7 +314,7 @@ class DockerIptablesFirewallBackend:
             owned = self._owned_jump_lines(listing, rule_id)
             if [shlex.split(line) for line in owned] != [expected_jump]:
                 return False
-            for preceding in host_rules[:host_rules.index(expected_jump)]:
+            for preceding in host_rules[: host_rules.index(expected_jump)]:
                 if not self._disjoint_policy_jump(
                     preceding,
                     host_chain=host_chain,
@@ -298,19 +322,47 @@ class DockerIptablesFirewallBackend:
                     bridge_interface=rules.bridge_interface,
                 ):
                     return False
-            chain_lines = self._checked(
-                ["iptables", "--wait", "-S", policy_chain]
-            ).stdout.splitlines()
-            actual_rules = [shlex.split(line) for line in chain_lines]
-            if actual_rules[:1] == [["-N", policy_chain]]:
-                actual_rules = actual_rules[1:]
-            expected_rules = [
-                ["-A", policy_chain, *self._rule_tokens(match, target)]
-                for match, target in compiled
-            ]
-            if actual_rules != expected_rules:
+            # Same compilation as install, so a missing, extra or moved
+            # intra-bridge accept fails the exact ordered comparison.
+            if self._chain_rules(policy_chain) != self._expected_rules(
+                policy_chain, compiled
+            ):
                 return False
         return True
+
+    def update(self, rule_id: str, rules: NetworkRuleSet) -> None:
+        """Replace an installed allow chain: append the new accepts, then
+        delete the old ones from the top. Nothing is ever accepted beyond
+        the old and new sets, and no new chain or jump is made, so a rule
+        that recovery removed is never brought back."""
+        if rules.allow_rules is None:
+            raise SetupError(f"network policy {rule_id} has no allow chain")
+        allow_chain = self._chains(rule_id)[2]
+        try:
+            stale = len(self._chain_rules(allow_chain))
+            for match, target in self._compiled_allow_rules(rules):
+                self._append(allow_chain, list(match), target)
+            for _ in range(stale):
+                self._checked(["iptables", "--wait", "-D", allow_chain, "1"])
+        except Exception as error:
+            raise InfrastructureError(
+                f"network policy {rule_id} allow chain update failed: {error}"
+            ) from error
+
+    def _chain_rules(self, chain: str) -> list[list[str]]:
+        listing = self._checked(["iptables", "--wait", "-S", chain]).stdout
+        actual = [shlex.split(line) for line in listing.splitlines()]
+        if actual[:1] == [["-N", chain]]:
+            actual = actual[1:]
+        return actual
+
+    def _expected_rules(
+        self, chain: str, compiled: Sequence[tuple[tuple[str, ...], str]]
+    ) -> list[list[str]]:
+        return [
+            ["-A", chain, *self._rule_tokens(match, target)]
+            for match, target in compiled
+        ]
 
     @classmethod
     def _disjoint_policy_jump(
@@ -338,12 +390,20 @@ class DockerIptablesFirewallBackend:
         return tokens[9] == expected_chain
 
     def _compiled_forward_rules(
-        self, rules: NetworkRuleSet
+        self, rules: NetworkRuleSet, rule_id: str
     ) -> tuple[tuple[tuple[str, ...], str], ...]:
         compiled = list(self._common_accept_rules(rules))
+        if rules.intra_bridge_accept:
+            # The jump already matches -i <bridge>; -o keeps the accept to
+            # peers on that same bridge, ahead of every reject below.
+            compiled.append((("-o", rules.bridge_interface), "ACCEPT"))
         for address in rules.engine_destinations:
             self._require_ipv4(address)
             compiled.append((("-d", f"{address}/32"), "REJECT"))
+        if rules.allow_rules is not None:
+            # Ahead of the private-range rejects, so an operator-approved
+            # private CIDR can be reached; what falls through is rejected.
+            compiled.append(((), self._chains(rule_id)[2]))
         compiled.extend((("-d", network), "REJECT") for network in self._BLOCKED_V4)
         if rules.mode == "allowlist":
             for network in rules.allow_networks:
@@ -351,6 +411,20 @@ class DockerIptablesFirewallBackend:
                     raise SetupError("IPv6 allowlist requires an IPv6-safe backend")
                 compiled.append((("-d", str(network)), "ACCEPT"))
         compiled.append(((), "ACCEPT" if rules.mode == "public" else "REJECT"))
+        return tuple(compiled)
+
+    @staticmethod
+    def _compiled_allow_rules(
+        rules: NetworkRuleSet,
+    ) -> tuple[tuple[tuple[str, ...], str], ...]:
+        compiled: list[tuple[tuple[str, ...], str]] = []
+        for network, port in rules.allow_rules or ():
+            if not isinstance(network, ipaddress.IPv4Network):
+                raise SetupError("IPv6 allowlist requires an IPv6-safe backend")
+            match: tuple[str, ...] = ("-d", str(network))
+            if port is not None:
+                match += ("-p", "tcp", "-m", "tcp", "--dport", str(port))
+            compiled.append((match, "ACCEPT"))
         return tuple(compiled)
 
     def _compiled_input_rules(
@@ -426,6 +500,8 @@ class DockerIptablesFirewallBackend:
         expected = {f"{rule_id}:forward", f"{rule_id}:input"}
         owned: list[str] = []
         for line in listing:
+            if rule_id not in line:
+                continue
             tokens = shlex.split(line)
             try:
                 comment = tokens[tokens.index("--comment") + 1]
@@ -477,9 +553,16 @@ class DockerIptablesFirewallBackend:
             errors.append(f"{shlex.join(command)}: {detail}")
 
     @staticmethod
-    def _chains(rule_id: str) -> tuple[str, str]:
-        digest = hashlib.sha256(rule_id.encode()).hexdigest()[:16].upper()
-        return f"RSI_F_{digest}", f"RSI_I_{digest}"
+    def _chains(rule_id: str) -> tuple[str, str, str]:
+        return firewall_rule_chains(rule_id)
+
+
+def firewall_rule_chains(rule_id: str) -> tuple[str, str, str]:
+    """The forward, input and allow chains of a rule; every install command
+    names one. Only brokered allowlist envs have the allow chain; removal
+    and discovery look for all three."""
+    digest = hashlib.sha256(rule_id.encode()).hexdigest()[:16].upper()
+    return f"RSI_F_{digest}", f"RSI_I_{digest}", f"RSI_A_{digest}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -716,9 +799,7 @@ class NetworkPolicyEnforcer:
                 f"failed to attest network policy {lease.rule_id}: {error}"
             ) from error
         if not installed:
-            raise SetupError(
-                f"network policy {lease.rule_id} is no longer installed"
-            )
+            raise SetupError(f"network policy {lease.rule_id} is no longer installed")
 
     def cleanup(self, lease: NetworkPolicyLease) -> None:
         try:

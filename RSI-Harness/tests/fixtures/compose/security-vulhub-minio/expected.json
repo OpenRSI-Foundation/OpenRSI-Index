@@ -1,0 +1,145 @@
+{
+  "images": {
+    "client": {
+      "args": {},
+      "build": ".",
+      "dockerfile": "Dockerfile",
+      "dockerfile_inline": null,
+      "network": null,
+      "no_cache": false,
+      "target": null
+    },
+    "node1": {
+      "policy": "missing",
+      "pull": "vulhub/minio:2023-02-27T18-10-45Z"
+    },
+    "node2": {
+      "policy": "missing",
+      "pull": "vulhub/minio:2023-02-27T18-10-45Z"
+    },
+    "node3": {
+      "policy": "missing",
+      "pull": "vulhub/minio:2023-02-27T18-10-45Z"
+    }
+  },
+  "notes": [
+    "services.client: no cpus limit; using 1.0",
+    "services.client: no memory limit; using 1024 MiB",
+    "services.client.volumes./logs: log mount dropped; logs are downloaded",
+    "services.client.volumes./agent-logs: log mount dropped; logs are downloaded",
+    "services.node1.ports: dropped; services reach each other on container ports",
+    "services.node1: no cpus limit; using 1.0",
+    "services.node1: no memory limit; using 1024 MiB",
+    "services.node2: no cpus limit; using 1.0",
+    "services.node2: no memory limit; using 1024 MiB",
+    "services.node3: no cpus limit; using 1.0",
+    "services.node3: no memory limit; using 1024 MiB"
+  ],
+  "seeds": [],
+  "spec": {
+    "disk_mb": 2048,
+    "lifetime_sec": null,
+    "network": "public",
+    "services": {
+      "client": {
+        "aliases": [
+          "tb-client"
+        ],
+        "command": [
+          "sh",
+          "-c",
+          "sleep infinity"
+        ],
+        "cpus": 1.0,
+        "env": {
+          "TEST_DIR": "/tests"
+        },
+        "image": null,
+        "memory_mb": 1024
+      },
+      "node1": {
+        "command": [
+          "minio",
+          "server",
+          "--console-address",
+          ":9001",
+          "http://node1:9000/mnt/data1",
+          "http://node2:9000/mnt/data2",
+          "http://node3:9000/mnt/data3"
+        ],
+        "cpus": 1.0,
+        "env": {
+          "MINIO_ROOT_PASSWORD": "minioadmin-vulhub",
+          "MINIO_ROOT_USER": "minioadmin"
+        },
+        "hostname": "node1",
+        "image": null,
+        "memory_mb": 1024,
+        "mounts": [
+          {
+            "target": "/mnt/data1",
+            "volume": "anon-826feef326e5"
+          }
+        ]
+      },
+      "node2": {
+        "command": [
+          "minio",
+          "server",
+          "http://node1:9000/mnt/data1",
+          "http://node2:9000/mnt/data2",
+          "http://node3:9000/mnt/data3"
+        ],
+        "cpus": 1.0,
+        "env": {
+          "MINIO_ROOT_PASSWORD": "minioadmin-vulhub",
+          "MINIO_ROOT_USER": "minioadmin"
+        },
+        "hostname": "node2",
+        "image": null,
+        "memory_mb": 1024,
+        "mounts": [
+          {
+            "target": "/mnt/data2",
+            "volume": "anon-4782605bb93e"
+          }
+        ]
+      },
+      "node3": {
+        "command": [
+          "minio",
+          "server",
+          "http://node1:9000/mnt/data1",
+          "http://node2:9000/mnt/data2",
+          "http://node3:9000/mnt/data3"
+        ],
+        "cpus": 1.0,
+        "env": {
+          "MINIO_ROOT_PASSWORD": "minioadmin-vulhub",
+          "MINIO_ROOT_USER": "minioadmin"
+        },
+        "hostname": "node3",
+        "image": null,
+        "memory_mb": 1024,
+        "mounts": [
+          {
+            "target": "/mnt/data3",
+            "volume": "anon-f8e7fb1a0a37"
+          }
+        ]
+      }
+    },
+    "version": 1,
+    "volumes": {
+      "anon-4782605bb93e": {
+        "seeded": false
+      },
+      "anon-826feef326e5": {
+        "seeded": false
+      },
+      "anon-f8e7fb1a0a37": {
+        "seeded": false
+      }
+    }
+  }
+}
