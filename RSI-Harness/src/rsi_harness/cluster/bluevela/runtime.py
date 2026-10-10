@@ -960,21 +960,33 @@ class ApptainerAgentRuntime:
         self._require_work(container)
         with self._lock:
             process = self._process
-            if process is None or process.poll() is not None:
-                raise InfrastructureError("Agent process stopped during Judge round")
-            os.killpg(process.pid, signal.SIGCONT)
+            if process is None:
+                self._paused = False
+                return
+            # A final Judge can finish after the Agent exits; its report is
+            # valid. pause() stopped the whole group, so continue it even
+            # then: members the Agent left behind must not stay frozen.
+            try:
+                os.killpg(process.pid, signal.SIGCONT)
+            except ProcessLookupError:
+                pass  # the whole group has exited
             self._paused = False
 
     def stop(self, container: ContainerRef) -> None:
         self._require_work(container)
         with self._lock:
             process = self._process
-            if process is None or process.poll() is not None:
+            if process is None:
                 self._paused = False
                 return
-            if self._paused:
-                os.killpg(process.pid, signal.SIGCONT)
-            os.killpg(process.pid, signal.SIGTERM)
+            # Signal the group even after the Agent exits, so members it left
+            # behind (possibly stopped by pause()) are terminated too.
+            try:
+                if self._paused or process.poll() is not None:
+                    os.killpg(process.pid, signal.SIGCONT)
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass  # the whole group has exited
             self._paused = False
 
     def quiescence(self, container: ContainerRef) -> WorkQuiescence:
@@ -1365,11 +1377,6 @@ class NativeJudgeEvaluator:
                 error=error,
             )
             self.artifacts.record_submission(report)
-            shutil.rmtree(request.verifier_logs)
-            try:
-                request.verifier_logs.parent.rmdir()
-            except OSError:
-                pass
             observer.resource_event("judge_removed", judge_container_id=judge_id)
             observer.resource_event(
                 "snapshot_released", snapshot_lease_id=f"workspace-{request.round_id}"

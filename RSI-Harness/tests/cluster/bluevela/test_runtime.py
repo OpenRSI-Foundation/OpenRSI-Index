@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
@@ -31,18 +34,34 @@ from rsi_harness.models import (
     GPUDevice,
     JudgeGPUMode,
     RunGPUPlan,
+    RunStatus,
+    SubmissionStatus,
 )
 from rsi_harness.runtime.artifacts import RunArtifactWriter
+from rsi_harness.runtime.coordinator import (
+    CoordinatorState,
+    RunCoordinator,
+    _RoundEvaluator,
+    aggregate_result,
+)
 from rsi_harness.runtime.local_auth import (
     AgentAuthFile,
     AgentAuthMaterial,
     AgentAuthMount,
 )
+from rsi_harness.runtime.submissions import SubmissionService
 from tests.factories import make_run_plan
+from tests.fakes import FakeClock
 
 
 class _Runtime:
-    def __init__(self, root: Path) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        reward_file="reward.txt",
+        reward_content="1\n",
+    ) -> None:
         self.workspace = root / "workspace"
         self.workspace.mkdir()
         (self.workspace / "answer.py").write_text("answer = 42\n")
@@ -50,6 +69,8 @@ class _Runtime:
         self.rounds.mkdir()
         self.payload = SimpleNamespace(run_id="native-run")
         self.events: list[str] = []
+        self.reward_file = reward_file
+        self.reward_content = reward_content
 
     def pause(self, _work: ContainerRef) -> None:
         self.events.append("pause")
@@ -62,7 +83,7 @@ class _Runtime:
 
     def run_judge(self, workspace, request, environment):
         del workspace, environment
-        (request.verifier_logs / "reward.txt").write_text("1\n")
+        (request.verifier_logs / self.reward_file).write_text(self.reward_content)
         request.verifier_output.write_text("passed\n")
         return AgentRunResult(
             exit_code=0,
@@ -182,14 +203,27 @@ def test_vlmr1_verifier_does_not_mutate_read_only_private_tests() -> None:
     assert "chmod -R go-rwx /tests" not in script
 
 
+@pytest.mark.parametrize(
+    ("reward_file", "reward_content"),
+    [
+        ("reward.txt", "1\n"),
+        ("reward.json", '{"reward": 1, "accuracy": 0.75}\n'),
+    ],
+)
 def test_workspace_snapshot_uses_path_authority_and_native_artifacts(
     tmp_path: Path,
+    reward_file,
+    reward_content,
 ) -> None:
     run_id = "native-run"
     plan = make_run_plan(tmp_path)
     writer = RunArtifactWriter(plan, run_id=run_id)
     writer.start()
-    runtime = _Runtime(tmp_path)
+    runtime = _Runtime(
+        tmp_path,
+        reward_file=reward_file,
+        reward_content=reward_content,
+    )
     observer = _Observer()
     work = ContainerRef(container_id="work", role="work")
     request = EvaluationRequest(
@@ -208,6 +242,9 @@ def test_workspace_snapshot_uses_path_authority_and_native_artifacts(
     assert runtime.events == ["pause", "idle", "unpause"]
     assert (writer.root / "submissions/agent-1/report.json").is_file()
     assert (writer.root / "feedback/agent-1.log").read_text() == "passed\n"
+    assert (request.verifier_logs / reward_file).read_text() == reward_content
+    if reward_file == "reward.json":
+        assert dict(report.rewards) == {"reward": 1.0, "accuracy": 0.75}
 
 
 def test_active_remote_work_makes_submission_retryable_before_snapshot(
@@ -275,6 +312,166 @@ def _single_node_gpu_runtime(
     )
     runtime._process = SimpleNamespace(pid=100, poll=lambda: None)
     return runtime
+
+
+@pytest.mark.parametrize("agent_exit", ["running", "before_resume", "during_resume"])
+def test_final_native_judge_is_registered_after_agent_exit(
+    tmp_path: Path,
+    monkeypatch,
+    agent_exit,
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    runtime.workspace.mkdir()
+    (runtime.workspace / "answer.py").write_text("answer = 42\n")
+    monkeypatch.setattr(runtime, "require_work_idle", lambda: None)
+    writer = RunArtifactWriter(runtime.plan, run_id="native-run")
+    writer.start()
+    judge_rounds = 0
+
+    def judge(_snapshot, request, _environment):
+        nonlocal judge_rounds
+        judge_rounds += 1
+        (request.verifier_logs / "reward.json").write_text(
+            json.dumps({"reward": judge_rounds}) + "\n"
+        )
+        request.verifier_output.write_text("passed\n")
+        if judge_rounds == 2 and agent_exit == "before_resume":
+            runtime._process = SimpleNamespace(pid=100, poll=lambda: 0)
+        return AgentRunResult(exit_code=0, output="passed\n")
+
+    def signal_group(_pid, signum):
+        if (
+            judge_rounds == 2
+            and agent_exit == "during_resume"
+            and signum == signal.SIGCONT
+        ):
+            raise ProcessLookupError("Agent exited before SIGCONT")
+
+    monkeypatch.setattr(runtime, "run_judge", judge)
+    monkeypatch.setattr("os.killpg", signal_group)
+    native = NativeJudgeEvaluator(runtime, writer)
+    state = CoordinatorState(run_id="native-run")
+    state.transition(RunStatus.AGENT_RUNNING)
+    evaluator = _RoundEvaluator(
+        backend=SimpleNamespace(
+            evaluate_submission=lambda request, *, lifecycle_observer: native.evaluate(
+                request, lifecycle_observer
+            ),
+        ),
+        state=state,
+        transition=state.transition,
+        persist_recovery=lambda _message: None,
+        update_work=lambda **_values: None,
+        update_judge=lambda **_values: None,
+    )
+    service = SubmissionService(
+        evaluator=evaluator,
+        artifact_writer=writer,
+        clock=FakeClock(),
+    )
+    token = service.register(
+        run_id="native-run",
+        run_plan=runtime.plan,
+        work_container=runtime.work_ref,
+    )
+
+    service.submit(token)
+    service.submit(token)
+    service.close(timeout_seconds=0)
+    writer.finalize()
+
+    history = RunCoordinator._history(SimpleNamespace(service=service), evaluator)
+    assert len(history) == len(evaluator.reports) == len(service.reports) == 2
+    assert history[-1].status is SubmissionStatus.COMPLETED
+    assert history[-1].score == 2.0
+    assert runtime._paused is False
+    final = json.loads((writer.root / "final_result.json").read_text())
+    engine = aggregate_result(
+        run_id="native-run",
+        reports=history,
+        primary_reward=runtime.plan.task.verifier.primary_reward,
+        direction=runtime.plan.task.score_direction,
+        terminal=RunStatus.COMPLETED,
+    )
+    assert final["total_rounds"] == engine.total_rounds == 2
+    assert final["best_round"] == engine.best_round == "agent-2"
+    assert final["best_score"] == engine.best_score == 2.0
+    assert json.loads((writer.root / "verifier/agent-2/reward.json").read_text()) == {
+        "reward": 2
+    }
+
+
+def test_native_unpause_does_not_hide_signal_permission_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    runtime._paused = True
+
+    def denied(_pid, _signum):
+        raise PermissionError("signal denied")
+
+    monkeypatch.setattr("os.killpg", denied)
+
+    with pytest.raises(PermissionError, match="signal denied"):
+        runtime.unpause(runtime.work_ref)
+
+    assert runtime._paused is True
+
+
+def _process_state(pid: int) -> str | None:
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+    except FileNotFoundError:
+        return None
+    return stat.rsplit(")", 1)[1].split()[0]
+
+
+def test_unpause_and_stop_reach_members_left_after_the_agent_exits(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The race in pause(): the Agent exits after the liveness check, so
+    # SIGSTOP only reaches what it left behind in its process group.
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    leader = subprocess.Popen(
+        ["sh", "-c", "sleep 300 & echo $!"],
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    child = int(leader.stdout.readline())
+    try:
+        leader.wait(timeout=10)
+        os.killpg(leader.pid, signal.SIGSTOP)
+        deadline = time.monotonic() + 10
+        while _process_state(child) != "T":
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        runtime._process = leader
+        runtime._paused = True
+
+        runtime.unpause(runtime.work_ref)
+        deadline = time.monotonic() + 10
+        while _process_state(child) == "T":
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        assert runtime._paused is False
+
+        os.killpg(leader.pid, signal.SIGSTOP)
+        runtime._paused = True
+        runtime.stop(runtime.work_ref)
+        deadline = time.monotonic() + 10
+        while _process_state(child) not in (None, "Z"):
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        # Once the group is gone, both calls are no-ops.
+        runtime.unpause(runtime.work_ref)
+        runtime.stop(runtime.work_ref)
+    finally:
+        try:
+            os.kill(child, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def _gpu_preflight_commands(
