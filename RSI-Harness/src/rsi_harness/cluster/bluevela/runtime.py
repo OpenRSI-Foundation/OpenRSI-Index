@@ -960,28 +960,33 @@ class ApptainerAgentRuntime:
         self._require_work(container)
         with self._lock:
             process = self._process
-            if process is None or process.poll() is not None:
-                # A final Judge can finish after the Agent exits. There is
-                # nothing left to resume, but its completed report is valid.
+            if process is None:
                 self._paused = False
                 return
+            # A final Judge can finish after the Agent exits; its report is
+            # valid. pause() stopped the whole group, so continue it even
+            # then: members the Agent left behind must not stay frozen.
             try:
                 os.killpg(process.pid, signal.SIGCONT)
             except ProcessLookupError:
-                # The process group may exit between poll() and SIGCONT.
-                pass
+                pass  # the whole group has exited
             self._paused = False
 
     def stop(self, container: ContainerRef) -> None:
         self._require_work(container)
         with self._lock:
             process = self._process
-            if process is None or process.poll() is not None:
+            if process is None:
                 self._paused = False
                 return
-            if self._paused:
-                os.killpg(process.pid, signal.SIGCONT)
-            os.killpg(process.pid, signal.SIGTERM)
+            # Signal the group even after the Agent exits, so members it left
+            # behind (possibly stopped by pause()) are terminated too.
+            try:
+                if self._paused or process.poll() is not None:
+                    os.killpg(process.pid, signal.SIGCONT)
+                os.killpg(process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass  # the whole group has exited
             self._paused = False
 
     def quiescence(self, container: ContainerRef) -> WorkQuiescence:
