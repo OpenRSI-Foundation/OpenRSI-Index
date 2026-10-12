@@ -4,15 +4,17 @@ RSI Harness powers OpenRSI Index for ultra-long-horizon RSI runs, natively
 supporting [Harbor-format tasks](../rsi-tasks/) with or without GPUs on local
 Docker, and GPU tasks on multi-node clusters.
 
-Agents such as Claude Code and Codex develop solutions in a persistent, isolated
-Work container and submit them to a fresh Judge for scoring. They can iterate on
-test feedback until the submission limit or timeout, with the highest score
-retained as the final result.
+Agents such as Claude Code, Codex, Qwen Code, Kimi Code, OpenCode, ZCode and
+pi develop solutions in
+a persistent, isolated Work container and submit them to a fresh Judge for
+scoring. They can iterate on test feedback until the submission limit or
+timeout, with the highest score retained as the final result.
 
 RSI Harness runs the **outer loop** only: preparing the task, pausing and
 snapshotting Work, scoring each submission in a fresh Judge, and selecting the
 final result. The **inner loop** is whichever agent you put in it — Claude Code,
-Codex, or an agent you design yourself.
+Codex, Qwen Code, Kimi Code, OpenCode, ZCode, pi, or an agent you design
+yourself.
 
 
 ## How it works
@@ -24,13 +26,16 @@ policy, and timeouts in a run plan. It then follows this lifecycle:
 
 1. **Work:** RSI Harness starts a persistent, isolated Work container. The Agent
    edits the task workspace here, but the task's private `tests/` directory is
-   never mounted into this container.
+   never mounted into this container (unless the task declares a public Judge,
+   below).
 2. **Submit:** When the Agent runs `rsi-submit`, the client sends a token-scoped
    control request. RSI Harness pauses Work and snapshots its filesystem state;
    the client does not package or upload the workspace.
 3. **Judge:** RSI Harness starts a fresh, isolated Judge container from that
    snapshot, injects the private tests, runs `/tests/test.sh`, records the test
-   output and reward, and removes the Judge container.
+   output and reward, and removes the Judge container. The Judge can also read
+   the Agent's trajectory up to this submission, read-only, at `/logs/agent`
+   ([details](docs/harbor-task-authoring/task-toml.md#agent-trajectory-in-the-judge)).
 4. **Iterate or finish:** RSI Harness resumes the same Work container and returns
    the Judge feedback to the Agent. The cycle repeats until the submission limit
    or timeout. Among valid submissions, the snapshot with the best primary
@@ -40,6 +45,36 @@ policy, and timeouts in a run plan. It then follows this lifecycle:
 Work persists across rounds, while each submission is evaluated in a fresh
 Judge, letting the Agent improve from feedback without access to the private
 tests.
+
+A task can instead make its Judge public, for example when the tests are a
+published rubric or review procedure:
+
+```toml
+[metadata.rsi_harness.verifier]
+visibility = "public"
+```
+
+Work then also sees the same `tests/` directory read-only at `/tests`. The run
+plan records its digest, and RSI Harness checks it before Work starts and
+before every Judge round, so the Agent reads exactly what the Judge runs. A
+public Judge also starts from the clean image Work started from, read-only,
+and reads only Work's `WORKDIR`, so the Agent cannot alter the programs that
+judge it. The default, `"hidden"`, keeps the tests private. See
+[`task-toml.md`](docs/harbor-task-authoring/task-toml.md#visibility).
+
+A Judge can also call the run's own Agent, for example to review a
+submission, when the task declares `model_access = true` in the same table.
+`rsi-agent exec --prompt-file FILE --output FILE [--schema FILE]` is then the
+only supported way for the Judge to call a model: it runs the run's Agent,
+with Work's credentials and settings, on one prompt, as its own unprivileged
+user, and the Judge procedure never sees the credentials. The Judge reaches
+only the Agent's pinned model endpoints, never general egress; local Docker
+runs only. See
+[`task-toml.md`](docs/harbor-task-authoring/task-toml.md#model_access).
+
+[`sample_tasks/science-ising3d`](sample_tasks/science-ising3d) combines these
+for open-ended science: a public rubric, a Judge started from the clean task
+image, and a trajectory audit and per-rubric review by the Agent model.
 
 ![RSI Harness workflow: one-time Harbor task preparation starts an agent in a persistent Work container. Each rsi-submit pauses and snapshots Work for a fresh, isolated Judge, which runs private tests and returns feedback. Work resumes for further iterations until the submission or time limit; the best valid submission is selected by its primary reward.](../assets/figures/rsi-harness.png)
 
@@ -103,6 +138,91 @@ from Engine artifacts. Do not put credentials in the Harbor task directory.
 from logs, while ordinary settings remain unchanged. For credentials with
 nonstandard names, list the variable names in `RSI_AGENT_SECRET_ENV_NAMES`
 (comma-separated).
+
+### Agents
+
+| `--agent` | Agent | Authentication | Required settings | Reasoning effort |
+| --- | --- | --- | --- | --- |
+| `codex` | Codex | `RSI_AGENT_API_KEY` or `--agent-auth local` | None; the base URL defaults to the provider's public API | Yes |
+| `claude-code` | Claude Code | `RSI_AGENT_API_KEY` or `--agent-auth local` | None; the base URL defaults to the provider's public API | Yes |
+| `qwen-code` | Qwen Code | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | No |
+| `kimi-code` | Kimi Code | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
+| `opencode` | OpenCode (linux-x64) | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
+| `zcode` | ZCode (linux-x64) | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
+| `pi` | pi | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `minimal`, `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
+
+Each Agent CLI is installed at an exact pinned version, over HTTPS, into the
+Work image when the image is built, together with the node it runs on. All of
+these versions live in one table,
+[`src/rsi_loop/harness/agent/versions.py`](src/rsi_loop/harness/agent/versions.py).
+To fetch the ZCode package from a mirror with the same
+`<version>/linux-x64/<file>` layout, set `RSI_ZCODE_MIRROR_URL` where
+`rsi-harness run` runs; the Work image build receives it as a build argument.
+
+To upgrade an Agent, or node for all of them:
+
+```bash
+uv run python scripts/bump_agent.py codex 0.160.0   # or scripts/bump-agent.sh
+```
+
+The script checks that the version is published, rewrites that one entry in
+the table, prints the diff and runs the Agent's Docker tests (every Agent's
+for `node`), exiting non-zero if they fail or cannot run. `--no-test` only
+edits, and `--no-check` skips the published check (offline, or without npm).
+`ripgrep`, which OpenCode's image carries, is bumped the same way and runs
+OpenCode's tests. A new version gets a new Work image; cached images of other
+versions are not reused. The Docker tests run each Agent's real CLI in a full
+run against a local fake model that speaks chat completions, the Responses API
+(Codex) and the Messages API (Claude Code). They check that one CLI process
+keeps working through many stop-hook continuations, including a long stretch
+with no tool use, a Judge round, a failed and an empty model reply, and that
+the API key stays out of every artifact.
+
+Codex and Claude Code keep working through their native stop hook. The stop
+hooks of Qwen Code, Kimi Code and ZCode allow only a limited number of
+continuations, and OpenCode has none, so RSI Harness runs them under
+`rsi-agent-driver`, a small program baked into their Work image. pi's own stop
+point has no limit, so it needs no driver: an extension baked into its Work
+image does the same job inside pi. For these five Agents:
+
+- **Same process, same session.** The CLI is started once. The driver talks to
+  it over the Agent Client Protocol (ZCode over its own app-server protocol)
+  and, whenever the Agent ends a turn, sends the stop hook's continuation text
+  as the next prompt into the same session; pi's extension queues the same
+  text as a follow-up user message whenever pi is about to stop. Failed or
+  empty model replies are retried with a backoff. For Kimi Code, a prompt the
+  CLI queued behind a turn it started by itself (for example when a background
+  command finishes) is not followed by more prompts until the CLI is idle
+  again. This is the stop-hook equivalent, so the run ends at the Agent timeout
+  as it does for Codex and Claude Code. With `--disable-stop-hook` the Agent
+  runs a single turn and the run ends when it finishes.
+- **Never relaunched.** If the CLI process exits, the Agent run ends; the
+  driver exits with it.
+- **Same transcript.** The driver, or pi's extension, writes
+  `agent_output.txt` in the same JSON-lines format as Claude Code's, so the
+  visualizer, redaction and Judge trajectory work unchanged. Its first event
+  names the Agent and its version, which the visualizer shows.
+- **Endpoint.** `RSI_AGENT_API_BASE_URL` is an OpenAI chat-completions
+  compatible base URL, including its version path (for example
+  `https://your-api.example/v1`). There is no default endpoint and no local
+  login.
+- **Model limits.** `RSI_AGENT_CONTEXT_WINDOW` and
+  `RSI_AGENT_MAX_OUTPUT_TOKENS` are the served model's real context window and
+  output limit in tokens. Setup fails without them; they are never guessed,
+  because a window larger than the real one makes the CLI overflow instead of
+  compacting its context.
+- **No other traffic.** The API key stays in the Agent's environment and is
+  never written to its configuration. ZCode is the exception: it reads an
+  OpenAI-compatible provider's key only from its provider file, so that one
+  file is written to a private directory on the `/dev/shm` tmpfs, which a
+  Judge's snapshot of Work does not include. If `/dev/shm` is not a tmpfs,
+  ZCode does not start. Telemetry, update checks, model-catalog
+  downloads, ZCode's endpoint routing lookups and other background model
+  requests are turned off, so a
+  no-network Work reaches only the pinned model endpoint; web tools are
+  disabled there.
+- **Local Docker only.** These five Agents need files baked into their Work
+  image, which cluster images do not carry yet, so `--cluster` refuses them.
 
 ## Run a Harbor task
 
@@ -325,17 +445,17 @@ above.
 | Option | Purpose | Default |
 | --- | --- | --- |
 | `TASK_DIR` | Path to a supported Harbor task directory. | Required |
-| `--agent NAME` | Agent adapter to run: `codex` or `claude-code`. | `codex` |
+| `--agent NAME` | Agent adapter to run: `codex`, `claude-code`, `qwen-code`, `kimi-code`, `opencode`, `zcode` or `pi` ([Agents](#agents)). | `codex` |
 | `--gpus LIST` | Ordered, comma-separated local GPU indexes or UUIDs. The Work container receives the count declared by the task. This option cannot be combined with `--cluster`. | Automatically select the task-declared GPU count; `gpus = "all"` requires an explicit list |
 | `--model NAME` | Override the model used by the selected Agent. | `RSI_AGENT_MODEL`, then the Agent's default |
-| `--reasoning-effort LEVEL` | Set an Agent-supported reasoning effort. | Agent default |
+| `--reasoning-effort LEVEL` | Set an Agent-supported reasoning effort: `minimal`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra` for Codex; `low`, `medium`, `high`, `xhigh` or `max` for Claude Code; `low`, `medium` or `high` for Kimi Code, OpenCode and ZCode; `minimal`, `low`, `medium` or `high` for pi. Other Agents refuse the option. | Agent default |
 | `--agent-auth local` | Reuse credentials from the local Codex or Claude Code login. | Not set; use `RSI_AGENT_API_KEY` when provided |
 | `--timeout SECONDS` | Override the Agent time limit. | Task `agent.timeout_sec`, or 60 seconds if unset |
 | `--max-submissions N` | Limit how many Judge submissions the Agent may make. | Unlimited |
 | `--cooldown SECONDS` | Require a minimum delay between submissions. | `0.0` |
 | `--primary-reward KEY` | Select the reward key used as the primary score. | `reward`, or the only reward key when exactly one exists |
 | `--score-direction DIRECTION` | Choose whether the best score is the maximum or minimum: `maximize` or `minimize`. | `maximize` |
-| `--disable-stop-hook` | Let the Agent stop naturally instead of installing the RSI Loop stop hook. | Disabled; the stop hook is installed |
+| `--disable-stop-hook` | Let the Agent stop naturally instead of installing the RSI Loop stop hook (or, for the Agents run under `rsi-agent-driver` and for pi, sending continuations). | Disabled; the stop hook is installed |
 | `--sandbox-policy PATH` | Operator policy TOML that approves the task's [managed sandbox](#managed-child-sandboxes) request. | Not set; nothing is granted |
 | `--cluster NAME_OR_PROFILE` | Run through a named cluster integration or profile TOML instead of local Docker. | Not set; run locally |
 | `--dry-run` | Resolve and print cluster submissions without submitting jobs. Requires `--cluster`. | Disabled |

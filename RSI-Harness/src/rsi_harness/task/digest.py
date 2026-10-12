@@ -7,7 +7,7 @@ import os
 import stat
 from pathlib import Path
 
-from rsi_harness.errors import UnsupportedTaskError
+from rsi_harness.errors import SetupError, UnsupportedTaskError
 
 
 def _add_field(digest: object, value: bytes) -> None:
@@ -49,6 +49,12 @@ def hash_tree(root: Path, *, excluded_roots: tuple[str, ...] = ()) -> str:
         _add_field(digest, kind)
         _add_field(digest, payload)
     return digest.hexdigest()
+
+
+def require_tests_digest(tests_dir: Path, expected: str) -> None:
+    """Prove a tests tree still matches the digest recorded in the run plan."""
+    if hash_tree(tests_dir) != expected:
+        raise SetupError("task tests differ from the run's recorded tests digest")
 
 
 def _collect_entries(root: Path, excluded: frozenset[str]) -> list[Path]:

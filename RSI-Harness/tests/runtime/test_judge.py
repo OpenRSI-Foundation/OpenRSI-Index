@@ -296,7 +296,16 @@ def test_successful_judge_lifecycle_and_fixed_security_spec(tmp_path):
     assert spec.gpu_allocation.uuids == ("GPU-c", "GPU-d")
     assert [(mount.target, mount.read_only) for mount in spec.mounts] == [
         (PurePosixPath("/logs/verifier"), False),
+        (PurePosixPath("/logs/agent"), True),
     ]
+    assert spec.mounts[1].source == (
+        plan.paths.logs
+        / "runs"
+        / "run-1"
+        / plan.task.task_id
+        / "judge-trajectory"
+        / "agent-1"
+    )
     assert spec.tmpfs == (
         ContainerTmpfs(
             target=PurePosixPath("/tests"),
@@ -2685,3 +2694,86 @@ def test_production_round_retains_policy_when_remove_fails_and_judge_stays_live(
     assert "judge_container_id=container-1" in context
     assert "network_id=network-1" in context
     assert "policy_rule_id=rsi-run-1-judge-" in context
+
+
+def _trajectory_reader(runtime, seen: list[dict[str, str]]):
+    original_exec = runtime.exec
+
+    def exec_reading_trajectory(container, command, **kwargs):
+        spec = runtime.created_specs[-1]
+        (mount,) = [m for m in spec.mounts if m.target == PurePosixPath("/logs/agent")]
+        assert mount.read_only is True
+        seen.append(
+            {
+                path.name: path.read_text()
+                for path in sorted(mount.source.iterdir())
+                if path.is_file()
+            }
+        )
+        return original_exec(container, command, **kwargs)
+
+    runtime.exec = exec_reading_trajectory
+
+
+def test_each_judge_round_reads_the_trajectory_frozen_at_its_submission(tmp_path):
+    runner, runtime, _snapshot, _artifacts, request = make_harness(tmp_path)
+    plan = request[0]
+    run_root = plan.paths.logs / "runs" / "run-1" / plan.task.task_id
+    (run_root / "agent_prompt.md").write_text("Solve it.\n")
+    output = run_root / "agent_output.txt"
+    output.write_text("before first submission\n")
+    seen: list[dict[str, str]] = []
+    _trajectory_reader(runtime, seen)
+
+    first = evaluate(runner, request, "agent-1")
+    with output.open("a") as stream:
+        stream.write("before second submission\n")
+    second = evaluate(runner, request, "agent-2")
+    with output.open("a") as stream:
+        stream.write("after the last submission\n")
+
+    assert first.status == second.status == SubmissionStatus.COMPLETED
+    assert seen[0]["agent_output.txt"] == "before first submission\n"
+    assert seen[0]["agent_prompt.md"] == "Solve it.\n"
+    assert seen[1]["agent_output.txt"] == (
+        "before first submission\nbefore second submission\n"
+    )
+    manifest = json.loads(seen[1]["manifest.json"])
+    assert manifest["round_id"] == "agent-2"
+    assert manifest["previous_round_id"] == "agent-1"
+    assert manifest["files"][1]["previous_size"] == len("before first submission\n")
+    # Once each Judge is gone only its manifest remains on the host.
+    for round_id in ("agent-1", "agent-2"):
+        directory = run_root / "judge-trajectory" / round_id
+        assert sorted(path.name for path in directory.iterdir()) == ["manifest.json"]
+
+
+def test_trajectory_capture_failure_is_an_infrastructure_error_and_resumes_work(
+    tmp_path,
+):
+    runner, runtime, _snapshot, _artifacts, request = make_harness(tmp_path)
+    plan = request[0]
+    run_root = plan.paths.logs / "runs" / "run-1" / plan.task.task_id
+    other = tmp_path / "other-run-output.txt"
+    other.write_text("not this run\n")
+    (run_root / "agent_output.txt").symlink_to(other)
+
+    report = evaluate(runner, request)
+
+    assert report.status == SubmissionStatus.INFRASTRUCTURE_ERROR
+    assert "not a regular file" in (report.error or "")
+    assert runtime.created_specs == []
+    assert runtime.events[-1] == ("unpause", "work-1")
+
+
+def test_trajectory_copy_is_kept_while_the_judge_is_retained(tmp_path):
+    runner, runtime, _snapshot, _artifacts, request = make_harness(tmp_path)
+    plan = request[0]
+    run_root = plan.paths.logs / "runs" / "run-1" / plan.task.task_id
+    (run_root / "agent_output.txt").write_text("output\n")
+    runtime.fail_at = "remove"
+
+    evaluate(runner, request)
+
+    directory = run_root / "judge-trajectory" / "agent-1"
+    assert (directory / "agent_output.txt").read_text() == "output\n"

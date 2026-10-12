@@ -342,14 +342,49 @@ def _scan_submissions_shallow(task_dir: Path) -> list[Submission]:
     return submissions
 
 
+def _peek_init_event(task_dir: Path) -> dict:
+    """Return the JSON init event near the top of agent_output.txt, or {}.
+
+    Claude Code writes it first; the coding-agent driver and the pi extension
+    write the same event with `agent` and `agent_version` added.
+    """
+    log_path = task_dir / "agent_output.txt"
+    if not log_path.is_file():
+        return {}
+    try:
+        with log_path.open("r", errors="replace") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return {}
+    for line in head.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("{"):
+            continue
+        try:
+            event = json.loads(stripped)
+        except json.JSONDecodeError:
+            continue
+        if (
+            isinstance(event, dict)
+            and event.get("type") == "system"
+            and (event.get("subtype") == "init" or event.get("model"))
+        ):
+            return event
+    return {}
+
+
 def _peek_model(task_dir: Path) -> str:
     """Extract model from agent_output.txt when final_result.json has none.
 
     Supports formats:
     - Claude Code JSONL: an init event line with {"type":"system","model":"..."}
+      (the coding-agent driver and the pi extension write the same event)
     - RSI Loop supervisor wrapper: Command: claude ... --model <model>
     - Codex plain text: header block contains `model: ...`
     """
+    model = _peek_init_event(task_dir).get("model")
+    if isinstance(model, str) and model:
+        return model
     log_path = task_dir / "agent_output.txt"
     if not log_path.is_file():
         return ""
@@ -358,15 +393,6 @@ def _peek_model(task_dir: Path) -> str:
             head = fh.read(4096)
     except OSError:
         return ""
-    for line in head.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("{"):
-            try:
-                init = json.loads(stripped)
-                if init.get("type") == "system" and init.get("model"):
-                    return init["model"]
-            except (json.JSONDecodeError, KeyError):
-                pass
     if "OpenAI Codex" in head:
         for line in head.splitlines():
             stripped = line.strip()
@@ -375,34 +401,83 @@ def _peek_model(task_dir: Path) -> str:
     return ""
 
 
+# Lines of run_agent.log that carry the Agent's launch command.
+_LAUNCH_MARKERS = ("Running agent:", "Resuming agent", "Agent supervisor attempt")
+# Driven Agents run under `rsi-agent-driver ... --agent-name <name> ...`.
+_RE_DRIVER_AGENT = re.compile(r"\brsi-agent-driver\b.*?\s--agent-name[\s=]+'?([A-Za-z0-9][\w.-]*)")
+# pi runs natively as `exec pi --offline ...`, after a prelude that starts
+# with its config directory; the log keeps only the command's first 200
+# characters, so the prelude may be all that is visible.
+_RE_PI_AGENT = re.compile(r"(?:^|[\s;&|(])(?:exec\s+)?pi\s+--offline(?=\s|$)|\bPI_CODING_AGENT_DIR=")
+
+
+def _agent_from_command(command: str) -> str:
+    """Return the Agent name a logged launch command identifies, or ""."""
+    cmd = command.strip()
+    program = cmd.split(maxsplit=1)[0] if cmd else ""
+    if name := {"claude": "claude-code", "codex": "codex", "aider": "aider"}.get(program):
+        return name
+    if m := _RE_DRIVER_AGENT.search(cmd):
+        return m.group(1)
+    if _RE_PI_AGENT.search(cmd):
+        return "pi"
+    return ""
+
+
 def _peek_agent(task_dir: Path) -> str:
-    """Infer the agent name from run_agent.log when final_result.json is absent."""
+    """Infer the agent name when final_result.json is absent.
+
+    Reads the launch command in run_agent.log, then falls back to
+    agent_output.txt: the `agent` field of its init event (the command is
+    truncated in the log, so a driven Agent's `--agent-name` is often cut
+    off), Claude Code's own init event, or Codex's header. RSI Harness logs
+    no launch command, only the Agent's output.
+    """
     log_path = task_dir / "run_agent.log"
-    if not log_path.is_file():
-        return ""
-    try:
-        with log_path.open("r", errors="replace") as fh:
-            head = fh.read(4096)
-    except OSError:
-        return ""
+    head = ""
+    if log_path.is_file():
+        try:
+            with log_path.open("r", errors="replace") as fh:
+                head = fh.read(4096)
+        except OSError:
+            head = ""
     if "Running agent: claude " in head or "Running agent: claude\n" in head:
         return "claude-code"
     if "Running agent: codex " in head or "Running agent: codex\n" in head:
         return "codex"
     if "Running agent: aider " in head or "Running agent: aider\n" in head:
         return "aider"
-    # New harness format: "Agent supervisor attempt N: claude -p ..."
+    # "Running agent: <cmd>", "Resuming agent (...): <cmd>" and the supervisor
+    # format "Agent supervisor attempt N: claude -p ...".
     for line in head.splitlines():
-        if "Agent supervisor attempt" not in line:
-            continue
-        after_colon = line.split(":", 4)[-1].strip()
-        if after_colon.startswith("claude ") or after_colon.startswith("claude\n"):
-            return "claude-code"
-        if after_colon.startswith("codex ") or after_colon.startswith("codex\n"):
-            return "codex"
-        if after_colon.startswith("aider ") or after_colon.startswith("aider\n"):
-            return "aider"
+        for marker in _LAUNCH_MARKERS:
+            pos = line.find(marker)
+            if pos < 0:
+                continue
+            rest = line[pos + len(marker):]
+            if marker != "Running agent:":
+                rest = rest.split(":", 1)[1] if ":" in rest else ""
+            if name := _agent_from_command(rest):
+                return name
+    init = _peek_init_event(task_dir)
+    agent = init.get("agent")
+    if isinstance(agent, str) and agent:
+        return agent
+    if init.get("claude_code_version"):
+        return "claude-code"
+    if _codex_header(task_dir):
+        return "codex"
     return ""
+
+
+def _codex_header(task_dir: Path) -> bool:
+    """Whether agent_output.txt starts with Codex's text header."""
+    try:
+        with (task_dir / "agent_output.txt").open("r", errors="replace") as fh:
+            head = fh.read(4096)
+    except OSError:
+        return False
+    return "OpenAI Codex v" in head
 
 
 def _select_best_submission(

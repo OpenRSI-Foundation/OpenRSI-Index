@@ -8,6 +8,8 @@ import logging
 import re
 import shlex
 import tempfile
+from dataclasses import dataclass
+from importlib import resources
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -19,6 +21,7 @@ from rsi_harness.integrations.rsi_loop import (
     RSILoopContainerHandle,
 )
 from rsi_harness.integrations.submit_client import generate_submit_client
+from rsi_harness.judge_agent import JUDGE_AGENT_UIDS
 from rsi_harness.models import (
     ContainerSpec,
     ImagePlan,
@@ -31,13 +34,16 @@ from rsi_harness.runtime.gpu import (
     NVIDIA_VISIBLE_DEVICES_VOID,
 )
 from rsi_loop import __version__ as rsi_loop_version
-from rsi_loop.harness.agent import Agent, create_agent, list_agent_classes
+from rsi_loop.harness.agent import Agent, create_agent
 from rsi_loop.harness.config import RSILoopConfig
 
 DEFAULT_RSI_LOOP_VERSION = rsi_loop_version
 DEFAULT_BOOTSTRAP_VERSION = "1"
 _SAFE_AGENT_LAUNCHER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
+_SAFE_IMAGE_FILE_PATH = re.compile(r"[A-Za-z0-9._+/-]+")
+_SAFE_BUILD_ARG = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _ORIGINAL_LAUNCHER_DIR = "/opt/rsi-harness/original-launchers"
+_AGENT_FILES_CONTEXT_DIR = "agent-files"
 
 
 def _bash_run_instruction(command: str) -> str:
@@ -54,6 +60,90 @@ def _registered_agent_launcher(agent: Agent) -> str:
     if not command or _SAFE_AGENT_LAUNCHER.fullmatch(command[0]) is None:
         raise SetupError("registered RSI Loop Agent launcher is unsafe")
     return command[0]
+
+
+def _quarantine_launcher_script(launcher: str) -> str:
+    # A task image that already ships the launcher would make the pinned
+    # install fail or shadow it on PATH, so move it aside first.
+    return f"""set -euo pipefail
+launcher={shlex.quote(launcher)}
+existing=$(command -v "$launcher" || true)
+if [[ -n "$existing" ]]; then
+    case "$existing" in
+        /*) ;;
+        *) echo 'existing Agent launcher path is unsafe' >&2; exit 86 ;;
+    esac
+    install -d -m 0755 {_ORIGINAL_LAUNCHER_DIR}
+    mv -f -- "$existing" {_ORIGINAL_LAUNCHER_DIR}/{shlex.quote(launcher)}
+fi
+"""
+
+
+def _agent_build_args(agent: Agent) -> dict[str, str | None]:
+    """Return the Agent's build arguments, refusing a name ARG cannot take."""
+    build_args = agent.build_args()
+    for name in build_args:
+        if not isinstance(name, str) or _SAFE_BUILD_ARG.fullmatch(name) is None:
+            raise SetupError(f"{agent.name} build argument is unsafe: {name!r}")
+    return build_args
+
+
+def _agent_launchers(agent: Agent) -> tuple[str, ...]:
+    """Return the run command's launcher followed by the Agent's extra ones."""
+    launchers = [_registered_agent_launcher(agent)]
+    for launcher in agent.extra_launchers:
+        if (
+            not isinstance(launcher, str)
+            or _SAFE_AGENT_LAUNCHER.fullmatch(launcher) is None
+        ):
+            raise SetupError(f"{agent.name} extra launcher is unsafe: {launcher!r}")
+        if launcher not in launchers:
+            launchers.append(launcher)
+    return tuple(launchers)
+
+
+@dataclass(frozen=True)
+class _AgentImageFile:
+    target: PurePosixPath
+    context_name: str
+    mode: int
+    content: bytes
+
+
+def _agent_image_files(agent: Agent) -> tuple[_AgentImageFile, ...]:
+    """Resolve an Agent's packaged image files in a stable order."""
+    files: list[_AgentImageFile] = []
+    for index, (raw_target, (resource, mode)) in enumerate(
+        sorted(agent.image_files.items())
+    ):
+        target = PurePosixPath(raw_target)
+        if (
+            not target.is_absolute()
+            or ".." in target.parts
+            or _SAFE_IMAGE_FILE_PATH.fullmatch(raw_target) is None
+        ):
+            raise SetupError(f"{agent.name} image file path is unsafe: {raw_target!r}")
+        source = PurePosixPath(resource)
+        if source.is_absolute() or ".." in source.parts:
+            raise SetupError(f"{agent.name} image file source is unsafe: {resource!r}")
+        if not isinstance(mode, int) or not 0 <= mode <= 0o777:
+            raise SetupError(f"{agent.name} image file mode is invalid: {mode!r}")
+        try:
+            content = resources.files("rsi_loop").joinpath(resource).read_bytes()
+        except OSError as error:
+            raise SetupError(
+                f"{agent.name} image file {resource!r} is missing from the "
+                f"rsi_loop package: {error}"
+            ) from error
+        files.append(
+            _AgentImageFile(
+                target=target,
+                context_name=f"{_AGENT_FILES_CONTEXT_DIR}/{index}",
+                mode=mode,
+                content=content,
+            )
+        )
+    return tuple(files)
 
 
 def _drain_build_logs(logs: Any) -> None:
@@ -292,9 +382,21 @@ class DockerImageBuilder:
                 submit = context / "rsi-submit"
                 submit.write_text(submit_client)
                 submit.chmod(0o755)
+                for image_file in _agent_image_files(agent):
+                    staged = context / image_file.context_name
+                    staged.parent.mkdir(parents=True, exist_ok=True)
+                    staged.write_bytes(image_file.content)
+                # Only the values that are set; the Dockerfile declares every
+                # name, so the tag does not depend on them.
+                build_args = {
+                    name: value
+                    for name, value in _agent_build_args(agent).items()
+                    if value
+                }
                 image, logs = self._client.images.build(
                     path=str(context),
                     tag=work_tag,
+                    buildargs=build_args,
                     timeout=max(1, round(task.service.build_timeout_seconds)),
                     pull=False,
                     rm=True,
@@ -317,19 +419,7 @@ class DockerImageBuilder:
         workdir: PurePosixPath,
         final_user: str,
     ) -> str:
-        launcher = _registered_agent_launcher(agent)
-        quarantine_launcher = f"""set -euo pipefail
-launcher={shlex.quote(launcher)}
-existing=$(command -v "$launcher" || true)
-if [[ -n "$existing" ]]; then
-    case "$existing" in
-        /*) ;;
-        *) echo 'existing Agent launcher path is unsafe' >&2; exit 86 ;;
-    esac
-    install -d -m 0755 {_ORIGINAL_LAUNCHER_DIR}
-    mv -f -- "$existing" {_ORIGINAL_LAUNCHER_DIR}/{shlex.quote(launcher)}
-fi
-"""
+        launchers = _agent_launchers(agent)
         lines = [
             f"FROM {base_ref}",
             "USER root",
@@ -344,17 +434,37 @@ fi
             _bash_run_instruction(build_agent_identity_script(final_user)),
             "COPY rsi-submit /usr/local/bin/rsi-submit",
             "RUN chmod 0755 /usr/local/bin/rsi-submit",
-            _bash_run_instruction(quarantine_launcher),
         ]
+        for launcher in launchers:
+            lines.append(_bash_run_instruction(_quarantine_launcher_script(launcher)))
+        # After the quarantine, which would otherwise move a baked-in
+        # launcher aside, and before install_cmds, which may use the files.
+        image_files = _agent_image_files(agent)
+        for image_file in image_files:
+            lines.append(
+                "COPY " + json.dumps([image_file.context_name, str(image_file.target)])
+            )
+        if image_files:
+            lines.append(
+                _bash_run_instruction(
+                    " && ".join(
+                        f"chmod {image_file.mode:04o} "
+                        f"{shlex.quote(str(image_file.target))}"
+                        for image_file in image_files
+                    )
+                )
+            )
+        lines.extend(f"ARG {name}" for name in _agent_build_args(agent))
         for command in agent.install_cmds:
             build_command = command.replace("sudo -E ", "")
             lines.append(_bash_run_instruction(build_command))
-        lines.append(
-            _bash_run_instruction(
-                f"launcher=$(command -v {shlex.quote(launcher)}) && "
-                'test -n "$launcher" && test -x "$launcher"'
+        for launcher in launchers:
+            lines.append(
+                _bash_run_instruction(
+                    f"launcher=$(command -v {shlex.quote(launcher)}) && "
+                    'test -n "$launcher" && test -x "$launcher"'
+                )
             )
-        )
         lines.extend(["ENV HOME=/home/agent", f"WORKDIR {workdir}"])
         if final_user:
             lines.append(f"USER {final_user}")
@@ -404,6 +514,46 @@ fi
             raise SetupError(
                 f"image user/WORKDIR dynamic preflight failed: {error}"
             ) from error
+        if task.verifier.model_access:
+            self._preflight_judge_agent(task, work_ref=work_ref)
+
+    def _preflight_judge_agent(self, task: TaskDefinition, *, work_ref: str) -> None:
+        """A model-access Judge runs rsi-agent: Python 3.8+ and free uids/gids."""
+        first, last = JUDGE_AGENT_UIDS[0], JUDGE_AGENT_UIDS[-1]
+        check = (
+            "import ctypes, fcntl, grp, pwd, sys\n"
+            "if sys.version_info < (3, 8):\n"
+            "    sys.exit('python3 is older than 3.8')\n"
+            f"ids = range({first}, {last + 1})\n"
+            "taken = sorted({e.pw_uid for e in pwd.getpwall() if e.pw_uid in ids}\n"
+            "               | {e.gr_gid for e in grp.getgrall() if e.gr_gid in ids})\n"
+            "if taken:\n"
+            f"    sys.exit('ids {first}-{last} are reserved for rsi-agent; '\n"
+            "             'the image already uses ' + ', '.join(map(str, taken)))\n"
+        )
+        try:
+            self._client.containers.run(
+                work_ref,
+                [
+                    "/bin/sh",
+                    "-c",
+                    "command -v python3 >/dev/null 2>&1 || "
+                    '{ echo "python3 is missing" >&2; exit 1; }; '
+                    'exec python3 -I -S -B -c "$1"',
+                    "rsi-agent-preflight",
+                    check,
+                ],
+                user="0",
+                environment={NVIDIA_VISIBLE_DEVICES_ENV: NVIDIA_VISIBLE_DEVICES_VOID},
+                network_mode="none",
+                labels=self._labels(task, "judge"),
+                remove=True,
+            )
+        except Exception as error:
+            raise SetupError(
+                "model_access needs python3 3.8 or later in the task image for "
+                f"rsi-agent: {error}"
+            ) from error
 
     def _preflight_hooks(
         self, task: TaskDefinition, *, agent: Agent, work_ref: str
@@ -430,18 +580,14 @@ fi
                 )
                 self._client.containers.get(container.container_id).start()
                 try:
-                    for agent_class in list_agent_classes():
-                        hook_agent = create_agent(
-                            agent_class.name, self._rsi_loop_config
-                        )
-                        log_dir = root / "logs" / agent_class.name
-                        log_dir.mkdir(parents=True)
-                        hook_agent.install_stop_hook(
-                            RSILoopBackendBridge(runtime),
-                            RSILoopContainerHandle(container),
-                            log_dir,
-                            logging.getLogger(__name__),
-                        )
+                    log_dir = root / "logs" / agent.name
+                    log_dir.mkdir(parents=True)
+                    create_agent(agent.name, self._rsi_loop_config).install_stop_hook(
+                        RSILoopBackendBridge(runtime),
+                        RSILoopContainerHandle(container),
+                        log_dir,
+                        logging.getLogger(__name__),
+                    )
                 finally:
                     runtime.stop(container)
                     runtime.remove(container)
@@ -461,20 +607,25 @@ fi
         dockerfile: str,
         submit_client: str,
     ) -> str:
+        identity: dict[str, Any] = {
+            "base_digest": base_digest,
+            "effective_user": effective_user,
+            "workdir": str(workdir),
+            "dockerfile": dockerfile,
+            "submit_client": submit_client,
+            "image_labels": self._labels(task, "work"),
+            "rsi_loop_version": self._rsi_loop_version,
+            "bootstrap_version": self._bootstrap_version,
+        }
+        image_files = _agent_image_files(agent)
+        # Only when present, so Agents without files keep their existing tags.
+        if image_files:
+            identity["image_files"] = {
+                str(image_file.target): hashlib.sha256(image_file.content).hexdigest()
+                for image_file in image_files
+            }
         content_digest = hashlib.sha256(
-            json.dumps(
-                {
-                    "base_digest": base_digest,
-                    "effective_user": effective_user,
-                    "workdir": str(workdir),
-                    "dockerfile": dockerfile,
-                    "submit_client": submit_client,
-                    "image_labels": self._labels(task, "work"),
-                    "rsi_loop_version": self._rsi_loop_version,
-                    "bootstrap_version": self._bootstrap_version,
-                },
-                sort_keys=True,
-            ).encode()
+            json.dumps(identity, sort_keys=True).encode()
         ).hexdigest()[:16]
         values = (
             task.environment_digest or "missing-environment-digest",

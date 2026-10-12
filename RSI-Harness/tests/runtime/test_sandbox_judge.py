@@ -773,7 +773,10 @@ def test_disabled_judge_does_not_pass_deadline_or_sandbox_mount(tmp_path):
     report = evaluate(runner, request)
 
     assert report.status == SubmissionStatus.COMPLETED
-    assert len(runtime.created_specs[0].mounts) == 1
+    assert [str(mount.target) for mount in runtime.created_specs[0].mounts] == [
+        "/logs/verifier",
+        "/logs/agent",
+    ]
     assert "RSI_SANDBOX_TOKEN" not in runtime.exec_environments[0]
 
 

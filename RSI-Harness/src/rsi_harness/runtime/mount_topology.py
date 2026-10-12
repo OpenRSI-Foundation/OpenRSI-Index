@@ -5,11 +5,17 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 
 from rsi_harness.errors import SetupError
-from rsi_harness.models import WORK_FEEDBACK_ROOT, RootfsSnapshotMode, RunPlan
+from rsi_harness.models import (
+    JUDGE_TRAJECTORY_ROOT,
+    WORK_FEEDBACK_ROOT,
+    RootfsSnapshotMode,
+    RunPlan,
+)
 
 ENGINE_MOUNT_TARGETS = (
     PurePosixPath("/tests"),
     PurePosixPath("/logs/verifier"),
+    JUDGE_TRAJECTORY_ROOT,
     PurePosixPath("/run/rsi-harness/staging"),
     WORK_FEEDBACK_ROOT,
 )

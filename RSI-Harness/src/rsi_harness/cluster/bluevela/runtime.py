@@ -44,6 +44,7 @@ from rsi_harness.integrations.rsi_loop import (
 )
 from rsi_harness.integrations.submit_client import generate_submit_client
 from rsi_harness.models import (
+    JUDGE_TRAJECTORY_ROOT,
     AgentHookRequest,
     AgentPrepareRequest,
     AgentRunRequest,
@@ -63,7 +64,7 @@ from rsi_harness.models import (
     SubmissionStatus,
     WorkQuiescence,
 )
-from rsi_harness.runtime.artifacts import RunArtifactWriter
+from rsi_harness.runtime.artifacts import RunArtifactWriter, _sudo_invoking_owner
 from rsi_harness.runtime.coordinator import (
     EmbeddedSubmissionServerFactory,
     ProductionCoordinatorBackend,
@@ -84,6 +85,11 @@ from rsi_harness.runtime.reward import read_reward
 from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
 from rsi_harness.runtime.sandbox_policy import validate_cluster_sandbox
 from rsi_harness.runtime.sandbox_server import SANDBOX_TARGET
+from rsi_harness.runtime.trajectory import (
+    capture_round_trajectory,
+    release_round_trajectory,
+)
+from rsi_harness.task.digest import require_tests_digest
 from rsi_loop.harness.agent import create_agent
 from rsi_loop.harness.config import load_config
 
@@ -247,7 +253,21 @@ class ApptainerAgentRuntime:
             raise SetupError("Judge authority provider must be a real directory")
         return source, PurePosixPath("/run-contract"), True
 
+    @property
+    def public_tests(self) -> bool:
+        return self.plan.task.verifier.visibility == "public"
+
+    def _require_public_tests_digest(self) -> None:
+        if self.public_tests:
+            require_tests_digest(
+                self.plan.task.source_dir / "tests", self.plan.task.tests_digest
+            )
+
     def initialize(self) -> None:
+        # Apptainer Judges run with no network and no Agent relay.
+        require_no_judge_model_access(self.plan.task)
+        # Public tests are read-only in Work: prove them before Work starts.
+        self._require_public_tests_digest()
         if self.profile.apptainer.mount_policy == "scoped" and "public" in (
             self.plan.task.service.network_mode,
             self.plan.task.agent.network.mode,
@@ -640,11 +660,19 @@ class ApptainerAgentRuntime:
         environment: dict[str, str],
         *,
         sandbox_endpoint: Any = None,
+        trajectory: Path | None = None,
     ) -> AgentRunResult:
+        # A public Judge runs exactly the tests Work saw.
+        self._require_public_tests_digest()
         if self.allocated_pools is not None:
             if sandbox_endpoint is not None:
                 raise SetupError("multi-node Judge cannot reach the sandbox broker")
-            return self._run_multinode_judge(workspace, request, environment)
+            return self._run_multinode_judge(
+                workspace, request, environment, trajectory=trajectory
+            )
+        trajectory_binds: tuple[tuple[Path, PurePosixPath, bool], ...] = ()
+        if trajectory is not None:
+            trajectory_binds = ((trajectory, JUDGE_TRAJECTORY_ROOT, True),)
         sandbox_binds: tuple[tuple[Path, PurePosixPath, bool], ...] = ()
         redact: tuple[str, ...] = ()
         if sandbox_endpoint is not None:
@@ -676,6 +704,7 @@ class ApptainerAgentRuntime:
                         False,
                     ),
                     (judge_tmp, PurePosixPath("/tmp"), False),
+                    *trajectory_binds,
                     *sandbox_binds,
                 ),
                 mount_workspace=False,
@@ -762,6 +791,8 @@ class ApptainerAgentRuntime:
         workspace: Path,
         request: EvaluationRequest,
         environment: dict[str, str],
+        *,
+        trajectory: Path | None = None,
     ) -> AgentRunResult:
         pools = self.allocated_pools
         assert pools is not None
@@ -789,6 +820,17 @@ class ApptainerAgentRuntime:
             WorkerBind(
                 source=request.verifier_logs,
                 target=PurePosixPath("/logs/verifier"),
+            ),
+            *(
+                ()
+                if trajectory is None
+                else (
+                    WorkerBind(
+                        source=trajectory,
+                        target=JUDGE_TRAJECTORY_ROOT,
+                        read_only=True,
+                    ),
+                )
             ),
             WorkerBind(
                 source=shim,
@@ -1058,6 +1100,14 @@ class ApptainerAgentRuntime:
             binds.append(
                 (self.feedback, PurePosixPath("/run/rsi-harness/feedback"), True)
             )
+            if self.public_tests:
+                binds.append(
+                    (
+                        self.plan.task.source_dir / "tests",
+                        PurePosixPath("/tests"),
+                        True,
+                    )
+                )
         if mount_agent_home:
             binds.append((self.agent_home, PurePosixPath("/home/agent"), False))
             binds.extend(self._agent_auth_binds)
@@ -1271,6 +1321,15 @@ class ApptainerAgentRuntime:
         )
 
 
+def require_no_judge_model_access(task: Any) -> None:
+    """Cluster Judges cannot reach a model: refuse a task that needs one."""
+    if task.verifier.model_access:
+        raise SetupError(
+            "Judge model access (metadata.rsi_harness.verifier.model_access) "
+            "is not supported on cluster runs; use the local Docker backend"
+        )
+
+
 class NativeJudgeEvaluator:
     """One Judge round. With a sandbox lifecycle it follows the local
     ordering: freeze Work's envs, pause Work, run the round with its own
@@ -1334,19 +1393,34 @@ class NativeJudgeEvaluator:
             environment = resolve_runtime_environment(
                 request.run_plan.task.verifier.environment, os.environ
             )
-            endpoint = None
-            if frozen:
-                endpoint = self.sandbox.prepare_judge(request.round_id)
-                self.sandbox.activate_judge(
-                    time.monotonic() + request.run_plan.task.verifier.timeout_seconds
-                )
-            result = (
-                self.runtime.run_judge(snapshot, request, environment)
-                if endpoint is None
-                else self.runtime.run_judge(
-                    snapshot, request, environment, sandbox_endpoint=endpoint
-                )
+            # Freeze the Agent's output while Work is paused: the Judge sees
+            # exactly what led to this submission and nothing later.
+            trajectory = capture_round_trajectory(
+                self.artifacts.root, request.round_id, owner=_sudo_invoking_owner()
             )
+            try:
+                endpoint = None
+                if frozen:
+                    endpoint = self.sandbox.prepare_judge(request.round_id)
+                    self.sandbox.activate_judge(
+                        time.monotonic()
+                        + request.run_plan.task.verifier.timeout_seconds
+                    )
+                result = (
+                    self.runtime.run_judge(
+                        snapshot, request, environment, trajectory=trajectory
+                    )
+                    if endpoint is None
+                    else self.runtime.run_judge(
+                        snapshot,
+                        request,
+                        environment,
+                        sandbox_endpoint=endpoint,
+                        trajectory=trajectory,
+                    )
+                )
+            finally:
+                release_round_trajectory(trajectory)
             reward = read_reward(
                 request.verifier_logs,
                 request.run_plan.task.verifier.primary_reward,

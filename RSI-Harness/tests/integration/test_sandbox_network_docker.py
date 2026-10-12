@@ -179,7 +179,9 @@ def test_real_env_bridge_resolves_aliases_and_tears_down_in_reverse(
             backend.attest(plan, network_id, containers=[services[1].id])
 
         main = services[1]
-        resolved = main.exec_run(["nslookup", "kvstore"])
+        # Absolute, so busybox nslookup does not try the host's DNS search
+        # domains, which Docker copies into every container, first.
+        resolved = main.exec_run(["nslookup", "kvstore."])
         assert resolved.exit_code == 0, resolved.output
         services[0].reload()
         kv_address = services[0].attrs["NetworkSettings"]["Networks"][plan.name][

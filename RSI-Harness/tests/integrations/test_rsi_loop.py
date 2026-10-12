@@ -11,7 +11,10 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from rsi_harness.errors import InfrastructureError, SetupError
-from rsi_harness.integrations.rsi_loop import RSILoopAgentAdapter
+from rsi_harness.integrations.rsi_loop import (
+    RSILoopAgentAdapter,
+    validate_agent_config,
+)
 from rsi_harness.models import (
     AgentHookRequest,
     AgentPrepareRequest,
@@ -23,9 +26,11 @@ from rsi_harness.models import (
     JudgeGPUMode,
     RunGPUPlan,
 )
-from rsi_loop.harness.agent import list_agent_classes
+from rsi_loop.harness.agent import create_agent, list_agent_classes
+from rsi_loop.harness.agent.base import STOP_HOOK_REASON
 from rsi_loop.harness.config import RSILoopConfig, load_config
 from tests.factories import make_run_plan
+from tests.fakes import register_fake_driven_agent
 
 
 class RecordingAgentRuntime:
@@ -248,8 +253,9 @@ def test_public_configuration_uses_rsi_environment_names(
     assert config.npm_registry_url == "https://npm.rsi.test"
 
 
+@pytest.mark.parametrize("effort", ("xhigh", "max", "ultra"))
 def test_prepare_maps_generic_reasoning_effort_to_codex_cli_override(
-    tmp_path: Path,
+    tmp_path: Path, effort: str
 ) -> None:
     prompt_path = (tmp_path / "reasoning-prompt.md").resolve()
     plan = make_run_plan(tmp_path)
@@ -258,7 +264,7 @@ def test_prepare_maps_generic_reasoning_effort_to_codex_cli_override(
             "task": plan.task.model_copy(
                 update={
                     "agent": plan.task.agent.model_copy(
-                        update={"model": "gpt-test", "reasoning_effort": "xhigh"}
+                        update={"model": "gpt-test", "reasoning_effort": effort}
                     )
                 }
             )
@@ -272,11 +278,55 @@ def test_prepare_maps_generic_reasoning_effort_to_codex_cli_override(
     assert prepared.command == (
         "/bin/bash",
         "-lc",
-        "codex exec -c 'model_reasoning_effort=\"xhigh\"' "
-        '-c web_search="disabled" --model gpt-test '
-        "--dangerously-bypass-approvals-and-sandbox "
+        f"codex exec -c 'model_reasoning_effort=\"{effort}\"' "
+        '-c web_search="disabled" -c features.shell_snapshot=false '
+        "--model gpt-test --dangerously-bypass-approvals-and-sandbox "
         '"$(cat /tmp/rsi-agent-prompt.md)"',
     )
+
+
+@pytest.mark.parametrize("via_extra_env", (False, True))
+def test_codex_command_names_the_configured_endpoint_as_its_provider(
+    tmp_path: Path, via_extra_env: bool
+) -> None:
+    """The pinned Codex ignores OPENAI_BASE_URL; its command names a provider.
+
+    The URL is read from the variable when the command runs, so the logged
+    command does not carry it. Without a configured endpoint Codex keeps its
+    default provider.
+    """
+    url = "https://agent.rsi.test/v1"
+    config = (
+        RSILoopConfig(agent_extra_env={"OPENAI_BASE_URL": url})
+        if via_extra_env
+        else RSILoopConfig(agent_api_base_url=url)
+    )
+    command = create_agent("codex", config).format_run_cmd(
+        "/tmp/prompt.md", model="gpt-test"
+    )
+    default = create_agent("codex", RSILoopConfig()).format_run_cmd(
+        "/tmp/prompt.md", model="gpt-test"
+    )
+
+    assert url not in command
+    assert "model_provider" not in default
+    argv = subprocess.run(
+        ["bash", "-c", 'codex() { printf "%s\\n" "$@"; }; ' + command],
+        env={**os.environ, "OPENAI_BASE_URL": url},
+        cwd=tmp_path,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+    overrides = [value for flag, value in zip(argv, argv[1:]) if flag == "-c"]
+    assert sorted(overrides) == [
+        "features.shell_snapshot=false",
+        "model_provider=rsi_proxy",
+        f'model_providers.rsi_proxy.base_url="{url}"',
+        "model_providers.rsi_proxy.env_key=OPENAI_API_KEY",
+        "model_providers.rsi_proxy.name=rsi_proxy",
+        "model_providers.rsi_proxy.wire_api=responses",
+    ]
 
 
 @pytest.mark.parametrize(
@@ -535,8 +585,9 @@ def test_claude_prompt_is_read_from_stdin_and_never_expanded_into_argv(
     assert " --model claude-opus-5" in command
 
 
+@pytest.mark.parametrize("effort", ("minimal", "ultra"))
 def test_prepare_rejects_unsupported_claude_reasoning_effort_before_writing_prompt(
-    tmp_path: Path,
+    tmp_path: Path, effort: str
 ) -> None:
     prompt_path = (tmp_path / "invalid-claude-reasoning-prompt.md").resolve()
     plan = make_run_plan(tmp_path)
@@ -547,7 +598,7 @@ def test_prepare_rejects_unsupported_claude_reasoning_effort_before_writing_prom
                     "agent": plan.task.agent.model_copy(
                         update={
                             "name": "claude-code",
-                            "reasoning_effort": "minimal",
+                            "reasoning_effort": effort,
                         }
                     )
                 }
@@ -563,7 +614,7 @@ def test_prepare_rejects_unsupported_claude_reasoning_effort_before_writing_prom
     assert not prompt_path.exists()
 
 
-@pytest.mark.parametrize("effort", ("none", "max", "HIGH", ""))
+@pytest.mark.parametrize("effort", ("none", "ultrahigh", "HIGH", ""))
 def test_prepare_rejects_unsupported_codex_reasoning_effort_before_writing_prompt(
     tmp_path: Path, effort: str
 ) -> None:
@@ -1226,3 +1277,695 @@ def test_run_redacts_bare_provider_proxy_and_custom_secret_values_longest_first(
         "[REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED] "
         "nested=[REDACTED][REDACTED] harmless-value"
     )
+
+
+def test_codex_names_the_api_base_url_provider_at_launch() -> None:
+    from rsi_loop.harness.agent import create_agent
+
+    proxied = create_agent(
+        "codex", RSILoopConfig(agent_api_base_url="http://model.test:8000/v1")
+    ).format_run_cmd("/tmp/prompt.md", model="m")
+    direct = create_agent("codex", RSILoopConfig()).format_run_cmd(
+        "/tmp/prompt.md", model="m"
+    )
+
+    argv = shlex.split(proxied.split('"$(cat')[0])
+    assert "model_provider=rsi_proxy" in argv
+    assert 'model_providers.rsi_proxy.base_url="$OPENAI_BASE_URL"' in argv
+    assert "model_providers.rsi_proxy.env_key=OPENAI_API_KEY" in argv
+    # The URL and key stay in the environment, not in the command line.
+    assert "model.test" not in proxied
+    assert "model_provider" not in direct
+
+
+# -- one-shot commands for rsi-agent in a Judge ------------------------------------
+
+
+def _oneshot(
+    agent, *, base_url=None, internet=False, effort="high", model="m", **config
+):
+    from rsi_harness.integrations.rsi_loop import rsi_loop_oneshot
+    from rsi_harness.models import AgentPlan, NetworkPolicy
+
+    return rsi_loop_oneshot(
+        RSILoopConfig(
+            agent_api_key="sk-oneshot", agent_api_base_url=base_url, **config
+        ),
+        AgentPlan(
+            name=agent,
+            model=model,
+            reasoning_effort=effort,
+            network=NetworkPolicy(mode="public" if internet else "no-network"),
+        ),
+    )
+
+
+CODEX_ONESHOT = (
+    "--ephemeral --skip-git-repo-check --ignore-user-config --ignore-rules"
+    " --dangerously-bypass-approvals-and-sandbox -c features.hooks=false"
+    " -c features.goals=false -c project_doc_max_bytes=0"
+    " --output-last-message {output_file} {schema_option} -"
+)
+
+
+def test_codex_one_shot_command_matches_work_launch_flags() -> None:
+    offline = _oneshot("codex")
+    assert offline["command"] == (
+        "codex exec -c 'model_reasoning_effort=\"high\"' "
+        '-c web_search="disabled" -c features.shell_snapshot=false --model m '
+        + CODEX_ONESHOT
+    )
+    assert offline["schema_option"] == "--output-schema {schema_file}"
+    assert offline["output"] == {"mode": "file", "fields": [], "error_field": None}
+    assert offline["unsupported"] is None
+    assert offline["environment"]["CODEX_API_KEY"] == "sk-oneshot"
+
+    online = _oneshot("codex", internet=True, effort=None, model=None)
+    assert online["command"] == (
+        "codex exec -c features.shell_snapshot=false " + CODEX_ONESHOT
+    )
+
+
+def test_codex_one_shot_names_the_base_url_provider_at_launch() -> None:
+    proxied = _oneshot("codex", base_url="http://model.test:8000/v1", internet=True)
+
+    command = proxied["command"]
+    argv = shlex.split(command.replace("{", "<").replace("}", ">"))
+    assert "model_provider=rsi_proxy" in argv
+    assert 'model_providers.rsi_proxy.base_url="$OPENAI_BASE_URL"' in argv
+    assert "model_providers.rsi_proxy.env_key=OPENAI_API_KEY" in argv
+    assert "model.test" not in command and "sk-oneshot" not in command
+    assert proxied["environment"]["OPENAI_BASE_URL"] == "http://model.test:8000/v1"
+    assert "CODEX_API_KEY" not in proxied["environment"]
+
+
+def test_claude_one_shot_command_prints_one_json_result() -> None:
+    offline = _oneshot("claude-code", effort="max")
+    assert offline["command"] == (
+        "claude --effort max -p --output-format json --no-session-persistence"
+        " --dangerously-skip-permissions --safe-mode --setting-sources user"
+        " {schema_option} --model m --disallowedTools WebSearch,WebFetch"
+    )
+    assert offline["schema_option"] == '--json-schema "$(cat {schema_file})"'
+    assert offline["output"] == {
+        "mode": "stdout-json",
+        "fields": ["structured_output", "result"],
+        "error_field": "is_error",
+    }
+    assert offline["environment"]["ANTHROPIC_AUTH_TOKEN"] == "sk-oneshot"
+    assert offline["environment"]["IS_SANDBOX"] == "1"
+
+    online = _oneshot("claude-code", internet=True, effort=None)
+    assert "--disallowedTools" not in online["command"]
+    assert online["command"].startswith("claude -p ")
+
+
+MODEL_LIMITS = {"agent_context_window": "131072", "agent_max_output_tokens": "16384"}
+QWEN_CONFIRMED = (
+    "read_file,glob,grep_search,run_shell_command,edit,write_file,notebook_edit"
+)
+QWEN_DENIED = "enter_plan_mode,exit_plan_mode,ask_user_question"
+
+
+def test_qwen_one_shot_command_prints_one_result_line() -> None:
+    base_url = "http://model.test:8000/v1"
+    offline = _oneshot("qwen-code", base_url=base_url, effort=None, **MODEL_LIMITS)
+
+    prelude, command = offline["command"].split("\n")
+    # Print mode, never the driver; the prompt arrives on stdin.
+    assert command == (
+        "qwen --safe-mode --chat-recording=false --output-format stream-json"
+        f" --allowed-tools {QWEN_CONFIRMED}"
+        # The skill tool too: it would list the working directory's
+        # .qwen/commands.
+        f" --exclude-tools {QWEN_DENIED},web_fetch,web_search,skill"
+        " --model m {schema_option} | tail -n 1"
+    )
+    # Work's settings, with folder trust on, written into the fresh HOME.
+    agent = create_agent("qwen-code", RSILoopConfig(**MODEL_LIMITS))
+    settings = agent.oneshot_settings(internet=False)
+    assert settings == {
+        **agent.settings(internet=False),
+        "security": {
+            "auth": {"selectedType": "openai"},
+            "folderTrust": {"enabled": True},
+        },
+    }
+    assert prelude == (
+        "mkdir -p \"$HOME/.qwen\" && printf '%s\\n' "
+        + shlex.quote(json.dumps(settings, sort_keys=True))
+        + ' > "$HOME/.qwen/settings.json" && set -o pipefail &&'
+    )
+    assert offline["schema_option"] == "--json-schema @{schema_file}"
+    assert offline["output"] == {
+        "mode": "stdout-json",
+        "fields": ["structured_result", "result"],
+        "error_field": "is_error",
+    }
+    environment = offline["environment"]
+    assert environment["OPENAI_API_KEY"] == "sk-oneshot"
+    assert environment["OPENAI_BASE_URL"] == base_url
+    assert environment["OPENAI_MODEL"] == "m"
+    assert environment["QWEN_CODE_MODELS_DEV"] == "off"
+    assert environment["QWEN_TELEMETRY_ENABLED"] == "false"
+    assert "sk-oneshot" not in offline["command"]
+    assert "model.test" not in offline["command"]
+
+    online = _oneshot("qwen-code", internet=True, effort=None, **MODEL_LIMITS)
+    argv = shlex.split(online["command"].split("\n")[1])
+    assert argv[argv.index("--allowed-tools") + 1] == (
+        f"{QWEN_CONFIRMED},web_fetch,web_search"
+    )
+    assert argv[argv.index("--exclude-tools") + 1] == f"{QWEN_DENIED},skill"
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        # As in Work: Qwen takes no reasoning effort yet.
+        ({**MODEL_LIMITS, "effort": "high"}, "does not support reasoning effort"),
+        ({**MODEL_LIMITS, "effort": None, "model": None}, "needs a model"),
+        (
+            {"effort": None, "agent_context_window": "131072"},
+            "RSI_AGENT_MAX_OUTPUT_TOKENS is not set",
+        ),
+    ],
+)
+def test_qwen_one_shot_refuses_what_work_refuses(options, message) -> None:
+    with pytest.raises(SetupError, match=message):
+        _oneshot("qwen-code", **options)
+
+
+def test_kimi_one_shot_command_uses_print_mode_with_work_config() -> None:
+    base_url = "http://model.test:8000/v1"
+    offline = _oneshot("kimi-code", base_url=base_url, **MODEL_LIMITS)
+
+    command = offline["command"]
+    lines = command.split("\n")
+    # Work's config.toml in the fresh HOME, with the reasoning effort.
+    agent = create_agent("kimi-code", RSILoopConfig(**MODEL_LIMITS))
+    prelude = agent.config_prelude(model="m", internet=False)
+    assert command.startswith(agent.apply_reasoning_effort(prelude, "high") + " &&\n")
+    assert 'default_effort = "high"' in command
+    assert '"FetchURL", "WebSearch"' in command
+    assert lines[-3:] == [
+        "unset KIMI_CODE_INFINITE_RETRY && set -o pipefail &&",
+        "{ kimi=$(command -v kimi) || exit 127; } &&",
+        lines[-1],
+    ]
+    # Print mode, never the driver; the prompt arrives on stdin, and only
+    # the last assistant line leaves the pipe.
+    launch, keep = lines[-1].split(" | ")
+    argv = shlex.split(launch)
+    assert argv[:2] == ["node", "-e"]
+    assert "readFileSync(0" in argv[2] and '"--prompt=" + prompt' in argv[2]
+    assert argv[3:] == [
+        "--",
+        "$kimi",
+        "--output-format",
+        "stream-json",
+        "--agent-file",
+        "$KIMI_CODE_HOME/oneshot-agent.md",
+        "--skills-dir",
+        "$KIMI_CODE_HOME/skills",
+        "{schema_option}",
+    ]
+    assert keep == 'sed -n \'/^{"role":"assistant"/h;${x;p;}\''
+    # The explicit profile: Kimi's default system prompt, no subagents.
+    assert (
+        "printf '%s' '---\nname: agent\ndescription: Default agent\n"
+        "disallowedTools: Agent, AgentSwarm\n---\n${base_prompt}\n'"
+        ' > "$KIMI_CODE_HOME/oneshot-agent.md" &&'
+    ) in command
+    # No native schema option: rsi-agent states the schema in the prompt.
+    assert offline["schema_option"] is None
+    assert offline["output"] == {
+        "mode": "stdout-json",
+        "fields": ["content"],
+        "error_field": None,
+    }
+    environment = offline["environment"]
+    assert environment["OPENAI_API_KEY"] == "sk-oneshot"
+    assert environment["OPENAI_BASE_URL"] == base_url
+    assert environment["KIMI_DISABLE_TELEMETRY"] == "1"
+    assert environment["KIMI_CODE_NO_AUTO_UPDATE"] == "1"
+    assert "sk-oneshot" not in command
+    assert "model.test" not in command
+
+    online = _oneshot("kimi-code", internet=True, effort=None, **MODEL_LIMITS)
+    assert '"FetchURL"' not in online["command"]
+    assert 'capabilities = ["tool_use"]\n' in online["command"]
+    assert "default_effort" not in online["command"]
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        # As in Work: an effort Kimi does not declare.
+        ({**MODEL_LIMITS, "effort": "xhigh"}, "unsupported Kimi Code reasoning effort"),
+        ({**MODEL_LIMITS, "model": None}, "needs a model"),
+        ({"agent_context_window": "131072"}, "RSI_AGENT_MAX_OUTPUT_TOKENS is not set"),
+    ],
+)
+def test_kimi_one_shot_refuses_what_work_refuses(options, message) -> None:
+    with pytest.raises(SetupError, match=message):
+        _oneshot("kimi-code", **options)
+
+
+def test_opencode_one_shot_command_uses_run_with_work_config() -> None:
+    base_url = "http://model.test:8000/v1"
+    offline = _oneshot("opencode", base_url=base_url, **MODEL_LIMITS)
+
+    command = offline["command"]
+    lines = command.split("\n")
+    # Work's config in the fresh HOME, with the reasoning effort.
+    agent = create_agent("opencode", RSILoopConfig(**MODEL_LIMITS))
+    prelude = agent.config_prelude(model="m", internet=False)
+    assert command.startswith(agent.apply_reasoning_effort(prelude, "high") + " &&\n")
+    config = json.loads(shlex.split(lines[0].rsplit(" && ", 1)[1])[1].split("=", 1)[1])
+    rsi_model = config["provider"]["rsi"]["models"]["m"]
+    assert rsi_model["options"] == {"reasoningEffort": "high"}
+    assert rsi_model["limit"] == {"context": 131072, "output": 16384}
+    assert config["permission"]["webfetch"] == "deny"
+    # Temporary files in the private HOME, not the Judge's /tmp.
+    assert lines[1] == 'export TMPDIR="$HOME/.tmp" && mkdir -p "$TMPDIR" &&'
+    # Nothing from the working directory: project config, skills, CLAUDE.md.
+    assert lines[2] == (
+        "export OPENCODE_DISABLE_PROJECT_CONFIG=1"
+        " OPENCODE_DISABLE_EXTERNAL_SKILLS=1 OPENCODE_DISABLE_CLAUDE_CODE=1"
+        " && set -o pipefail &&"
+    )
+    # Print mode, never the driver; the prompt arrives on stdin, errors go
+    # to stderr and only the last text part leaves the pipe.
+    launch, keep = lines[3].split(" | ")
+    assert launch == "opencode run --format json {schema_option}"
+    assert shlex.split(keep) == [
+        "sed",
+        "-n",
+        "-e",
+        '/^{"type":"error",/w /dev/stderr',
+        "-e",
+        '/^{"type":"text",/h;${x;s/^{"type":"text","timestamp":[0-9]*,'
+        r'"sessionID":"[^"]*","part":\(.*\)}$/\1/p;}',
+    ]
+    assert len(lines) == 4
+    # No structured-output option: rsi-agent states the schema in the prompt.
+    assert offline["schema_option"] is None
+    assert offline["output"] == {
+        "mode": "stdout-json",
+        "fields": ["text"],
+        "error_field": None,
+    }
+    # The config names the key and endpoint variables, never their values.
+    environment = offline["environment"]
+    assert environment["RSI_AGENT_API_KEY"] == "sk-oneshot"
+    assert environment["RSI_AGENT_API_BASE_URL"] == base_url
+    assert environment["OPENCODE_DISABLE_MODELS_FETCH"] == "1"
+    assert environment["OPENCODE_DISABLE_AUTOUPDATE"] == "1"
+    assert "sk-oneshot" not in command
+    assert "model.test" not in command
+
+    online = _oneshot("opencode", internet=True, effort=None, **MODEL_LIMITS)
+    assert '"webfetch": "deny"' not in online["command"]
+    assert '"options": {}' in online["command"]
+    assert "reasoningEffort" not in online["command"]
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        # As in Work: an effort OpenCode does not declare.
+        ({**MODEL_LIMITS, "effort": "xhigh"}, "unsupported OpenCode reasoning effort"),
+        ({**MODEL_LIMITS, "model": None}, "needs a model"),
+        ({"agent_context_window": "131072"}, "RSI_AGENT_MAX_OUTPUT_TOKENS is not set"),
+    ],
+)
+def test_opencode_one_shot_refuses_what_work_refuses(options, message) -> None:
+    with pytest.raises(SetupError, match=message):
+        _oneshot("opencode", **options)
+
+
+ZCODE_ONESHOT_DENIED = (
+    "AskUserQuestion,EnterPlanMode,ExitPlanMode,CronList,CronUpdate,"
+    "CronCreate,CronDelete,OffPeakCreate,Skill,Agent,SendMessage"
+)
+
+
+def test_zcode_one_shot_command_uses_print_mode_with_work_config() -> None:
+    base_url = "http://model.test:8000/v1"
+    offline = _oneshot("zcode", base_url=base_url, **MODEL_LIMITS)
+
+    command = offline["command"]
+    # Work's CLI and provider config, with the reasoning effort; the provider
+    # config, which will hold the key, goes into the fresh HOME, which must
+    # be a tmpfs, instead of a directory under /dev/shm.
+    agent = create_agent("zcode", RSILoopConfig(**MODEL_LIMITS))
+    prelude = agent.apply_reasoning_effort(
+        agent.config_prelude(model="m", internet=False), "high"
+    )
+    work_secret = (
+        'test "$(stat -f -c %T /dev/shm)" = tmpfs'
+        " && rsi_secret_dir=$(mktemp -d /dev/shm/rsi-zcode.XXXXXX)"
+    )
+    assert work_secret in prelude
+    prelude = prelude.replace(
+        work_secret,
+        'test "$(stat -f -c %T "$HOME")" = tmpfs && rsi_secret_dir="$HOME/.zcode"',
+    )
+    assert command.startswith(prelude + " &&\n")
+    assert '"values": ["high"]' in prelude
+    assert '"options": {"reasoningLevel": "high"}' in prelude
+    lines = command.removeprefix(prelude + " &&\n").split("\n")
+    # The working directory's config and .env cannot pick a proxy or CAs,
+    # unbound the retries or move ZCode's files out of the private HOME.
+    kept = (
+        "ZCODE_HTTP_PROXY",
+        "ZCODE_NO_PROXY",
+        "ZCODE_AGENT_CA_CERT",
+        "NODE_TLS_REJECT_UNAUTHORIZED",
+        "ZCODE_MODEL_RETRY_MAX_RETRIES",
+        "ZCODE_MODEL_RETRY_BASE_DELAY_MS",
+        "ZCODE_MODEL_RETRY_MAX_DELAY_MS",
+        "ZCODE_MODEL_RETRY_BACKOFF_FACTOR",
+        "ZCODE_BETA",
+        "ZCODE_ENV",
+    )
+    assert lines[0] == (
+        "export "
+        + "".join(f'{name}="${{{name}-}}" ' for name in kept)
+        + 'ZCODE_STORAGE_DIR="$HOME/.zcode" ZCODE_HOME="$HOME/.zcode"'
+        ' ZCODE_DATA_BASE_DIR="$HOME" ZCODE_LOG_DIR="$HOME/.zcode/cli/log" &&'
+    )
+    assert lines[1] == "{ test -f /opt/zcode/zcode.cjs || exit 127; } &&"
+    # Print mode under the pinned node, never the driver; the prompt arrives
+    # on stdin and reaches ZCode's argv only inside its own process.
+    argv = shlex.split(lines[2])
+    assert argv[:2] == ["/usr/local/bin/node", "-e"]
+    assert "readFileSync(0" in argv[2] and '"--prompt=" + prompt' in argv[2]
+    assert argv[3:] == [
+        "--",
+        "/opt/zcode/zcode.cjs",
+        "--output-format",
+        "json",
+        "--mode",
+        "yolo",
+        "--disallowed-tools",
+        ZCODE_ONESHOT_DENIED + ",WebFetch",
+        "{schema_option}",
+    ]
+    assert len(lines) == 3
+    # No structured-output option: rsi-agent states the schema in the prompt.
+    assert offline["schema_option"] is None
+    assert offline["output"] == {
+        "mode": "stdout-json",
+        "fields": ["response"],
+        "error_field": None,
+    }
+    # The prelude copies the key and endpoint from the environment.
+    environment = offline["environment"]
+    assert environment["RSI_AGENT_API_KEY"] == "sk-oneshot"
+    assert environment["RSI_AGENT_API_BASE_URL"] == base_url
+    assert environment["ZCODE_BASE_URL"] == "http://127.0.0.1:9"
+    assert environment["ZCODE_MODEL_TELEMETRY_ENABLED"] == "false"
+    assert "sk-oneshot" not in command
+    assert "model.test" not in command
+
+    online = _oneshot("zcode", internet=True, effort=None, **MODEL_LIMITS)
+    assert shlex.split(online["command"].split("\n")[-1])[-2] == ZCODE_ONESHOT_DENIED
+    assert '"values": ["default"], "map": "{}"' in online["command"]
+    assert '"options": {"reasoningLevel": "default"}' in online["command"]
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        # As in Work: an effort ZCode does not declare.
+        ({**MODEL_LIMITS, "effort": "xhigh"}, "unsupported ZCode reasoning effort"),
+        ({**MODEL_LIMITS, "model": None}, "needs a model"),
+        ({"agent_context_window": "131072"}, "RSI_AGENT_MAX_OUTPUT_TOKENS is not set"),
+    ],
+)
+def test_zcode_one_shot_refuses_what_work_refuses(options, message) -> None:
+    with pytest.raises(SetupError, match=message):
+        _oneshot("zcode", **options)
+
+
+PI_ONESHOT_FLAGS = [
+    "--no-session",
+    "--no-approve",
+    "--no-context-files",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+]
+
+
+def test_pi_one_shot_command_uses_print_mode_with_work_config() -> None:
+    base_url = "http://model.test:8000/v1"
+    offline = _oneshot("pi", base_url=base_url, **MODEL_LIMITS)
+
+    command = offline["command"]
+    lines = command.split("\n")
+    # Work's settings and models in the fresh HOME, with the reasoning
+    # effort turned on: Work's own command up to its launch.
+    agent = create_agent("pi", RSILoopConfig(**MODEL_LIMITS))
+    work = agent.apply_reasoning_effort(
+        agent.format_run_cmd("/p", model="m", continuation="go on"), "high"
+    )
+    prelude = work.split(" && export RSI_CONTINUATION_REASON=")[0]
+    assert command.startswith(prelude + " &&\n")
+    assert command.removeprefix(prelude).count("\n") == 3
+    models = json.loads(shlex.split(prelude.rsplit(" && ", 1)[1])[3])
+    rsi_model = models["providers"]["rsi"]["models"][0]
+    assert rsi_model["reasoning"] is True
+    assert (rsi_model["contextWindow"], rsi_model["maxTokens"]) == (131072, 16384)
+    assert models["providers"]["rsi"]["apiKey"] == "$RSI_AGENT_API_KEY"
+    # Temporary files in the private HOME, not the Judge's /tmp.
+    assert lines[-3] == 'export TMPDIR="$HOME/.tmp" && mkdir -p "$TMPDIR" &&'
+    # Print mode without the extension that keeps Work going, and nothing
+    # from the working directory; the prompt arrives on stdin.
+    assert lines[-2] == (
+        "answer=$(exec "
+        + shlex.join(
+            ["pi", "--thinking", "high", "--offline", "-p", *PI_ONESHOT_FLAGS]
+            + ["--provider", "rsi", "--model", "m"]
+        )
+        + " {schema_option}) &&"
+    )
+    assert "rsi-never-stop" not in command
+    # The final message without print mode's trailing newline.
+    assert lines[-1] == 'printf "%s" "$answer" >{output_file}'
+    # No structured-output option: rsi-agent states the schema in the prompt.
+    assert offline["schema_option"] is None
+    assert offline["output"] == {"mode": "file", "fields": [], "error_field": None}
+    # The config names the key and endpoint variables, never their values.
+    environment = offline["environment"]
+    assert environment["RSI_AGENT_API_KEY"] == "sk-oneshot"
+    assert environment["RSI_AGENT_API_BASE_URL"] == base_url
+    assert environment["PI_OFFLINE"] == "1"
+    assert environment["PI_SKIP_VERSION_CHECK"] == "1"
+    assert environment["PI_TELEMETRY"] == "0"
+    assert "sk-oneshot" not in command
+    assert "model.test" not in command
+
+    # pi has no web tools: online differs only in the environment.
+    online = _oneshot("pi", internet=True, effort=None, **MODEL_LIMITS)
+    assert online["command"] == agent.format_oneshot_cmd(model="m").command
+    assert '"reasoning": false' in online["command"]
+    assert "--thinking" not in online["command"]
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        # As in Work: an effort pi does not declare.
+        ({**MODEL_LIMITS, "effort": "xhigh"}, "unsupported pi reasoning effort"),
+        ({**MODEL_LIMITS, "model": None}, "needs a model"),
+        ({"agent_context_window": "131072"}, "RSI_AGENT_MAX_OUTPUT_TOKENS is not set"),
+    ],
+)
+def test_pi_one_shot_refuses_what_work_refuses(options, message) -> None:
+    with pytest.raises(SetupError, match=message):
+        _oneshot("pi", **options)
+
+
+def test_an_agent_without_a_one_shot_command_is_named(monkeypatch) -> None:
+    from rsi_loop.harness.agent.claude_code import ClaudeCodeAgent
+
+    monkeypatch.setattr(
+        ClaudeCodeAgent, "format_oneshot_cmd", lambda self, **options: None
+    )
+
+    result = _oneshot("claude-code")
+
+    assert result["command"] is None
+    assert result["unsupported"] == (
+        "the run's Agent 'claude-code' cannot run one-shot in a Judge"
+    )
+
+
+def test_every_registered_agent_has_a_one_shot_command() -> None:
+    from rsi_loop.harness.agent import OneShotCommand, create_agent
+
+    # A configuration every Agent's setup accepts.
+    config = RSILoopConfig(
+        agent_api_key="sk-oneshot",
+        agent_api_base_url="http://model.test:8000/v1",
+        agent_model="m",
+        **MODEL_LIMITS,
+    )
+    for agent_class in list_agent_classes():
+        agent = create_agent(agent_class.name, config)
+        agent.check_config()
+        for internet in (False, True):
+            oneshot = agent.format_oneshot_cmd(model="m", internet=internet)
+            assert isinstance(oneshot, OneShotCommand), agent_class.name
+
+
+def test_one_shot_commands_reject_an_incomplete_contract() -> None:
+    from rsi_loop.harness.agent import OneShotCommand
+
+    with pytest.raises(ValueError, match="output_file"):
+        OneShotCommand(command="agent {schema_option}")
+    with pytest.raises(ValueError, match="schema_option"):
+        OneShotCommand(command="agent > {output_file}")
+    with pytest.raises(ValueError, match="output fields"):
+        OneShotCommand(command="agent {schema_option}", output="stdout-json")
+
+
+def _driven_plan(tmp_path: Path, *, install_stop_hook: bool = True):
+    plan = make_run_plan(tmp_path)
+    return plan.model_copy(
+        update={
+            "task": plan.task.model_copy(
+                update={
+                    "agent": plan.task.agent.model_copy(
+                        update={
+                            "name": "fake-driven",
+                            "model": "m",
+                            "install_stop_hook": install_stop_hook,
+                        }
+                    )
+                }
+            )
+        }
+    )
+
+
+_LIMITS = {"agent_context_window": "128000", "agent_max_output_tokens": "8192"}
+
+
+@pytest.mark.parametrize("install_stop_hook", [True, False])
+def test_prepare_passes_the_continuation_only_with_the_stop_hook(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, install_stop_hook: bool
+) -> None:
+    register_fake_driven_agent(monkeypatch)
+
+    prepared = RSILoopAgentAdapter(RSILoopConfig(**_LIMITS)).prepare(
+        AgentPrepareRequest(
+            run_plan=_driven_plan(tmp_path, install_stop_hook=install_stop_hook),
+            prompt_path=(tmp_path / "prompt.md").resolve(),
+        )
+    )
+
+    command = prepared.command[2]
+    assert prepared.command[:2] == ("/bin/bash", "-lc")
+    assert "exec rsi-agent-driver --protocol acp" in command
+    assert "--prompt-file /tmp/rsi-agent-prompt.md" in command
+    expected = f"--continuation-reason {shlex.quote(STOP_HOOK_REASON)}"
+    assert (expected in command) is install_stop_hook
+    environment = dict(prepared.environment)
+    assert environment["RSI_AGENT_CONTEXT_WINDOW"] == "128000"
+    assert environment["RSI_AGENT_MAX_OUTPUT_TOKENS"] == "8192"
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [
+        {},
+        {"agent_context_window": "128000"},
+        {"agent_context_window": "lots", "agent_max_output_tokens": "8192"},
+    ],
+)
+def test_prepare_refuses_a_driven_agent_without_context_limits(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, limits: dict[str, str]
+) -> None:
+    register_fake_driven_agent(monkeypatch)
+    prompt_path = (tmp_path / "prompt.md").resolve()
+
+    with pytest.raises(SetupError, match="RSI_AGENT_CONTEXT_WINDOW"):
+        RSILoopAgentAdapter(RSILoopConfig(**limits)).prepare(
+            AgentPrepareRequest(
+                run_plan=_driven_plan(tmp_path), prompt_path=prompt_path
+            )
+        )
+    assert not prompt_path.exists()
+
+
+@pytest.mark.parametrize("name", ["codex", "claude-code"])
+def test_native_hook_agents_need_no_context_limits(name: str) -> None:
+    validate_agent_config(RSILoopConfig(), name)
+
+
+def test_unknown_agent_config_is_a_setup_error() -> None:
+    with pytest.raises(SetupError, match="Unknown agent"):
+        validate_agent_config(RSILoopConfig(), "no-such-agent")
+
+
+@pytest.mark.parametrize(
+    "name", sorted(c.name for c in list_agent_classes() if c.requires_model)
+)
+def test_production_refuses_a_run_without_a_model_before_any_runtime_work(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    from rsi_harness.models import CompileOptions, RunRequest
+    from rsi_harness.runtime import production
+    from tests.factories import write_harbor_task
+
+    class Reached(Exception):
+        pass
+
+    def reached(*_args: object, **_kwargs: object) -> None:
+        raise Reached
+
+    class Inventory:
+        list_devices = reached
+
+    services = production.ProductionRuntimeServices(
+        data_root=tmp_path / "data",
+        logs_root=tmp_path / "logs",
+        inventory=Inventory(),
+        rsi_loop_config=RSILoopConfig(
+            agent_api_key="sk-test",
+            agent_api_base_url="http://203.0.113.7:8000/v1",
+            **_LIMITS,
+        ),
+    )
+    monkeypatch.setattr(services, "_client", reached)
+    monkeypatch.setattr(production, "resolve_agent_auth", reached)
+    task = write_harbor_task(tmp_path)
+    options = CompileOptions(agent_name=name)
+
+    # A setup refusal, before any image, container or GPU work.
+    with pytest.raises(SetupError, match="needs a model; set RSI_AGENT_MODEL"):
+        services.run(RunRequest(task_dir=task, agent_name=name, options=options))
+    assert not (tmp_path / "data").exists()
+    assert not (tmp_path / "logs").exists()
+    # The run's own model passes the check.
+    with pytest.raises(Reached):
+        services.run(
+            RunRequest(task_dir=task, agent_name=name, model="m", options=options)
+        )
+
+
+def test_context_limits_load_from_rsi_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("RSI_AGENT_CONTEXT_WINDOW", "200000")
+    monkeypatch.setenv("RSI_AGENT_MAX_OUTPUT_TOKENS", "not-a-number")
+
+    config = load_config()
+
+    # Kept as given: only an Agent that needs them rejects a bad value.
+    assert config.agent_context_window == "200000"
+    assert config.agent_max_output_tokens == "not-a-number"

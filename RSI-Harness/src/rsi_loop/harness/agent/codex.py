@@ -21,16 +21,31 @@ import logging
 import shlex
 from pathlib import Path, PurePosixPath
 
-from rsi_loop.harness.agent.base import Agent
+from rsi_loop.harness.agent import versions
+from rsi_loop.harness.agent.base import (
+    NODE_INSTALL_CMD,
+    STOP_HOOK_REASON,
+    Agent,
+    OneShotCommand,
+)
 from rsi_loop.harness.backend import ContainerBackend, ContainerHandle
+
+
+_PROVIDER_FLAGS = (
+    "-c model_provider=rsi_proxy "
+    "-c model_providers.rsi_proxy.name=rsi_proxy "
+    """-c 'model_providers.rsi_proxy.base_url="'"$OPENAI_BASE_URL"'"' """
+    "-c model_providers.rsi_proxy.env_key=OPENAI_API_KEY "
+    "-c model_providers.rsi_proxy.wire_api=responses"
+)
 
 
 class CodexAgent(Agent):
 
     name = "codex"
     install_cmds = [
-        "sudo -E bash -c 'NODE_MIRROR=${RSI_NODEJS_MIRROR_URL:-https://nodejs.org/dist} && curl -fsSL $NODE_MIRROR/v22.23.3/node-v22.23.3-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1'",
-        "sudo -E npm install -g @openai/codex@0.159.2",
+        NODE_INSTALL_CMD,
+        f"sudo -E npm install -g @openai/codex@{versions.CODEX}",
         '''if [ -n "$OPENAI_BASE_URL" ]; then
     mkdir -p ~/.codex
     cat > ~/.codex/config.toml << EOF
@@ -52,6 +67,10 @@ fi''',
     default_api_base_url = "https://api.openai.com"
     model_env = "CODEX_MODEL"
     stop_hook = "codex"
+    display_name = "Codex"
+    reasoning_efforts = frozenset(
+        {"minimal", "low", "medium", "high", "xhigh", "max", "ultra"}
+    )
 
     def augment_env(self, env: dict[str, str], model: str | None) -> None:
         if not self._config.agent_api_base_url:
@@ -66,15 +85,61 @@ fi''',
         cwd: str = "",
         internet: bool = True,
         resume: bool = False,
+        continuation: str | None = None,
     ) -> str:
+        # The stop hook file installed by install_stop_hook carries the
+        # continuation, so the command does not.
         cmd = super().format_run_cmd(
             prompt_path, model=model, cwd=cwd, internet=internet, resume=resume,
         )
+        return self._launch_flags(cmd, model=model, internet=internet)
 
+    def format_oneshot_cmd(
+        self,
+        *,
+        model: str | None = None,
+        internet: bool = True,
+    ) -> OneShotCommand:
+        # No session, rules, hooks, project docs or user config: files in the
+        # working directory cannot change how the call behaves. The prompt
+        # arrives on stdin ("-") and the final message goes to a file. Goal
+        # tools need a persistent thread, so an ephemeral call never offers
+        # them (a model kept calling them until its timeout).
+        cmd = (
+            "codex exec --ephemeral --skip-git-repo-check --ignore-user-config"
+            " --ignore-rules --dangerously-bypass-approvals-and-sandbox"
+            " -c features.hooks=false -c features.goals=false"
+            " -c project_doc_max_bytes=0"
+            " --output-last-message {output_file} {schema_option} -"
+        )
+        return OneShotCommand(
+            command=self._launch_flags(cmd, model=model, internet=internet),
+            schema_option="--output-schema {schema_file}",
+            output="file",
+        )
+
+    def _launch_flags(
+        self, cmd: str, *, model: str | None, internet: bool
+    ) -> str:
+        """Model, provider and web-search flags shared by every launch."""
         if model:
             cmd = cmd.replace(
                 "codex exec", f"codex exec --model {shlex.quote(model)}", 1,
             )
+
+        if self._config.agent_api_base_url or self._config.agent_extra_env.get(
+            "OPENAI_BASE_URL"
+        ):
+            # The install-time config.toml never sees OPENAI_BASE_URL (images
+            # build without the Agent environment), so name the provider at
+            # launch. The URL and key stay in the environment, not argv.
+            cmd = cmd.replace("codex exec", f"codex exec {_PROVIDER_FLAGS}", 1)
+
+        # Codex otherwise saves its shell's environment, API key included,
+        # under $HOME, where a Judge's snapshot of Work would capture it.
+        cmd = cmd.replace(
+            "codex exec", "codex exec -c features.shell_snapshot=false", 1,
+        )
 
         if not internet:
             cmd = cmd.replace(
@@ -82,6 +147,13 @@ fi''',
             )
 
         return cmd
+
+    def apply_reasoning_effort(self, command: str, effort: str) -> str:
+        marker = "codex exec"
+        if marker not in command:
+            raise ValueError("RSI Loop Codex command cannot accept reasoning effort")
+        override = shlex.quote(f'model_reasoning_effort="{effort}"')
+        return command.replace(marker, f"{marker} -c {override}", 1)
 
     def install_stop_hook(
         self,
@@ -176,9 +248,12 @@ chown -R agent:agent /home/agent/.codex
 
 
 def _generate_codex_stop_hook() -> str:
-    return r"""#!/bin/bash
+    output = json.dumps(
+        {"decision": "block", "reason": STOP_HOOK_REASON}, separators=(",", ":")
+    )
+    return f"""#!/bin/bash
 cat >/dev/null
-echo '{"decision":"block","reason":"Do not stop. Continue working on the implementation."}'
+echo {shlex.quote(output)}
 """
 
 

@@ -1,0 +1,137 @@
+{
+  "task_id": "science-ising3d",
+  "target": "Derive a unified, error-controlled thermodynamic construction for the zero-field uniform nearest-neighbor ferromagnetic Ising model on the simple-cubic lattice: infinite-volume pressure, energy and heat capacity for all finite K>=0, high/low-temperature asymptotics, Kc and leading singularities on both critical sides. This is the declared thermodynamic subproblem, not every question about three-dimensional Ising models.",
+  "evidence_policy": "Every rubric below is a substantive scientific claim, judged separately under these common rules. The Judge obtains evidence from the frozen candidate (its arguments, code, data and attributed sources), its own offline recompute of the optional probe.py and model.py:pressure(K) routes recorded in bundle.json, and the reviewer's own reasoning and small independent calculations; it never executes candidate code outside those routes and does not search the web. All needed arguments and counterevidence must be assessed, not merely listed. An applicable exact representation or scientifically justified controlled approximation is allowed; no fully formalized proof is required. Ordinary-phase claims cover every compact subset of the specified open phase and require quantitative accuracy genuinely resolving the observable, with a justified refinement mechanism; a fixed coarse enclosure or arbitrarily enlarged uncertainty is insufficient. Endpoint and critical laws require asymptotically discriminating remainders, not just fit quality. Distinguish finite-size, truncation, arithmetic and sampling errors where present; derivatives require their own applicable controls, and critical limits require justified ordering or joint-limit control. Use applicable independently checkable derivations, independent calculations or attributed reference evidence; independence means a distinct evidential check, not mandatory new data, a holdout, another institution or a prescribed software family. Parameters or answers used as inputs/calibration cannot also independently validate their purported derivation. Transparent imported valid mathematics and prior work are allowed, but conditional conclusions are not unconditional target results. Material contradictions prevent pass; missing essential support is unresolved, a demonstrated invalidity is fail. Check applicable physical consistency, including convex p, max(log(2),3K)<=p<=log(2)+3K, -3<=e<=0 and c>=0. These broad necessary bounds alone are not quantitative solutions or sufficient evidence. No absence-of-counterexample, disclosure, file-presence, checklist or efficiency points. The predeclared automatic integrity audit must be clear before scientific judgment yields a valid count; violation, unresolved audit or audit execution failure gives no valid reward, not scientific rubric failures. Integrity is not a scored rubric. Normal reading of public feedback/references, supported inherited results and transparent approximations are permitted. All required scientific rubrics must pass on one immutable candidate; count is not percentage solved.",
+  "rubrics": [
+    {
+      "id": "R01",
+      "title": "Construction corresponds to the specified finite lattice model",
+      "pass_when": "A substantive argument connects the candidate representation to Z_L=sum_s exp(K sum_<ij> s_i s_j) on periodic simple-cubic cubes, with spins +/-1, each undirected nearest-neighbor bond counted once, J>0 and zero field. The actual interactions, weights, normalization and degrees of freedom agree; writing the correct Hamiltonian beside an unrelated approximation is insufficient."
+    },
+    {
+      "id": "R02",
+      "title": "Supported derivation of the unified thermodynamic construction",
+      "pass_when": "The scientifically essential model-to-construction steps, including any closure, resummation, transformation or imported theorem, are independently checkable and applicable to this lattice model. Establish the resulting representation or systematically controlled approximation beyond finite enumeration, interpolation, curve fitting, a scaling ansatz or inserting target answers alone. Essential unproved closures leave this claim unresolved, even if some fitted predictions agree."
+    },
+    {
+      "id": "R03",
+      "title": "Controlled thermodynamic-limit construction",
+      "pass_when": "Show that this candidate construction represents the periodic-volume limit p(K)=lim_L log(Z_L)/L^3. Applicable finite-volume or exact-limit reasoning controls the candidate limit and its domain; quoting existence of the true model limit without connecting the submitted construction is insufficient. Distinguish finite size from approximation, arithmetic and sampling error where present. A converged-looking sequence is not by itself evidence of the claimed limit."
+    },
+    {
+      "id": "R04",
+      "title": "Pressure throughout the ordinary high-temperature phase",
+      "pass_when": "From the same construction, determine p(K) on every compact subinterval of 0<K<Kc with scientifically justified quantitative accuracy and a supported refinement/accuracy mechanism, or an applicable exact representation. Cover the whole phase rather than only a small-K expansion or finite probe grid. Applicable independent pressure evidence corroborates the construction. Necessary normalization checks do not establish this phase-wide claim."
+    },
+    {
+      "id": "R05",
+      "title": "Pressure throughout the ordinary low-temperature phase",
+      "pass_when": "From the same construction, determine p(K) on every compact subinterval of Kc<K<infinity with justified quantitative accuracy and supported refinement, or an applicable exact representation. A ground-state approximation or large-K expansion alone does not cover this phase. Applicable independent pressure evidence must corroborate the claimed range, not merely the selected fit points."
+    },
+    {
+      "id": "R06",
+      "title": "Energy throughout the ordinary high-temperature phase",
+      "pass_when": "Determine e(K)=energy/J=-p'(K) on every compact subinterval of 0<K<Kc from this construction and support agreement with the original model energy. Justify differentiation or the alternative energy derivation and its own error control, including applicable interchange of limits. Small pressure errors or numerically differentiating a fit do not automatically control energy error; use independent energy evidence."
+    },
+    {
+      "id": "R07",
+      "title": "Energy throughout the ordinary low-temperature phase",
+      "pass_when": "Determine e(K)=-p'(K) on every compact subinterval of Kc<K<infinity with justified derivative/limit applicability, independently corroborated energy and its own quantitative accuracy control. The ground-state value alone, or differentiating an uncontrolled approximation, is insufficient."
+    },
+    {
+      "id": "R08",
+      "title": "Heat capacity throughout the ordinary high-temperature phase",
+      "pass_when": "Determine c(K)=heat capacity/k_B=K^2 p''(K) on every compact subinterval of 0<K<Kc, with applicable second-derivative/limit reasoning, independent heat-capacity evidence and its own quantitative error control. Nonnegativity and a small-K anchor are necessary checks, not phase-wide sufficiency. Accuracy of p or e alone does not establish this second derivative."
+    },
+    {
+      "id": "R09",
+      "title": "Heat capacity throughout the ordinary low-temperature phase",
+      "pass_when": "Determine c(K)=K^2 p''(K) on every compact subinterval of Kc<K<infinity with applicable second-derivative/limit reasoning, independent corroboration and quantitative heat-capacity error control. Do not infer this claim solely from a matching pressure curve or a vanishing ground-state heat capacity."
+    },
+    {
+      "id": "R10",
+      "title": "Controlled high-temperature pressure asymptotics",
+      "pass_when": "Derive the high-temperature pressure expansion from this construction with an applicable remainder/convergence argument and independently check nontrivial coefficients. For this normalization, necessary checks include p(0)=log(2), p(K)=log(2)+(3/2)K^2+(11/4)K^4+O(K^6). The K^4 term includes simple-cubic plaquette loops. Merely quoting these coefficients or an uncontrolled polynomial matching them is insufficient."
+    },
+    {
+      "id": "R11",
+      "title": "Controlled low-temperature pressure asymptotics",
+      "pass_when": "Derive p(K)=3K+exp(-12K)+O(exp(-20K)) as K tends to infinity, or an equivalent supported expansion with the same leading thermal correction, from this construction with a justified remainder/domain. Independently corroborate the excitation contribution: an isolated flipped spin changes six bonds and costs 12J. The ground-state limit p-3K tending to zero alone is insufficient, and finite floating-point cancellation does not refute an exponentially small correction."
+    },
+    {
+      "id": "R12",
+      "title": "Controlled high-temperature energy asymptotics",
+      "pass_when": "Derive e(K)=-3K-11K^3+O(K^5) as K tends to zero, consistently from the same construction, with applicable differentiation and an energy remainder justified independently of the pressure remainder. Corroborate nontrivial coefficients with applicable independent reasoning/evidence; stating e(0)=0 alone is insufficient."
+    },
+    {
+      "id": "R13",
+      "title": "Controlled low-temperature energy asymptotics",
+      "pass_when": "Derive e(K)=-3+12 exp(-12K)+O(exp(-20K)) as K tends to infinity, or an equivalent supported leading expansion. Justify energy differentiation/limit and its remainder and independently corroborate the excitation contribution. The value e tending to -3 alone or formal differentiation of an uncontrolled pressure asymptotic does not establish this claim."
+    },
+    {
+      "id": "R14",
+      "title": "Controlled high-temperature heat-capacity asymptotics",
+      "pass_when": "Derive c(K)=3K^2+33K^4+O(K^6) as K tends to zero with applicable second differentiation, its own remainder control and independent corroboration of the coefficients. Merely quoting p''(0)=3, setting c(0)=0 or twice differentiating a pressure remainder without justification is insufficient."
+    },
+    {
+      "id": "R15",
+      "title": "Controlled low-temperature heat-capacity asymptotics",
+      "pass_when": "Derive c(K)=144K^2 exp(-12K)+O(K^2 exp(-20K)) as K tends to infinity, or an equivalent supported leading expansion. Justify the heat-capacity remainder and differentiation from the same construction and independently corroborate the leading excitation factor. A vanishing heat capacity alone is insufficient."
+    },
+    {
+      "id": "R16",
+      "title": "Critical coupling derived from the same construction",
+      "pass_when": "The same model-based construction determines the physical transition coupling Kc, with supported accuracy/uncertainty and a justified route to resolving it further if approximate. Connect the identified transition to the thermodynamic construction and reconcile its phase domains; arbitrary branch switches, spurious transitions, fitted breakpoints and inserting a known Kc do not derive it. Independently applicable lattice critical evidence must corroborate the result without supplying the answer used to obtain it."
+    },
+    {
+      "id": "R17",
+      "title": "Critical pressure value and consistent regular background",
+      "pass_when": "Determine the finite pressure value at Kc and establish that high- and low-temperature limits approach that same model pressure. Identify a consistently normalized regular background to the order needed to distinguish the asserted leading nonanalytic term, with controlled separation from singular and correction terms. Neither a chosen interpolation constant nor a fit whose background absorbs the proposed singularity is sufficient; use independent critical-pressure evidence or independently checkable derivation."
+    },
+    {
+      "id": "R18",
+      "title": "Critical energy value and matching one-sided limits",
+      "pass_when": "Determine the finite thermodynamic energy at Kc from the construction and justify the matching high- and low-temperature limiting energies for this continuous transition. Establish the relevant first-derivative/limit applicability, units and uncertainty, corroborated by independent critical-energy evidence. A pressure that merely has matching values need not have matching derivatives; do not silently introduce latent heat or choose a matching constant by hand."
+    },
+    {
+      "id": "R19",
+      "title": "Leading singular pressure law from the high-temperature side",
+      "pass_when": "Derive the leading singular pressure term as t=Kc/K-1 tends to zero from above, including its functional form/exponent and coefficient in this lattice and temperature normalization. Separate the regular background and justify the asymptotic remainder, applicable thermodynamic/critical limit ordering and parameter dependencies. For a power law, establish p_s=B_+ t^(2-alpha_+) with a remainder small relative to that term. Imported exponents/amplitudes, a fitted power or asserted universality alone do not derive this law; independent critical evidence must corroborate it."
+    },
+    {
+      "id": "R20",
+      "title": "Leading singular pressure law from the low-temperature side",
+      "pass_when": "Derive the leading singular pressure term as t=Kc/K-1 tends to zero from below, including its functional form/exponent and correctly normalized low-side coefficient. For a power law, establish p_s=B_- |t|^(2-alpha_-) with asymptotically smaller remainder after justified background separation. Support limit ordering and dependencies, independently corroborate the law, and do not substitute the high-side amplitude or import a fitted low-side answer."
+    },
+    {
+      "id": "R21",
+      "title": "Leading critical energy law from the high-temperature side",
+      "pass_when": "Derive the leading singular energy contribution as t tends to zero from above from the same pressure construction, including the exponent, sign and amplitude after separating its regular energy background. Justify differentiation and an asymptotically discriminating energy remainder; a pressure remainder small in value need not have a small derivative. Independently corroborate the energy law rather than only repeating the pressure claim. For the usual pressure power law the energy exponent is 1-alpha_+, with the amplitude fixed by e=-p' and the t(K) Jacobian."
+    },
+    {
+      "id": "R22",
+      "title": "Leading critical energy law from the low-temperature side",
+      "pass_when": "Derive the leading singular energy contribution as t tends to zero from below from the same construction, with the low-side exponent, sign, amplitude, background separation and independently justified energy remainder. Support the derivative/limit ordering and independent critical-energy corroboration; copying the high-side expression without its sign/Jacobian or assuming derivative control from pressure accuracy is insufficient."
+    },
+    {
+      "id": "R23",
+      "title": "Leading critical heat-capacity law from the high-temperature side",
+      "pass_when": "Derive the leading singular heat capacity as t tends to zero from above with its exponent and correctly normalized amplitude, from c=K^2 p''. Control differentiation, critical-limit ordering, background/correction separation and a remainder small relative to the leading heat-capacity singularity; corroborate independently. For p_s=B_+ t^(2-alpha_+) the leading amplitude is B_+(2-alpha_+)(1-alpha_+) in the present t convention. An inserted standard exponent or generic divergence is insufficient; no finite value at Kc is required."
+    },
+    {
+      "id": "R24",
+      "title": "Leading critical heat-capacity law from the low-temperature side",
+      "pass_when": "Derive the low-side leading heat-capacity singularity as t tends to zero from below, including the independently supported exponent and amplitude for this construction, with its own justified derivative/asymptotic error control and background separation. Corroborate it independently rather than identifying it with the high-side amplitude. A universal amplitude ratio, if used, needs applicable support and cannot replace the two lattice amplitudes. No finite heat-capacity value at Kc is required."
+    },
+    {
+      "id": "R25",
+      "title": "All branches and scientific outputs belong to one coherent construction",
+      "pass_when": "Substantively establish that ordinary-phase predictions, endpoint expansions, Kc, regular backgrounds and critical laws are compatible parts of one model-derived construction. Quantitatively reconcile overlaps, units, derivative relations, shared parameters and assumptions; for an ordinary power-law transition reconcile its common thermal exponent and distinct side amplitudes, and resolve material counterevidence. Independent phase-wise fits spliced at an imported Kc, mutually inconsistent formulas/code or different unexplained parameter sets do not meet this claim. Merely declaring coherence or using identical filenames is insufficient."
+    },
+    {
+      "id": "R26",
+      "title": "Independent reproduction of decisive scientific results",
+      "pass_when": "Independently rederive or reproduce scientifically decisive steps and outputs of the frozen construction, including nontrivial model-to-construction reasoning and its claimed thermodynamic/critical results, with relevant inputs, precision, dependencies and actual outcomes checked. Analytical rechecking is acceptable; computation-essential results need usable self-contained reproduction and task-controlled replay evidence. Reprinting known anchors, successful exit codes, candidate-written success assertions, file hashes or a documentation checklist alone do not establish scientific reproducibility."
+    }
+  ]
+}
