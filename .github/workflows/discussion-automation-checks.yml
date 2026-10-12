@@ -9,6 +9,7 @@ on:
       - .github/workflows/harness-agent-tests.yml
       - .github/workflows/harness-root-checks.yml
       - .github/workflows/task-log-publication-checks.yml
+      - .github/workflows/auto-label-*.yml
       - checks/**
       - .agents/skills/proposal-agent/scripts/**
   pull_request:
@@ -18,6 +19,7 @@ on:
       - .github/workflows/harness-agent-tests.yml
       - .github/workflows/harness-root-checks.yml
       - .github/workflows/task-log-publication-checks.yml
+      - .github/workflows/auto-label-*.yml
       - checks/**
       - .agents/skills/proposal-agent/scripts/**
   workflow_dispatch:

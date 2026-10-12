@@ -1,9 +1,21 @@
 # Task and log publication checks
 
-`Task and log publication (CPU only)` runs on every pull request. Unrelated PRs
-explicitly pass with “not applicable”; only affected `rsi-tasks/` packages and
-`rsi-logs/` archives are checked. Nested `signature-tasks/` paths are supported.
-Task-only, log-only and combined task/log PRs are all supported.
+`Task and log publication (CPU only)` runs on pull requests and pushes to
+`main` that touch `rsi-tasks/`, `rsi-logs/`, the publication checker, its tests
+and policies, the RSI-Harness sources and lockfile it compiles tasks with, or the
+workflow itself. Only affected `rsi-tasks/` packages and `rsi-logs/` archives are
+checked; a run with no package change passes with “not applicable”. A manual run
+(`workflow_dispatch`) audits every published package (`--full`). A newer push to
+a PR cancels that PR's running check; runs for pushes to `main` and manual runs
+are never cancelled, so each push's changes are audited. Nested `signature-tasks/` paths are supported. Task-only, log-only and
+combined task/log PRs are all supported.
+
+Files directly under `rsi-tasks/`, `rsi-tasks/signature-tasks/`, `rsi-logs/` or
+`rsi-logs/signature-tasks/` belong to no package. Only Markdown documentation
+(`.md`) may sit there, and it is secret-scanned like package files; any other file
+there fails, as does a file under `rsi-tasks/` with no enclosing `task.toml`.
+Removing such a file always passes. Failures name the task or log root and the
+file concerned.
 
 This is a **publication check, not a scientific evaluation**. It never builds
 task images, runs `solution/solve.sh`, runs `tests/test.sh`, calls a model,
@@ -14,13 +26,23 @@ Harness revision and frozen lockfile, not a contributor's environment.
 
 ## Task checks
 
-- Parse TOML; require non-empty instructions, name and description.
+- Parse TOML; require `task.toml`, non-empty instructions, name and description.
+  Deleting `task.toml` while other task files remain fails with “missing
+  task.toml”.
 - Accept any positive finite declared timeout. **There is no five-hour cap.**
 - Check integer non-negative Work/Judge GPU declarations as metadata only.
 - For runnable packages, require schema 1.4, a verifier entry and an environment
   image/build declaration; compile with the current RSI-Harness without running.
-- Syntax-parse changed task-owned Python without importing/executing it.
-- Reject publication symlinks and stored files of 100 MiB or more.
+- Syntax-parse changed task-owned Python without importing/executing it. Code
+  the Harness runs (`tests/` and `solution/`) must parse; elsewhere, for example
+  `environment/` starter code that is deliberately broken or targets the task
+  image's Python, a parse failure is a warning only.
+- Reject publication symlinks and stored files of 100 MiB or more. A larger
+  task data file can be split losslessly with the task runner's
+  `split_run_log.py`: inside a task, a `manifest.json` in exactly the runner's
+  chunk format (`version`, `source_name`, `source_size`, `source_sha256`,
+  `chunk_size`, `parts`) is verified and its stream reassembled for scanning as
+  for logs below. Other task files named `manifest.json` are task data.
 - Allow complete task removal, but reject partial removal of required files.
 
 Existing GPIC and Marin signature archives have documented, narrowly named
@@ -47,15 +69,23 @@ reward semantics remain the task's declared scientific contract.
   Failed, rejected, cancelled, negative, low and unscored records are legitimate.
   Round-number gaps and a single model are allowed. CI does not invent missing
   submissions, select score direction, demand a final result or closing summary.
-- Verify existing publication/release file manifests against tracked files,
-  SHA-256 and declared byte counts. Verify gzip restoration hash/size/line counts
-  and ordered chunk checksums/whole-stream hashes where provided. Changing or
-  removing a manifested file requires updating its manifest.
-- Reassemble chunk streams for secret scanning, so a token split across a chunk
-  boundary is not missed. Both `parts[].path/bytes` plus `sha256/bytes` and the
-  runner's `parts[].file/size` plus `source_sha256/source_size` format are supported.
-  Checksum-verified compressed chunks are decoded only after complete
-  reassembly, never mistaken for independently complete gzip/archive files.
+- Verify existing publication/release file manifests (`*manifest.json` and
+  `publication.json` under `rsi-logs/`) against tracked files, SHA-256 and
+  declared byte counts. Verify gzip restoration hash/size/line counts and ordered
+  chunk checksums/whole-stream hashes where provided. Changing or removing a
+  manifested file requires updating its manifest. A malformed manifest fails
+  naming the manifest. Task files with such names are task data (for example
+  verifier asset inventories), not log manifests; only a task `manifest.json` in
+  the runner's exact chunk format is verified as one.
+- Reassemble chunk streams for validation and secret scanning, so a token split
+  across a chunk boundary is not missed. Parts named by a checksum-verified chunk
+  manifest are scanned as raw bytes but never decompressed or parsed
+  individually: they are decoded only after complete reassembly, never mistaken
+  for independently complete gzip/archive files, so a split `.jsonl.gz` or
+  `.tar.gz` is validated as one file. Parts without a manifest are checked as
+  standalone files, where a fragment of a compressed stream fails. Both
+  `parts[].path/bytes` plus `sha256/bytes` and the runner's `parts[].file/size`
+  plus `source_sha256/source_size` format are supported.
 
 Manifests are currently optional for plain log files; an absent manifest is not
 proof of trajectory completeness. CI can verify the bytes and records published,
@@ -68,7 +98,11 @@ so old private-path/hash receipts are not mistaken for the new public manifest.
 
 Suspected credential matches are **warnings, not a merge gate**. Hardcoded
 values and recorded code can produce false positives; each warning gives only
-the file, rule and line for human review. A successful check does **not** certify
+the file, rule and line for human review. The file is the published path, with
+`!member` appended for archive members or decompressed content
+(`bundle.zip!cfg/run.yaml`, `log.txt.gz!log.txt`) and for the stream a chunk
+manifest reassembles (`run.log.parts/manifest.json!run.log`). Every distinct
+warning is printed; there is no cap. A successful check does **not** certify
 that a publication contains no secrets. Confirmed credentials still need to be
 redacted before publication; this policy does not disable GitHub secret scanning
 or repository push protection. Scanner installation/runtime failures remain
@@ -76,9 +110,12 @@ errors, so a skipped or incomplete scan cannot masquerade as a clean scan.
 
 Gitleaks 8.30.1 is installed from a SHA-256-pinned release archive. Its provider
 rules remain enabled; the policy includes only narrowly reviewed code/digest
-false positives. There is no broad transcript/path exemption. Inline
-`gitleaks:allow`, contributor `.gitleaksignore`, and contributor scanner configs
-cannot suppress findings.
+false positives. There is no broad transcript/path exemption: the scanner's
+default configuration skips paths such as images, PDFs, `*.bin`, lockfiles,
+`node_modules/` and virtualenvs, so staged copies get neutral file names that
+keep only the suffixes path-specific rules need (YAML, Terraform/HCL, PHP,
+PKCS#12, NuGet config). Inline `gitleaks:allow`, contributor `.gitleaksignore`,
+and contributor scanner configs cannot suppress findings.
 
 All files in an affected package are scanned, not just changed lines. Gzip,
 tar (including gzip/bzip2/xz), zip, xz and bzip2 are read with bounded traversal;
@@ -94,17 +131,27 @@ These archive-safety and integrity failures remain blocking even though suspecte
 credentials are advisory.
 
 Bounds: 100 MiB per stored file, 1 GiB per expanded member/reconstructed stream,
-8 GiB aggregate scan bytes (including wrappers and nested expansions), 100,000
-members and four archive levels. Exceeding a bound **fails**, never silently
-truncates/skips a scan. Larger publications need an explicitly reviewed budget
-adjustment. The CPU CI job has a 20-minute safety timeout independent of research
-budgets. Scanner diagnostics expose only file/rule/line identifiers; matched
-text and scanner reports are not printed or uploaded as public artifacts.
+8 GiB aggregate scan bytes (including wrappers, nested expansions and tar header
+blocks), 1 MiB of tar header records (PAX/long-name) per member, 100,000 members
+(archive directory entries included; a ZIP's declared entry count is checked
+before its directory is read) and four archive levels. Exceeding a bound **fails**, never silently truncates/skips a scan.
+Larger publications need an explicitly reviewed budget adjustment. The CPU CI
+job has a 20-minute safety timeout independent of research budgets. Scanner
+diagnostics expose only file/rule/line identifiers; matched text and scanner
+reports are not printed or uploaded as public artifacts.
 
-After bootstrap, enforcement uses the checker and policies from the PR's base
-revision. Proposed checker changes are unit-tested separately; they cannot waive
-their own task/log failures. The first PR introducing these files uses its own
-implementation solely because no base implementation exists yet.
+Enforcement runs in its own job and executes only the checker, policies and
+Harness from the PR's base revision; the proposed revision is read as data. If
+the base lacks the checker or its policies, the job fails rather than falling
+back to the proposed ones. The proposed checker's tests run in a separate job on
+a separate runner, so test code cannot alter the enforcement job's files.
+
+This is **not a security boundary**. With a `pull_request` trigger GitHub runs
+the workflow file from the PR itself, so a PR can still edit this workflow, or
+the checks it runs, to change its own result. The check informs reviewers, who
+should look at any change to `.github/workflows/` or `checks/`. It becomes a
+gate only if maintainers make it a required status check and protect those paths,
+for example with code-owner review.
 
 ## Local use
 
@@ -121,17 +168,22 @@ python3 -I checks/test_publication.py
 
 The checkout must match the checked HEAD. Local checks without `--gitleaks`
 explicitly report that secret scanning was not performed; PR CI always supplies
-it. `--full` requests an explicit whole-repository audit rather than an incremental
-PR check. The legacy shell scripts and planted fixtures in `checks/` are retained
-for historical reference, **not** used as the current publication policy.
+it. `--full` requests a whole-repository audit rather than an incremental PR
+check; a manual workflow run uses it. The checker tests' scanner and compiler
+integration tests skip without `PUBLICATION_GITLEAKS_BIN` or the Harness unless
+`PUBLICATION_REQUIRE_INTEGRATION=1`, which CI sets. The legacy shell scripts and
+planted fixtures in `checks/` are retained for historical reference, **not** used
+as the current publication policy.
 `check-task-timeout.sh` has been updated to positive/finite validation with no cap.
 
 The old PR `/run`, `/cheat`, `/validate`, `/review`, `/fortify`, automatic trial
 dispatch/status and missing-tool chart/rubric workflows are retired. Their source
 remains recoverable in Git history. Discussion proposal review/build dispatch,
 Harness CPU tests and labels remain independent. The `gpu` label only describes
-declared Work/Judge resources; it does not trigger computation.
+declared Work/Judge resources; it does not trigger computation. The labelling job
+creates the label if it is missing and its token may; otherwise it leaves a
+notice instead of failing.
 
-This PR does not change branch-protection settings. If maintainers later want a
-merge gate, require the stable `Task and log publication (CPU only)` check only
-after this workflow has landed successfully.
+Branch protection is unchanged. Before requiring `Task and log publication (CPU
+only)` as a merge gate, remove its path filter (an unrelated PR then passes with
+“not applicable”): a required check that never starts leaves the PR waiting.
