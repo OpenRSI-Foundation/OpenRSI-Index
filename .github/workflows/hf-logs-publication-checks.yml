@@ -1,0 +1,305 @@
+name: Logs repository publication checks
+
+# Checks research logs published in the Hugging Face Logs dataset repository.
+# A Hub webhook (scope repo.content) reaches a relay (infra/hf-webhook-relay/),
+# which sends one repository_dispatch per updated main or PR ref. The checker,
+# policies and task list always come from this repository's main branch; the
+# Logs revision is fetched anonymously and read as data, never executed. For a
+# Hub PR the result is posted as one comment there; Hub PRs have no required
+# checks, so maintainers merge on that comment. A daily run audits all of main.
+on:
+  repository_dispatch:
+    types: [hf-logs]
+  schedule:
+    - cron: "23 5 * * *"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Logs repository ref (refs/heads/main or refs/pr/<N>)
+        required: true
+        default: refs/heads/main
+        type: string
+      full:
+        description: Audit every published log, not just the PR's changes (main is always audited in full)
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  # The Logs dataset repository. This is the only place the workflow names it.
+  LOGS_REPO: OpenRSI-Foundation/OpenRSI-Index-Logs
+
+# One group per Hub PR ref: a newer push supersedes a running check. Each main
+# update audits its own diff from the previous main, so main runs get a group of
+# their own and are never cancelled or dropped while queued.
+concurrency:
+  group: >-
+    ${{ startsWith(github.event.client_payload.ref || inputs.ref || 'refs/heads/main', 'refs/pr/')
+    && format('hf-logs-{0}', github.event.client_payload.ref || inputs.ref)
+    || format('hf-logs-main-{0}', github.run_id) }}
+  cancel-in-progress: ${{ startsWith(github.event.client_payload.ref || inputs.ref || 'refs/heads/main', 'refs/pr/') }}
+
+jobs:
+  logs:
+    name: Logs publication (CPU only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      GIT_TERMINAL_PROMPT: "0"
+      HAS_HF_TOKEN: ${{ secrets.HF_TOKEN != '' }}
+    steps:
+      # The dispatch payload is untrusted input. It is validated here, passed
+      # only through environment variables, and used afterwards only as the
+      # validated step outputs.
+      - name: Validate request
+        id: request
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PAYLOAD_REPO: ${{ github.event.client_payload.repo }}
+          PAYLOAD_REF: ${{ github.event.client_payload.ref }}
+          PAYLOAD_SHA: ${{ github.event.client_payload.sha }}
+          PAYLOAD_OLD_SHA: ${{ github.event.client_payload.old_sha }}
+          PAYLOAD_PR: ${{ github.event.client_payload.pr }}
+          INPUT_REF: ${{ inputs.ref }}
+          INPUT_FULL: ${{ inputs.full }}
+        run: |
+          set -euo pipefail
+          reject() {
+            echo "::error::Rejected request: $1"
+            exit 1
+          }
+          sha_re='^[0-9a-f]{40}$'
+          ref_re='^refs/(pr/[0-9]+|heads/main)$'
+          expected="" old="" full=false
+          case "$EVENT_NAME" in
+            repository_dispatch)
+              [ "$PAYLOAD_REPO" = "$LOGS_REPO" ] || reject "client_payload.repo is not the Logs repository"
+              [[ "$PAYLOAD_REF" =~ $ref_re ]] || reject "client_payload.ref must be refs/heads/main or refs/pr/<N>"
+              [[ "$PAYLOAD_SHA" =~ $sha_re ]] || reject "client_payload.sha must be a 40-character lowercase hex commit id"
+              ref=$PAYLOAD_REF
+              expected=$PAYLOAD_SHA
+              if [ -n "$PAYLOAD_OLD_SHA" ]; then
+                [[ "$PAYLOAD_OLD_SHA" =~ $sha_re ]] || reject "client_payload.old_sha must be null or a 40-character lowercase hex commit id"
+                if [ "$PAYLOAD_OLD_SHA" != 0000000000000000000000000000000000000000 ]; then
+                  old=$PAYLOAD_OLD_SHA
+                fi
+              fi
+              pr_from_ref=""
+              if [[ "$ref" == refs/pr/* ]]; then
+                pr_from_ref=${ref#refs/pr/}
+              fi
+              [ "$PAYLOAD_PR" = "$pr_from_ref" ] || reject "client_payload.pr must be the number in refs/pr/<N>, or null for main"
+              ;;
+            workflow_dispatch)
+              [[ "$INPUT_REF" =~ $ref_re ]] || reject "the ref input must be refs/heads/main or refs/pr/<N>"
+              ref=$INPUT_REF
+              if [ "$INPUT_FULL" = true ]; then
+                full=true
+              fi
+              ;;
+            schedule)
+              ref=refs/heads/main
+              full=true
+              ;;
+            *)
+              reject "unsupported event $EVENT_NAME"
+              ;;
+          esac
+          pr=""
+          if [[ "$ref" == refs/pr/* ]]; then
+            pr=${ref#refs/pr/}
+          elif [ -z "$old" ]; then
+            # Main without a previous revision has no diff to audit.
+            full=true
+          fi
+          {
+            echo "ref=$ref"
+            echo "expected=$expected"
+            echo "old=$old"
+            echo "pr=$pr"
+            echo "full=$full"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Checkout trusted checker, policies and task list (main)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: main
+          path: trusted
+          persist-credentials: false
+          sparse-checkout: checks
+
+      - name: Install checksum-pinned secret scanner
+        env:
+          SCANNER_DIR: ${{ runner.temp }}/publication-gitleaks
+        run: |
+          set -euo pipefail
+          mkdir -p "$SCANNER_DIR"
+          curl --fail --silent --show-error --location \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            --output "$SCANNER_DIR/gitleaks.tar.gz"
+          printf '%s  %s\n' \
+            '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb' \
+            "$SCANNER_DIR/gitleaks.tar.gz" | sha256sum --check --strict
+          tar -xzf "$SCANNER_DIR/gitleaks.tar.gz" -C "$SCANNER_DIR" gitleaks
+
+      - name: Fetch the Logs revision (anonymous; LFS content deferred)
+        id: fetch
+        env:
+          REF: ${{ steps.request.outputs.ref }}
+          EXPECTED: ${{ steps.request.outputs.expected }}
+          OLD: ${{ steps.request.outputs.old }}
+          FULL: ${{ steps.request.outputs.full }}
+        run: |
+          set -euo pipefail
+          git init -q logs
+          cd logs
+          # Anonymous public read: no credential helper, LFS objects later.
+          git config credential.helper ""
+          git lfs install --local --skip-smudge >/dev/null
+          git remote add origin "https://huggingface.co/datasets/$LOGS_REPO"
+          git fetch --no-tags --quiet origin \
+            "+refs/heads/main:refs/remotes/origin/main" \
+            "+${REF}:refs/remotes/origin/checked"
+          resolved=$(git rev-parse refs/remotes/origin/checked)
+          sha=$resolved
+          if [ -n "$EXPECTED" ] && [ "$resolved" != "$EXPECTED" ]; then
+            if [ "$REF" = refs/heads/main ] && git merge-base --is-ancestor "$EXPECTED" "$resolved" 2>/dev/null; then
+              # Main moved on; still audit exactly the update that was announced.
+              sha=$EXPECTED
+            else
+              echo "::notice::$REF now points to $resolved, not the announced $EXPECTED; the run for the newer revision reports instead."
+              {
+                echo "stale=true"
+                echo "sha=$EXPECTED"
+                echo "mode=not checked"
+              } >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+          git checkout -q --detach "$sha"
+          base="" full=$FULL
+          if [ "$full" != true ]; then
+            if [[ "$REF" == refs/pr/* ]]; then
+              base=$(git merge-base refs/remotes/origin/main "$sha" || true)
+            elif git cat-file -e "${OLD}^{commit}" 2>/dev/null \
+              && git merge-base --is-ancestor "$OLD" "$sha"; then
+              base=$OLD
+            fi
+            if [ -z "$base" ]; then
+              # A rewritten main or an unrelated PR leaves no diff to audit.
+              echo "::notice::No usable base revision; auditing every published log (--full)."
+              full=true
+            fi
+          fi
+          mode="full"
+          if [ "$full" != true ]; then
+            mode="incremental from $base"
+          fi
+          {
+            echo "stale=false"
+            echo "sha=$sha"
+            echo "base=$base"
+            echo "full=$full"
+            echo "mode=$mode"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Download the LFS content the check reads
+        if: steps.fetch.outputs.stale == 'false'
+        working-directory: logs
+        env:
+          BASE: ${{ steps.fetch.outputs.base }}
+          SHA: ${{ steps.fetch.outputs.sha }}
+          FULL: ${{ steps.fetch.outputs.full }}
+        run: |
+          set -euo pipefail
+          if [ "$FULL" = true ]; then
+            git lfs pull
+            exit 0
+          fi
+          # Affected log roots plus changed root files, as the checker selects
+          # them. Anything missed stays a pointer, which the checker rejects.
+          patterns=$(python3 -I "$GITHUB_WORKSPACE/trusted/checks/check_publication.py" \
+            --repo . --mount rsi-logs --base-ref "$BASE" --head-ref "$SHA" --lfs-include)
+          if [ -n "$patterns" ]; then
+            while IFS= read -r pattern; do
+              git lfs pull --include="$pattern" --exclude=""
+            done <<<"$patterns"
+          fi
+
+      - name: Check the Logs revision
+        id: check
+        if: steps.fetch.outputs.stale == 'false'
+        env:
+          BASE: ${{ steps.fetch.outputs.base }}
+          SHA: ${{ steps.fetch.outputs.sha }}
+          FULL: ${{ steps.fetch.outputs.full }}
+          SCANNER_DIR: ${{ runner.temp }}/publication-gitleaks
+        run: |
+          set -euo pipefail
+          PUBLICATION_CHECKS="$GITHUB_WORKSPACE/trusted/checks"
+          for required in check_publication.py publication-policy.toml publication-gitleaks.toml hf_logs_report.py; do
+            if [ ! -f "$PUBLICATION_CHECKS/$required" ]; then
+              echo "::error::OpenRSI-Index main lacks checks/$required; the Logs check cannot run."
+              exit 1
+            fi
+          done
+          mode=(--base-ref "$BASE")
+          if [ "$FULL" = true ]; then
+            mode=(--full)
+          fi
+          set +e
+          python3 -I "$PUBLICATION_CHECKS/check_publication.py" \
+            --repo "$GITHUB_WORKSPACE/logs" --mount rsi-logs \
+            --task-repo "$GITHUB_WORKSPACE/trusted" --task-ref HEAD \
+            --head-ref "$SHA" "${mode[@]}" \
+            --policy "$PUBLICATION_CHECKS/publication-policy.toml" \
+            --secret-config "$PUBLICATION_CHECKS/publication-gitleaks.toml" \
+            --gitleaks "$SCANNER_DIR/gitleaks" 2>&1 | tee "$RUNNER_TEMP/logs-check.txt"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "status=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "status=fail" >> "$GITHUB_OUTPUT"
+          fi
+          exit "$status"
+
+      - name: Install pinned Hub client
+        if: >-
+          always() && steps.fetch.outputs.stale == 'false'
+          && steps.request.outputs.pr != '' && env.HAS_HF_TOKEN == 'true'
+        run: |
+          set -euo pipefail
+          python3 -m venv "$RUNNER_TEMP/hub"
+          "$RUNNER_TEMP/hub/bin/python" -m pip install --quiet --disable-pip-version-check \
+            "huggingface_hub==2.0.0"
+
+      - name: Report (job summary; comment on the Hub PR)
+        if: always() && steps.fetch.outcome == 'success'
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          STATUS: ${{ steps.fetch.outputs.stale == 'true' && 'stale' || steps.check.outputs.status || 'error' }}
+          REF: ${{ steps.request.outputs.ref }}
+          PR: ${{ steps.request.outputs.pr }}
+          SHA: ${{ steps.fetch.outputs.sha }}
+          MODE: ${{ steps.fetch.outputs.mode }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          python=python3
+          comment=()
+          # A stale run stays quiet on the PR; the newer revision's run reports.
+          if [ -n "$PR" ] && [ "$STATUS" != stale ]; then
+            comment=(--comment-pr "$PR")
+            if [ -x "$RUNNER_TEMP/hub/bin/python" ]; then
+              python="$RUNNER_TEMP/hub/bin/python"
+            fi
+          fi
+          "$python" -I "$GITHUB_WORKSPACE/trusted/checks/hf_logs_report.py" \
+            --status "$STATUS" --output "$RUNNER_TEMP/logs-check.txt" \
+            --repo "$LOGS_REPO" --ref "$REF" --sha "$SHA" --mode "$MODE" \
+            --run-url "$RUN_URL" --summary "$GITHUB_STEP_SUMMARY" "${comment[@]}"

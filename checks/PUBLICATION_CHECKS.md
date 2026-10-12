@@ -2,10 +2,14 @@
 
 `Task and log publication (CPU only)` runs on pull requests and pushes to
 `main` that touch `rsi-tasks/`, `rsi-logs/`, the publication checker, its tests
-and policies, the RSI-Harness sources and lockfile it compiles tasks with, or the
-workflow itself. Only affected `rsi-tasks/` packages and `rsi-logs/` archives are
+and policies, the RSI-Harness sources and lockfile it compiles tasks with, the
+workflow itself, or the Logs-repository workflow, report script, history guard
+and webhook relay whose contract tests it runs. Only affected `rsi-tasks/` packages and `rsi-logs/` archives are
 checked; a run with no package change passes with “not applicable”. A manual run
-(`workflow_dispatch`) audits every published package (`--full`). A newer push to
+(`workflow_dispatch`) audits every published package (`--full`), and so does a
+push to `main` that was forced (for example after a history rewrite) or whose
+previous revision the checkout cannot find: with no usable base there is no diff
+to audit, so the head is audited against itself. A newer push to
 a PR cancels that PR's running check; runs for pushes to `main` and manual runs
 are never cancelled, so each push's changes are audited. Nested `signature-tasks/` paths are supported. Task-only, log-only and
 combined task/log PRs are all supported.
@@ -86,6 +90,25 @@ reward semantics remain the task's declared scientific contract.
   standalone files, where a fragment of a compressed stream fails. Both
   `parts[].path/bytes` plus `sha256/bytes` and the runner's `parts[].file/size`
   plus `source_sha256/source_size` format are supported.
+- Verify version 2 manifests, which describe one raw file, optionally restored
+  from an earlier compressed or chunked publication. One sits beside its file
+  as `<name up to the first dot>.manifest.json` (`agent_output.manifest.json`
+  for `agent_output.txt`):
+
+  ```json
+  {"version": 2, "artifact": "agent_output.txt", "size": 330542050,
+   "sha256": "<hex>", "line_feeds": 5880480,
+   "converted_from": {"artifact": "agent_output.txt.gz", "compression": "gzip",
+     "compressed_size": 51574548, "compressed_sha256": "<hex>",
+     "parts": [{"path": "part-0001.bin", "bytes": 1, "sha256": "<hex>"}],
+     "original_manifest": {}},
+   "note": "..."}
+  ```
+
+  The raw file's size, SHA-256 and line-feed count must match; `converted_from`
+  (optional; `parts` only for a former chunked file, `original_manifest` the
+  replaced manifest verbatim) is checked for shape only, because the former
+  publication's bytes are no longer published.
 
 Manifests are currently optional for plain log files; an absent manifest is not
 proof of trajectory completeness. CI can verify the bytes and records published,
@@ -153,6 +176,102 @@ should look at any change to `.github/workflows/` or `checks/`. It becomes a
 gate only if maintainers make it a required status check and protect those paths,
 for example with code-owner review.
 
+## Logs repository checks (Hugging Face)
+
+Run logs can also be published in a separate Hugging Face dataset repository,
+`OpenRSI-Foundation/OpenRSI-Index-Logs`, whose root has the layout of
+`rsi-logs/` (`<task>/…`, `signature-tasks/<task>/…`). The checker's **Logs
+mode** checks such a repository with the same rules as `rsi-logs/` here:
+
+```bash
+python3 -I checks/check_publication.py \
+  --repo <Logs checkout with LFS content> --mount rsi-logs \
+  --task-repo <OpenRSI-Index checkout> --task-ref <ref> \
+  (--base-ref <base> --head-ref <head> | --full) \
+  --policy checks/publication-policy.toml \
+  --secret-config checks/publication-gitleaks.toml --gitleaks <gitleaks>
+```
+
+- Every Logs path `p` is checked, and reported, as `rsi-logs/<p>`.
+- Tasks, aliases and historical exceptions come from `--task-ref` of
+  `--task-repo` (`git ls-tree … rsi-tasks`), never from the Logs repository: a
+  log needs its task merged into OpenRSI-Index first.
+- `README.md` (the dataset card), `LICENSE` and `.gitattributes` at the root are
+  repository infrastructure and are secret-scanned only. `.md` files at the root
+  or under `signature-tasks/` are collection documentation; any other file
+  outside a log root fails.
+- The repository stores **raw files only**; large and binary files go through
+  LFS/Xet, so there is no stored-size limit (the scan bounds below still apply).
+  A new or modified compressed or archived file (`.gz`, `.xz`, `.bz2`, `.zst`,
+  `.zip`, `.tar*`, `.7z`, `.rar`, or such content under another name) or a
+  lossless chunk (a file under `*.parts/`, or a chunk manifest) fails with a
+  hint to upload the raw file instead. ZIP containers with their own suffix
+  (for example `.npz`) are raw files. A `--full` audit applies this to every
+  file.
+- A file that is still a Git LFS pointer fails: a skipped LFS download must
+  never pass as a clean, tiny file. `--lfs-include` prints the LFS include
+  patterns an incremental check reads (affected log roots and changed root
+  files) and exits.
+- `--base-ref` may be omitted with `--full`. A base that is missing or shares no
+  history with the head fails with a request to audit with `--full`.
+
+`.github/workflows/hf-logs-publication-checks.yml` runs Logs mode:
+
+1. A Hub webhook on the Logs repository (scope `repo.content`, secret header
+   `X-Webhook-Secret`) calls the relay in `infra/hf-webhook-relay/` (a
+   Cloudflare Worker; setup in its README). For every update of `main` or of a
+   PR ref `refs/pr/<N>`, the relay sends a `repository_dispatch` of type
+   `hf-logs` to this repository with `client_payload`
+   `{repo, ref, sha, old_sha, pr}`.
+2. The workflow validates that payload before use (`repo` must be the Logs
+   repository, `ref` must match `^refs/(pr/[0-9]+|heads/main)$`, `sha` 40 hex
+   digits, `pr` the number in the ref) and passes it to scripts only through
+   environment variables.
+3. It checks out this repository's `main` (checker, policies, report script and
+   task list; the trusted revision), installs the same checksum-pinned gitleaks,
+   and fetches the Logs ref anonymously over HTTPS with LFS downloads deferred.
+   If the ref no longer points at the announced revision, a PR run reports
+   *stale* and stops (the newer revision's run reports); a `main` run still
+   audits the announced revision when it is in `main`'s history.
+4. It downloads LFS content for what the check reads (everything for `--full`)
+   and runs the checker. A PR is checked from its merge base with `main`, a
+   `main` update from the previous `main`; with no usable base (a new or
+   rewritten `main`) the run is `--full`. The Logs revision is data only and
+   never executed.
+5. For a PR it posts one comment with the result and the checker's output
+   (paths, rules, line numbers; never matched text) on the Hub PR, using a
+   pinned `huggingface_hub` and the repository secret `HF_TOKEN`. Without that
+   secret it skips the comment; every run writes a job summary.
+
+A daily scheduled run audits all of the Logs repository's `main` (`--full`), which
+also catches logs whose task was later removed or renamed in OpenRSI-Index and
+updates whose dispatch was lost. A manual run takes a `ref` (default
+`refs/heads/main`, always audited in full) and a `full` switch for PR refs. Runs
+for one Hub PR supersede each other; `main` runs are never cancelled.
+
+Hub PRs have no required checks: maintainers merge a Logs PR only after its
+comment reports PASS and their own review. The relay and the workflow trust only
+the webhook secret and the validated payload; the checker and policy come from
+OpenRSI-Index `main`, so a Logs PR cannot change how it is checked.
+
+## History guard
+
+`.github/workflows/history-guard.yml` (job `history-guard`) runs on every pull
+request, with no path filter, so it can be made a required status check. It
+fails a PR whose head shares no merge base with its base branch (for example a
+branch made from a copy of the repository from before a history rewrite), and a
+PR any of whose commits (merges included, compared with each parent) adds a file
+under a prefix listed in the **base** revision's `checks/publication-policy.toml`:
+
+```toml
+[history_guard]
+forbidden_prefixes = ["rsi-tasks/reasonir-difficulty-curriculum/tests/assets/bright/"]
+```
+
+Deleting such a file in a later commit does not help, because the blobs would
+stay in history; the branch must be recreated without them. A PR cannot shorten
+the list it is checked against, since the list is read from its base.
+
 ## Local use
 
 From the repository root, with the published base Harness environment installed:
@@ -168,9 +287,13 @@ python3 -I checks/test_publication.py
 
 The checkout must match the checked HEAD. Local checks without `--gitleaks`
 explicitly report that secret scanning was not performed; PR CI always supplies
-it. `--full` requests a whole-repository audit rather than an incremental PR
-check; a manual workflow run uses it. The checker tests' scanner and compiler
-integration tests skip without `PUBLICATION_GITLEAKS_BIN` or the Harness unless
+it. Logs mode is described above. `--full` requests a whole-repository audit rather than an incremental PR
+check; a manual workflow run uses it. The checker tests also cover Logs mode, the
+Logs-repository and history-guard workflows (running their shell steps against
+local fixture repositories) and the relay (`node --test
+infra/hf-webhook-relay/worker.test.mjs`, which needs no network or npm
+packages). The scanner, compiler and relay
+integration tests skip without `PUBLICATION_GITLEAKS_BIN`, the Harness or Node.js unless
 `PUBLICATION_REQUIRE_INTEGRATION=1`, which CI sets. The legacy shell scripts and
 planted fixtures in `checks/` are retained for historical reference, **not** used
 as the current publication policy.

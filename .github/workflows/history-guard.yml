@@ -1,0 +1,83 @@
+name: History guard
+
+# Runs on every pull request, with no path filter, so it can be made a required
+# status check without leaving unrelated PRs waiting. It fails a PR that shares
+# no history with its base, or whose commits add files under a prefix that was
+# removed from the repository's history. The prefixes come from the BASE
+# revision's checks/publication-policy.toml ([history_guard] forbidden_prefixes),
+# so a PR cannot loosen the list it is checked against.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: history-guard-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  history-guard:
+    name: history-guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fetch commit history (trees only)
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          # Paths are compared by name only; file contents are never needed.
+          filter: blob:none
+          sparse-checkout: .github
+          persist-credentials: false
+      - name: Reject unrelated history and removed paths
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --quiet origin "$BASE_SHA"
+          fi
+          if ! git merge-base "$BASE_SHA" "$HEAD_SHA" >/dev/null; then
+            echo "::error::This PR shares no history with its base branch. It was probably made from a copy of the repository from before main's history was rewritten. Create a new branch from the current main and cherry-pick only your own commits; do not merge or rebase the old history."
+            exit 1
+          fi
+          policy=""
+          # The tree says whether the base has a policy; reading it must succeed.
+          if [ -n "$(git ls-tree "$BASE_SHA" -- checks/publication-policy.toml)" ]; then
+            policy=$(git show "${BASE_SHA}:checks/publication-policy.toml")
+          fi
+          # A command substitution, so an invalid policy fails this step.
+          listed=$(printf '%s' "$policy" | python3 -I -c '
+          import sys, tomllib
+          section = tomllib.loads(sys.stdin.read()).get("history_guard", {})
+          for prefix in section.get("forbidden_prefixes", []):
+              if not isinstance(prefix, str) or not prefix or not prefix.isprintable():
+                  sys.exit("invalid [history_guard] forbidden_prefixes entry")
+              print(prefix)
+          ')
+          prefixes=()
+          if [ -n "$listed" ]; then
+            mapfile -t prefixes <<<"$listed"
+          fi
+          if [ "${#prefixes[@]}" -eq 0 ]; then
+            echo "History is related to the base; the base lists no removed path prefixes."
+            exit 0
+          fi
+          pathspecs=()
+          for prefix in "${prefixes[@]}"; do
+            pathspecs+=(":(literal)$prefix")
+          done
+          # Every commit the PR brings (merges against each parent), not just the
+          # final tree: a later deletion still leaves the blobs in history.
+          added=$(git log -m --no-renames --diff-filter=d --name-only --format= \
+            "${BASE_SHA}..${HEAD_SHA}" -- "${pathspecs[@]}" | sort -u)
+          if [ -n "$added" ]; then
+            count=$(printf '%s\n' "$added" | wc -l)
+            echo "::error::This PR's commits add $count file(s) under a path removed from this repository's history (${prefixes[*]}). Recreate the branch from the current main without those files; deleting them in a later commit is not enough."
+            printf '%s\n' "$added" | head -n 50 | sed 's/^/  removed path: /'
+            exit 1
+          fi
+          echo "History is related to the base and adds nothing under: ${prefixes[*]}"

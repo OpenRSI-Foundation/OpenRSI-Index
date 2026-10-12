@@ -1,0 +1,19 @@
+# Cloudflare Worker that relays Hugging Face webhooks for the Logs dataset
+# repository to a GitHub repository_dispatch. See README.md.
+#
+# No secrets here. Set them once with:
+#   npx wrangler secret put WEBHOOK_SECRET   # the Hub webhook's secret
+#   npx wrangler secret put GITHUB_TOKEN     # token that may dispatch to GITHUB_REPO
+name = "hf-webhook-relay"
+main = "worker.js"
+compatibility_date = "2026-09-01"
+workers_dev = true
+
+[vars]
+# The Logs dataset repository whose events are relayed.
+HF_REPO = "OpenRSI-Foundation/OpenRSI-Index-Logs"
+# The GitHub repository that receives repository_dispatch "hf-logs" events.
+GITHUB_REPO = "OpenRSI-Foundation/OpenRSI-Index"
+
+[observability]
+enabled = true

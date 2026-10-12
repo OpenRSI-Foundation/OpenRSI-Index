@@ -3,8 +3,10 @@ name: Task and log publication checks
 on:
   # Only changes that can affect the result: task and log content, the checker,
   # its tests and policies, the Harness it compiles tasks with and runs its tests
-  # in, and this workflow. Main has no required status checks, so a
-  # path-filtered check never leaves a merge waiting on it.
+  # in, and this workflow; plus the Logs-repository workflow, its report script,
+  # the history guard and the webhook relay, whose contract tests run here. Main
+  # has no required status checks, so a path-filtered check never leaves a merge
+  # waiting on it.
   pull_request:
     paths:
       - rsi-tasks/**
@@ -16,6 +18,10 @@ on:
       - RSI-Harness/uv.lock
       - RSI-Harness/src/**
       - .github/workflows/task-log-publication-checks.yml
+      - .github/workflows/hf-logs-publication-checks.yml
+      - .github/workflows/history-guard.yml
+      - checks/hf_logs_report.py
+      - infra/hf-webhook-relay/**
   push:
     branches: [main]
     paths:
@@ -28,6 +34,10 @@ on:
       - RSI-Harness/uv.lock
       - RSI-Harness/src/**
       - .github/workflows/task-log-publication-checks.yml
+      - .github/workflows/hf-logs-publication-checks.yml
+      - .github/workflows/history-guard.yml
+      - checks/hf_logs_report.py
+      - infra/hf-webhook-relay/**
   # A manual run audits every published package (--full), not an empty diff.
   workflow_dispatch:
 
@@ -136,6 +146,7 @@ jobs:
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
           HEAD_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          FORCED: ${{ github.event.forced || false }}
           SCANNER_DIR: ${{ runner.temp }}/publication-gitleaks
         run: |
           set -euo pipefail
@@ -151,6 +162,14 @@ jobs:
           mode=()
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
             mode=(--full)
+            BASE_REF="$HEAD_REF"
+          elif [ "$FORCED" = "true" ] \
+            || ! git -C "$GITHUB_WORKSPACE/proposal" cat-file -e "${BASE_REF}^{commit}" 2>/dev/null; then
+            # A force push (for example after a history rewrite) or a base this
+            # checkout lacks leaves no diff to audit, so audit the whole head.
+            echo "::notice::No usable base revision for an incremental check; auditing every published package (--full)."
+            mode=(--full)
+            BASE_REF="$HEAD_REF"
           fi
           uv run --frozen --no-dev python -I "$PUBLICATION_CHECKS/check_publication.py" \
             --repo "$GITHUB_WORKSPACE/proposal" \

@@ -16,6 +16,7 @@ import io
 import json
 import lzma
 import os
+import re
 import struct
 import subprocess
 import sys
@@ -1531,6 +1532,43 @@ class RepositoryTests(unittest.TestCase):
                 self.commit()
                 self.assertFails(f"^{directory}/manifest.json: .*{message}")
 
+    # Manifest v2 and full audits in the Index tree
+
+    def test_v2_manifest_verified_in_the_index_tree(self):
+        raw = b"a\nb\nc\n"
+        self.task()
+        self.log()
+        self.write("rsi-logs/demo-task/m/agent_output.txt", raw)
+        manifest = "rsi-logs/demo-task/m/agent_output.manifest.json"
+        self.write(manifest, json.dumps(v2_manifest(raw)))
+        self.commit()
+        self.check()
+        self.write(manifest, json.dumps(v2_manifest(raw, line_feeds=2)))
+        self.commit()
+        self.assertFails(f"^{manifest}: agent_output.txt: manifest line_feeds mismatch")
+
+    def test_index_mode_keeps_compressed_and_chunked_logs(self):
+        self.task()
+        self.log()
+        self.write("rsi-logs/demo-task/m/out.txt.gz", gzip.compress(b"x\n"))
+        self.commit()
+        self.check()
+
+    def test_full_audit_without_base(self):
+        self.task()
+        self.commit()
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            pub.check(self.repo, None, "HEAD", HERE / "publication-policy.toml", full=True)
+        self.assertIn("PASS rsi-tasks/demo-task: task configuration", output.getvalue())
+
+    def test_missing_base_names_the_remedy(self):
+        self.task()
+        self.commit()
+        with self.assertRaisesRegex(pub.CheckError, "audit the head with --full"):
+            with contextlib.redirect_stdout(io.StringIO()):
+                pub.check(self.repo, "f" * 40, "HEAD", HERE / "publication-policy.toml")
+
     # CI path: compiler and scanner integration
 
     def test_harness_compilation(self):
@@ -1585,6 +1623,468 @@ class RepositoryTests(unittest.TestCase):
             self.assertIn(f"::warning::Possible credential: {label};", output)
 
 
+def v2_manifest(raw: bytes, artifact="agent_output.txt", **extra):
+    doc = {
+        "version": 2,
+        "artifact": artifact,
+        "size": len(raw),
+        "sha256": sha(raw),
+        "line_feeds": raw.count(b"\n"),
+        "converted_from": {
+            "artifact": artifact + ".gz",
+            "compression": "gzip",
+            "compressed_size": 123,
+            "compressed_sha256": "c" * 64,
+            "original_manifest": {"version": 1, "artifact": artifact + ".gz"},
+        },
+        "note": "Restored from the gzip publication in OpenRSI-Index; the Hub stores large files natively.",
+    }
+    doc.update(extra)
+    return doc
+
+
+LFS_POINTER_TEXT = (
+    "version https://git-lfs.github.com/spec/v1\n"
+    "oid sha256:" + "d" * 64 + "\n"
+    "size 52428800\n"
+)
+
+
+class LogsModeTests(unittest.TestCase):
+    """Two repositories: an Index checkout with tasks, and a Logs repository
+    whose root is checked as rsi-logs/."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.index = Path(self.tmp.name) / "index"
+        self.repo = Path(self.tmp.name) / "logs"
+        for repo in (self.index, self.repo):
+            repo.mkdir()
+            self.git(repo, "init", "-q")
+            self.git(repo, "config", "user.name", "Publication test")
+            self.git(repo, "config", "user.email", "publication-test@example.invalid")
+        self.write(self.index, "README.md", "Index\n")
+        self.write(
+            self.index,
+            "rsi-tasks/demo-task/task.toml",
+            'schema_version = "1.4"\n[task]\nname="rsi/demo"\ndescription="Synthetic"\n',
+        )
+        self.write(self.index, "rsi-tasks/demo-task/instruction.md", "Do it\n")
+        self.write(
+            self.index, "rsi-tasks/signature-tasks/gpic_generation/task.toml", "x\n"
+        )
+        self.task_ref = self.commit(self.index)
+        self.write(self.repo, "README.md", "---\nlicense: other\n---\n# Logs\n")
+        self.write(self.repo, "LICENSE", "License text\n")
+        self.write(self.repo, ".gitattributes", "*.bin filter=lfs diff=lfs merge=lfs -text\n")
+        self.base = self.commit(self.repo)
+
+    def git(self, repo, *args):
+        return (
+            subprocess.check_output(
+                ["git", "-C", str(repo), *args], stderr=subprocess.DEVNULL
+            )
+            .decode()
+            .strip()
+        )
+
+    def commit(self, repo=None):
+        repo = repo or self.repo
+        self.git(repo, "add", "-A")
+        self.git(repo, "commit", "-qm", "synthetic fixture", "--allow-empty")
+        return self.git(repo, "rev-parse", "HEAD")
+
+    def write(self, repo, path, content):
+        p = repo / path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(content if isinstance(content, bytes) else content.encode())
+        return p
+
+    def log(self, slug="demo-task"):
+        self.write(self.repo, slug + "/README.md", "Recorded run\n")
+        return slug
+
+    def check(self, base=..., **options):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            pub.check(
+                self.repo,
+                self.base if base is ... else base,
+                "HEAD",
+                HERE / "publication-policy.toml",
+                mount="rsi-logs",
+                task_repo=self.index,
+                task_ref=options.pop("task_ref", self.task_ref),
+                **options,
+            )
+        return output.getvalue()
+
+    def assertFails(self, pattern="", **options):
+        with self.assertRaisesRegex(pub.CheckError, pattern):
+            self.check(**options)
+
+    # Layout and task correspondence
+
+    def test_log_root_checked_against_index_task(self):
+        self.log()
+        self.write(self.repo, "demo-task/model/events.jsonl", '{"x": 1}\n')
+        self.commit()
+        output = self.check()
+        self.assertIn("NOTICE Logs mode", output)
+        self.assertIn("PASS 2 published files", output)
+
+    def test_log_without_index_task_fails(self):
+        self.log("missing-task")
+        self.commit()
+        self.assertFails(
+            "^rsi-logs/missing-task: corresponding public task.toml not found in "
+            "the task repository; merge the task into OpenRSI-Index first"
+        )
+
+    def test_tasks_come_from_the_task_ref_only(self):
+        self.git(self.index, "checkout", "-qb", "proposal")
+        self.write(self.index, "rsi-tasks/new-task/task.toml", "x\n")
+        proposal = self.commit(self.index)
+        self.log("new-task")
+        self.commit()
+        self.check(task_ref=proposal)
+        self.assertFails("rsi-logs/new-task: corresponding public task.toml")
+        # A task.toml inside the Logs repository never stands in for one.
+        self.write(self.repo, "rsi-tasks/new-task/task.toml", "x\n")
+        self.commit()
+        self.assertFails("corresponding public task.toml")
+
+    def test_unknown_task_ref_fails(self):
+        self.log()
+        self.commit()
+        self.assertFails("task repository revision not found", task_ref="no-such-ref")
+
+    def test_historical_alias_and_signature_layout(self):
+        self.log("signature-tasks/gpic-10m-autoresearch")
+        self.write(self.repo, "signature-tasks/README.md", "Signature logs\n")
+        self.commit()
+        output = self.check()
+        self.assertIn("PASS 2 published files", output)
+
+    def test_new_log_requires_readme(self):
+        self.write(self.repo, "demo-task/model/agent_output.txt", "output\n")
+        self.commit()
+        self.assertFails("rsi-logs/demo-task: new log archive needs README.md")
+
+    def test_root_infrastructure_is_scanned_only(self):
+        self.write(self.repo, ".gitattributes", "*.txt filter=lfs diff=lfs merge=lfs -text\n")
+        self.write(self.repo, "LICENSE", "Changed license\n")
+        self.write(self.repo, "README.md", "Changed card\n")
+        self.write(self.repo, "SANITIZATION.md", "Notes\n")
+        self.commit()
+        self.assertIn("PASS 4 published files", self.check())
+
+    def test_other_root_files_fail(self):
+        for name in ("data.json", "notes.txt"):
+            with self.subTest(name=name):
+                self.git(self.repo, "reset", "-q", "--hard", self.base)
+                self.write(self.repo, name, "{}\n")
+                self.commit()
+                self.assertFails(
+                    f"^rsi-logs/{re.escape(name)}: log files must be inside <task>/ "
+                    "or signature-tasks/<task>/ of the Logs repository"
+                )
+
+    def test_unknown_top_level_directory_is_a_log_root_without_task(self):
+        self.write(self.repo, ".github/workflows/x.yml", "on: push\n")
+        self.commit()
+        self.assertFails("^rsi-logs/.github: corresponding public task.toml not found")
+
+    def test_unrelated_change_and_removal_pass(self):
+        self.log()
+        self.base = self.commit()
+        self.assertIn("not applicable", self.check())
+        (self.repo / "demo-task/README.md").unlink()
+        self.commit()
+        self.assertIn("PASS rsi-logs/demo-task: log archive removed", self.check())
+
+    def test_full_audit_needs_no_base(self):
+        self.write(self.repo, "missing-task/README.md", "x\n")
+        self.base = self.commit()
+        self.assertIn("not applicable", self.check())
+        self.assertFails("rsi-logs/missing-task: corresponding", base=None, full=True)
+        with self.assertRaisesRegex(pub.CheckError, "--base-ref is required"):
+            self.check(base=None)
+
+    def test_missing_or_unrelated_base_asks_for_full(self):
+        self.log()
+        self.commit()
+        self.assertFails("audit the head with --full", base="f" * 40)
+        self.git(self.repo, "checkout", "-q", "--orphan", "rewritten")
+        self.commit()
+        self.assertFails("shares no history", base=self.base)
+        self.check(base=None, full=True)
+
+    def test_mode_options_must_be_complete(self):
+        with self.assertRaisesRegex(pub.CheckError, "Logs mode needs"):
+            pub.check(
+                self.repo, self.base, "HEAD", HERE / "publication-policy.toml",
+                mount="rsi-logs",
+            )
+        with self.assertRaisesRegex(pub.CheckError, "only used with --mount"):
+            pub.check(
+                self.repo, self.base, "HEAD", HERE / "publication-policy.toml",
+                task_repo=self.index, task_ref="HEAD",
+            )
+
+    # Raw files only
+
+    def test_new_compressed_files_and_chunks_rejected(self):
+        raw = b"line\n" * 100
+        cases = {
+            "demo-task/m/agent_output.txt.gz": gzip.compress(raw),
+            "demo-task/m/trace.jsonl.xz": lzma.compress(raw),
+            "demo-task/m/trace.bz2": bz2.compress(raw),
+            "demo-task/m/trace.zst": b"\x28\xb5\x2f\xfd" + raw,
+            "demo-task/m/bundle.zip": b"PK\x05\x06" + b"\0" * 18,
+            "demo-task/m/bundle.tar": tar_bytes([("a.txt", raw)]),
+            "demo-task/m/bundle.tar.lz4": raw,
+            "demo-task/m/agent_output.txt": gzip.compress(raw),
+            "demo-task/m/workspace": tar_bytes([("a.txt", raw)]),
+            "demo-task/m/agent_output.txt.gz.parts/part-0001.bin": raw,
+        }
+        for name, content in cases.items():
+            with self.subTest(name=name):
+                self.git(self.repo, "reset", "-q", "--hard", self.base)
+                self.git(self.repo, "clean", "-qfdx")
+                self.log()
+                self.write(self.repo, name, content)
+                self.commit()
+                self.assertFails(
+                    f"^rsi-logs/{re.escape(name)}: .*stores raw files only .*"
+                    "upload the uncompressed, unsplit file"
+                )
+
+    def test_chunk_manifest_rejected(self):
+        self.log()
+        payload = b"whole transcript\n"
+        self.write(self.repo, "demo-task/m/out.txt.chunks/p1", payload)
+        manifest = {
+            "sha256": sha(payload),
+            "bytes": len(payload),
+            "parts": [{"path": "p1", "bytes": len(payload), "sha256": sha(payload)}],
+        }
+        self.write(
+            self.repo, "demo-task/m/out.txt.chunks/manifest.json", json.dumps(manifest)
+        )
+        self.commit()
+        self.assertFails(
+            "^rsi-logs/demo-task/m/out.txt.chunks/manifest.json: chunk manifest; "
+            "the Logs repository stores raw files only"
+        )
+
+    def test_zip_containers_with_their_own_suffix_are_raw(self):
+        data = io.BytesIO()
+        with zipfile.ZipFile(data, "w") as archive:
+            archive.writestr("arr.npy", b"\x93NUMPY")
+        self.log()
+        self.write(self.repo, "demo-task/m/arrays.npz", data.getvalue())
+        self.commit()
+        self.check()
+
+    def test_unchanged_compressed_file_is_not_rejected_incrementally(self):
+        self.log()
+        self.write(self.repo, "demo-task/m/old.txt.gz", gzip.compress(b"old\n"))
+        self.base = self.commit()
+        self.write(self.repo, "demo-task/m/new.txt", "new\n")
+        self.commit()
+        self.check()
+        self.assertFails("old.txt.gz: compressed", base=None, full=True)
+
+    def test_large_raw_file_has_no_stored_size_limit(self):
+        self.log()
+        self.write(self.repo, "demo-task/m/agent_output.txt", b"x\n" * 10)
+        self.commit()
+        with patch.object(pub, "MAX_STORED", 4):
+            self.check()
+
+    def test_lfs_pointer_is_an_error(self):
+        self.log()
+        self.write(self.repo, "demo-task/m/agent_output.txt", LFS_POINTER_TEXT)
+        self.commit()
+        self.assertFails(
+            "^rsi-logs/demo-task/m/agent_output.txt: Git LFS pointer, not content; "
+            "download LFS objects"
+        )
+        # Infrastructure files must be downloaded as well.
+        self.write(self.repo, "demo-task/m/agent_output.txt", "content\n")
+        self.write(self.repo, "LICENSE", LFS_POINTER_TEXT)
+        self.commit()
+        self.assertFails("^rsi-logs/LICENSE: Git LFS pointer")
+
+    def test_lfs_includes_cover_what_the_check_reads(self):
+        self.log()
+        self.log("signature-tasks/gpic-10m-autoresearch")
+        self.write(self.repo, "demo-task/m/a.txt", "a\n")
+        self.base = self.commit()
+        (self.repo / "demo-task/m/a.txt").unlink()
+        self.write(self.repo, "signature-tasks/gpic-10m-autoresearch/m/b.txt", "b\n")
+        self.write(self.repo, "signature-tasks/README.md", "docs\n")
+        self.write(self.repo, "LICENSE", "new\n")
+        self.commit()
+        revisions = pub.Revisions(self.repo, self.base, "HEAD", False, "rsi-logs")
+        self.assertEqual(
+            pub.lfs_includes(revisions),
+            [
+                "LICENSE",
+                "demo-task/**",
+                "signature-tasks/README.md",
+                "signature-tasks/gpic-10m-autoresearch/**",
+            ],
+        )
+
+    # Manifests
+
+    def test_v2_manifest_verified(self):
+        raw = b"line one\nline two\n"
+        self.log()
+        self.write(self.repo, "demo-task/m/agent_output.txt", raw)
+        manifest = "demo-task/m/agent_output.manifest.json"
+        self.write(self.repo, manifest, json.dumps(v2_manifest(raw)))
+        self.commit()
+        self.check()
+        bad = {
+            "size": (dict(size=len(raw) + 1), "agent_output.txt: manifest byte count mismatch"),
+            "sha": (dict(sha256="0" * 64), "agent_output.txt: manifest SHA-256 mismatch"),
+            "lines": (dict(line_feeds=3), "agent_output.txt: manifest line_feeds mismatch"),
+            "type": (dict(size="18"), "size and line_feeds must be integers"),
+            "digest": (dict(sha256="ABC"), "sha256 must be a SHA-256 hex digest"),
+            "path": (dict(artifact="../x.txt"), "artifact must be a file name"),
+            "source": (
+                dict(converted_from={"artifact": "a.gz", "compression": "gzip"}),
+                "converted_from requires",
+            ),
+            "parts": (
+                dict(
+                    converted_from=dict(
+                        v2_manifest(raw)["converted_from"], parts=[{"path": "p"}]
+                    )
+                ),
+                "converted_from parts require",
+            ),
+        }
+        for label, (change, message) in bad.items():
+            with self.subTest(label=label):
+                self.write(self.repo, manifest, json.dumps(v2_manifest(raw, **change)))
+                self.commit()
+                self.assertFails(f"^rsi-logs/{manifest}: .*{re.escape(message)}")
+        doc = v2_manifest(raw)
+        del doc["line_feeds"]
+        self.write(self.repo, manifest, json.dumps(doc))
+        self.commit()
+        self.assertFails("version 2 manifest lacks line_feeds")
+
+    def test_v2_manifest_from_chunks_and_name_rule(self):
+        raw = b"chunked once\n"
+        self.log()
+        self.write(self.repo, "demo-task/m/agent_output.txt", raw)
+        source = dict(
+            v2_manifest(raw)["converted_from"],
+            artifact="agent_output.txt.gz.parts",
+            parts=[{"path": "part-0001.bin", "bytes": 3, "sha256": "e" * 64}],
+            original_manifest={"schema_version": 1, "parts": [{"path": "part-0001.bin"}]},
+        )
+        manifest = "demo-task/m/agent_output.manifest.json"
+        self.write(self.repo, manifest, json.dumps(v2_manifest(raw, converted_from=source)))
+        self.commit()
+        self.check()
+        (self.repo / manifest).rename(self.repo / "demo-task/m/other.manifest.json")
+        self.commit()
+        self.assertFails(
+            "other.manifest.json: version 2 manifest for agent_output.txt must be "
+            "named agent_output.manifest.json"
+        )
+
+    def test_v2_manifest_needs_its_tracked_artifact(self):
+        raw = b"x\n"
+        self.log()
+        self.write(
+            self.repo,
+            "demo-task/m/agent_output.manifest.json",
+            json.dumps(v2_manifest(raw)),
+        )
+        self.commit()
+        self.assertFails("agent_output.txt: manifest references missing")
+
+    def test_publication_manifest_lists_raw_files(self):
+        raw = b"restored\n"
+        self.log()
+        self.write(self.repo, "demo-task/m/agent_output.txt", raw)
+        entry = {
+            "path": "m/agent_output.txt",
+            "bytes": len(raw),
+            "sha256": sha(raw),
+            "uncompressed_bytes": len(raw),
+            "uncompressed_sha256": sha(raw),
+            "line_count": 1,
+            "compression": None,
+        }
+        self.write(self.repo, "demo-task/publication.json", json.dumps({"files": [entry]}))
+        self.commit()
+        self.check()
+        self.write(
+            self.repo,
+            "demo-task/publication.json",
+            json.dumps({"files": [dict(entry, path="m/agent_output.txt.gz")]}),
+        )
+        self.commit()
+        self.assertFails("publication.json: m/agent_output.txt.gz: manifest references missing")
+
+    def test_structured_records_still_validated(self):
+        self.log()
+        self.write(self.repo, "demo-task/m/events.jsonl", '{"x": 1}\n{bad\n')
+        self.commit()
+        self.assertFails("^rsi-logs/demo-task/m/events.jsonl: invalid JSONL at line 2")
+
+    def test_cli_logs_mode_and_lfs_include(self):
+        self.log()
+        self.commit()
+        script = str(HERE / "check_publication.py")
+        common = ["--repo", str(self.repo), "--mount", "rsi-logs", "--base-ref", self.base]
+        result = subprocess.run(
+            [sys.executable, "-I", script, *common, "--lfs-include"],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(result.stdout, "demo-task/**\n")
+        result = subprocess.run(
+            [
+                sys.executable, "-I", script, *common,
+                "--task-repo", str(self.index), "--task-ref", self.task_ref,
+            ],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("PASS 1 published files", result.stdout)
+        result = subprocess.run(
+            [sys.executable, "-I", script, "--repo", str(self.repo), "--mount", "rsi-logs",
+             "--task-repo", str(self.index), "--task-ref", self.task_ref],
+            capture_output=True, text=True,
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("FAIL --base-ref is required unless --full", result.stdout)
+
+    def test_ci_invocation_scans_with_published_paths(self):
+        need(self, GITLEAKS, "set PUBLICATION_GITLEAKS_BIN for scanner tests")
+        token = fake_token()
+        self.log()
+        self.write(self.repo, "LICENSE", f'github_token = "{token}"\n')
+        line = json.dumps({"tool_output": f'export GITHUB_TOKEN="{token}"'}) + "\n"
+        self.write(self.repo, "demo-task/m/trajectory.jsonl", line)
+        self.commit()
+        output = self.check(
+            gitleaks=Path(GITLEAKS), secret_config=HERE / "publication-gitleaks.toml"
+        )
+        self.assertNotIn(token, output)
+        for label in ("rsi-logs/LICENSE", "rsi-logs/demo-task/m/trajectory.jsonl"):
+            self.assertIn(f"::warning::Possible credential: {label};", output)
+
+
 class WorkflowTests(unittest.TestCase):
     def workflow(self):
         try:
@@ -1621,6 +2121,10 @@ class WorkflowTests(unittest.TestCase):
             "RSI-Harness/uv.lock",
             "RSI-Harness/src/**",
             ".github/workflows/task-log-publication-checks.yml",
+            ".github/workflows/hf-logs-publication-checks.yml",
+            ".github/workflows/history-guard.yml",
+            "checks/hf_logs_report.py",
+            "infra/hf-webhook-relay/**",
         ]
         self.assertEqual(on["pull_request"]["paths"], watched)
         self.assertEqual(on["push"]["paths"], watched)
@@ -1704,6 +2208,19 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn("mode=(--full)", run)
         self.assertIn('"${mode[@]}"', run)
 
+    def test_forced_push_or_missing_base_falls_back_to_full(self):
+        step = self.workflow()["jobs"]["publication"]["steps"][-1]
+        self.assertEqual(step["env"]["FORCED"], "${{ github.event.forced || false }}")
+        run = step["run"]
+        self.assertIn('[ "$FORCED" = "true" ]', run)
+        self.assertIn(
+            '! git -C "$GITHUB_WORKSPACE/proposal" cat-file -e "${BASE_REF}^{commit}"', run
+        )
+        # The checker's merge base must exist, so a full audit diffs the head
+        # against itself rather than against an unreachable base.
+        self.assertEqual(run.count('BASE_REF="$HEAD_REF"'), 2)
+        self.assertEqual(run.count("mode=(--full)"), 2)
+
     def test_proposed_checker_tests_run_in_their_own_job(self):
         jobs = self.workflow()["jobs"]
         tests = jobs["checker-tests"]
@@ -1732,6 +2249,517 @@ class WorkflowTests(unittest.TestCase):
             "harness-publication-checks.yml",
         ):
             self.assertTrue((workflows / name).exists(), name)
+
+
+WORKFLOWS = HERE.parent / ".github/workflows"
+HF_WORKFLOW = WORKFLOWS / "hf-logs-publication-checks.yml"
+GUARD_WORKFLOW = WORKFLOWS / "history-guard.yml"
+RELAY = HERE.parent / "infra/hf-webhook-relay"
+SPEC_REPORT = importlib.util.spec_from_file_location(
+    "hf_logs_report", HERE / "hf_logs_report.py"
+)
+report = importlib.util.module_from_spec(SPEC_REPORT)
+SPEC_REPORT.loader.exec_module(report)
+
+
+def load_workflow(test: unittest.TestCase, path: Path):
+    try:
+        import yaml
+    except ImportError:
+        need(test, False, "PyYAML is not installed")
+    return yaml.safe_load(path.read_text())
+
+
+def named_step(job, name):
+    (step,) = [s for s in job["steps"] if s.get("name") == name]
+    return step
+
+
+def run_step(script: str, cwd: Path, env: dict):
+    """Run a workflow step the way GitHub's bash shell does."""
+    with tempfile.TemporaryDirectory() as tmp:
+        path = Path(tmp) / "step.sh"
+        path.write_text(script)
+        output = Path(tmp) / "output"
+        output.touch()
+        result = subprocess.run(
+            ["bash", "--noprofile", "--norc", "-eo", "pipefail", str(path)],
+            cwd=cwd,
+            env={
+                "PATH": os.environ["PATH"],
+                "HOME": os.environ.get("HOME", tmp),
+                "GITHUB_OUTPUT": str(output),
+                **env,
+            },
+            capture_output=True,
+            text=True,
+        )
+        values = dict(
+            line.split("=", 1) for line in output.read_text().splitlines() if line
+        )
+    return result, values
+
+
+class HfLogsWorkflowTests(unittest.TestCase):
+    def setUp(self):
+        self.wf = load_workflow(self, HF_WORKFLOW)
+        self.job = self.wf["jobs"]["logs"]
+
+    def validate(self, **env):
+        step = named_step(self.job, "Validate request")
+        defaults = {
+            "LOGS_REPO": self.wf["env"]["LOGS_REPO"],
+            "EVENT_NAME": "repository_dispatch",
+            "PAYLOAD_REPO": self.wf["env"]["LOGS_REPO"],
+            "PAYLOAD_REF": "refs/pr/12",
+            "PAYLOAD_SHA": "a" * 40,
+            "PAYLOAD_OLD_SHA": "b" * 40,
+            "PAYLOAD_PR": "12",
+            "INPUT_REF": "",
+            "INPUT_FULL": "",
+        }
+        return run_step(step["run"], HERE, {**defaults, **env})
+
+    def test_triggers(self):
+        on = self.wf[True]
+        self.assertEqual(set(on), {"repository_dispatch", "schedule", "workflow_dispatch"})
+        self.assertEqual(on["repository_dispatch"], {"types": ["hf-logs"]})
+        self.assertEqual(len(on["schedule"]), 1)
+        inputs = on["workflow_dispatch"]["inputs"]
+        self.assertEqual(inputs["ref"]["default"], "refs/heads/main")
+        self.assertEqual(inputs["full"]["type"], "boolean")
+
+    def test_read_only_and_payload_never_reaches_a_shell_directly(self):
+        self.assertEqual(self.wf["permissions"], {"contents": "read"})
+        self.assertNotIn("permissions", self.job)
+        for step in self.job["steps"]:
+            self.assertNotIn("${{", step.get("run", ""), step.get("name"))
+        text = HF_WORKFLOW.read_text()
+        self.assertNotIn("pull_request", text)
+        self.assertNotIn("persist-credentials: true", text)
+        # The Hub token reaches only the job-level presence flag and the report.
+        users = [
+            s["name"] for s in self.job["steps"] if "secrets." in json.dumps(s)
+        ]
+        self.assertEqual(users, ["Report (job summary; comment on the Hub PR)"])
+        self.assertEqual(self.job["env"]["HAS_HF_TOKEN"], "${{ secrets.HF_TOKEN != '' }}")
+        self.assertEqual(text.count("secrets."), 2)
+
+    def test_logs_repository_named_once_and_matches_the_relay(self):
+        repo = self.wf["env"]["LOGS_REPO"]
+        self.assertEqual(repo, "OpenRSI-Foundation/OpenRSI-Index-Logs")
+        self.assertEqual(HF_WORKFLOW.read_text().count(repo), 1)
+        config = tomllib_loads((RELAY / "wrangler.toml").read_text())
+        self.assertEqual(config["vars"]["HF_REPO"], repo)
+        self.assertEqual(config["vars"]["GITHUB_REPO"], "OpenRSI-Foundation/OpenRSI-Index")
+
+    def test_valid_requests(self):
+        result, out = self.validate()
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(
+            out,
+            {"ref": "refs/pr/12", "expected": "a" * 40, "old": "b" * 40, "pr": "12", "full": "false"},
+        )
+        result, out = self.validate(
+            PAYLOAD_REF="refs/heads/main", PAYLOAD_PR="", PAYLOAD_OLD_SHA=""
+        )
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual((out["pr"], out["old"], out["full"]), ("", "", "true"))
+        result, out = self.validate(
+            PAYLOAD_REF="refs/heads/main", PAYLOAD_PR="", PAYLOAD_OLD_SHA="0" * 40
+        )
+        self.assertEqual((out["old"], out["full"]), ("", "true"))
+        result, out = self.validate(PAYLOAD_REF="refs/heads/main", PAYLOAD_PR="")
+        self.assertEqual((out["old"], out["full"]), ("b" * 40, "false"))
+        result, out = self.validate(EVENT_NAME="schedule")
+        self.assertEqual((out["ref"], out["full"], out["expected"]), ("refs/heads/main", "true", ""))
+        result, out = self.validate(
+            EVENT_NAME="workflow_dispatch", INPUT_REF="refs/pr/3", INPUT_FULL="true"
+        )
+        self.assertEqual((out["ref"], out["pr"], out["full"]), ("refs/pr/3", "3", "true"))
+        result, out = self.validate(
+            EVENT_NAME="workflow_dispatch", INPUT_REF="refs/heads/main", INPUT_FULL="false"
+        )
+        self.assertEqual(out["full"], "true")
+
+    def test_invalid_requests_rejected(self):
+        bad = {
+            "repo": dict(PAYLOAD_REPO="someone/else"),
+            "ref": dict(PAYLOAD_REF="refs/heads/dev"),
+            "ref injection": dict(PAYLOAD_REF="refs/pr/1; rm -rf /"),
+            "ref newline": dict(PAYLOAD_REF="refs/pr/1\nrefs/heads/main"),
+            "tag": dict(PAYLOAD_REF="refs/tags/v1"),
+            "sha": dict(PAYLOAD_SHA="A" * 40),
+            "short sha": dict(PAYLOAD_SHA="a" * 39),
+            "old sha": dict(PAYLOAD_OLD_SHA="$(id)"),
+            "pr mismatch": dict(PAYLOAD_PR="13"),
+            "pr on main": dict(PAYLOAD_REF="refs/heads/main", PAYLOAD_PR="1"),
+            "input ref": dict(EVENT_NAME="workflow_dispatch", INPUT_REF="main"),
+            "event": dict(EVENT_NAME="push"),
+        }
+        for label, env in bad.items():
+            with self.subTest(label=label):
+                result, out = self.validate(**env)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("::error::Rejected request", result.stdout)
+                self.assertEqual(out, {})
+
+    def test_concurrency_per_pr_ref_never_drops_main_updates(self):
+        group = self.wf["concurrency"]["group"]
+        self.assertIn("'refs/pr/'", group)
+        self.assertIn("format('hf-logs-main-{0}', github.run_id)", group)
+        self.assertIn("startsWith(", self.wf["concurrency"]["cancel-in-progress"])
+
+    def test_trusted_main_checkout_and_pinned_scanner(self):
+        (checkout,) = [
+            s for s in self.job["steps"] if s.get("uses", "").startswith("actions/checkout@")
+        ]
+        self.assertEqual(checkout["with"]["ref"], "main")
+        self.assertEqual(checkout["with"]["path"], "trusted")
+        self.assertEqual(checkout["with"]["sparse-checkout"], "checks")
+        self.assertFalse(checkout["with"]["persist-credentials"])
+        task_log = load_workflow(self, WORKFLOW)
+        expected = named_step(task_log["jobs"]["publication"], "Install checksum-pinned secret scanner")
+        actual = named_step(self.job, "Install checksum-pinned secret scanner")
+        self.assertEqual(actual, expected)
+        self.assertEqual(
+            checkout["uses"],
+            named_step(task_log["jobs"]["publication"], "Checkout submitted publication data")["uses"],
+        )
+
+    def test_fetch_is_anonymous_and_checks_the_announced_revision(self):
+        run = named_step(self.job, "Fetch the Logs revision (anonymous; LFS content deferred)")["run"]
+        self.assertIn('git config credential.helper ""', run)
+        self.assertIn("git lfs install --local --skip-smudge", run)
+        self.assertIn('"https://huggingface.co/datasets/$LOGS_REPO"', run)
+        self.assertIn('"$resolved" != "$EXPECTED"', run)
+        self.assertIn('echo "stale=true"', run)
+        self.assertIn("git merge-base refs/remotes/origin/main", run)
+        self.assertIn('base=$OLD', run)
+
+    def test_fetch_step_against_a_local_logs_repository(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        remote = root / "remote"
+        remote.mkdir()
+
+        def git(*args, cwd=remote):
+            return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
+
+        git("init", "-q", "-b", "main")
+        git("config", "user.name", "t")
+        git("config", "user.email", "t@example.invalid")
+        (remote / "README.md").write_text("x\n")
+        git("add", "-A")
+        git("commit", "-qm", "one")
+        first = git("rev-parse", "HEAD")
+        git("checkout", "-qb", "pr")
+        (remote / "a.txt").write_text("a\n")
+        git("add", "-A")
+        git("commit", "-qm", "pr")
+        pr = git("rev-parse", "HEAD")
+        git("update-ref", "refs/pr/5", pr)
+        git("checkout", "-q", "main")
+        (remote / "b.txt").write_text("b\n")
+        git("add", "-A")
+        git("commit", "-qm", "two")
+        second = git("rev-parse", "HEAD")
+        run = named_step(self.job, "Fetch the Logs revision (anonymous; LFS content deferred)")["run"]
+        # Point the fixed Hub URL at the local repository.
+        run = run.replace('"https://huggingface.co/datasets/$LOGS_REPO"', '"$LOCAL_REMOTE"')
+
+        def fetch(case, **env):
+            work = root / case
+            work.mkdir()
+            return run_step(
+                run, work,
+                {"LOGS_REPO": "x/y", "LOCAL_REMOTE": str(remote), "OLD": "", "FULL": "false", **env},
+            )
+
+        result, out = fetch("pr", REF="refs/pr/5", EXPECTED=pr)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((out["stale"], out["sha"], out["base"], out["full"]), ("false", pr, first, "false"))
+        result, out = fetch("stale-pr", REF="refs/pr/5", EXPECTED="c" * 40)
+        self.assertEqual((out["stale"], out["sha"]), ("true", "c" * 40))
+        result, out = fetch("main", REF="refs/heads/main", EXPECTED=second, OLD=first)
+        self.assertEqual((out["sha"], out["base"], out["mode"]), (second, first, f"incremental from {first}"))
+        # Main moved on after the announcement: the announced update is still audited.
+        result, out = fetch("main-moved", REF="refs/heads/main", EXPECTED=first, OLD="")
+        self.assertEqual((out["stale"], out["sha"]), ("false", first))
+        # A rewritten main (old revision unknown) is audited in full.
+        result, out = fetch("rewritten", REF="refs/heads/main", EXPECTED=second, OLD="d" * 40)
+        self.assertEqual((out["full"], out["base"], out["mode"]), ("true", "", "full"))
+
+    def test_lfs_download_uses_the_checker_selection(self):
+        run = named_step(self.job, "Download the LFS content the check reads")["run"]
+        self.assertIn("--mount rsi-logs", run)
+        self.assertIn("--lfs-include", run)
+        self.assertIn('git lfs pull --include="$pattern"', run)
+        self.assertIn("git lfs pull\n", run)
+
+    def test_checker_runs_from_trusted_main_in_logs_mode(self):
+        step = named_step(self.job, "Check the Logs revision")
+        run = step["run"]
+        self.assertIn('PUBLICATION_CHECKS="$GITHUB_WORKSPACE/trusted/checks"', run)
+        self.assertIn('python3 -I "$PUBLICATION_CHECKS/check_publication.py"', run)
+        for flag in (
+            "--mount rsi-logs",
+            '--task-repo "$GITHUB_WORKSPACE/trusted" --task-ref HEAD',
+            '--repo "$GITHUB_WORKSPACE/logs"',
+            "--gitleaks",
+            "--secret-config",
+            "--policy",
+            "mode=(--full)",
+        ):
+            self.assertIn(flag, run)
+        self.assertIn("exit 1", run)
+        self.assertNotIn("--compile", run)
+
+    def test_report_comments_only_on_prs_with_a_pinned_client(self):
+        install = named_step(self.job, "Install pinned Hub client")
+        self.assertRegex(install["run"], r'"huggingface_hub==[0-9]+\.[0-9]+\.[0-9]+"')
+        self.assertIn("env.HAS_HF_TOKEN == 'true'", install["if"])
+        self.assertIn("steps.request.outputs.pr != ''", install["if"])
+        step = named_step(self.job, "Report (job summary; comment on the Hub PR)")
+        self.assertIn("always()", step["if"])
+        self.assertEqual(step["env"]["HF_TOKEN"], "${{ secrets.HF_TOKEN }}")
+        self.assertIn('--summary "$GITHUB_STEP_SUMMARY"', step["run"])
+        self.assertIn('comment=(--comment-pr "$PR")', step["run"])
+        self.assertIn('[ "$STATUS" != stale ]', step["run"])
+        self.assertIn("hf_logs_report.py", step["run"])
+
+
+def tomllib_loads(text):
+    import tomllib
+
+    return tomllib.loads(text)
+
+
+class HfLogsReportTests(unittest.TestCase):
+    def build(self, status="pass", output="PASS 3 published files\n", **kw):
+        return report.build_report(
+            status, output, repo="o/r", ref="refs/pr/2", sha="a" * 40, mode="full", **kw
+        )
+
+    def test_report_contents(self):
+        body = self.build(run_url="https://example.invalid/run")
+        self.assertIn("publication check: PASS", body)
+        self.assertIn("`refs/pr/2`", body)
+        self.assertIn("https://example.invalid/run", body)
+        self.assertIn("```text\nPASS 3 published files\n```", body)
+        self.assertIn("FAIL", self.build("fail"))
+        self.assertIn("ERROR", self.build("error", ""))
+        self.assertIn("newer", self.build("stale", ""))
+
+    def test_fence_outlasts_backticks_and_commands_become_text(self):
+        body = self.build(output="::warning::Possible credential: a````b.txt; rule=x, line=1\n")
+        self.assertIn("WARNING: Possible credential", body)
+        self.assertNotIn("::warning::", body)
+        self.assertIn("`````text\n", body)
+
+    def test_long_output_keeps_the_end(self):
+        output = "x" * (report.MAX_OUTPUT + 100) + "\nFAIL final line\n"
+        body = self.build("fail", output)
+        self.assertIn("FAIL final line", body)
+        self.assertIn("earlier output omitted", body)
+        self.assertLess(len(body), report.MAX_OUTPUT + 2000)
+
+    def run_main(self, *extra, token=None):
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "out.txt"
+            out.write_text("PASS ok\n")
+            summary = Path(tmp) / "summary.md"
+            args = [
+                "--status", "pass", "--output", str(out), "--repo", "o/r",
+                "--ref", "refs/pr/2", "--sha", "a" * 40, "--mode", "full",
+                "--summary", str(summary), *extra,
+            ]
+            env = {k: v for k, v in os.environ.items() if k != "HF_TOKEN"}
+            if token:
+                env["HF_TOKEN"] = token
+            stdout = io.StringIO()
+            with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(stdout):
+                code = report.main(args)
+            return code, stdout.getvalue(), summary.read_text()
+
+    def test_summary_without_token_posts_nothing(self):
+        with patch.object(report, "post_comment") as post:
+            code, stdout, summary = self.run_main("--comment-pr", "2")
+        self.assertEqual(code, 0)
+        post.assert_not_called()
+        self.assertIn("HF_TOKEN is not configured", stdout)
+        self.assertIn("PASS ok", summary)
+
+    def test_comment_posted_once_with_token(self):
+        with patch.object(report, "post_comment") as post:
+            code, stdout, _ = self.run_main("--comment-pr", "2", token="hf_test")
+        self.assertEqual(code, 0)
+        post.assert_called_once()
+        self.assertEqual(post.call_args.args[:2], ("o/r", 2))
+        self.assertNotIn("hf_test", stdout)
+
+    def test_comment_failure_is_reported_without_details(self):
+        with patch.object(report, "post_comment", side_effect=RuntimeError("hf_secret_echo")):
+            code, stdout, _ = self.run_main("--comment-pr", "2", token="hf_test")
+        self.assertEqual(code, 1)
+        self.assertIn("(RuntimeError)", stdout)
+        self.assertNotIn("hf_secret_echo", stdout)
+
+
+class HistoryGuardTests(unittest.TestCase):
+    STEP = "Reject unrelated history and removed paths"
+
+    def setUp(self):
+        self.wf = load_workflow(self, GUARD_WORKFLOW)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.repo = Path(self.tmp.name)
+        self.git("init", "-q")
+        self.git("config", "user.name", "Guard test")
+        self.git("config", "user.email", "guard-test@example.invalid")
+        self.policy(["rsi-logs/", "rsi-tasks/demo/tests/assets/bright/"])
+        self.write("README.md", "x\n")
+        self.base = self.commit()
+
+    def git(self, *args):
+        return subprocess.check_output(
+            ["git", "-C", str(self.repo), *args], text=True, stderr=subprocess.DEVNULL
+        ).strip()
+
+    def write(self, path, text):
+        p = self.repo / path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+
+    def policy(self, prefixes):
+        listed = ", ".join(json.dumps(p) for p in prefixes)
+        self.write(
+            "checks/publication-policy.toml",
+            f"[historical_tasks]\n\n[history_guard]\nforbidden_prefixes = [{listed}]\n",
+        )
+
+    def commit(self):
+        self.git("add", "-A")
+        self.git("commit", "-qm", "fixture", "--allow-empty")
+        return self.git("rev-parse", "HEAD")
+
+    def guard(self, head=None):
+        step = named_step(self.wf["jobs"]["history-guard"], self.STEP)
+        return run_step(
+            step["run"],
+            self.repo,
+            {"BASE_SHA": self.base, "HEAD_SHA": head or self.git("rev-parse", "HEAD")},
+        )[0]
+
+    def test_workflow_runs_on_every_pull_request(self):
+        self.assertEqual(self.wf[True], {"pull_request": None})
+        job = self.wf["jobs"]["history-guard"]
+        self.assertEqual(job["name"], "history-guard")
+        self.assertEqual(self.wf["permissions"], {"contents": "read"})
+        (checkout,) = [s for s in job["steps"] if "uses" in s]
+        self.assertEqual(checkout["with"]["fetch-depth"], 0)
+        self.assertFalse(checkout["with"]["persist-credentials"])
+        for step in job["steps"]:
+            self.assertNotIn("${{", step.get("run", ""))
+
+    def test_policy_lists_the_removed_assets(self):
+        policy = tomllib_loads((HERE / "publication-policy.toml").read_text())
+        self.assertEqual(
+            policy["history_guard"]["forbidden_prefixes"],
+            ["rsi-tasks/reasonir-difficulty-curriculum/tests/assets/bright/"],
+        )
+
+    def test_related_pr_passes(self):
+        self.write("rsi-tasks/demo/tests/assets/manifest.json", "{}\n")
+        self.write("rsi-logs-notes.md", "not under the prefix\n")
+        self.commit()
+        result = self.guard()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_added_then_deleted_file_still_fails(self):
+        self.write("rsi-tasks/demo/tests/assets/bright/q.parquet", "data\n")
+        self.commit()
+        self.git("rm", "-rq", "rsi-tasks/demo/tests/assets/bright")
+        self.commit()
+        result = self.guard()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("::error::This PR's commits add 1 file(s)", result.stdout)
+        self.assertIn("  removed path: rsi-tasks/demo/tests/assets/bright/q.parquet", result.stdout)
+
+    def test_files_arriving_through_a_merge_fail(self):
+        self.git("checkout", "-qb", "old")
+        self.write("rsi-logs/task/run.log", "x\n")
+        self.commit()
+        self.git("checkout", "-q", "-")
+        self.git("checkout", "-qb", "feature")
+        self.write("feature.md", "x\n")
+        self.commit()
+        self.git("merge", "-q", "--no-edit", "old")
+        self.assertEqual(self.guard().returncode, 1)
+
+    def test_unrelated_history_fails(self):
+        self.git("checkout", "-q", "--orphan", "rewritten")
+        self.write("other.md", "x\n")
+        result = self.guard(self.commit())
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("shares no history with its base", result.stdout)
+
+    def test_prefixes_come_from_the_base_revision(self):
+        self.policy([])
+        self.write("rsi-logs/task/run.log", "x\n")
+        self.commit()
+        self.assertEqual(self.guard().returncode, 1)
+
+    def test_base_without_a_list_passes(self):
+        self.write("checks/publication-policy.toml", "[historical_tasks]\n")
+        self.base = self.commit()
+        self.write("rsi-logs/task/run.log", "x\n")
+        self.commit()
+        result = self.guard()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("lists no removed path prefixes", result.stdout)
+
+    def test_invalid_base_policy_fails(self):
+        self.write("checks/publication-policy.toml", "[history_guard]\nforbidden_prefixes = [1]\n")
+        self.base = self.commit()
+        self.write("x.md", "x\n")
+        self.commit()
+        self.assertNotEqual(self.guard().returncode, 0)
+
+
+class RelayTests(unittest.TestCase):
+    def test_wrangler_config_has_no_secrets(self):
+        text = (RELAY / "wrangler.toml").read_text()
+        config = tomllib_loads(text)
+        self.assertEqual(config["main"], "worker.js")
+        self.assertEqual(set(config["vars"]), {"HF_REPO", "GITHUB_REPO"})
+        self.assertIn("wrangler secret put WEBHOOK_SECRET", text)
+        self.assertIn("wrangler secret put GITHUB_TOKEN", text)
+
+    def test_relay_has_no_dependencies(self):
+        package = json.loads((RELAY / "package.json").read_text())
+        self.assertNotIn("dependencies", package)
+        self.assertNotIn("devDependencies", package)
+
+    def test_relay_and_workflow_agree_on_the_ref_pattern_and_event(self):
+        worker = (RELAY / "worker.js").read_text()
+        self.assertIn(r"/^refs\/(pr\/[0-9]+|heads\/main)$/", worker)
+        self.assertIn('EVENT_TYPE = "hf-logs"', worker)
+        run = HF_WORKFLOW.read_text()
+        self.assertIn("ref_re='^refs/(pr/[0-9]+|heads/main)$'", run)
+
+    def test_node_tests_pass(self):
+        import shutil
+
+        node = shutil.which("node")
+        need(self, node, "Node.js is not installed")
+        result = subprocess.run(
+            [node, "--test", str(RELAY / "worker.test.mjs")],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stdout[-2000:])
 
 
 class SecretScannerTests(unittest.TestCase):
