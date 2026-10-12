@@ -3,7 +3,9 @@
 The Discussion rubric reviewer uses `gpt-6.1-sol` with `high` reasoning through
 an OpenAI-compatible proxy, not the official OpenAI endpoint. It runs on a
 GitHub-hosted runner independently of the private task-worker slots.
-OpenAI calls in the PR `/run` and `/cheat` workflows use the same proxy settings.
+PR task/log publication checks do not call a model, use provider credentials,
+build task images, or perform GPU evaluation. See
+[publication checks](../checks/PUBLICATION_CHECKS.md).
 
 In this repository's **Settings → Secrets and variables → Actions**, configure
 these before deploying the workflow:
@@ -16,8 +18,7 @@ these before deploying the workflow:
 If both a variable and a secret define `RUBRIC_BASE_URL`, the variable takes
 precedence. Only one is needed.
 
-The workflows map these to `OPENAI_API_KEY` and `OPENAI_BASE_URL`, plus
-`OPENAI_API_BASE` for the trial clients that use LiteLLM. Both settings are
+The Discussion workflow maps these to `OPENAI_API_KEY` and `OPENAI_BASE_URL`. Both settings are
 required for a new rubric review; a missing URL
 must not silently send the proxy key to the official endpoint. Do not include
 `/responses` in the base URL: the SDK appends it.
@@ -26,13 +27,10 @@ The old `OPENAI_API_KEY` repository secret is no longer used by these workflows
 and can be removed once this change is deployed. The `RUBRIC_` setting names are
 retained so existing configuration works without renaming secrets.
 
-`/run` runs coding agents on PR task changes; `/cheat` runs adversarial trials
-to check for reward hacking. Both can analyze the resulting trajectories and
-report back to the PR. This change updates their OpenAI connection settings,
-not their model matrix or separate Anthropic/Gemini credentials.
-Harbor 0.14.0's analyzer uses the Claude Agent SDK (currently `sonnet`), so that
-analysis still needs Anthropic credentials; the OpenAI proxy key does not
-replace them.
+The obsolete PR `/run`, `/cheat`, `/validate`, `/review`, and `/fortify`
+workflows have been retired. Scientific GPU runs and evaluation are performed
+by operators outside publication CI, and their real records are published
+without a universal score threshold.
 
 No RSI-Skills secret, W2 login, worker-slot provider configuration, or Codex
 `config.toml` change is needed.

@@ -167,7 +167,7 @@ jobs:
           REUSED_REVIEW_ID: ${{ steps.reuse.outputs.review_comment_id }}
           REUSED_DECISION: ${{ steps.reuse.outputs.decision }}
           PYTHONUNBUFFERED: "1"
-          # Proxy credentials shared with the PR trial workflows.
+          # Proposal review only; PR publication checks never use these credentials.
           OPENAI_API_KEY: ${{ secrets.RUBRIC_API_KEY }}
           OPENAI_BASE_URL: ${{ vars.RUBRIC_BASE_URL || secrets.RUBRIC_BASE_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

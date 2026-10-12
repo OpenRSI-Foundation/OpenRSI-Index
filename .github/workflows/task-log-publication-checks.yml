@@ -1,0 +1,92 @@
+name: Task and log publication checks
+
+on:
+  # Run on every PR: a stable check is explicitly successful for unrelated PRs,
+  # rather than disappearing or leaving a path-filtered required check pending.
+  pull_request:
+  push:
+    branches: [main]
+    paths:
+      - checks/check_publication.py
+      - checks/test_publication.py
+      - checks/publication-*.toml
+      - .github/workflows/task-log-publication-checks.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: task-log-publication-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  publication:
+    name: Task and log publication (CPU only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      CUDA_VISIBLE_DEVICES: ""
+    steps:
+      - name: Checkout submitted publication data
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          path: proposal
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Checkout base Harness and trusted publication policy
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.sha }}
+          path: trusted-base
+          persist-credentials: false
+          sparse-checkout: |
+            RSI-Harness
+            checks
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+        with:
+          version: "0.6.5"
+      - name: Install base-revision compiler dependencies (no task dependencies)
+        working-directory: trusted-base/RSI-Harness
+        run: uv sync --frozen --no-dev --python 3.12
+      - name: Install checksum-pinned secret scanner
+        env:
+          SCANNER_DIR: ${{ runner.temp }}/publication-gitleaks
+        run: |
+          set -euo pipefail
+          mkdir -p "$SCANNER_DIR"
+          curl --fail --silent --show-error --location \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            --output "$SCANNER_DIR/gitleaks.tar.gz"
+          printf '%s  %s\n' \
+            '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb' \
+            "$SCANNER_DIR/gitleaks.tar.gz" | sha256sum --check --strict
+          tar -xzf "$SCANNER_DIR/gitleaks.tar.gz" -C "$SCANNER_DIR" gitleaks
+      - name: Test publication checker without Docker, GPUs or models
+        working-directory: trusted-base/RSI-Harness
+        env:
+          PUBLICATION_GITLEAKS_BIN: ${{ runner.temp }}/publication-gitleaks/gitleaks
+        run: uv run --frozen --no-dev python -I ../../proposal/checks/test_publication.py
+      - name: Validate changed task and log packages
+        working-directory: trusted-base/RSI-Harness
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before || github.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          SCANNER_DIR: ${{ runner.temp }}/publication-gitleaks
+        run: |
+          set -euo pipefail
+          PUBLICATION_CHECKS="$GITHUB_WORKSPACE/trusted-base/checks"
+          # Bootstrap only: these files do not exist on main before this first
+          # CI PR merges. Later PRs always use base code/policy for enforcement;
+          # proposed checker changes are tested above, not self-authorized.
+          if [ ! -f "$PUBLICATION_CHECKS/check_publication.py" ]; then
+            PUBLICATION_CHECKS="$GITHUB_WORKSPACE/proposal/checks"
+          fi
+          uv run --frozen --no-dev python -I "$PUBLICATION_CHECKS/check_publication.py" \
+            --repo "$GITHUB_WORKSPACE/proposal" \
+            --base-ref "$BASE_REF" --head-ref "$HEAD_REF" --compile \
+            --policy "$PUBLICATION_CHECKS/publication-policy.toml" \
+            --secret-config "$PUBLICATION_CHECKS/publication-gitleaks.toml" \
+            --gitleaks "$SCANNER_DIR/gitleaks"
