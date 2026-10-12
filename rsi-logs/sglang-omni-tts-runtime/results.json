@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "measurements_file": "measurements.json",
   "run_id": "omni-resume3-669485-20261004T141956Z-resume3",
   "round": "agent-4",
   "source_feedback": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/feedback/agent-4.log",

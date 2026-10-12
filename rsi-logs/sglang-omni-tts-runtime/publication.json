@@ -1,5 +1,17 @@
 {
   "schema_version": 1,
+  "derived_evidence": [
+    {
+      "path": "measurements.json",
+      "sha256": "154567f66f062fd5bc67e80f4aeba0686841765e7d4907bdad76822856b37c47",
+      "description": "11 complete Judge measurements, 14 unchanged rewards, two separate local controlled studies; source locations and hashes retained"
+    },
+    {
+      "path": "summarize_measurements.py",
+      "sha256": "9f5077dcf8897fc7ee6c39f111b8606c701a33146a1f36c7bcda6cd41e153568",
+      "description": "CPU-only evidence extractor; no evaluator or GPU execution"
+    }
+  ],
   "source_repository": "OpenRSI-Foundation/sglang-omni-tts-runtime-d154",
   "source_commit": "c819dc10aaf7dab0c2d0ed5eea5499e449a6a9d5",
   "agent": "codex",
