@@ -421,6 +421,36 @@ class RepositoryTests(unittest.TestCase):
             self.assertEqual(stream.read(100), content)
             self.assertEqual(stream.read(100), b"")
 
+    def test_gzip_chunks_validated_only_after_complete_reassembly(self):
+        self.task()
+        self.write("rsi-logs/demo-task/README.md", "Recorded run\n")
+        content = b"complete sanitized transcript\n" * 100
+        compressed = gzip.compress(content, mtime=0)
+        parts = []
+        for number, block in enumerate((compressed[:12], compressed[12:])):
+            name = f"part-{number}.bin"
+            self.write(f"rsi-logs/demo-task/model/{name}", block)
+            parts.append(
+                {
+                    "path": name,
+                    "bytes": len(block),
+                    "sha256": hashlib.sha256(block).hexdigest(),
+                }
+            )
+        self.write(
+            "rsi-logs/demo-task/model/manifest.json",
+            json.dumps(
+                {
+                    "source_name": "agent_output.txt.gz",
+                    "bytes": len(compressed),
+                    "sha256": hashlib.sha256(compressed).hexdigest(),
+                    "parts": parts,
+                }
+            ),
+        )
+        self.commit()
+        self.check()
+
     def test_compressed_manifest_verified(self):
         raw = b"line one\nline two\n"
         packed = gzip.compress(raw, mtime=0)

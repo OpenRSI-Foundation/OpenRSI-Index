@@ -351,7 +351,7 @@ class ScanStage:
     def __init__(self, destination: Path):
         self.destination, self.total, self.count = destination, 0, 0
 
-    def add(self, stream, name: str, depth=0, structured=True):
+    def add(self, stream, name: str, depth=0, structured=True, expand=True):
         safe_relative(name)
         if depth > MAX_DEPTH:
             raise CheckError(
@@ -372,6 +372,10 @@ class ScanStage:
                         "scan expansion budget exceeded; split publication (no files silently skipped)"
                     )
                 out.write(block)
+        if not expand:
+            # Only checksum-verified chunks may be copied opaquely. Their
+            # complete reassembled stream is expanded and audited below.
+            return
         lower = name.lower()
         with target.open("rb") as f:
             header = f.read(512)
@@ -656,12 +660,22 @@ def check(
                     f"{name}: invalid Python syntax (not executed)"
                 ) from exc
     if selected:
+        verified_chunks = {
+            (p.parent / safe_relative(entry["path"])).relative_to(repo).as_posix()
+            for p, _, parts in chunk_manifests
+            for entry in parts
+        }
         with tempfile.TemporaryDirectory(prefix="rsi-publication-") as temporary:
             stage = ScanStage(Path(temporary) / "scan")
             for name in sorted(selected):
                 try:
                     with (repo / name).open("rb") as f:
-                        stage.add(f, name, structured=name.startswith("rsi-logs/"))
+                        stage.add(
+                            f,
+                            name,
+                            structured=name.startswith("rsi-logs/"),
+                            expand=name not in verified_chunks,
+                        )
                 except (
                     ValueError,
                     OSError,

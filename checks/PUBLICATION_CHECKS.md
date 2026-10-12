@@ -54,6 +54,8 @@ reward semantics remain the task's declared scientific contract.
 - Reassemble chunk streams for secret scanning, so a token split across a chunk
   boundary is not missed. Both `parts[].path/bytes` plus `sha256/bytes` and the
   runner's `parts[].file/size` plus `source_sha256/source_size` format are supported.
+  Checksum-verified compressed chunks are decoded only after complete
+  reassembly, never mistaken for independently complete gzip/archive files.
 
 Manifests are currently optional for plain log files; an absent manifest is not
 proof of trajectory completeness. CI can verify the bytes and records published,
