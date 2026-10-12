@@ -65,6 +65,7 @@ We are actively developing this project and welcome [contributions](https://gith
 | [`reasonir-difficulty-curriculum`](rsi-tasks/reasonir-difficulty-curriculum/) | Public Task | Post-training | Optimize a fixed-budget retrieval LoRA through difficulty-aware curricula. | 4× H100 minimum |
 | [`isaaclab-peginsert-reward-search`](rsi-tasks/isaaclab-peginsert-reward-search/) | Public Task | Robotics      | Design bounded reward graphs for fixed-budget Isaac Lab peg insertion. | 4× H100         |
 | [`kev-decision-architecture`](rsi-tasks/kev-decision-architecture/) | Public Task | Post-training | Redesign a 0.5B decision architecture under a fixed training corpus and recipe. | 2× H100 minimum |
+| [`sglang-omni-tts-runtime`](rsi-tasks/sglang-omni-tts-runtime/) · [Research log](rsi-logs/sglang-omni-tts-runtime/) | Public Task | MLSys | Improve CosyVoice3 TTS serving throughput with Qwen Base and MOSS regression checks. | 1 Work + 3 Judge GPUs; recorded on H200 |
 
 </details>
 

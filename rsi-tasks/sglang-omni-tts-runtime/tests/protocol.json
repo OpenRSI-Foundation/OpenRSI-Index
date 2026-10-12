@@ -1,0 +1,124 @@
+{
+  "version": 5,
+  "source": "1523543056bf334bc2f4d69db23aad0a002cedf2",
+  "archive_sha256": "c5a1d842729a0d431b3b139e0d1ccbc40d161c8e77aad3234d82a8c742454357",
+  "rows": 1088,
+  "repetitions": 3,
+  "repetition_seeds": [
+    42,
+    43,
+    44
+  ],
+  "benchmark_engine_overrides": {
+    "max_running_requests": 64,
+    "cuda_graph_max_bs": 64
+  },
+  "tts_warmup": 16,
+  "asr_warmup": 64,
+  "asr_concurrency": 32,
+  "cache_policy": "fresh-empty-per-lane-per-repetition",
+  "lower_metrics": [
+    "wer_corpus",
+    "latency_mean_s",
+    "latency_median_s",
+    "latency_p95_s",
+    "latency_p99_s",
+    "rtf_mean",
+    "rtf_median",
+    "rtf_p95",
+    "rtf_p99"
+  ],
+  "higher_metrics": [
+    "throughput_qps",
+    "audio_throughput_s_per_s"
+  ],
+  "lanes": [
+    {
+      "name": "base",
+      "model": "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+      "port": 8000,
+      "output": "results/qwen3_tts_base_en",
+      "argv": [
+        "-m",
+        "benchmarks.eval.benchmark_tts_seedtts",
+        "--meta",
+        "zhaochenyang20/seed-tts-eval-arrow",
+        "--model",
+        "Qwen/Qwen3-TTS-12Hz-1.7B-Base",
+        "--port",
+        "8000",
+        "--ref-format",
+        "references",
+        "--output-dir",
+        "results/qwen3_tts_base_en",
+        "--lang",
+        "en",
+        "--max-concurrency",
+        "16"
+      ]
+    },
+    {
+      "name": "moss",
+      "model": "OpenMOSS-Team/MOSS-TTS-v1.5",
+      "port": 8001,
+      "output": "results/moss_tts_en",
+      "argv": [
+        "-m",
+        "benchmarks.eval.benchmark_tts_seedtts",
+        "--meta",
+        "zhaochenyang20/seed-tts-eval-arrow",
+        "--model",
+        "OpenMOSS-Team/MOSS-TTS-v1.5",
+        "--port",
+        "8001",
+        "--ref-format",
+        "references",
+        "--token-count",
+        "auto",
+        "--output-dir",
+        "results/moss_tts_en",
+        "--lang",
+        "en",
+        "--max-concurrency",
+        "16"
+      ]
+    },
+    {
+      "name": "cosy",
+      "model": "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+      "port": 8003,
+      "output": "results/fun_cosyvoice3_en",
+      "argv": [
+        "-m",
+        "benchmarks.eval.benchmark_tts_seedtts",
+        "--meta",
+        "zhaochenyang20/seed-tts-eval-arrow",
+        "--model",
+        "FunAudioLLM/Fun-CosyVoice3-0.5B-2512",
+        "--port",
+        "8003",
+        "--output-dir",
+        "results/fun_cosyvoice3_en",
+        "--lang",
+        "en",
+        "--max-concurrency",
+        "16"
+      ]
+    }
+  ],
+  "evaluation_policy": {
+    "method": "three-run-mean-with-strict-objective-v1",
+    "calibration_evaluations": 1,
+    "holdout_evaluations": 1,
+    "aggregation": "arithmetic-mean-of-three-per-run-metrics",
+    "primary_objective": {
+      "model": "cosy",
+      "metric": "throughput_qps",
+      "comparison": ">"
+    },
+    "other_performance_gates_relative_tolerance": 0.03,
+    "wer_absolute_max": 0.02,
+    "baseline_update": "previous-complete-eligible-candidate",
+    "reward": "cosy-qps-relative-to-initial-baseline"
+  }
+}
