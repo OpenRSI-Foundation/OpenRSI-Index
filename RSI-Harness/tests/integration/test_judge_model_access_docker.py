@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import shutil
 import socket
 import threading
@@ -133,7 +134,11 @@ def _docker(image: str = IMAGE):
         client.ping()
         client.images.get(image)
     except Exception as error:
-        pytest.skip(f"local cached {image} Docker authority unavailable: {error}")
+        message = f"local cached {image} Docker authority unavailable: {error}"
+        # scripts/bump_agent.py sets it: a bump must not pass on skipped cases.
+        if os.environ.get("RSI_REQUIRE_DOCKER_TESTS") == "1":
+            pytest.fail(message)
+        pytest.skip(message)
     return client
 
 

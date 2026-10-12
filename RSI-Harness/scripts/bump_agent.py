@@ -31,9 +31,14 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSIONS = ROOT / "src" / "rsi_loop" / "harness" / "agent" / "versions.py"
-# Every case in these is parametrized by its Agent's name, so ``-k [name]``
-# selects that Agent's cases.
-DOCKER_TESTS = ("tests/integration/test_driven_agents_docker.py",)
+# An Agent's cases in these: a full run (id ``[name]``), the Judge's one-shot
+# call through rsi-agent (``[name]``, or ``[name-...]`` for Codex and Claude
+# Code), so ``-k "[name] or [name-"`` selects exactly that Agent's cases.
+DOCKER_TESTS = (
+    "tests/integration/test_driven_agents_docker.py",
+    "tests/integration/test_agent_one_shot_docker.py",
+    "tests/integration/test_judge_model_access_docker.py",
+)
 # Makes a Docker case that cannot run (no Docker, no cached base image) fail
 # instead of skip: pytest exits 0 when every selected case skipped, which
 # would pass a bump that tested nothing.
@@ -114,7 +119,10 @@ def pytest_args(target: Target) -> list[str]:
     """Return the pytest arguments that run *target*'s Docker cases."""
     args = [*DOCKER_TESTS]
     if target.agents:
-        args += ["-k", " or ".join(f"[{agent}]" for agent in target.agents)]
+        args += [
+            "-k",
+            " or ".join(f"[{agent}] or [{agent}-" for agent in target.agents),
+        ]
     return args
 
 

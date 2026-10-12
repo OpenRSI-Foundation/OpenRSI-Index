@@ -117,7 +117,8 @@ def test_bump_script_covers_every_agent_and_constant() -> None:
 def test_every_agent_has_the_docker_cases_the_bump_script_selects() -> None:
     from tests.integration import test_driven_agents_docker as docker_tests
 
-    assert bump.DOCKER_TESTS == (str(Path(docker_tests.__file__).relative_to(ROOT)),)
+    assert bump.DOCKER_TESTS[0] == str(Path(docker_tests.__file__).relative_to(ROOT))
+    assert all((ROOT / path).is_file() for path in bump.DOCKER_TESTS)
     # ``-k [name]`` selects a case by its id, the Agent's name.
     assert sorted(str(case) for case in docker_tests.CASES) == AGENT_NAMES
 
@@ -188,9 +189,9 @@ def test_pytest_args_select_the_agents_cases_or_all_for_node() -> None:
     assert bump.pytest_args(bump.TARGETS["claude-code"]) == [
         *bump.DOCKER_TESTS,
         "-k",
-        "[claude-code]",
+        "[claude-code] or [claude-code-",
     ]
-    assert bump.pytest_args(bump.TARGETS["ripgrep"])[-1] == "[opencode]"
+    assert bump.pytest_args(bump.TARGETS["ripgrep"])[-1] == "[opencode] or [opencode-"
     assert bump.pytest_args(bump.TARGETS["node"]) == list(bump.DOCKER_TESTS)
 
 
@@ -210,7 +211,8 @@ def test_run_tests_makes_a_case_that_cannot_run_fail(
 
     assert bump.run_tests(bump.TARGETS["pi"]) == 0
     [(command, kwargs)] = calls
-    assert command[-3:] == bump.pytest_args(bump.TARGETS["pi"])
+    args = bump.pytest_args(bump.TARGETS["pi"])
+    assert command[-len(args) :] == args
     assert kwargs["env"][bump.REQUIRE_ENV] == "1"
     assert docker_tests.REQUIRE_ENV == bump.REQUIRE_ENV
 
