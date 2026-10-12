@@ -54,6 +54,8 @@ reward semantics remain the task's declared scientific contract.
 - Reassemble chunk streams for secret scanning, so a token split across a chunk
   boundary is not missed. Both `parts[].path/bytes` plus `sha256/bytes` and the
   runner's `parts[].file/size` plus `source_sha256/source_size` format are supported.
+  Checksum-verified compressed chunks are decoded only after complete
+  reassembly, never mistaken for independently complete gzip/archive files.
 
 Manifests are currently optional for plain log files; an absent manifest is not
 proof of trajectory completeness. CI can verify the bytes and records published,
@@ -81,8 +83,13 @@ cannot suppress findings.
 All files in an affected package are scanned, not just changed lines. Gzip,
 tar (including gzip/bzip2/xz), zip, xz and bzip2 are read with bounded traversal;
 compression signatures are recognized even after renaming. Archive members are
-copied as inert regular files; archive links, devices, traversal paths, encrypted
-ZIPs and unsupported rar/7z/zstd wrappers fail. No executable modes are restored.
+copied as inert regular files; log archive links, devices, traversal paths,
+encrypted ZIPs and unsupported rar/7z/zstd wrappers fail. Task-source tar archives
+may contain safe relative symbolic-link declarations naming a regular file in
+the same archive (for example, upstream `CLAUDE.md` → `AGENTS.md`). These are
+scanned as inert link-target metadata, never created or followed; the target
+file is scanned independently. Absolute/traversal, missing, chained and hard
+links remain errors. No executable modes are restored.
 These archive-safety and integrity failures remain blocking even though suspected
 credentials are advisory.
 
