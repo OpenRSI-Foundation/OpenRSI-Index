@@ -1,12 +1,20 @@
 name: Harness publication checks
 
+# Everything it checks lives under RSI-Harness/ (dependencies are locked),
+# so a change elsewhere cannot change its result. It also runs once on main
+# after each such change is merged.
 on:
   pull_request:
+    paths:
+      - RSI-Harness/**
+      - .github/workflows/harness-publication-checks.yml
+      - checks/test_harness_publication_workflow.py
   push:
     branches: [main]
     paths:
       - RSI-Harness/**
       - .github/workflows/harness-publication-checks.yml
+      - checks/test_harness_publication_workflow.py
   workflow_dispatch:
 
 permissions:

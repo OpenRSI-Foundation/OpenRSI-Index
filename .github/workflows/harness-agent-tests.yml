@@ -20,6 +20,7 @@ on:
       - RSI-Harness/tests/integration/test_judge_model_access_docker.py
       - RSI-Harness/uv.lock
       - .github/workflows/harness-agent-tests.yml
+      - checks/harness_agent_selection.py
   workflow_dispatch:
 
 permissions:
@@ -30,14 +31,45 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  plan:
+    name: Choose the Agents to test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      agents: ${{ steps.select.outputs.agents }}
+      model_access: ${{ steps.select.outputs.model_access }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+        with:
+          version: "0.6.5"
+      - name: Select the Agents this change can affect
+        id: select
+        # One Agent's own files or version line test that Agent; shared code
+        # tests every Agent. A manual run tests every Agent.
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ -n "$BASE" ]; then
+            uv run --python 3.12 --with pyyaml python checks/harness_agent_selection.py "$BASE" "$HEAD"
+          else
+            uv run --python 3.12 --with pyyaml python checks/harness_agent_selection.py --all
+          fi
+
   agent:
     name: Agent ${{ matrix.agent }}
+    needs: plan
+    if: needs.plan.outputs.agents != '[]'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        agent: [codex, claude-code, qwen-code, kimi-code, opencode, zcode, pi]
+        agent: ${{ fromJSON(needs.plan.outputs.agents) }}
     defaults:
       run:
         working-directory: RSI-Harness
@@ -68,6 +100,8 @@ jobs:
 
   model-access:
     name: Judge model access
+    needs: plan
+    if: needs.plan.outputs.model_access == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
