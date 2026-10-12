@@ -1,27 +1,92 @@
 name: Task and log publication checks
 
 on:
-  # Run on every PR: a stable check is explicitly successful for unrelated PRs,
-  # rather than disappearing or leaving a path-filtered required check pending.
+  # Only changes that can affect the result: task and log content, the checker,
+  # its tests and policies, the Harness it compiles tasks with and runs its tests
+  # in, and this workflow. Main has no required status checks, so a
+  # path-filtered check never leaves a merge waiting on it.
   pull_request:
-  push:
-    branches: [main]
     paths:
+      - rsi-tasks/**
+      - rsi-logs/**
       - checks/check_publication.py
       - checks/test_publication.py
       - checks/publication-*.toml
+      - RSI-Harness/pyproject.toml
+      - RSI-Harness/uv.lock
+      - RSI-Harness/src/**
       - .github/workflows/task-log-publication-checks.yml
+  push:
+    branches: [main]
+    paths:
+      - rsi-tasks/**
+      - rsi-logs/**
+      - checks/check_publication.py
+      - checks/test_publication.py
+      - checks/publication-*.toml
+      - RSI-Harness/pyproject.toml
+      - RSI-Harness/uv.lock
+      - RSI-Harness/src/**
+      - .github/workflows/task-log-publication-checks.yml
+  # A manual run audits every published package (--full), not an empty diff.
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# Only a superseded PR run is cancelled. Each push to main audits its own diff
+# from the previous push, and a manual run audits everything, so those get a
+# group of their own and are never cancelled or dropped while queued.
 concurrency:
-  group: task-log-publication-${{ github.event.pull_request.number || github.ref }}
+  group: task-log-publication-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
+  checker-tests:
+    # Runs the proposed checker's own tests. They are PR-controlled code, so
+    # they get their own job and runner and cannot touch enforcement files.
+    name: Publication checker tests (proposed revision)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      CUDA_VISIBLE_DEVICES: ""
+    steps:
+      - name: Checkout proposed checker
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+        with:
+          version: "0.6.5"
+      - name: Install checksum-pinned secret scanner
+        env:
+          SCANNER_DIR: ${{ runner.temp }}/publication-gitleaks
+        run: |
+          set -euo pipefail
+          mkdir -p "$SCANNER_DIR"
+          curl --fail --silent --show-error --location \
+            https://github.com/gitleaks/gitleaks/releases/download/v8.30.1/gitleaks_8.30.1_linux_x64.tar.gz \
+            --output "$SCANNER_DIR/gitleaks.tar.gz"
+          printf '%s  %s\n' \
+            '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb' \
+            "$SCANNER_DIR/gitleaks.tar.gz" | sha256sum --check --strict
+          tar -xzf "$SCANNER_DIR/gitleaks.tar.gz" -C "$SCANNER_DIR" gitleaks
+      - name: Install Harness compiler dependencies (no task dependencies)
+        working-directory: RSI-Harness
+        run: uv sync --frozen --no-dev --python 3.12
+      - name: Test publication checker without Docker, GPUs or models
+        working-directory: RSI-Harness
+        env:
+          PUBLICATION_GITLEAKS_BIN: ${{ runner.temp }}/publication-gitleaks/gitleaks
+          # Scanner and compiler integration tests must run here, not skip.
+          PUBLICATION_REQUIRE_INTEGRATION: "1"
+        run: uv run --frozen --no-dev python -I ../checks/test_publication.py
+
   publication:
+    # Enforcement executes only the base revision's checker, policies and
+    # Harness; the proposed revision is read as data and never run.
     name: Task and log publication (CPU only)
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -64,11 +129,6 @@ jobs:
             '551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb' \
             "$SCANNER_DIR/gitleaks.tar.gz" | sha256sum --check --strict
           tar -xzf "$SCANNER_DIR/gitleaks.tar.gz" -C "$SCANNER_DIR" gitleaks
-      - name: Test publication checker without Docker, GPUs or models
-        working-directory: trusted-base/RSI-Harness
-        env:
-          PUBLICATION_GITLEAKS_BIN: ${{ runner.temp }}/publication-gitleaks/gitleaks
-        run: uv run --frozen --no-dev python -I ../../proposal/checks/test_publication.py
       - name: Validate changed task and log packages
         working-directory: trusted-base/RSI-Harness
         env:
@@ -78,15 +138,21 @@ jobs:
         run: |
           set -euo pipefail
           PUBLICATION_CHECKS="$GITHUB_WORKSPACE/trusted-base/checks"
-          # Bootstrap only: these files do not exist on main before this first
-          # CI PR merges. Later PRs always use base code/policy for enforcement;
-          # proposed checker changes are tested above, not self-authorized.
-          if [ ! -f "$PUBLICATION_CHECKS/check_publication.py" ]; then
-            PUBLICATION_CHECKS="$GITHUB_WORKSPACE/proposal/checks"
+          # Never fall back to the proposed checker or policy: that would let a
+          # PR decide its own result. A base without them cannot enforce.
+          for required in check_publication.py publication-policy.toml publication-gitleaks.toml; do
+            if [ ! -f "$PUBLICATION_CHECKS/$required" ]; then
+              echo "::error::The PR base lacks checks/$required; rebase onto a base that has the publication checker."
+              exit 1
+            fi
+          done
+          mode=()
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            mode=(--full)
           fi
           uv run --frozen --no-dev python -I "$PUBLICATION_CHECKS/check_publication.py" \
             --repo "$GITHUB_WORKSPACE/proposal" \
-            --base-ref "$BASE_REF" --head-ref "$HEAD_REF" --compile \
+            --base-ref "$BASE_REF" --head-ref "$HEAD_REF" --compile "${mode[@]}" \
             --policy "$PUBLICATION_CHECKS/publication-policy.toml" \
             --secret-config "$PUBLICATION_CHECKS/publication-gitleaks.toml" \
             --gitleaks "$SCANNER_DIR/gitleaks"

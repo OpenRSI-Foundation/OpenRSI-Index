@@ -58,12 +58,27 @@ jobs:
           has_label=$(gh api "repos/$REPO/issues/$PR/labels" \
             --jq "[.[].name] | index(\"$LABEL\") != null")
 
+          # The label is informational, so a missing label or a token that may
+          # not create one is reported, never a failed job.
+          skip() {
+            echo "::notice::Could not $1 the '$LABEL' label; it only describes declared GPU resources and gates nothing."
+          }
+          ensure_label() {
+            gh api "repos/$REPO/labels/$LABEL" --silent 2>/dev/null && return 0
+            # Creation can race with another run; re-check rather than fail.
+            gh label create "$LABEL" --repo "$REPO" --color 5319e7 \
+              --description "Task declares Work or Judge GPUs" >/dev/null 2>&1 \
+              || gh api "repos/$REPO/labels/$LABEL" --silent 2>/dev/null
+          }
+
           if [ "$has_gpu" = "true" ] && [ "$has_label" = "false" ]; then
             echo "Adding label: $LABEL"
-            gh pr edit "$PR" --repo "$REPO" --add-label "$LABEL"
+            if ! { ensure_label && gh pr edit "$PR" --repo "$REPO" --add-label "$LABEL"; }; then
+              skip add
+            fi
           elif [ "$has_gpu" = "false" ] && [ "$has_label" = "true" ]; then
             echo "Removing label: $LABEL (no task.toml in PR requests a GPU)"
-            gh pr edit "$PR" --repo "$REPO" --remove-label "$LABEL"
+            gh pr edit "$PR" --repo "$REPO" --remove-label "$LABEL" || skip remove
           else
             echo "No label change needed (has_gpu=$has_gpu, has_label=$has_label)"
           fi
