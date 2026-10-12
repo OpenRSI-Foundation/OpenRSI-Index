@@ -26,7 +26,7 @@ integrity of what it installs against the registry.
 
 NODE_VERSION = "22.23.3"
 
-CODEX = "0.159.2"
+CODEX = "0.162.1"
 CLAUDE_CODE = "2.1.285"
 QWEN_CODE = "0.25.1"
 KIMI_CODE = "2.1.1"
