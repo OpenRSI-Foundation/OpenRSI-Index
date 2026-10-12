@@ -21,7 +21,7 @@ The Dockerfile, asset lock, and `tests/assets/manifest.json` record build and ev
 
 The [published runs](../../rsi-logs/reasonir-difficulty-curriculum/) contain 10 Claude submissions and 8 Codex submissions, with best rewards of `0.22340` and `0.21811`. Five submissions receive real negative general-retrieval regression penalties; these are valid measured rewards, not failed submissions.
 
-All 30 payloads in `tests/assets/manifest.json` are required byte-for-byte. The repository includes 24 BRIGHT Parquet files. The four BEIR archives are downloaded locally from their official distribution endpoint because their individual terms differ from the BEIR code license. The BRIGHT Earth Science and Psychology document files are also fetched from the fixed official Hugging Face revision: their original crawled webpage content contains third-party credential-like strings, so these two files are not redistributed in Git. Downloading preserves their original bytes and hashes; no benchmark records are redacted or rewritten. Although Judge scores only the three BRIGHT subjects named above, exact inventory validation and training-positive resolution still depend on the complete locked asset set. Do not remove the other subjects or recompress the assets. See [third-party notices](THIRD_PARTY.md) for benchmark attribution and terms.
+All 30 payloads in `tests/assets/manifest.json` are required byte-for-byte, and none is stored in Git; the repository tracks only the manifest. The four BEIR archives are downloaded from their official distribution endpoint because their individual terms differ from the BEIR code license. All BRIGHT files are downloaded from the fixed official Hugging Face revision. Twenty-two BRIGHT Parquet files are used exactly as published. The Earth Science and Psychology document files contain third-party credential-like strings in their original crawled webpage content; downloading instead of redistributing keeps those strings out of Git without redacting or rewriting benchmark records. The single upstream LeetCode document file is checked against `leetcode_sharding.source_sha256` and split into the four locked row-contiguous shards with PyArrow 18.1.0; its records are unchanged. Although Judge scores only the three BRIGHT subjects named above, exact inventory validation and training-positive resolution still depend on the complete locked asset set. Do not remove the other subjects or recompress the assets. See [third-party notices](THIRD_PARTY.md) for benchmark attribution and terms.
 
 ## Environment and evaluation
 
@@ -35,13 +35,21 @@ The shared Base/Judge architecture cannot provide root-independent proof that Wo
 
 ## Run and validate
 
-From the OpenRSI-Index repository root, first read the [dataset terms](THIRD_PARTY.md) and confirm that your intended use is permitted. Then fetch the four BEIR archives and two BRIGHT document files, and verify the complete asset inventory before starting Harness:
+From the OpenRSI-Index repository root, first read the [dataset terms](THIRD_PARTY.md) and confirm that your intended use is permitted. Then fetch every evaluation asset and verify the complete asset inventory before starting Harness:
 
 ```bash
-python3 rsi-tasks/reasonir-difficulty-curriculum/prepare_eval_assets.py --accept-dataset-terms
+uv run rsi-tasks/reasonir-difficulty-curriculum/prepare_eval_assets.py --accept-dataset-terms
 ```
 
-This one-time preparation needs network access to the official BEIR endpoint and Hugging Face. It verifies all 30 original pinned SHA-256 values and leaves the six downloads ignored by Git. Correct existing files are reused without network access or rewriting; a mismatched file or download stops preparation. It does not run training or evaluation. Work and Judge remain offline; neither downloads data at runtime. A fresh clone is not ready for evaluation until this command succeeds.
+`uv run` reads the script's inline metadata and supplies the exact `pyarrow==18.1.0` needed to rebuild the LeetCode shards byte for byte; `python3` also works when that PyArrow version is installed. This one-time preparation needs network access and downloads about 432 MB:
+
+| Source | Files | Download |
+| --- | --- | ---: |
+| Official BEIR endpoint (`public.ukp.informatik.tu-darmstadt.de/thakur/BEIR/datasets/<name>.zip`) | ArguAna, FiQA, NFCorpus, and SciFact archives | 27.0 MB |
+| Hugging Face `xlangai/BRIGHT@3066d29c9651a576c8aba4832d249807b181ecae`, `documents/<subject>-00000-of-00001.parquet` and `examples/<subject>-00000-of-00001.parquet` | 10 document and 12 example Parquet files, installed unchanged | 194.3 MB |
+| Same revision, `documents/leetcode-00000-of-00001.parquet` | One LeetCode document file, split locally into `leetcode-00000.parquet` to `leetcode-00003.parquet` | 210.5 MB |
+
+The installed assets occupy 377 MB under `tests/assets`; the LeetCode rebuild stages next to `tests/` in the task folder, so preparation needs about 600 MB of free space on that filesystem. The command verifies all 30 original pinned SHA-256 values, and the task `.gitignore` keeps every downloaded file and any staging folder out of Git. Correct existing files are reused without network access or rewriting. Each download is retried up to three times and installed only after its hash matches; the four LeetCode shards are installed only if all four match. If preparation stops, files that already verified are kept, so rerunning the command fetches only what is still missing; staging left by an interrupted run is removed on the next run. A mismatched existing file stops preparation without being overwritten: delete that file and rerun to download a fresh copy. The byte-identical LeetCode rebuild was confirmed on Linux x86_64; if it differs on another platform, preparation stops without installing the shards. It does not run training or evaluation. Work and Judge remain offline; neither downloads data at runtime. A fresh clone is not ready for evaluation until this command succeeds.
 
 After installing [RSI-Harness](../../RSI-Harness/), use the calibrated values only with the unchanged pinned protocol:
 
