@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import subprocess
+from importlib import resources
 from pathlib import Path, PurePosixPath
 from uuid import uuid4
 
@@ -29,9 +31,16 @@ from rsi_harness.runtime.images import (
 from rsi_harness.runtime.mount_topology import validate_run_plan_mount_topology
 from rsi_harness.task.compiler import HarborTaskCompiler
 from rsi_loop import __version__ as rsi_loop_version
-from rsi_loop.harness.agent import create_agent
+from rsi_loop.harness.agent import create_agent, versions
+from rsi_loop.harness.agent import factory as agent_factory
+from rsi_loop.harness.agent.driven import DrivenAgent
 from rsi_loop.harness.config import RSILoopConfig
-from tests.fakes import FakeDockerClient, FakeDockerImage
+from tests.fakes import (
+    FakeDockerClient,
+    FakeDockerImage,
+    FakeDrivenAgent,
+    register_fake_driven_agent,
+)
 
 RSI_LOOP_VERSION = rsi_loop_version
 
@@ -121,15 +130,17 @@ def test_dockerfile_base_uses_only_environment_and_work_is_derived_independently
     assert plan.work_digest != plan.base_digest
     assert "rsi-submit" in work_build["context_files"]["Dockerfile"]
     dockerfile = work_build["context_files"]["Dockerfile"]
-    assert "@openai/codex@0.159.2" in dockerfile
+    assert f"@openai/codex@{versions.CODEX}" in dockerfile
     assert "@openai/codex@0.147.0" not in dockerfile
 
 
 @pytest.mark.parametrize(
     ("agent_name", "package"),
     [
-        ("codex", "@openai/codex@0.159.2"),
-        ("claude-code", "@anthropic-ai/claude-code@2.1.285"),
+        ("codex", f"@openai/codex@{versions.CODEX}"),
+        ("claude-code", f"@anthropic-ai/claude-code@{versions.CLAUDE_CODE}"),
+        ("qwen-code", f"--ignore-scripts @qwen-code/qwen-code@{versions.QWEN_CODE}"),
+        ("kimi-code", f"--ignore-scripts @moonshot-ai/kimi-code@{versions.KIMI_CODE}"),
     ],
 )
 def test_agent_images_pin_cli_and_compatible_node_versions(agent_name, package):
@@ -141,7 +152,8 @@ def test_agent_images_pin_cli_and_compatible_node_versions(agent_name, package):
     )
 
     assert f"npm install -g {package}" in dockerfile
-    assert "/v22.23.3/node-v22.23.3-linux-x64.tar.xz" in dockerfile
+    node = versions.NODE_VERSION
+    assert f"/v{node}/node-v{node}-linux-x64.tar.xz" in dockerfile
     assert "node-v20." not in dockerfile
 
 
@@ -467,7 +479,8 @@ def test_dynamic_preflight_uses_phase_users_and_agent_home(tmp_path):
     assert work["labels"]["rsi-harness.task-id"] == "minimal-gpu"
 
     hook_commands = [call["command"] for call in client.api.exec_create_calls]
-    assert any(
+    # Only the selected Agent's hook is installed in its Work image.
+    assert not any(
         isinstance(command, tuple)
         and command[-1] == "/home/agent/.claude/settings.json"
         for command in hook_commands
@@ -694,6 +707,9 @@ def test_work_image_replaces_a_preexisting_registered_agent_launcher(
         {
             "name": "codex",
             "run_cmd": "codex exec --dangerously-bypass-approvals-and-sandbox",
+            "image_files": {},
+            "extra_launchers": (),
+            "build_args": lambda self: {},
             "install_cmds": (
                 "printf '#!/bin/sh\\nexit 0\\n' > /tmp/pinned-codex "
                 "&& chmod 0755 /tmp/pinned-codex "
@@ -833,3 +849,261 @@ def test_agent_identity_repairs_preexisting_agent_group_to_effective_gid():
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def _model_access(task):
+    return task.model_copy(
+        update={"verifier": task.verifier.model_copy(update={"model_access": True})}
+    )
+
+
+def test_model_access_preflights_python_and_a_free_agent_uid(tmp_path) -> None:
+    client = FakeDockerClient()
+    task = _model_access(task_definition(tmp_path))
+
+    plan = DockerImageBuilder(client).prepare(
+        task, agent=create_agent("codex", RSILoopConfig())
+    )
+
+    work, judge, agent = client.containers.runs
+    assert agent["image"] == plan.work_ref
+    assert agent["user"] == "0" and agent["network_mode"] == "none"
+    assert "command -v python3" in agent["command"][2]
+    assert "python3 -I -S -B" in agent["command"][2]
+    check = agent["command"][4]
+    assert "sys.version_info < (3, 8)" in check
+    assert "ids = range(61000, 61016)" in check
+    assert "grp.getgrall()" in check and "pwd.getpwall()" in check
+    assert "import ctypes, fcntl" in check
+    assert agent["remove"] is True
+
+
+def test_model_access_without_python_fails_setup_clearly(tmp_path) -> None:
+    client = FakeDockerClient()
+    task = _model_access(task_definition(tmp_path))
+
+    def run_hook(image, command, **kwargs):
+        if "rsi-agent-preflight" in command:
+            raise RuntimeError("python3 is missing")
+        return b""
+
+    client.containers.run_hook = run_hook
+
+    with pytest.raises(SetupError, match="python3 3.8 or later.*python3 is missing"):
+        DockerImageBuilder(client).prepare(
+            task, agent=create_agent("codex", RSILoopConfig())
+        )
+
+
+def test_without_model_access_no_rsi_agent_preflight_runs(tmp_path) -> None:
+    client = FakeDockerClient()
+
+    DockerImageBuilder(client).prepare(
+        task_definition(tmp_path), agent=create_agent("codex", RSILoopConfig())
+    )
+
+    assert len(client.containers.runs) == 2
+
+
+def _driver_resource(name: str) -> str:
+    return (
+        resources.files("rsi_loop")
+        .joinpath("harness", "agent", "driver", name)
+        .read_text()
+    )
+
+
+def test_driven_work_image_bakes_driver_files_before_install_commands(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    register_fake_driven_agent(monkeypatch)
+    client = FakeDockerClient()
+    task = task_definition(tmp_path)
+    task = task.model_copy(
+        update={"agent": task.agent.model_copy(update={"name": "fake-driven"})}
+    )
+
+    DockerImageBuilder(client).prepare(
+        task, agent=create_agent("fake-driven", RSILoopConfig())
+    )
+
+    work_build = client.images.built[-1]
+    files = work_build["context_files"]
+    assert set(files) == {"Dockerfile", "rsi-submit", "agent-files/0", "agent-files/1"}
+    assert files["agent-files/0"] == _driver_resource("rsi-agent-driver.mjs")
+    assert files["agent-files/1"] == _driver_resource("rsi-agent-driver.sh")
+    lines = files["Dockerfile"].splitlines()
+    quarantines = [i for i, line in enumerate(lines) if "original-launchers" in line]
+    quarantine = quarantines[-1]
+    copies = [
+        i for i, line in enumerate(lines) if line.startswith('COPY ["agent-files/')
+    ]
+    assert [lines[i] for i in copies] == [
+        'COPY ["agent-files/0", "/opt/rsi-harness/agent-driver.mjs"]',
+        'COPY ["agent-files/1", "/usr/local/bin/rsi-agent-driver"]',
+    ]
+    chmod = copies[-1] + 1
+    assert "chmod 0644 /opt/rsi-harness/agent-driver.mjs" in lines[chmod]
+    assert "chmod 0755 /usr/local/bin/rsi-agent-driver" in lines[chmod]
+    node = next(
+        i for i, line in enumerate(lines) if f"node-v{versions.NODE_VERSION}" in line
+    )
+    cli = next(i for i, line in enumerate(lines) if "fake-cli@1.2.3" in line)
+    checks = [i for i, line in enumerate(lines) if "command -v" in line and i > cli]
+    assert quarantine < copies[0] < chmod < node < cli < checks[0]
+    # The CLI the driver starts is moved aside and checked like the driver.
+    assert ["launcher=rsi-agent-driver" in lines[i] for i in quarantines] == [
+        True,
+        False,
+    ]
+    assert "launcher=fake-cli" in lines[quarantines[1]]
+    assert ["command -v rsi-agent-driver" in lines[i] for i in checks] == [True, False]
+    assert "command -v fake-cli" in lines[checks[1]]
+
+
+class _MirroredAgent(FakeDrivenAgent):
+    install_cmds = [
+        *DrivenAgent.install_cmds,
+        'curl -fsSL "${FAKE_MIRROR:-https://example.invalid}/fake-cli.tgz"',
+    ]
+    mirror: str | None = None
+
+    def build_args(self) -> dict[str, str | None]:
+        return {"FAKE_MIRROR": self.mirror}
+
+
+def test_build_args_reach_install_commands_without_changing_the_tag(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    task = task_definition(tmp_path)
+    task = task.model_copy(
+        update={"agent": task.agent.model_copy(update={"name": "fake-driven"})}
+    )
+    builds = []
+    for mirror in (None, "https://mirror.test"):
+        agent = type("Mirrored", (_MirroredAgent,), {"mirror": mirror})
+        monkeypatch.setitem(agent_factory._REGISTRY, "fake-driven", agent)
+        client = FakeDockerClient()
+        DockerImageBuilder(client).prepare(
+            task, agent=create_agent("fake-driven", RSILoopConfig())
+        )
+        builds.append(client.images.built[-1])
+
+    unset, mirrored = builds
+    lines = mirrored["context_files"]["Dockerfile"].splitlines()
+    # Declared before the command that reads it.
+    declared = lines.index("ARG FAKE_MIRROR")
+    reader = next(i for i, line in enumerate(lines) if "FAKE_MIRROR:-" in line)
+    assert declared < reader
+    assert unset["buildargs"] == {}
+    assert mirrored["buildargs"] == {"FAKE_MIRROR": "https://mirror.test"}
+    # Declared either way, so one tag: the value only picks where the
+    # install commands fetch from.
+    assert (
+        unset["context_files"]["Dockerfile"] == mirrored["context_files"]["Dockerfile"]
+    )
+    assert unset["tag"] == mirrored["tag"]
+
+
+def test_unsafe_build_arg_name_is_refused() -> None:
+    class BadArg(FakeDrivenAgent):
+        def build_args(self) -> dict[str, str | None]:
+            return {"A B": None}
+
+    with pytest.raises(SetupError, match="build argument is unsafe"):
+        DockerImageBuilder(None)._work_dockerfile(
+            agent=BadArg(RSILoopConfig()),
+            base_ref="ubuntu:24.04",
+            workdir=PurePosixPath("/workspace"),
+            final_user="1001",
+        )
+
+
+def test_unsafe_extra_launcher_is_refused() -> None:
+    class BadLauncher(FakeDrivenAgent):
+        extra_launchers = ("/usr/bin/fake-cli",)
+
+    with pytest.raises(SetupError, match="extra launcher is unsafe"):
+        DockerImageBuilder(None)._work_dockerfile(
+            agent=BadLauncher(RSILoopConfig()),
+            base_ref="ubuntu:24.04",
+            workdir=PurePosixPath("/workspace"),
+            final_user="1001",
+        )
+
+
+def test_work_tag_hashes_image_file_contents_only_for_agents_that_have_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: list[dict[str, object]] = []
+    original_dumps = images_module.json.dumps
+
+    def capture(value: object, *args: object, **kwargs: object) -> str:
+        if isinstance(value, dict) and "base_digest" in value:
+            captured.append(value)
+        return original_dumps(value, *args, **kwargs)
+
+    monkeypatch.setattr(images_module.json, "dumps", capture)
+    builder = DockerImageBuilder(None)
+    arguments = {
+        "base_digest": "sha256:base",
+        "effective_user": "1001",
+        "workdir": PurePosixPath("/workspace"),
+        "dockerfile": "FROM base",
+        "submit_client": "client",
+    }
+    task = task_definition(tmp_path)
+    builder._work_tag(task, create_agent("codex", RSILoopConfig()), **arguments)
+    driven_tag = builder._work_tag(task, FakeDrivenAgent(RSILoopConfig()), **arguments)
+
+    class OtherDriver(FakeDrivenAgent):
+        image_files = {
+            "/opt/rsi-harness/agent-driver.mjs": (
+                "harness/agent/driver/rsi-agent-driver.sh",
+                0o644,
+            ),
+            "/usr/local/bin/rsi-agent-driver": (
+                "harness/agent/driver/rsi-agent-driver.sh",
+                0o755,
+            ),
+        }
+
+    other_tag = builder._work_tag(task, OtherDriver(RSILoopConfig()), **arguments)
+
+    codex_identity, driven_identity, _other_identity = captured
+    assert "image_files" not in codex_identity
+    assert driven_identity["image_files"] == {
+        "/opt/rsi-harness/agent-driver.mjs": hashlib.sha256(
+            _driver_resource("rsi-agent-driver.mjs").encode()
+        ).hexdigest(),
+        "/usr/local/bin/rsi-agent-driver": hashlib.sha256(
+            _driver_resource("rsi-agent-driver.sh").encode()
+        ).hexdigest(),
+    }
+    assert other_tag != driven_tag
+
+
+@pytest.mark.parametrize(
+    ("image_files", "message"),
+    [
+        ({"relative/file": ("harness/agent/driven.py", 0o644)}, "path is unsafe"),
+        ({"/opt/../etc/passwd": ("harness/agent/driven.py", 0o644)}, "path is unsafe"),
+        ({"/opt/a b": ("harness/agent/driven.py", 0o644)}, "path is unsafe"),
+        ({"/opt/f": ("../rsi_harness/cli.py", 0o644)}, "source is unsafe"),
+        ({"/opt/f": ("harness/agent/missing.mjs", 0o644)}, "missing from the"),
+        ({"/opt/f": ("harness/agent/driven.py", 0o4755)}, "mode is invalid"),
+    ],
+)
+def test_unsafe_or_missing_image_files_are_refused(image_files, message) -> None:
+    class BadFiles(FakeDrivenAgent):
+        pass
+
+    BadFiles.image_files = image_files
+
+    with pytest.raises(SetupError, match=message):
+        DockerImageBuilder(None)._work_dockerfile(
+            agent=BadFiles(RSILoopConfig()),
+            base_ref="ubuntu:24.04",
+            workdir=PurePosixPath("/workspace"),
+            final_user="1001",
+        )

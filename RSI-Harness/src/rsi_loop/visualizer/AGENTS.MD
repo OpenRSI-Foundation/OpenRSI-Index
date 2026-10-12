@@ -12,7 +12,7 @@ rsi_loop/visualizer/
 ├── __main__.py         # CLI entry: `python -m rsi_loop.visualizer`
 ├── AGENTS.MD           # This file: dev guide and operator runbook
 ├── parsers/
-│   ├── agent_output.py # Claude Code JSONL → Trajectory/Exchange
+│   ├── agent_output.py # Claude Code JSONL (and driver/pi transcripts) → Trajectory/Exchange
 │   ├── codex_output.py # Codex plain text → Trajectory
 │   └── test_output.py  # Raw test output → per-test blocks
 └── templates/
@@ -37,7 +37,8 @@ rsi_loop/visualizer/
 - Submission ordering: `evolve_state.json` timestamps > file mtime > seq number.
 - Score task detection: `task JSON parser ∈ {score_sum, structured_json}` OR `score_direction` present OR `game_mode`.
 - For finalized runs, `final_result.json` is primary; if `best_score=None`, recompute from submissions.
-- Agent/model detection for in-progress runs: `_peek_agent()` matches both old format (`Running agent: claude`) and new supervisor format (`Agent supervisor attempt N: claude -p ...`); `_peek_model()` scans multiple lines of `agent_output.txt` for the JSON init event (not just the first line).
+- Agent/model detection for in-progress runs: `_peek_agent()` matches the launch command in `run_agent.log`, both old format (`Running agent: claude`) and new supervisor format (`Agent supervisor attempt N: claude -p ...`), including `rsi-agent-driver ... --agent-name <name>` for driven Agents and `pi --offline` for pi. The logged command is truncated, so it falls back to the `agent` field of the JSON init event in `agent_output.txt`, which the driver and the pi extension write. `_peek_model()` scans multiple lines of `agent_output.txt` for that init event (not just the first line).
+- Trajectories: the driver and the pi extension write Claude-Code stream-json, so `parsers/agent_output.py` renders them unchanged; the init summary shows `agent: <name> <version>` instead of the Claude Code version when the init event names an agent.
 
 ### Evolution Timeline (ECharts)
 - Step line (`step: "end"`) — score only changes at submissions.

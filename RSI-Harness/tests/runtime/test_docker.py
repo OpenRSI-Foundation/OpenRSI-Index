@@ -170,6 +170,21 @@ def test_create_omits_extra_hosts_without_pinned_mappings(tmp_path):
     runtime.create(ContainerSpec(image="work@sha256:abc"))
 
     assert "extra_hosts" not in client.containers.created[0]
+    assert "dns" not in client.containers.created[0]
+
+
+def test_create_passes_dns_servers(tmp_path):
+    client = FakeDockerClient()
+    runtime = make_runtime(client, tmp_path, networked=True)
+
+    runtime.create(ContainerSpec(image="work@sha256:abc", dns=("192.0.2.1",)))
+
+    assert client.containers.created[0]["dns"] == ["192.0.2.1"]
+
+
+def test_container_spec_dns_servers_are_ip_literals():
+    with pytest.raises(ValueError):
+        ContainerSpec(image="work@sha256:abc", dns=("resolver.example",))
 
 
 def test_work_feedback_mount_requires_exact_read_only_authority(tmp_path):
@@ -1131,11 +1146,11 @@ def test_inject_directory_streams_modes_and_symlinks_without_mutating_source(
         assert members["nested/helper-link"].linkname == "helper.txt"
         assert payload.extractfile("nested/helper.txt").read() == b"helper\n"
     commands = [call["command"] for call in client.api.exec_create_calls]
-    assert commands == [
-        ("/usr/bin/install", "-d", "-m", "0700", target),
-        ("/bin/cp", "-a", f"{target}/.", "/tests"),
-        ("/bin/rm", "-rf", "--", target),
-    ]
+    prepared, populated, removed = commands
+    assert prepared == ("/usr/bin/install", "-d", "-m", "0700", target)
+    assert populated[:2] == ("/bin/sh", "-c")
+    assert populated[3:] == ("rsi-harness-copy-tests", target, "/tests")
+    assert removed == ("/bin/rm", "-rf", "--", target)
 
 
 def test_inject_directory_never_opens_outside_content_during_directory_swap(

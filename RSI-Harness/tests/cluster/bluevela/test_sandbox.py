@@ -306,8 +306,10 @@ class _Apptainer:
     def require_work_idle(self):
         self.events.append("idle")
 
-    def run_judge(self, workspace, request, environment, *, sandbox_endpoint):
-        del workspace, environment
+    def run_judge(
+        self, workspace, request, environment, *, sandbox_endpoint, trajectory=None
+    ):
+        del workspace, environment, trajectory
         self.events.append("judge")
         # Work's envs are frozen before Work is paused and the round starts.
         assert sandbox_of(self.kit, self.work_env).state == "paused"

@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -23,6 +23,7 @@ from rsi_harness.integrations.rsi_loop import (
     RSILoopAgentAdapter,
     rsi_loop_agent_environment,
     rsi_loop_runtime_secret_values,
+    validate_agent_config,
     validate_agent_reasoning_effort,
 )
 from rsi_harness.models import (
@@ -66,7 +67,15 @@ from rsi_harness.runtime.gpu import (
     resolve_gpu_plan,
 )
 from rsi_harness.runtime.images import DockerImageBuilder
-from rsi_harness.runtime.judge import DockerJudgeRuntimeFactory, JudgeRunner
+from rsi_harness.runtime.judge import (
+    DockerJudgeRuntimeFactory,
+    JudgeRunner,
+    public_judge_image,
+)
+from rsi_harness.runtime.judge_model_access import (
+    JudgeModelAccess,
+    resolve_judge_model_access,
+)
 from rsi_harness.runtime.local_auth import (
     AgentAuthMaterial,
     resolve_agent_auth,
@@ -78,6 +87,7 @@ from rsi_harness.runtime.network import (
     NetworkPolicyLease,
     PinnedEndpoint,
     firewall_rule_chains,
+    no_network_dns_servers,
 )
 from rsi_harness.runtime.recovery import (
     LeaseStore,
@@ -141,6 +151,7 @@ from rsi_harness.runtime.workdir_volume import (
 )
 from rsi_harness.runtime.workspace import delete_managed_workspace
 from rsi_harness.task.compiler import HarborTaskCompiler
+from rsi_harness.task.digest import require_tests_digest
 from rsi_loop.harness.agent import create_agent
 from rsi_loop.harness.config import RSILoopConfig, load_config
 
@@ -836,6 +847,7 @@ class _ProductionRunComposition:
         agent_secret_env: Mapping[str, str],
         verifier_secret_env: Mapping[str, str],
         agent_auth: AgentAuthMaterial | None = None,
+        judge_model_access: JudgeModelAccess | None = None,
         event_callback: Callable[[str, object], None] | None = None,
         preparation: RunPreparation | None = None,
         compiler: HarborTaskCompiler | None = None,
@@ -861,6 +873,9 @@ class _ProductionRunComposition:
         self.agent_secret_env = dict(agent_secret_env)
         self.verifier_secret_env = dict(verifier_secret_env)
         self.agent_auth = agent_auth
+        # Held for the whole run, unlike the Agent's transient bindings: a
+        # drained Judge round can still run after the Agent exits.
+        self.judge_model_access = judge_model_access
         self.event_callback = event_callback or (lambda _name, _value: None)
         self.preparation = preparation
         self.agent_output_secrets = rsi_loop_runtime_secret_values(rsi_loop_config)
@@ -875,6 +890,7 @@ class _ProductionRunComposition:
         self.artifacts: RunArtifactWriter | None = None
         self.enforcer: NetworkPolicyEnforcer | None = None
         self.work_runtime: DockerContainerRuntime | None = None
+        self.work_public_tests = False
         self.work_provisioner: DockerContainerRuntime | None = None
         self.agent: Any = None
         self.started_server: Any = None
@@ -1094,6 +1110,9 @@ class _ProductionRunComposition:
             self.client,
             rsi_loop_config=self.rsi_loop_config,
         ).prepare(definition, agent=selected)
+        if definition.verifier.visibility == "public":
+            # Refuse before any run state: the Judge needs the clean image.
+            public_judge_image(images)
         self.event_callback("images_ready", None)
         return images
 
@@ -1302,7 +1321,7 @@ class _ProductionRunComposition:
         )
 
     def plan_work_container(self, plan: Any, run_id: str) -> str:
-        del plan, run_id
+        del run_id
         if self.work_network is None or self.planned_work_network is None:
             raise RuntimeError("Work network actual authority is unavailable")
         if self.work_network.name != self.planned_work_network:
@@ -1320,6 +1339,7 @@ class _ProductionRunComposition:
             staging_dir=self.data_root / self.run_id / "staging",
             work_feedback_dir=self.artifacts.feedback_root,
             **({"sandbox_socket_dir": endpoint.directory} if endpoint else {}),
+            work_public_tests=plan.task.verifier.visibility == "public",
         )
         try:
             self.agent = self.agent_adapter_factory(
@@ -1383,6 +1403,20 @@ class _ProductionRunComposition:
                 if plan.rootfs_snapshot_mode is RootfsSnapshotMode.SPLIT_WORKDIR
                 else ()
             )
+            tests_mounts: tuple[ContainerMount, ...] = ()
+            if plan.task.verifier.visibility == "public":
+                # Work reads the same tests the Judge later runs, proven
+                # against the digest recorded in the run plan.
+                tests_dir = plan.task.source_dir / "tests"
+                require_tests_digest(tests_dir, plan.task.tests_digest)
+                tests_mounts = (
+                    ContainerMount(
+                        source=tests_dir,
+                        target=PurePosixPath("/tests"),
+                        read_only=True,
+                    ),
+                )
+            self.work_public_tests = bool(tests_mounts)
             endpoint = self.sandbox_lifecycle.prepare_work()
             return self.work_runtime.create(
                 ContainerSpec(
@@ -1400,6 +1434,11 @@ class _ProductionRunComposition:
                             for address in endpoint.addresses
                         )
                     ),
+                    # Its bridge routes to the pinned endpoints, so keep
+                    # Docker's resolver from forwarding other names out.
+                    dns=no_network_dns_servers(
+                        plan.task.agent.network.mode, bool(self.api_endpoints)
+                    ),
                     mounts=(
                         ContainerMount(
                             source=self.artifacts.feedback_root,
@@ -1407,6 +1446,7 @@ class _ProductionRunComposition:
                             read_only=True,
                         ),
                     )
+                    + tests_mounts
                     + ((endpoint.mount,) if endpoint else ()),
                     volume_mounts=volume_mounts,
                     tmpfs=(
@@ -1432,6 +1472,8 @@ class _ProductionRunComposition:
                 "mount attestation"
             )
         self.work_runtime.attest_work_feedback_mount(work)
+        if self.work_public_tests:
+            self.work_runtime.attest_work_tests_mount(work)
 
     def _control_endpoint(self) -> tuple[str, ...]:
         if self.started_server is None:
@@ -1794,6 +1836,11 @@ class _ProductionRunComposition:
             work_container=request.work_container,
             omit_gpu_device_requests_for_tests=self.omit_gpu,
             **(
+                {"model_access": self.judge_model_access}
+                if self.judge_model_access is not None
+                else {}
+            ),
+            **(
                 {"sandbox_lifecycle": self.sandbox_lifecycle}
                 if self.sandbox_lifecycle.enabled
                 else {}
@@ -1811,6 +1858,11 @@ class _ProductionRunComposition:
             lifecycle_observer=observer,
             verifier_secret_env=self.verifier_secret_env,
             event_callback=self.event_callback,
+            **(
+                {"model_access": self.judge_model_access}
+                if self.judge_model_access is not None
+                else {}
+            ),
             **(
                 {"sandbox_lifecycle": self.sandbox_lifecycle}
                 if self.sandbox_lifecycle.enabled
@@ -1918,6 +1970,11 @@ class ProductionRuntimeServices:
             definition = definition.model_copy(
                 update={"agent": definition.agent.model_copy(update=agent_updates)}
             )
+        validate_agent_config(
+            self.rsi_loop_config,
+            definition.agent.name,
+            model=definition.agent.model,
+        )
         needs_gpus = (
             definition.gpu_requirement.count != 0 or definition.verifier.gpu_count != 0
         )
@@ -1938,6 +1995,9 @@ class ProductionRuntimeServices:
             agent_api_key=self.rsi_loop_config.agent_api_key,
         )
         api_endpoints = _agent_endpoints(definition, self.rsi_loop_config, agent_auth)
+        judge_model_access = resolve_judge_model_access(
+            definition, self.rsi_loop_config, agent_auth, api_endpoints
+        )
         client = self._client()
         snapshot = self.snapshot or OverlaySnapshotBackend(self.data_root)
         firewall = self.firewall or DockerIptablesFirewallBackend(client)
@@ -1958,6 +2018,7 @@ class ProductionRuntimeServices:
             agent_secret_env=self.agent_secret_env,
             verifier_secret_env=self.verifier_secret_env,
             agent_auth=agent_auth,
+            judge_model_access=judge_model_access,
             event_callback=self.event_callback,
             preparation=preparation,
             compiler=compiler,

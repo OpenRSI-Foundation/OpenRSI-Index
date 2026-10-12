@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import shutil
 import threading
 import time
@@ -31,6 +32,8 @@ from rsi_harness.models import (
     WorkQuiescence,
 )
 from rsi_harness.runtime.rootfs_snapshot import RootfsSnapshotNotCreatedError
+from rsi_loop.harness.agent import factory as agent_factory
+from rsi_loop.harness.agent.driven import DrivenAgent
 
 
 class FakeContainerRuntime:
@@ -112,6 +115,9 @@ class FakeJudgeRuntime:
         self.reward_payload: object | None = {"reward": 1}
         self.created_specs: list[ContainerSpec] = []
         self.exec_environments: list[dict[str, str]] = []
+        self.exec_options: list[dict[str, Any]] = []
+        self.injected_auth: list[tuple[Any, str | None]] = []
+        self.injected_judge_agent: list[tuple[bytes, str | None]] = []
         self.round_ids: list[str] = []
         self.closed_rounds = 0
         self.work_paused = False
@@ -188,9 +194,32 @@ class FakeJudgeRuntime:
         self._private_tests = private_tests
         self._raise("inject")
 
+    def inject_agent_auth(
+        self, container: ContainerRef, material: Any, *, owner: str | None
+    ) -> None:
+        del container
+        self.events.append(("auth_inject", self._round_id))
+        self.injected_auth.append((material, owner))
+        self._raise("auth")
+
+    def inject_judge_agent(
+        self, container: ContainerRef, launch: bytes, *, owner: str | None
+    ) -> None:
+        del container
+        self.events.append(("judge_agent_inject", self._round_id))
+        self.injected_judge_agent.append((launch, owner))
+        self._raise("judge_agent")
+
     def exec(self, container: ContainerRef, command: tuple[str, ...], **kwargs: Any):
         del container
         self.exec_environments.append(dict(kwargs.get("environment") or {}))
+        self.exec_options.append(
+            {
+                key: value
+                for key, value in kwargs.items()
+                if key not in {"environment", "output_path"}
+            }
+        )
         output_path = kwargs.get("output_path")
         self.exec_output_paths.append(output_path)
         if output_path is not None and self.exec_result.full_output_captured:
@@ -884,3 +913,40 @@ class FakeFirewallBackend:
         if rule_id not in self.installed:
             raise InfrastructureError(f"network policy {rule_id} allow chain is absent")
         self.installed[rule_id] = rules
+
+
+class FakeDrivenAgent(DrivenAgent):
+    """A test-only driven Agent; register it with ``register_fake_driven_agent``."""
+
+    name = "fake-driven"
+    protocol = "acp"
+    cli_argv = ("fake-cli", "acp")
+    extra_launchers = ("fake-cli",)
+    driver_flags = ("--acp-mode", "yolo")
+    requires_context_limits = True
+    agent_version = "1.2.3"
+    install_cmds = [*DrivenAgent.install_cmds, "sudo -E npm install -g fake-cli@1.2.3"]
+    api_key_env = "RSI_AGENT_API_KEY"
+    api_base_env = "RSI_AGENT_BASE_URL"
+    model_env = "RSI_AGENT_MODEL"
+
+    def config_prelude(self, *, model: str | None, internet: bool) -> str:
+        window, output = self.context_limits()
+        config = json.dumps(
+            {
+                "model": model,
+                "apiKeyEnv": self.api_key_env,
+                "contextWindow": window,
+                "maxOutputTokens": output,
+                "web": internet,
+            }
+        )
+        return (
+            'mkdir -p "$HOME/.fake-cli" && '
+            f"printf '%s\\n' {shlex.quote(config)} > \"$HOME/.fake-cli/config.json\""
+        )
+
+
+def register_fake_driven_agent(monkeypatch: Any) -> type[FakeDrivenAgent]:
+    monkeypatch.setitem(agent_factory._REGISTRY, FakeDrivenAgent.name, FakeDrivenAgent)
+    return FakeDrivenAgent

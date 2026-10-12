@@ -1,0 +1,14 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["candidate_digest", "rubric_digest", "trajectory_digest", "status", "reason", "evidence", "next_step"],
+  "properties": {
+    "candidate_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "rubric_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "trajectory_digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "status": {"enum": ["clear", "violation", "unresolved"]},
+    "reason": {"type": "string", "minLength": 1},
+    "evidence": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "next_step": {"type": "string", "minLength": 1}
+  }
+}

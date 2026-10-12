@@ -1,0 +1,174 @@
+# New public-review runtime contract; the original A7 contract remains unchanged.
+schema_version: rsi-science-contract/0.5-draft
+task_id: science-ising3d
+status: design_draft
+launch_ready: false   # true only after execution validation passes and launch_blockers is empty
+
+target:
+  objective_type: claim
+  statement: Derive a unified, error-controlled thermodynamic construction and its transition location and leading critical laws on both sides.
+  domain_specification: >-
+    Spins +/-1, uniform nearest-neighbor ferromagnetic J>0, zero field, simple-cubic lattice;
+    H=-J sum_<ij> s_i*s_j with each undirected bond counted once. K=J/(k_B*T).
+    Periodic finite cubes tend to infinite volume; p(K)=lim_N log(Z_N(K))/N.
+    Energy/J=-dp/dK and heat capacity/k_B=K^2*d2p/dK2. Cover all finite K>=0,
+    high/low-temperature asymptotics and leading pressure singularities on both critical sides.
+    Nonzero fields, other lattices, disorder, frustration, all spatial correlations and a full
+    conformal spectrum are outside scope. Ordinary checkable derivations, independent consequences
+    and justified error control suffice; a complete formalized exact proof is not required.
+  allowed_premises:
+    - {id: P1, statement: The stated spin model and equilibrium periodic-volume thermodynamic limit.}
+    - {id: P2, statement: Standard mathematical identities with their applicability conditions stated.}
+  claims:
+    - {id: C01, statement: "Construction corresponds to the specified finite lattice model"}
+    - {id: C02, statement: "Supported derivation of the unified thermodynamic construction"}
+    - {id: C03, statement: "Controlled thermodynamic-limit construction"}
+    - {id: C04, statement: "Pressure throughout the ordinary high-temperature phase"}
+    - {id: C05, statement: "Pressure throughout the ordinary low-temperature phase"}
+    - {id: C06, statement: "Energy throughout the ordinary high-temperature phase"}
+    - {id: C07, statement: "Energy throughout the ordinary low-temperature phase"}
+    - {id: C08, statement: "Heat capacity throughout the ordinary high-temperature phase"}
+    - {id: C09, statement: "Heat capacity throughout the ordinary low-temperature phase"}
+    - {id: C10, statement: "Controlled high-temperature pressure asymptotics"}
+    - {id: C11, statement: "Controlled low-temperature pressure asymptotics"}
+    - {id: C12, statement: "Controlled high-temperature energy asymptotics"}
+    - {id: C13, statement: "Controlled low-temperature energy asymptotics"}
+    - {id: C14, statement: "Controlled high-temperature heat-capacity asymptotics"}
+    - {id: C15, statement: "Controlled low-temperature heat-capacity asymptotics"}
+    - {id: C16, statement: "Critical coupling derived from the same construction"}
+    - {id: C17, statement: "Critical pressure value and consistent regular background"}
+    - {id: C18, statement: "Critical energy value and matching one-sided limits"}
+    - {id: C19, statement: "Leading singular pressure law from the high-temperature side"}
+    - {id: C20, statement: "Leading singular pressure law from the low-temperature side"}
+    - {id: C21, statement: "Leading critical energy law from the high-temperature side"}
+    - {id: C22, statement: "Leading critical energy law from the low-temperature side"}
+    - {id: C23, statement: "Leading critical heat-capacity law from the high-temperature side"}
+    - {id: C24, statement: "Leading critical heat-capacity law from the low-temperature side"}
+    - {id: C25, statement: "All branches and scientific outputs belong to one coherent construction"}
+    - {id: C26, statement: "Independent reproduction of decisive scientific results"}
+
+research_contract:
+  starting_point:
+    mode: provided_artifacts
+    assets: [/opt/science/starter (an explicitly insufficient example, also the initial /workspace/candidate)]
+  action_space:
+    allowed: >-
+      Develop and revise hypotheses, derivations, representations, controlled approximations,
+      code and evidence; use public research and budgeted local calculations. Cite imported results.
+      No prescribed theory family or formal-proof language; no per-iteration human involvement.
+    immutable: [task_contract, task_owned_assets, public_rubrics, reviewer_protocol]
+  submission:
+    artifacts: [theory.md, supporting derivations/code/data/references and reproduction instructions]
+    interface: >-
+      Files under /workspace/candidate, at most 512 regular files and 32 MiB, no symlinks; theory.md is
+      the main argument. rsi-submit freezes the candidate; candidate_digest is SHA256 of the canonical JSON
+      file-hash mapping and rubric_digest is SHA256 of the exact rubrics.json bytes. model.py:pressure(K)
+      (finite floating-point pressure values) and probe.py (a bounded deterministic reproduction that prints
+      its own results) are optional recompute routes; each runs offline on its own copy, as its own
+      unprivileged user, in the Judge started from the clean task image, with a 60-second limit. The
+      integrity.md and integrity.schema.json audit applies first to every submission and the
+      Harness-captured trajectory up to it; only clear permits a valid scientific review/count.
+
+verification_contract:
+  owner: task_author
+  implementation_status: model_review_only
+  adequacy: >-
+    A separate automatic integrity audit first establishes submission validity; only a clear audit
+    permits scientific scoring. Automatic model scientific peer review then applies the 26 public scientific criteria using ordinary
+    mathematical reasoning, code inspection, cited evidence and task-controlled recompute diagnostics.
+    No universal formal checker is claimed. Integrity availability, unfinished audit and audit errors
+    never become valid zero scores or scientific failures; integrity is not a scored science criterion. Finite probes do not establish whole-rubric passes.
+    Essential unsupported arguments remain unresolved; demonstrated contradictions fail. Subtle
+    reasoning may be misjudged; review reliability must be documented, not assumed formally sound.
+    This revision implements the public-review method; execution traces and calibration limits are recorded separately.
+  visibility: {specification: full, verifier_code: full, test_instances: full, reference_answers_and_evidence: full, feedback: full}
+  evidence_policy:
+    validity: >-
+      Before scientific judgment, automatically audit the same frozen candidate and the complete Harness-captured
+      trajectory up to the submission under public integrity.md and integrity.schema.json. Only clear permits a valid count
+      or completion. Proven tampering, forged task-controlled evidence or judge-directed prompt injection
+      invalidate the submission; violation, unresolved or missing/failed audit yields no valid reward.
+      Scientific proof gaps or transparent borrowed inputs are not by themselves malicious; unsupported or
+      circular derivation is judged in the affected scientific criteria. No later acceptance gate or integrity point.
+    quality: >-
+      Trace evidence versions, applicability, uncertainty, assumptions and independence. References
+      are not automatically ground truth. Resolve material conflicts within the affected rubric.
+      Widening uncertainty or presenting candidate success logs does not establish a claim.
+      Phase-wide results need supported quantitative refinement; endpoint and critical claims need
+      asymptotically discriminating errors. Accuracy of pressure does not imply accuracy of derivatives.
+      Independent support may be mathematical or computational and does not require unseen data.
+    information_boundary: >-
+      Public references and answers may be read; borrowed Kc/exponents cannot validate their own
+      purported independent derivation. Each revision creates a new candidate. No mandatory holdout.
+    acquisition: >-
+      The Judge reads the frozen candidate, including the sources it cites and includes, and runs its own
+      offline recompute of the optional routes (bundle.json); reviewers add their own reasoning and small
+      independent calculations and do not search the web. Essential unavailable evidence remains
+      unresolved. No human measurements or approvals in the loop.
+  requirements:
+    - {id: R01, claim_supported: [C01], evidence_required: ["Construction corresponds to the specified finite lattice model"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R01.pass_when}
+    - {id: R02, claim_supported: [C02], evidence_required: ["Supported derivation of the unified thermodynamic construction"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R02.pass_when}
+    - {id: R03, claim_supported: [C03], evidence_required: ["Controlled thermodynamic-limit construction"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R03.pass_when}
+    - {id: R04, claim_supported: [C04], evidence_required: ["Pressure throughout the ordinary high-temperature phase"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R04.pass_when}
+    - {id: R05, claim_supported: [C05], evidence_required: ["Pressure throughout the ordinary low-temperature phase"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R05.pass_when}
+    - {id: R06, claim_supported: [C06], evidence_required: ["Energy throughout the ordinary high-temperature phase"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R06.pass_when}
+    - {id: R07, claim_supported: [C07], evidence_required: ["Energy throughout the ordinary low-temperature phase"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R07.pass_when}
+    - {id: R08, claim_supported: [C08], evidence_required: ["Heat capacity throughout the ordinary high-temperature phase"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R08.pass_when}
+    - {id: R09, claim_supported: [C09], evidence_required: ["Heat capacity throughout the ordinary low-temperature phase"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R09.pass_when}
+    - {id: R10, claim_supported: [C10], evidence_required: ["Controlled high-temperature pressure asymptotics"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R10.pass_when}
+    - {id: R11, claim_supported: [C11], evidence_required: ["Controlled low-temperature pressure asymptotics"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R11.pass_when}
+    - {id: R12, claim_supported: [C12], evidence_required: ["Controlled high-temperature energy asymptotics"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R12.pass_when}
+    - {id: R13, claim_supported: [C13], evidence_required: ["Controlled low-temperature energy asymptotics"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R13.pass_when}
+    - {id: R14, claim_supported: [C14], evidence_required: ["Controlled high-temperature heat-capacity asymptotics"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R14.pass_when}
+    - {id: R15, claim_supported: [C15], evidence_required: ["Controlled low-temperature heat-capacity asymptotics"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R15.pass_when}
+    - {id: R16, claim_supported: [C16], evidence_required: ["Critical coupling derived from the same construction"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R16.pass_when}
+    - {id: R17, claim_supported: [C17], evidence_required: ["Critical pressure value and consistent regular background"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R17.pass_when}
+    - {id: R18, claim_supported: [C18], evidence_required: ["Critical energy value and matching one-sided limits"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R18.pass_when}
+    - {id: R19, claim_supported: [C19], evidence_required: ["Leading singular pressure law from the high-temperature side"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R19.pass_when}
+    - {id: R20, claim_supported: [C20], evidence_required: ["Leading singular pressure law from the low-temperature side"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R20.pass_when}
+    - {id: R21, claim_supported: [C21], evidence_required: ["Leading critical energy law from the high-temperature side"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R21.pass_when}
+    - {id: R22, claim_supported: [C22], evidence_required: ["Leading critical energy law from the low-temperature side"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R22.pass_when}
+    - {id: R23, claim_supported: [C23], evidence_required: ["Leading critical heat-capacity law from the high-temperature side"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R23.pass_when}
+    - {id: R24, claim_supported: [C24], evidence_required: ["Leading critical heat-capacity law from the low-temperature side"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R24.pass_when}
+    - {id: R25, claim_supported: [C25], evidence_required: ["All branches and scientific outputs belong to one coherent construction"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R25.pass_when}
+    - {id: R26, claim_supported: [C26], evidence_required: ["Independent reproduction of decisive scientific results"], method: public reviewer.md after clear integrity audit, pass_rule: rubrics.json R26.pass_when}
+
+decision_and_feedback:
+  progress:
+    comparison: >-
+      completed_rubrics=count(status==pass) for a valid digest-bound review of one candidate after clear integrity audit;
+      larger counts rank higher, equal counts tie. This explicitly replaces A7's partial-order
+      progress policy for this new runtime. Retain individual verdicts and evidence; count is not
+      scientific completion percentage. Integrity violation/unresolved, missing or failed audit, and evaluation errors have no valid count. Never union passes
+      across candidates, and never convert missing evidence to a pass. No efficiency score or weights.
+    feedback: Full per-rubric status, reason, evidence locations and next_step; evaluator errors separately.
+    efficiency_weight: 0
+  completion:
+    rule: {all_of: [R01, R02, R03, R04, R05, R06, R07, R08, R09, R10, R11, R12, R13, R14, R15, R16, R17, R18, R19, R20, R21, R22, R23, R24, R25, R26]}
+    meaning: >-
+      A clear predeclared integrity audit establishes submission validity, and one coherent immutable
+      candidate passes all 26 scientific requirements under this evidence standard.
+      Completion is computed by the Judge procedure, not self-awarded or stitched from best historical passes.
+      No extra scientific acceptance gate; later human inspection does not affect completion.
+
+prior_results:
+  - id: A7_DESIGN
+    source: OpenRSI-Index science-proposals/schema/examples/a7-ising.yaml
+    revision: rsi-science-contract/0.5-draft original A7 design
+    scope: Earlier broad thermodynamic six-requirement design; not a scientific pass, not the 26-criterion baseline.
+    assumptions: The new runtime retains the scientific target and replaces verification/progress policy explicitly.
+    verification_results: []
+
+execution:
+  environment: >-
+    The Python 3.11 image pinned by digest (standard library only) with the starter; every Judge starts from the clean
+    task image, recomputes the routes as unprivileged users and reviews with the run's own Agent, model and
+    reasoning effort through rsi-agent (Judge library science_judge version 2).
+  access: >-
+    Work has public network access for literature and data. The Judge is offline except the pinned model
+    endpoints; routes cannot open internet sockets and get no credentials; reviewers never execute
+    candidate code and do not search the web.
+  budgets: >-
+    Work 4 CPUs and 8 GiB for a 6-hour run; Judge timeout 3600 s: two 60 s routes, a 1200 s audit deadline
+    and a 1800 s review deadline shared by all 26 rubric reviews, four at a time.
+  launch_blockers: []

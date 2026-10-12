@@ -18,7 +18,7 @@ Provides :class:`Agent` (base class with config as class attributes)
 and concrete implementations per coding agent.  Select via ``create_agent()``.
 """
 
-from rsi_loop.harness.agent.base import Agent
+from rsi_loop.harness.agent.base import Agent, OneShotCommand
 from rsi_loop.harness.agent.factory import (
     create_agent,
     get_agent_class,
@@ -27,6 +27,7 @@ from rsi_loop.harness.agent.factory import (
 
 __all__ = [
     "Agent",
+    "OneShotCommand",
     "create_agent",
     "get_agent_class",
     "list_agent_classes",

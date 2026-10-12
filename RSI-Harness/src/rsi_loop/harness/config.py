@@ -35,6 +35,8 @@ class RSILoopConfig:
     maven_mirror_url: str | None = None
     go_proxy: str | None = None
     nodejs_mirror_url: str | None = None
+    # Serves the ZCode package for the zcode Agent's Work image build.
+    zcode_mirror_url: str | None = None
     npm_registry_url: str | None = None
     apt_mirror_url: str | None = None
 
@@ -46,6 +48,12 @@ class RSILoopConfig:
     agent_extra_env: dict[str, str] = field(default_factory=dict)
     # Additional EXTRA_ENV names carrying credentials, beyond standard names.
     agent_secret_env_names: tuple[str, ...] = ()
+    # Model context window and output limit, in tokens, for Agents whose CLI
+    # must be told them. Kept as given and validated by the Agents that need
+    # them, so a bad value fails that Agent's setup with a clear message
+    # rather than every config load.
+    agent_context_window: str | None = None
+    agent_max_output_tokens: str | None = None
 
     # Claude Code cache optimization — suppress the random cch attribution
     # header and dynamic system prompt sections that break prompt caching on
@@ -97,12 +105,15 @@ def load_config(cli_overrides: dict | None = None) -> RSILoopConfig:
         "maven_mirror_url": ["RSI_MAVEN_MIRROR_URL"],
         "go_proxy": ["RSI_GO_PROXY"],
         "nodejs_mirror_url": ["RSI_NODEJS_MIRROR_URL"],
+        "zcode_mirror_url": ["RSI_ZCODE_MIRROR_URL"],
         "npm_registry_url": ["RSI_NPM_REGISTRY_URL"],
         "apt_mirror_url": ["RSI_APT_MIRROR_URL"],
         "agent_api_key": ["RSI_AGENT_API_KEY"],
         "agent_api_base_url": ["RSI_AGENT_API_BASE_URL"],
         "agent_model": ["RSI_AGENT_MODEL"],
         "agent_timeout": ["RSI_AGENT_TIMEOUT"],
+        "agent_context_window": ["RSI_AGENT_CONTEXT_WINDOW"],
+        "agent_max_output_tokens": ["RSI_AGENT_MAX_OUTPUT_TOKENS"],
         "git_user": ["RSI_GIT_USER"],
         "git_token": ["RSI_GIT_TOKEN"],
         "registry": ["RSI_REGISTRY"],

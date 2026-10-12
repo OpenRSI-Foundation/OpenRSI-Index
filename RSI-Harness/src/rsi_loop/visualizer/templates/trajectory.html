@@ -57,6 +57,7 @@
         <h3 class="font-semibold mb-2 text-slate-700">Meta</h3>
         <dl class="text-xs space-y-1 text-slate-600">
           {% if trajectory.meta.model %}<div><dt class="inline text-slate-400">model:</dt> <dd class="inline mono">{{ trajectory.meta.model }}</dd></div>{% endif %}
+          {% if trajectory.meta.agent %}<div><dt class="inline text-slate-400">agent:</dt> <dd class="inline mono">{{ trajectory.meta.agent }}{% if trajectory.meta.agent_version %} {{ trajectory.meta.agent_version }}{% endif %}</dd></div>{% endif %}
           {% if trajectory.meta.claude_code_version %}<div><dt class="inline text-slate-400">cc:</dt> <dd class="inline mono">{{ trajectory.meta.claude_code_version }}</dd></div>{% endif %}
           {% if trajectory.meta.permissionMode %}<div><dt class="inline text-slate-400">perm:</dt> <dd class="inline mono">{{ trajectory.meta.permissionMode }}</dd></div>{% endif %}
           {% if trajectory.meta.session_id %}<div><dt class="inline text-slate-400">session:</dt> <dd class="inline mono break-all">{{ trajectory.meta.session_id }}</dd></div>{% endif %}

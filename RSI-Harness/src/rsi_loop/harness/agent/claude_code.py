@@ -21,7 +21,13 @@ import logging
 import shlex
 from pathlib import Path, PurePosixPath
 
-from rsi_loop.harness.agent.base import Agent
+from rsi_loop.harness.agent import versions
+from rsi_loop.harness.agent.base import (
+    NODE_INSTALL_CMD,
+    STOP_HOOK_REASON,
+    Agent,
+    OneShotCommand,
+)
 from rsi_loop.harness.backend import ContainerBackend, ContainerHandle
 
 
@@ -29,8 +35,8 @@ class ClaudeCodeAgent(Agent):
 
     name = "claude-code"
     install_cmds = [
-        "sudo -E bash -c 'NODE_MIRROR=${RSI_NODEJS_MIRROR_URL:-https://nodejs.org/dist} && curl -fsSL $NODE_MIRROR/v22.23.3/node-v22.23.3-linux-x64.tar.xz | tar -xJ -C /usr/local --strip-components=1'",
-        "sudo -E npm install -g @anthropic-ai/claude-code@2.1.285",
+        NODE_INSTALL_CMD,
+        f"sudo -E npm install -g @anthropic-ai/claude-code@{versions.CLAUDE_CODE}",
     ]
     # The prompt is fed on stdin, not as an argument: with the task text in
     # argv, an Agent running `pkill -f <name mentioned in the task>` matches
@@ -53,6 +59,8 @@ class ClaudeCodeAgent(Agent):
     default_api_base_url = "https://api.anthropic.com"
     model_env = "ANTHROPIC_MODEL"
     stop_hook = "claude"
+    display_name = "Claude Code"
+    reasoning_efforts = frozenset({"low", "medium", "high", "xhigh", "max"})
 
     def augment_env(self, env: dict[str, str], model: str | None) -> None:
         # The Work container is the sandbox. Claude Code refuses
@@ -75,7 +83,10 @@ class ClaudeCodeAgent(Agent):
         cwd: str = "",
         internet: bool = True,
         resume: bool = False,
+        continuation: str | None = None,
     ) -> str:
+        # The stop hook file installed by install_stop_hook carries the
+        # continuation, so the command does not.
         cmd = super().format_run_cmd(
             prompt_path, model=model, cwd=cwd, internet=internet, resume=resume,
         )
@@ -96,6 +107,42 @@ class ClaudeCodeAgent(Agent):
             )
 
         return cmd
+
+    def format_oneshot_cmd(
+        self,
+        *,
+        model: str | None = None,
+        internet: bool = True,
+    ) -> OneShotCommand:
+        # Print mode with one JSON result on stdout. Safe mode and user-only
+        # settings keep CLAUDE.md, hooks, plugins and project settings in the
+        # working directory from changing the call; no session is kept. The
+        # prompt arrives on stdin.
+        cmd = (
+            "claude -p --output-format json --no-session-persistence"
+            " --dangerously-skip-permissions --safe-mode --setting-sources user"
+            " {schema_option}"
+        )
+        effective_model = model or self._config.agent_model or self.default_model
+        if effective_model:
+            cmd += f" --model {shlex.quote(effective_model)}"
+        if not internet:
+            cmd += " --disallowedTools WebSearch,WebFetch"
+        return OneShotCommand(
+            command=cmd,
+            schema_option='--json-schema "$(cat {schema_file})"',
+            output="stdout-json",
+            output_fields=("structured_output", "result"),
+            error_field="is_error",
+        )
+
+    def apply_reasoning_effort(self, command: str, effort: str) -> str:
+        marker = "claude "
+        if not command.startswith(marker):
+            raise ValueError(
+                "RSI Loop Claude Code command cannot accept reasoning effort"
+            )
+        return f"claude --effort {shlex.quote(effort)} {command[len(marker) :]}"
 
     def install_stop_hook(
         self,
@@ -150,9 +197,12 @@ class ClaudeCodeAgent(Agent):
 
 
 def _generate_stop_hook() -> str:
-    return r"""#!/bin/bash
+    output = json.dumps(
+        {"decision": "block", "reason": STOP_HOOK_REASON}, separators=(",", ":")
+    )
+    return f"""#!/bin/bash
 cat >/dev/null
-echo '{"decision":"block","reason":"Do not stop. Continue working on the implementation."}'
+echo {shlex.quote(output)}
 """
 
 

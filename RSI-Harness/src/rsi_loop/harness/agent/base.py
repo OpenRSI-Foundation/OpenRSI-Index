@@ -18,10 +18,61 @@ from __future__ import annotations
 
 import abc
 import logging
+from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
+from rsi_loop.harness.agent import versions
 from rsi_loop.harness.backend import ContainerBackend, ContainerHandle
 from rsi_loop.harness.config import RSILoopConfig
+
+# What every stop mechanism (native hook, extension or driver) sends the
+# Agent when it tries to end its work.
+STOP_HOOK_REASON = "Do not stop. Continue working on the implementation."
+CONTEXT_WINDOW_ENV = "RSI_AGENT_CONTEXT_WINDOW"
+MAX_OUTPUT_TOKENS_ENV = "RSI_AGENT_MAX_OUTPUT_TOKENS"
+# The pinned node every Agent image installs into /usr/local; the driver, its
+# launcher wrapper and the ZCode launcher rely on it being there.
+NODE_INSTALL_CMD = (
+    "sudo -E bash -c 'NODE_MIRROR=${RSI_NODEJS_MIRROR_URL:-https://nodejs.org/dist}"
+    f" && curl -fsSL $NODE_MIRROR/v{versions.NODE_VERSION}"
+    f"/node-v{versions.NODE_VERSION}-linux-x64.tar.xz"
+    " | tar -xJ -C /usr/local --strip-components=1'"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class OneShotCommand:
+    """A non-interactive Agent invocation that answers one prompt and exits.
+
+    ``command`` is a bash command that reads the prompt on stdin. It may use
+    two literal tokens: ``{output_file}``, the file the Agent must write its
+    final message to (``output == "file"``), and ``{schema_option}``, replaced
+    by ``schema_option`` (with ``{schema_file}`` filled in) when the caller
+    asks for structured output, and by nothing otherwise. An Agent without a
+    native schema option leaves ``schema_option`` as ``None``; the caller then
+    states the schema in the prompt instead.
+
+    With ``output == "stdout-json"`` the Agent prints one JSON object: the
+    first of ``output_fields`` present is the final message, and a true
+    ``error_field`` means the call failed.
+    """
+
+    command: str
+    schema_option: str | None = None
+    output: str = "file"
+    output_fields: tuple[str, ...] = ()
+    error_field: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.output not in {"file", "stdout-json"}:
+            raise ValueError(f"unsupported one-shot output {self.output!r}")
+        if self.output == "file" and "{output_file}" not in self.command:
+            raise ValueError("a file one-shot command must name {output_file}")
+        if self.output == "stdout-json" and not self.output_fields:
+            raise ValueError("a stdout-json one-shot command needs output fields")
+        if "{schema_option}" not in self.command:
+            raise ValueError("a one-shot command must place {schema_option}")
 
 
 class Agent(abc.ABC):
@@ -43,9 +94,26 @@ class Agent(abc.ABC):
     default_api_base_url: str | None = None
     model_env: str | None = None
     default_model: str | None = None
+    # The CLI has no model of its own to fall back on: setup refuses a run
+    # that names none.
+    requires_model: bool = False
+    # The CLI must be told the model's context window and output limit.
+    requires_context_limits: bool = False
     timeout: int = 3600
     stop_hook: str | None = None
     resume_cmd: str | None = None
+    display_name: str | None = None
+    # Values accepted by ``apply_reasoning_effort``; empty means the Agent
+    # does not support a reasoning effort.
+    reasoning_efforts: frozenset[str] = frozenset()
+    # Files baked into the Work image before ``install_cmds`` run:
+    # container path -> (resource path relative to the ``rsi_loop`` package,
+    # file mode). Agents without any keep their Work image tag unchanged.
+    image_files: Mapping[str, tuple[str, int]] = {}
+    # Commands besides the ``run_cmd`` launcher that ``install_cmds`` provide
+    # and the Agent starts. The Work image moves a task image's copy aside
+    # and checks the installed one, as it does for the launcher.
+    extra_launchers: tuple[str, ...] = ()
 
     def __init__(self, config: RSILoopConfig) -> None:
         self._config = config
@@ -61,6 +129,16 @@ class Agent(abc.ABC):
         mirrors, extra_env) have already been applied.
         """
 
+    def build_args(self) -> dict[str, str | None]:
+        """Return the build arguments ``install_cmds`` read, by name.
+
+        A Work image build declares every name and passes the values that
+        are set; None leaves the install command's default. The values stay
+        out of the image's tag, so they may only choose where verified
+        content comes from.
+        """
+        return {}
+
     def format_run_cmd(
         self,
         prompt_path: str,
@@ -69,6 +147,7 @@ class Agent(abc.ABC):
         cwd: str = "",
         internet: bool = True,
         resume: bool = False,
+        continuation: str | None = None,
     ) -> str:
         """Build the shell command to run the agent.
 
@@ -76,10 +155,106 @@ class Agent(abc.ABC):
         placeholders and handles the resume fallback.  Subclasses that need
         extra CLI flags (``--model``, ``--disallowedTools``, …) should call
         ``super()`` first, then append.
+
+        *continuation* is the text to send whenever the Agent ends a turn, or
+        ``None`` when the stop hook is disabled. Agents whose stop hook is a
+        native hook installed by :meth:`install_stop_hook` ignore it.
         """
         if resume and self.resume_cmd:
             return self.resume_cmd
         return self.run_cmd.format(prompt_file=prompt_path, cwd=cwd)
+
+    def format_oneshot_cmd(
+        self,
+        *,
+        model: str | None = None,
+        internet: bool = True,
+    ) -> OneShotCommand | None:
+        """Build the one-shot command a Judge runs through ``rsi-agent``.
+
+        The same CLI, credentials and provider settings as :meth:`format_run_cmd`,
+        but non-interactive: one prompt in, one final message out, with no
+        session, hooks or project instructions. ``None`` (the default) means
+        this Agent cannot be called from a Judge.
+        """
+        del model, internet
+        return None
+
+    def check_config(self) -> None:
+        """Raise :class:`ValueError` when the configuration cannot run this Agent.
+
+        Called before the Agent is prepared, so a missing setting fails the
+        run during setup instead of inside Work.
+        """
+        if self.requires_context_limits:
+            self.context_limits()
+
+    def context_limits(self) -> tuple[int, int]:
+        """Return (context window, max output tokens) from the configuration.
+
+        Raises :class:`ValueError` when either is missing or invalid. They are
+        never guessed: a declared window above the real one makes some CLIs
+        loop on failed requests instead of compacting.
+        """
+        values = {
+            CONTEXT_WINDOW_ENV: self._config.agent_context_window,
+            MAX_OUTPUT_TOKENS_ENV: self._config.agent_max_output_tokens,
+        }
+        parsed: dict[str, int] = {}
+        for env_name, raw in values.items():
+            text = "" if raw is None else str(raw).strip()
+            if not text.isdecimal() or int(text) <= 0:
+                state = "is not set" if not text else f"is {text!r}"
+                raise ValueError(
+                    f"Agent {self.name!r} needs {CONTEXT_WINDOW_ENV} and "
+                    f"{MAX_OUTPUT_TOKENS_ENV} set to the model's real limits as "
+                    f"positive token counts; {env_name} {state}"
+                )
+            parsed[env_name] = int(text)
+        window = parsed[CONTEXT_WINDOW_ENV]
+        output = parsed[MAX_OUTPUT_TOKENS_ENV]
+        if output >= window:
+            raise ValueError(
+                f"{MAX_OUTPUT_TOKENS_ENV} ({output}) must be smaller than "
+                f"{CONTEXT_WINDOW_ENV} ({window})"
+            )
+        return window, output
+
+    def require_api_endpoint(self) -> None:
+        """Raise :class:`ValueError` unless an endpoint and an API key are set.
+
+        For CLIs with no public default endpoint and no local login.
+        ``RSI_AGENT_EXTRA_ENV`` may set the CLI's own variables instead.
+        """
+        extra = self._config.agent_extra_env
+        missing = [
+            setting
+            for setting, value in (
+                (
+                    "RSI_AGENT_API_BASE_URL",
+                    self._config.agent_api_base_url
+                    or (self.api_base_env and extra.get(self.api_base_env)),
+                ),
+                (
+                    "RSI_AGENT_API_KEY",
+                    self._config.agent_api_key or extra.get(self.api_key_env),
+                ),
+            )
+            if not value
+        ]
+        if missing:
+            raise ValueError(
+                f"Agent {self.name!r} uses an OpenAI-compatible endpoint with an "
+                f"API key and has no default endpoint; set {' and '.join(missing)}"
+            )
+
+    def apply_reasoning_effort(self, command: str, effort: str) -> str:
+        """Return *command* with *effort* applied.
+
+        Only called with a value from ``reasoning_efforts``. Raise
+        :class:`ValueError` when the command cannot take it.
+        """
+        raise ValueError(f"{self.name} does not support reasoning effort")
 
     def install_stop_hook(
         self,

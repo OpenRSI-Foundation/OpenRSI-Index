@@ -102,6 +102,7 @@ def make_run_plan(tmp_path: Path, *, secret_env_names: tuple[str, ...] = ()) -> 
             judge_ref=f"judge@sha256:{'c' * 64}",
             workdir=PurePosixPath("/workspace"),
             rootfs_snapshot_mode=RootfsSnapshotMode.SPLIT_WORKDIR,
+            work_digest=f"sha256:{'b' * 64}",
         ),
         gpu_plan=RunGPUPlan(
             authorized_pool=GPUAllocation(),

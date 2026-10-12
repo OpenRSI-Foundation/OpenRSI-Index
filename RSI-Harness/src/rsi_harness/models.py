@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ipaddress
 import re
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass
@@ -22,6 +23,7 @@ from rsi_harness.runtime.sandbox_contracts import (
 
 VERIFIER_OUTPUT_TRUNCATION_MARKER = "\n...[verifier output truncated]...\n"
 WORK_FEEDBACK_ROOT = PurePosixPath("/run/rsi-harness/feedback")
+JUDGE_TRAJECTORY_ROOT = PurePosixPath("/logs/agent")
 MIN_VERIFIER_OUTPUT_LIMIT_BYTES = len(VERIFIER_OUTPUT_TRUNCATION_MARKER.encode("utf-8"))
 
 
@@ -298,6 +300,11 @@ class VerifierPlan(PersistedModel):
     primary_reward: str | None = None
     output_limit_bytes: int = 1_000_000
     network: NetworkPolicy = Field(default_factory=NetworkPolicy)
+    # "public" also mounts the same task tests read-only in Work.
+    visibility: Literal["hidden", "public"] = "hidden"
+    # The Judge reaches only the Agent's pinned model endpoints with the
+    # Agent's credentials; never general egress.
+    model_access: bool = False
 
     @field_validator("output_limit_bytes")
     @classmethod
@@ -464,10 +471,18 @@ class ContainerSpec:
     memory_mb: int | None = None
     storage_mb: int | None = None
     extra_hosts: tuple[tuple[str, str], ...] = ()
+    # Upstream servers for Docker's embedded resolver; empty keeps the host's.
+    dns: tuple[str, ...] = ()
+    # Read-only root filesystem with no-new-privileges; writable paths come
+    # only from mounts and tmpfs.
+    read_only_rootfs: bool = False
 
     def __post_init__(self) -> None:
         if self.workdir is not None:
             object.__setattr__(self, "workdir", _workdir(self.workdir))
+        object.__setattr__(
+            self, "dns", tuple(str(ipaddress.ip_address(server)) for server in self.dns)
+        )
         if self.shm_size is not None:
             object.__setattr__(self, "shm_size", _shm_size(self.shm_size))
 

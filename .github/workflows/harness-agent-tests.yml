@@ -1,0 +1,94 @@
+name: Harness Agent tests
+
+# Each Agent's real, pinned CLI runs a full Harness run in Docker against a
+# local fake model, plus the Judge's one-shot call. Versions are pinned, so
+# nothing upstream can break an Agent until a change here does: run on the
+# changes that can.
+on:
+  pull_request:
+    paths:
+      - RSI-Harness/src/rsi_loop/harness/agent/**
+      - RSI-Harness/src/rsi_loop/harness/config.py
+      - RSI-Harness/src/rsi_harness/integrations/rsi_loop.py
+      - RSI-Harness/src/rsi_harness/judge_agent/**
+      - RSI-Harness/src/rsi_harness/runtime/images.py
+      - RSI-Harness/src/rsi_harness/runtime/judge_model_access.py
+      - RSI-Harness/scripts/bump_agent.py
+      - RSI-Harness/tests/fakes/**
+      - RSI-Harness/tests/integration/test_driven_agents_docker.py
+      - RSI-Harness/tests/integration/test_agent_one_shot_docker.py
+      - RSI-Harness/tests/integration/test_judge_model_access_docker.py
+      - RSI-Harness/uv.lock
+      - .github/workflows/harness-agent-tests.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-agent-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  agent:
+    name: Agent ${{ matrix.agent }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        agent: [codex, claude-code, qwen-code, kimi-code, opencode, zcode, pi]
+    defaults:
+      run:
+        working-directory: RSI-Harness
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+        with:
+          version: "0.6.5"
+      - name: Install the test environment
+        run: uv sync --frozen --group test --python 3.12
+      - name: Pull the test base images
+        run: |
+          docker pull ubuntu:24.04
+          docker pull python@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b
+      - name: Run the Agent's Docker tests
+        # A case that cannot run fails instead of skipping.
+        env:
+          RSI_REQUIRE_DOCKER_TESTS: "1"
+        run: |
+          set -o pipefail
+          uv run --frozen --group test python -m pytest -m integration -q -rs \
+            tests/integration/test_driven_agents_docker.py \
+            tests/integration/test_agent_one_shot_docker.py \
+            -k "[${{ matrix.agent }}]" | tee "$RUNNER_TEMP/pytest.log"
+          ! grep -Eq '[0-9]+ skipped' "$RUNNER_TEMP/pytest.log"
+
+  model-access:
+    name: Judge model access
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: RSI-Harness
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+        with:
+          version: "0.6.5"
+      - name: Install the test environment
+        run: uv sync --frozen --group test --python 3.12
+      - name: Pull the test base images
+        run: |
+          docker pull ubuntu:24.04
+          docker pull python@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b
+      - name: Run the rsi-agent Docker tests
+        run: |
+          set -o pipefail
+          uv run --frozen --group test python -m pytest -m integration -q -rs \
+            tests/integration/test_judge_model_access_docker.py | tee "$RUNNER_TEMP/pytest.log"
+          ! grep -Eq '[0-9]+ skipped' "$RUNNER_TEMP/pytest.log"

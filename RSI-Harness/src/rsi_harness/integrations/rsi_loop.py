@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import logging
-import shlex
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
-from typing import Protocol
+from typing import Any, Protocol
 from urllib.parse import unquote, urlsplit
 
 from rsi_harness.errors import InfrastructureError, SetupError
@@ -26,18 +25,18 @@ from rsi_harness.runtime.redaction import (
     redact_exact_values,
     redact_text,
 )
-from rsi_loop.harness.agent import Agent, create_agent, list_agent_classes
+from rsi_loop.harness.agent import (
+    Agent,
+    create_agent,
+    get_agent_class,
+    list_agent_classes,
+)
+from rsi_loop.harness.agent.base import STOP_HOOK_REASON
 from rsi_loop.harness.backend import ExecResult
 from rsi_loop.harness.config import RSILoopConfig
 
 _CONTAINER_PROMPT_PATH = PurePosixPath("/tmp/rsi-agent-prompt.md")
 _CONTROL_ENV_KEYS = ("RSI_JUDGE_URL", "RSI_TOKEN")
-_CODEX_REASONING_EFFORTS = frozenset({"minimal", "low", "medium", "high", "xhigh"})
-_CLAUDE_CODE_REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
-_REASONING_EFFORTS = {
-    "codex": ("Codex", _CODEX_REASONING_EFFORTS),
-    "claude-code": ("Claude Code", _CLAUDE_CODE_REASONING_EFFORTS),
-}
 
 
 def validate_agent_reasoning_effort(
@@ -47,39 +46,55 @@ def validate_agent_reasoning_effort(
 
     if reasoning_effort is None:
         return
-    agent_support = _REASONING_EFFORTS.get(agent_name)
-    if agent_support is None:
+    try:
+        agent_class = get_agent_class(agent_name)
+    except ValueError:
+        agent_class = None
+    if agent_class is None or not agent_class.reasoning_efforts:
         raise SetupError(f"Agent {agent_name!r} does not support reasoning effort")
-    display_name, supported_efforts = agent_support
-    if reasoning_effort not in supported_efforts:
-        supported = ", ".join(sorted(supported_efforts))
+    if reasoning_effort not in agent_class.reasoning_efforts:
+        supported = ", ".join(sorted(agent_class.reasoning_efforts))
+        display_name = agent_class.display_name or agent_class.name
         raise SetupError(
             f"unsupported {display_name} reasoning effort {reasoning_effort!r}; "
             f"choose one of: {supported}"
         )
 
 
+def validate_agent_config(
+    config: RSILoopConfig, agent_name: str, *, model: str | None = None
+) -> Agent:
+    """Fail before runtime mutation when the configuration cannot run the Agent.
+
+    *model* is the run's own model (request or task), if any; the configured
+    and the Agent's default model apply without it. Returns the checked Agent
+    so callers need not build it again.
+    """
+
+    try:
+        agent = create_agent(agent_name, config)
+        agent.check_config()
+    except ValueError as error:
+        raise SetupError(str(error)) from error
+    if agent.requires_model and not (
+        model or config.agent_model or agent.default_model
+    ):
+        raise SetupError(
+            f"Agent {agent.name!r} needs a model; set RSI_AGENT_MODEL or --model"
+        )
+    return agent
+
+
 def _apply_reasoning_effort(
-    agent_name: str, command: str, reasoning_effort: str | None
+    agent: Agent, command: str, reasoning_effort: str | None
 ) -> str:
-    validate_agent_reasoning_effort(agent_name, reasoning_effort)
+    validate_agent_reasoning_effort(agent.name, reasoning_effort)
     if reasoning_effort is None:
         return command
-    if agent_name == "codex":
-        marker = "codex exec"
-        if marker not in command:
-            raise SetupError("RSI Loop Codex command cannot accept reasoning effort")
-        override = shlex.quote(f'model_reasoning_effort="{reasoning_effort}"')
-        return command.replace(marker, f"{marker} -c {override}", 1)
-    if agent_name == "claude-code":
-        marker = "claude "
-        if not command.startswith(marker):
-            raise SetupError(
-                "RSI Loop Claude Code command cannot accept reasoning effort"
-            )
-        effort = shlex.quote(reasoning_effort)
-        return f"claude --effort {effort} {command[len(marker) :]}"
-    raise AssertionError("validated Agent reasoning support is incomplete")
+    try:
+        return agent.apply_reasoning_effort(command, reasoning_effort)
+    except ValueError as error:
+        raise SetupError(str(error)) from error
 
 
 def rsi_loop_runtime_secret_values(config: RSILoopConfig) -> set[str]:
@@ -148,11 +163,61 @@ def rsi_loop_agent_environment(
         environment["RSI_NODEJS_MIRROR_URL"] = config.nodejs_mirror_url
     if config.npm_registry_url:
         environment["npm_config_registry"] = config.npm_registry_url
+    for value, name in (
+        (config.agent_context_window, "RSI_AGENT_CONTEXT_WINDOW"),
+        (config.agent_max_output_tokens, "RSI_AGENT_MAX_OUTPUT_TOKENS"),
+    ):
+        if value:
+            environment[name] = value
     environment.update(config.agent_extra_env)
     agent.augment_env(environment, model)
     for key in _CONTROL_ENV_KEYS:
         environment.pop(key, None)
     return environment
+
+
+def rsi_loop_oneshot(config: RSILoopConfig, agent_plan: Any) -> dict[str, Any]:
+    """The run's Agent as one non-interactive call, for ``rsi-agent`` in a Judge.
+
+    The same CLI flags, environment (key, base URL, proxy, model) and
+    reasoning effort as the Work Agent. ``command`` is ``None`` when the Agent
+    has no one-shot command; ``unsupported`` then says why.
+    """
+
+    validate_agent_reasoning_effort(agent_plan.name, agent_plan.reasoning_effort)
+    agent = create_agent(agent_plan.name, config)
+    model = agent_plan.model or config.agent_model or agent.default_model
+    result: dict[str, Any] = {
+        "agent": agent.name,
+        "model": model,
+        "reasoning_effort": agent_plan.reasoning_effort,
+        "environment": rsi_loop_agent_environment(config, agent, model),
+        "command": None,
+        "schema_option": None,
+        "output": None,
+        "unsupported": None,
+    }
+    try:
+        oneshot = agent.format_oneshot_cmd(
+            model=model, internet=agent_plan.network.mode == "public"
+        )
+    except ValueError as error:
+        raise SetupError(str(error)) from error
+    if oneshot is None:
+        result["unsupported"] = (
+            f"the run's Agent {agent.name!r} cannot run one-shot in a Judge"
+        )
+        return result
+    result["command"] = _apply_reasoning_effort(
+        agent, oneshot.command, agent_plan.reasoning_effort
+    )
+    result["schema_option"] = oneshot.schema_option
+    result["output"] = {
+        "mode": oneshot.output,
+        "fields": list(oneshot.output_fields),
+        "error_field": oneshot.error_field,
+    }
+    return result
 
 
 class _ControlBinding:
@@ -265,25 +330,32 @@ class RSILoopAgentAdapter:
         plan = request.run_plan
         agent_plan = plan.task.agent
         validate_agent_reasoning_effort(agent_plan.name, agent_plan.reasoning_effort)
-        agent = create_agent(agent_plan.name, self._config)
+        agent = validate_agent_config(
+            self._config, agent_plan.name, model=agent_plan.model
+        )
         model = agent_plan.model or self._config.agent_model or agent.default_model
         prompt = self._prompt(
             plan.task.instruction,
             plan.gpu_plan,
             request.max_submissions,
+            public_tests=plan.task.verifier.visibility == "public",
         )
         request.prompt_path.parent.mkdir(parents=True, exist_ok=True)
         request.prompt_path.write_text(prompt)
-        command = agent.format_run_cmd(
-            str(_CONTAINER_PROMPT_PATH),
-            model=model,
-            cwd=str(plan.workdir),
-            internet=agent_plan.network.mode == "public",
-            resume=request.resume,
-        )
-        command = _apply_reasoning_effort(
-            agent.name, command, agent_plan.reasoning_effort
-        )
+        try:
+            command = agent.format_run_cmd(
+                str(_CONTAINER_PROMPT_PATH),
+                model=model,
+                cwd=str(plan.workdir),
+                internet=agent_plan.network.mode == "public",
+                resume=request.resume,
+                continuation=STOP_HOOK_REASON if agent_plan.install_stop_hook else None,
+            )
+        except ValueError as error:
+            # A backstop: production checks the model before any image or
+            # container work, but a refusal here must still be a setup error.
+            raise SetupError(str(error)) from error
+        command = _apply_reasoning_effort(agent, command, agent_plan.reasoning_effort)
         return PreparedAgent(
             agent_name=agent.name,
             command=("/bin/bash", "-lc", command),
@@ -403,6 +475,8 @@ class RSILoopAgentAdapter:
         instruction: str,
         gpu_plan: RunGPUPlan,
         max_submissions: int | None,
+        *,
+        public_tests: bool = False,
     ) -> str:
         judge_gpu_count = len(gpu_plan.judge.devices)
         submission_guidance = (
@@ -426,6 +500,12 @@ class RSILoopAgentAdapter:
                 "Every Work GPU process must exit before rsi-submit. A rejected "
                 "preflight does not consume a submission."
             )
+        tests_guidance = (
+            "\nThe Judge's tests are public: `/tests` holds, read-only, exactly the\n"
+            "files the Judge runs as `/tests/test.sh`.\n"
+            if public_tests
+            else ""
+        )
         return f"""{instruction.rstrip()}
 
 ## Evaluation
@@ -437,7 +517,7 @@ receive feedback while improving the same workspace.
 Each submission stores complete Judge stdout and stderr in
 `/run/rsi-harness/feedback/agent-N.log`, where N is the submission number.
 {submission_guidance}
-
+{tests_guidance}
 {gpu_guidance}
 """
 
@@ -446,6 +526,8 @@ __all__ = [
     "RSILoopAgentAdapter",
     "RSILoopBackendBridge",
     "rsi_loop_agent_environment",
+    "rsi_loop_oneshot",
     "rsi_loop_runtime_secret_values",
+    "validate_agent_config",
     "validate_agent_reasoning_effort",
 ]

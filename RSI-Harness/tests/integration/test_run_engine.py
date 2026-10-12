@@ -3075,6 +3075,9 @@ def test_real_docker_split_workdir_fake_agent_submits_two_fresh_judges(
                     "set -eu\n"
                     "printf %s wrong > answer.txt\n"
                     "rsi-submit\n"
+                    # rsi-submit prints only the round's summary; the Judge's
+                    # full output is in the read-only feedback directory.
+                    "cat /run/rsi-harness/feedback/agent-1.log\n"
                     "printf %s 42 > answer.txt\n"
                     "rsi-submit\n"
                     "printf '\\nscripted fake Agent fixed after feedback\\n'\n",

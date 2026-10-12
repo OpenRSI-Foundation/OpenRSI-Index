@@ -17,6 +17,7 @@ from rsi_harness.models import (
     RunPaths,
 )
 from rsi_harness.task.compiler import HarborTaskCompiler
+from rsi_harness.task.digest import hash_tree
 from tests.factories import DEFAULT_TASK_TOML, write_harbor_task
 
 
@@ -284,7 +285,27 @@ def test_verifier_gpu_count_rejects_explicit_null_metadata_tables(tmp_path, meta
         ),
         (
             "[metadata.rsi_harness.verifier]\nextra = 1",
-            "unknown verifier GPU metadata",
+            "unknown verifier metadata",
+        ),
+        (
+            '[metadata.rsi_harness.verifier]\nvisibility = "Public"',
+            "metadata.rsi_harness.verifier.visibility",
+        ),
+        (
+            "[metadata.rsi_harness.verifier]\nvisibility = true",
+            "metadata.rsi_harness.verifier.visibility",
+        ),
+        (
+            '[metadata.rsi_harness.verifier]\nvisibility = ["public"]',
+            "metadata.rsi_harness.verifier.visibility",
+        ),
+        (
+            "[metadata.rsi_harness.verifier]\nmodel_access = 1",
+            "metadata.rsi_harness.verifier.model_access",
+        ),
+        (
+            '[metadata.rsi_harness.verifier]\nmodel_access = "true"',
+            "metadata.rsi_harness.verifier.model_access",
         ),
     ],
 )
@@ -304,6 +325,45 @@ def test_compile_rejects_malformed_verifier_gpu_metadata(tmp_path, metadata, mes
         HarborTaskCompiler().compile(task, CompileOptions())
 
     assert "secret" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ("", "hidden"),
+        ("\n[metadata.rsi_harness.verifier]\ngpus = 1\n", "hidden"),
+        ('\n[metadata.rsi_harness.verifier]\nvisibility = "hidden"\n', "hidden"),
+        ('\n[metadata.rsi_harness.verifier]\nvisibility = "public"\n', "public"),
+    ],
+)
+def test_compiles_verifier_visibility_with_hidden_default(tmp_path, metadata, expected):
+    """Only an explicit public declaration exposes the tests to Work."""
+    task = write_harbor_task(tmp_path, task_toml=DEFAULT_TASK_TOML + metadata)
+
+    definition = HarborTaskCompiler().compile(task, CompileOptions())
+
+    assert definition.verifier.visibility == expected
+    assert definition.tests_digest == hash_tree(task / "tests")
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ("", False),
+        ('\n[metadata.rsi_harness.verifier]\nvisibility = "public"\n', False),
+        ("\n[metadata.rsi_harness.verifier]\nmodel_access = false\n", False),
+        ("\n[metadata.rsi_harness.verifier]\nmodel_access = true\n", True),
+    ],
+)
+def test_compiles_verifier_model_access_only_when_declared(
+    tmp_path, metadata, expected
+):
+    """The Judge reaches the Agent's model only on an explicit opt-in."""
+    task = write_harbor_task(tmp_path, task_toml=DEFAULT_TASK_TOML + metadata)
+
+    definition = HarborTaskCompiler().compile(task, CompileOptions())
+
+    assert definition.verifier.model_access is expected
 
 
 def test_compile_defaults_undeclared_gpu_shared_memory_to_one_gibibyte(tmp_path):

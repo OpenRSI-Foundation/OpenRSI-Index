@@ -303,6 +303,7 @@ def _assert_judge_spec(
     captured: dict[str, object],
     *,
     expected_log_dir: Path,
+    expected_trajectory_dir: Path,
     expected_image_id: str,
     firewall_available: bool,
 ) -> None:
@@ -331,7 +332,10 @@ def _assert_judge_spec(
     assert [
         (mount["Type"], mount["Source"], mount["Destination"], mount["RW"])
         for mount in mounts
-    ] == [("bind", str(expected_log_dir), "/logs/verifier", True)]
+    ] == [
+        ("bind", str(expected_log_dir), "/logs/verifier", True),
+        ("bind", str(expected_trajectory_dir), "/logs/agent", False),
+    ]
 
 
 def _remove_container(container: Any | None) -> None:
@@ -726,6 +730,9 @@ def test_real_two_round_judge_gpu_inherits_complete_work_rootfs_and_discards_wri
             _assert_judge_spec(
                 observer.judges[round_id],
                 expected_log_dir=(plan.paths.logs / "verifier" / round_id).resolve(),
+                expected_trajectory_dir=(
+                    artifacts.root / "judge-trajectory" / round_id
+                ).resolve(),
                 expected_image_id=str(acquired_values["snapshot_image_id"]),
                 firewall_available=firewall_available,
             )
