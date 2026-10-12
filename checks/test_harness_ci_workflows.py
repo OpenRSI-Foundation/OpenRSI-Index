@@ -16,13 +16,6 @@ def _load(path):
     return yaml.load(path.read_text(), Loader=yaml.BaseLoader)
 
 
-def _registered_agents():
-    factory = (HARNESS / "src/rsi_loop/harness/agent/factory.py").read_text()
-    registry = factory[factory.index("_REGISTRY") :]
-    registry = registry[: registry.index("}")]
-    return sorted(re.findall(r'^\s*"([a-z0-9-]+)":', registry, re.MULTILINE))
-
-
 @pytest.mark.parametrize("path", (AGENT_TESTS, ROOT_CHECKS))
 def test_harness_docker_workflows_run_on_relevant_prs_without_secrets(path):
     text = path.read_text()
@@ -52,17 +45,24 @@ def test_a_skipped_docker_check_fails_its_job(path):
             assert "! grep -Eq '[0-9]+ skipped'" in run
 
 
-def test_every_registered_agent_has_its_own_docker_job():
+def test_every_selected_agent_gets_its_own_docker_job():
     workflow = _load(AGENT_TESTS)
-    matrix = workflow["jobs"]["agent"]["strategy"]["matrix"]["agent"]
+    jobs = workflow["jobs"]
     paths = workflow["on"]["pull_request"]["paths"]
 
-    assert sorted(matrix) == _registered_agents()
+    assert jobs["agent"]["needs"] == "plan"
+    assert jobs["agent"]["strategy"]["matrix"]["agent"] == (
+        "${{ fromJSON(needs.plan.outputs.agents) }}"
+    )
+    assert jobs["agent"]["if"] == "needs.plan.outputs.agents != '[]'"
+    assert jobs["model-access"]["if"] == "needs.plan.outputs.model_access == 'true'"
+    select = next(step for step in jobs["plan"]["steps"] if step.get("id") == "select")
+    assert "checks/harness_agent_selection.py" in select["run"]
+    assert "checks/harness_agent_selection.py" in paths
     assert "RSI-Harness/src/rsi_loop/harness/agent/**" in paths
-    assert (HARNESS / "src/rsi_loop/harness/agent/versions.py").exists()
     run = next(
         step["run"]
-        for step in workflow["jobs"]["agent"]["steps"]
+        for step in jobs["agent"]["steps"]
         if "pytest" in step.get("run", "")
     )
     assert '-k "[${{ matrix.agent }}]"' in run
