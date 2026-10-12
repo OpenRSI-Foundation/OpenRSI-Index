@@ -9,12 +9,20 @@ WORKFLOW = Path(__file__).resolve().parents[1] / ".github/workflows/harness-publ
 REQUIRED = ("pyproject.toml", "uv.lock", "logs/runs/.gitkeep", "src/rsi_harness/task/compiler.py")
 
 
-def test_publication_check_runs_on_every_pr_without_private_secrets():
+def test_publication_check_runs_on_harness_changes_without_private_secrets():
     text = WORKFLOW.read_text()
     workflow = yaml.load(text, Loader=yaml.BaseLoader)
 
-    assert "pull_request" in workflow["on"]
-    assert "paths" not in (workflow["on"]["pull_request"] or {})
+    # Every PR and every push to main that can change its result: the Harness,
+    # this workflow or its test.
+    watched = [
+        "RSI-Harness/**",
+        ".github/workflows/harness-publication-checks.yml",
+        "checks/test_harness_publication_workflow.py",
+    ]
+    assert workflow["on"]["pull_request"]["paths"] == watched
+    assert workflow["on"]["push"]["branches"] == ["main"]
+    assert workflow["on"]["push"]["paths"] == watched
     assert "pull_request_target" not in workflow["on"]
     assert workflow["permissions"] == {"contents": "read"}
     assert "secrets." not in text
