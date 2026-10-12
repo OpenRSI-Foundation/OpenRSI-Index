@@ -221,19 +221,34 @@ def parse(path: Path) -> Trajectory:
                         "tools": event.get("tools"),
                         "permissionMode": event.get("permissionMode"),
                         "claude_code_version": event.get("claude_code_version"),
+                        "agent": event.get("agent"),
+                        "agent_version": event.get("agent_version"),
                     }
                     # Emit a synthetic system exchange so it shows at the top
                     # of the trajectory. Summary is human-readable; full init
                     # dict is stashed on the exchange for template rendering.
-                    summary_lines = [
-                        f"model: {event.get('model', '?')}",
-                        f"claude_code: {event.get('claude_code_version', '?')}",
+                    summary_lines = [f"model: {event.get('model', '?')}"]
+                    # Other coding agents (driven CLIs, pi) name themselves
+                    # in the same init event instead of a Claude Code version.
+                    agent = event.get("agent")
+                    if agent:
+                        version = event.get("agent_version")
+                        summary_lines.append(
+                            f"agent: {agent} {version}" if version else f"agent: {agent}"
+                        )
+                    else:
+                        summary_lines.append(
+                            f"claude_code: {event.get('claude_code_version', '?')}"
+                        )
+                    summary_lines += [
                         f"permission: {event.get('permissionMode', '?')}",
                         f"cwd: {event.get('cwd', '?')}",
                     ]
                     tools = event.get("tools") or []
                     if tools:
-                        summary_lines.append(f"tools ({len(tools)}): {', '.join(tools)}")
+                        summary_lines.append(
+                            f"tools ({len(tools)}): {', '.join(map(str, tools))}"
+                        )
                     sid = event.get("session_id")
                     if sid:
                         summary_lines.append(f"session: {sid}")

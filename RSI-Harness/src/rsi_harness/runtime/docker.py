@@ -26,7 +26,18 @@ from rsi_harness.errors import (
     InfrastructureError,
     SetupError,
 )
+from rsi_harness.judge_agent import (
+    JUDGE_AGENT_CODE_TARGET,
+    JUDGE_AGENT_DIRECTORY,
+    JUDGE_AGENT_LAUNCH_SPEC,
+    JUDGE_AGENT_LAUNCHER,
+    JUDGE_AGENT_LAUNCHER_TARGET,
+    JUDGE_AGENT_PRIVATE,
+    JUDGE_AGENT_STATE_ROOT,
+    JUDGE_AGENT_TMPFS,
+)
 from rsi_harness.models import (
+    JUDGE_TRAJECTORY_ROOT,
     WORK_FEEDBACK_ROOT,
     AgentRunResult,
     ContainerMount,
@@ -52,11 +63,15 @@ from rsi_harness.runtime.network import (
     managed_bridge_interface,
 )
 from rsi_harness.runtime.redaction import redact_exact_values, redact_text
+from rsi_harness.runtime.trajectory import TRAJECTORY_DIRECTORY
 from rsi_harness.runtime.workdir_volume import DockerWorkdirVolumeBackend
 
 _STAGING_TARGET = PurePosixPath("/run/rsi-harness/staging")
 _DOCKER_SOCKET_TARGETS = frozenset(
     {PurePosixPath("/var/run/docker.sock"), PurePosixPath("/run/docker.sock")}
+)
+_SAFE_AUTH_OWNER = re.compile(
+    r"[A-Za-z0-9_][A-Za-z0-9_.-]*(?::[A-Za-z0-9_][A-Za-z0-9_.-]*)?"
 )
 _MAX_INJECTED_TEST_ENTRIES = 100_000
 _MAX_INJECTED_TEST_REGULAR_BYTES = 1_073_741_824
@@ -381,9 +396,17 @@ class DockerContainerRuntime:
         workdir_volume_references: Sequence[ContainerRef] = (),
         work_feedback_dir: Path | None = None,
         sandbox_socket_dir: Path | None = None,
+        work_public_tests: bool = False,
+        judge_model_access: bool = False,
     ) -> None:
         if role not in {"work", "judge", "helper"}:
             raise ValueError(f"unsupported container role {role!r}")
+        if work_public_tests and role != "work":
+            raise SetupError("public task tests mounts are limited to Work")
+        if judge_model_access and role != "judge":
+            raise SetupError("Judge model access is limited to a Judge")
+        self._work_public_tests = work_public_tests
+        self._judge_model_access = judge_model_access
         self._client = client
         self._run_id = run_id
         self._task_id = task_id
@@ -457,6 +480,9 @@ class DockerContainerRuntime:
                 ) from error
         self._container_networks: dict[str, str] = {}
         self._policy_leases: dict[str, NetworkPolicyLease] = {}
+        # Tests staging root for a read-only-rootfs container: its writable
+        # /logs/verifier bind, or None when it has none.
+        self._test_archive_staging_roots: dict[str, PurePosixPath | None] = {}
 
     @property
     def recovery_labels(self) -> dict[str, str]:
@@ -479,6 +505,15 @@ class DockerContainerRuntime:
                     or SANDBOX_MOUNT_TARGET in target.parents
                 ):
                     raise SetupError("parent mount overlaps sandbox socket authority")
+        for tmpfs in spec.tmpfs:
+            if tmpfs.target in (JUDGE_AGENT_STATE_ROOT, JUDGE_AGENT_PRIVATE) and (
+                self._role != "judge"
+                or not self._judge_model_access
+                or tmpfs not in JUDGE_AGENT_TMPFS
+            ):
+                raise SetupError(
+                    "rsi-agent state is limited to a model-access Judge's exact tmpfs"
+                )
         if len(spec.volume_mounts) > 1:
             raise SetupError("exactly one managed WORKDIR volume mount is allowed")
         for volume_mount in spec.volume_mounts:
@@ -531,10 +566,15 @@ class DockerContainerRuntime:
         }
         if spec.shm_size is not None:
             kwargs["shm_size"] = spec.shm_size
+        if spec.read_only_rootfs:
+            kwargs["read_only"] = True
+            kwargs["security_opt"] = ["no-new-privileges:true"]
         if spec.extra_hosts:
             kwargs["extra_hosts"] = [
                 f"{hostname}:{address}" for hostname, address in spec.extra_hosts
             ]
+        if spec.dns:
+            kwargs["dns"] = list(spec.dns)
         if spec.cpus is not None:
             kwargs["nano_cpus"] = int(spec.cpus * 1_000_000_000)
         if spec.memory_mb is not None:
@@ -558,6 +598,16 @@ class DockerContainerRuntime:
                 f"failed to create {self._role.title()} container: {error}"
             ) from error
         ref = ContainerRef(container_id=container.id, role=self._role)
+        if spec.read_only_rootfs:
+            self._test_archive_staging_roots[ref.container_id] = next(
+                (
+                    mount.target
+                    for mount in mounts
+                    if mount.target == PurePosixPath("/logs/verifier")
+                    and not mount.read_only
+                ),
+                None,
+            )
         if self._network is not None:
             self._container_networks[ref.container_id] = self._network.network_id
         return ref
@@ -649,6 +699,46 @@ class DockerContainerRuntime:
         if not exact:
             raise InfrastructureError(
                 "recovery_required: Work feedback mount attestation differs "
+                "from exact read-only authority"
+            )
+
+    def attest_work_tests_mount(self, container: ContainerRef) -> None:
+        """Attest Work's exact read-only bind of the public task tests."""
+        if (
+            self._role != "work"
+            or container.role != "work"
+            or not self._work_public_tests
+        ):
+            raise InfrastructureError(
+                "recovery_required: Work tests mount attestation authority "
+                "is unavailable"
+            )
+        try:
+            source = (self._task_source_dir / "tests").resolve(strict=True)
+            docker_container = self._client.containers.get(container.container_id)
+            docker_container.reload()
+            mounts = docker_container.attrs["Mounts"]
+            if not isinstance(mounts, (list, tuple)):
+                raise TypeError("Docker Mounts is not a sequence")
+            at_target = [
+                candidate
+                for candidate in mounts
+                if isinstance(candidate, Mapping)
+                and candidate.get("Destination") == "/tests"
+            ]
+            exact = (
+                len(at_target) == 1
+                and at_target[0].get("Type") == "bind"
+                and at_target[0].get("Source") == str(source)
+                and at_target[0].get("RW") is False
+            )
+        except Exception as error:
+            raise InfrastructureError(
+                f"recovery_required: Work tests mount attestation is unproven: {error}"
+            ) from error
+        if not exact:
+            raise InfrastructureError(
+                "recovery_required: Work tests mount attestation differs "
                 "from exact read-only authority"
             )
 
@@ -1222,12 +1312,31 @@ class DockerContainerRuntime:
             staged.unlink(missing_ok=True)
 
     def inject_agent_auth(
-        self, container: ContainerRef, material: AgentAuthMaterial
+        self,
+        container: ContainerRef,
+        material: AgentAuthMaterial,
+        *,
+        owner: str | None = None,
     ) -> None:
-        """Inject validated Agent credentials into exact Work-only tmpfs mounts."""
+        """Inject validated Agent credentials into exact private tmpfs mounts.
 
-        if self._role != "work" or container.role != "work":
-            raise SetupError("local Agent authentication is limited to Work")
+        Work always receives them. A Judge receives them only when its task
+        declared model access; ``owner`` then hands them to a non-root Judge
+        user, which alone can read them.
+        """
+
+        allowed = self._role == "work" or (
+            self._role == "judge" and self._judge_model_access
+        )
+        if not allowed or container.role != self._role:
+            raise SetupError(
+                "local Agent authentication is limited to Work and a model-access Judge"
+            )
+        if owner is not None and (
+            self._role != "judge" or not _SAFE_AUTH_OWNER.fullmatch(owner)
+        ):
+            raise SetupError("Agent authentication owner is invalid")
+        label = self._role.title()
         docker_container = self._container(container)
         try:
             docker_container.reload()
@@ -1236,13 +1345,13 @@ class DockerContainerRuntime:
             mounts = attrs.get("Mounts") or ()
         except (APIError, AttributeError, TypeError) as error:
             raise InfrastructureError(
-                "failed to inspect Work Agent authentication tmpfs"
+                f"failed to inspect {label} Agent authentication tmpfs"
             ) from error
         for auth_mount in material.mounts:
             expected_target = str(auth_mount.tmpfs.target)
             if host_tmpfs.get(expected_target) != auth_mount.tmpfs.options:
                 raise InfrastructureError(
-                    "Work Agent authentication tmpfs is not installed exactly"
+                    f"{label} Agent authentication tmpfs is not installed exactly"
                 )
             at_target = [
                 mount
@@ -1289,7 +1398,7 @@ class DockerContainerRuntime:
                 )
             if not active_mount_is_exact:
                 raise InfrastructureError(
-                    "Work Agent authentication tmpfs attestation failed"
+                    f"{label} Agent authentication tmpfs attestation failed"
                 )
 
             hardened = self.exec(
@@ -1300,7 +1409,7 @@ class DockerContainerRuntime:
             )
             if hardened.exit_code != 0:
                 raise InfrastructureError(
-                    "failed to secure Work Agent authentication tmpfs"
+                    f"failed to secure {label} Agent authentication tmpfs"
                 )
             for auth_file in auth_mount.files:
                 self._stream_agent_auth_file(
@@ -1309,23 +1418,120 @@ class DockerContainerRuntime:
                     content=auth_file.content,
                     mode=auth_file.mode,
                 )
-            attested = self.exec(
+            if owner is not None:
+                owned = self.exec(
+                    container,
+                    ("/bin/chown", "-R", "--", owner, expected_target),
+                    timeout_seconds=10.0,
+                    user="root",
+                )
+                if owned.exit_code != 0:
+                    raise InfrastructureError(
+                        "failed to hand Judge Agent authentication to its user"
+                    )
+                attested = self.exec(
+                    container,
+                    (
+                        "/bin/sh",
+                        "-c",
+                        'case "$2" in *[!0-9]*) uid="$(/usr/bin/id -u -- "$2")" '
+                        '|| exit 1 ;; *) uid="$2" ;; esac; '
+                        'mode="$(/usr/bin/stat -c %a:%u -- "$1")" && '
+                        '[ "$mode" = "700:$uid" ]',
+                        "rsi-agent-auth-directory",
+                        expected_target,
+                        owner.split(":", 1)[0],
+                    ),
+                    timeout_seconds=10.0,
+                    user="root",
+                )
+            else:
+                attested = self.exec(
+                    container,
+                    (
+                        "/bin/sh",
+                        "-c",
+                        'mode="$(/usr/bin/stat -c %a:%u:%g -- "$1")" && '
+                        '[ "$mode" = "700:0:0" ]',
+                        "rsi-agent-auth-directory",
+                        expected_target,
+                    ),
+                    timeout_seconds=10.0,
+                    user="root",
+                )
+            if attested.exit_code != 0:
+                raise InfrastructureError(
+                    f"{label} Agent authentication tmpfs permissions differ"
+                )
+
+    def inject_judge_agent(
+        self,
+        container: ContainerRef,
+        launch: bytes,
+        *,
+        owner: str | None = None,
+    ) -> None:
+        """Stream rsi-agent's launch spec, from memory, into its private tmpfs.
+
+        Only a model-access Judge receives it. ``owner`` hands the state to a
+        non-root Judge user; a root Judge keeps it root-only.
+        """
+
+        if (
+            self._role != "judge"
+            or not self._judge_model_access
+            or container.role != "judge"
+        ):
+            raise SetupError("rsi-agent is limited to a model-access Judge")
+        if owner is not None and not _SAFE_AUTH_OWNER.fullmatch(owner):
+            raise SetupError("rsi-agent owner is invalid")
+        if not isinstance(launch, bytes) or not launch:
+            raise SetupError("rsi-agent launch spec is empty")
+        docker_container = self._container(container)
+        try:
+            docker_container.reload()
+            host_tmpfs = (docker_container.attrs.get("HostConfig") or {}).get(
+                "Tmpfs"
+            ) or {}
+        except (APIError, AttributeError, TypeError) as error:
+            raise InfrastructureError(
+                "failed to inspect rsi-agent state tmpfs"
+            ) from error
+        for tmpfs in JUDGE_AGENT_TMPFS:
+            if host_tmpfs.get(str(tmpfs.target)) != tmpfs.options:
+                raise InfrastructureError(
+                    "rsi-agent state tmpfs is not installed exactly"
+                )
+        state, private = str(JUDGE_AGENT_STATE_ROOT), str(JUDGE_AGENT_PRIVATE)
+        prepared = self.exec(
+            container,
+            (
+                "/bin/sh",
+                "-c",
+                '/bin/chmod 0711 -- "$1" && /bin/chmod 0700 -- "$2" && '
+                '[ "$(/usr/bin/stat -c %a:%u -- "$1")" = 711:0 ] && '
+                '[ "$(/usr/bin/stat -c %a:%u -- "$2")" = 700:0 ]',
+                "rsi-agent-state",
+                state,
+                private,
+            ),
+            timeout_seconds=10.0,
+            user="root",
+        )
+        if prepared.exit_code != 0:
+            raise InfrastructureError("failed to secure rsi-agent state tmpfs")
+        self._stream_agent_auth_file(
+            container, target=JUDGE_AGENT_LAUNCH_SPEC, content=launch, mode=0o600
+        )
+        if owner is not None:
+            owned = self.exec(
                 container,
-                (
-                    "/bin/sh",
-                    "-c",
-                    'mode="$(/usr/bin/stat -c %a:%u:%g -- "$1")" && '
-                    '[ "$mode" = "700:0:0" ]',
-                    "rsi-agent-auth-directory",
-                    expected_target,
-                ),
+                ("/bin/chown", "-R", "--", owner, state),
                 timeout_seconds=10.0,
                 user="root",
             )
-            if attested.exit_code != 0:
-                raise InfrastructureError(
-                    "Work Agent authentication tmpfs permissions differ"
-                )
+            if owned.exit_code != 0:
+                raise InfrastructureError("failed to hand rsi-agent state to the Judge")
 
     def _stream_agent_auth_file(
         self,
@@ -1377,13 +1583,13 @@ class DockerContainerRuntime:
             inspection = self._client.api.exec_inspect(exec_id)
             if inspection.get("Running") is True or inspection.get("ExitCode") != 0:
                 raise InfrastructureError(
-                    "local Agent authentication write failed in Work"
+                    f"local Agent authentication write failed in {self._role.title()}"
                 )
         except InfrastructureError:
             raise
         except (APIError, KeyError, OSError, TypeError) as error:
             raise InfrastructureError(
-                "failed to stream local Agent authentication into Work"
+                f"failed to stream local Agent authentication into {self._role.title()}"
             ) from error
         finally:
             if response is not None:
@@ -1432,7 +1638,18 @@ class DockerContainerRuntime:
         target: PurePosixPath,
         plan: _TestArchivePlan,
     ) -> None:
-        staging = PurePosixPath(f"/tmp/.rsi-harness-tests-{uuid.uuid4().hex}")
+        # Docker's archive API cannot write into a read-only rootfs, nor see a
+        # directory created by exec in a live tmpfs, so a read-only-rootfs
+        # container stages under its writable /logs/verifier bind instead.
+        staging_root = self._test_archive_staging_roots.get(
+            container.container_id, PurePosixPath("/tmp")
+        )
+        if staging_root is None:
+            raise InfrastructureError(
+                "read-only rootfs tests injection requires a writable "
+                "/logs/verifier bind"
+            )
+        staging = staging_root / f".rsi-harness-tests-{uuid.uuid4().hex}"
         prepared = self.exec(
             container,
             ("/usr/bin/install", "-d", "-m", "0700", str(staging)),
@@ -1442,6 +1659,37 @@ class DockerContainerRuntime:
             raise InfrastructureError(
                 f"failed to prepare private tests staging: {prepared.output}"
             )
+        upload_error: BaseException | None = None
+        try:
+            self._upload_test_archive(container, target, plan, staging)
+        except BaseException as error:
+            upload_error = error
+            raise
+        finally:
+            try:
+                removed = self.exec(
+                    container,
+                    ("/bin/rm", "-rf", "--", str(staging)),
+                    user="root",
+                )
+                if removed.exit_code != 0:
+                    raise InfrastructureError(
+                        f"failed to remove private tests staging: {removed.output}"
+                    )
+            except Exception as cleanup_error:
+                if upload_error is None:
+                    raise
+                upload_error.add_note(
+                    f"private tests staging cleanup also failed: {cleanup_error}"
+                )
+
+    def _upload_test_archive(
+        self,
+        container: ContainerRef,
+        target: PurePosixPath,
+        plan: _TestArchivePlan,
+        staging: PurePosixPath,
+    ) -> None:
         reader_descriptor, writer_descriptor = os.pipe()
         reader = _ChunkedReadStream(os.fdopen(reader_descriptor, "rb", buffering=0))
         writer = os.fdopen(writer_descriptor, "wb", buffering=0)
@@ -1514,21 +1762,25 @@ class DockerContainerRuntime:
             )
         copied = self.exec(
             container,
-            ("/bin/cp", "-a", f"{staging}/.", str(target)),
+            (
+                "/bin/sh",
+                "-c",
+                # cp -a would also copy the private staging mode onto the
+                # existing target; keep the target's own mode, even when the
+                # copy partially fails.
+                'target_mode=$(/usr/bin/stat -c %a -- "$2") || exit; '
+                '/bin/cp -a -- "$1/." "$2"; copy_status=$?; '
+                '/bin/chmod -- "$target_mode" "$2" || exit; '
+                'exit "$copy_status"',
+                "rsi-harness-copy-tests",
+                str(staging),
+                str(target),
+            ),
             user="root",
         )
         if copied.exit_code != 0:
             raise InfrastructureError(
                 f"failed to populate private tests tmpfs: {copied.output}"
-            )
-        removed = self.exec(
-            container,
-            ("/bin/rm", "-rf", "--", str(staging)),
-            user="root",
-        )
-        if removed.exit_code != 0:
-            raise InfrastructureError(
-                f"failed to remove private tests staging: {removed.output}"
             )
 
     def _collect_test_archive_entries(self, source: Path) -> _TestArchivePlan:
@@ -1997,13 +2249,17 @@ class DockerContainerRuntime:
             raise SetupError("Docker socket mounts are forbidden")
         task = self._task_source_dir
         task_tests = task / "tests"
-        exact_judge_tests = (
-            self._role == "judge"
-            and mount.target == PurePosixPath("/tests")
+        exact_tests = (
+            mount.target == PurePosixPath("/tests")
             and mount.read_only
             and task_tests.is_dir()
             and not task_tests.is_symlink()
             and source == task_tests.resolve(strict=True)
+        )
+        exact_judge_tests = self._role == "judge" and exact_tests
+        # Public visibility: Work reads the same tests the Judge runs.
+        exact_work_tests = (
+            self._role == "work" and self._work_public_tests and exact_tests
         )
         exact_work_feedback = (
             self._role == "work"
@@ -2028,11 +2284,49 @@ class DockerContainerRuntime:
             raise SetupError(
                 "Work feedback mount differs from exact read-only authority"
             )
+        # The round's Agent trajectory: a read-only, Engine-owned copy.
+        exact_judge_trajectory = (
+            self._role == "judge"
+            and mount.target == JUDGE_TRAJECTORY_ROOT
+            and mount.read_only
+            and source.parent.name == TRAJECTORY_DIRECTORY
+        )
+        if mount.target == JUDGE_TRAJECTORY_ROOT and not exact_judge_trajectory:
+            raise SetupError(
+                "Judge trajectory mount differs from exact read-only authority"
+            )
+        # rsi-agent: the Engine's read-only copy for this run, model access only.
+        exact_judge_agent = (
+            self._role == "judge"
+            and self._judge_model_access
+            and mount.read_only
+            and (
+                (
+                    mount.target == JUDGE_AGENT_CODE_TARGET
+                    and source.name == JUDGE_AGENT_DIRECTORY
+                    and source.is_dir()
+                )
+                or (
+                    mount.target == JUDGE_AGENT_LAUNCHER_TARGET
+                    and source.name == JUDGE_AGENT_LAUNCHER
+                    and source.parent.name == JUDGE_AGENT_DIRECTORY
+                    and source.is_file()
+                )
+            )
+        )
+        if (
+            mount.target in (JUDGE_AGENT_CODE_TARGET, JUDGE_AGENT_LAUNCHER_TARGET)
+            and not exact_judge_agent
+        ):
+            raise SetupError(
+                "rsi-agent mounts are limited to a model-access Judge's exact "
+                "read-only copy"
+            )
         if (
             source == task or task in source.parents or source in task.parents
-        ) and not exact_judge_tests:
+        ) and not (exact_judge_tests or exact_work_tests):
             raise SetupError("task source or its ancestor cannot be mounted")
-        if not exact_judge_tests:
+        if not (exact_judge_tests or exact_work_tests):
             self._require_engine_owned(source)
         allowed_targets = {_STAGING_TARGET}
         if workdir is not None:
@@ -2043,6 +2337,12 @@ class DockerContainerRuntime:
             )
         if exact_work_feedback:
             allowed_targets.add(WORK_FEEDBACK_ROOT)
+        if exact_judge_trajectory:
+            allowed_targets.add(JUDGE_TRAJECTORY_ROOT)
+        if exact_judge_agent:
+            allowed_targets.add(mount.target)
+        if exact_work_tests:
+            allowed_targets.add(PurePosixPath("/tests"))
         if exact_sandbox:
             allowed_targets.add(SANDBOX_MOUNT_TARGET)
         if mount.target not in allowed_targets:

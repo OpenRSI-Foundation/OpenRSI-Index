@@ -1,0 +1,51 @@
+schema_version = "1.4"
+
+[task]
+name = "rsi/science-ising3d"
+version = "1.0.0"
+description = "Derive the zero-field 3D Ising thermodynamics (pressure, energy, heat capacity, Kc and leading critical laws) with controlled errors, judged by 26 public scientific rubrics."
+
+[metadata]
+author_name = "Yichen Feng"
+author_email = "yfeng42@uw.edu"
+difficulty_explanation = "The simple-cubic Ising model has no known exact solution; the target asks for a controlled construction over all finite couplings, its transition point and both-sided leading critical laws, which is an open research problem."
+verification_explanation = "Recompute the frozen candidate offline (the optional probe.py and model.py pressure routes) -> audit the round's trajectory -> review 26 public rubrics in separate contexts -> reward = number of rubrics this candidate passes."
+category = "Science"
+subcategory = "Physics"
+tags = ["science", "public-rubrics", "ising", "statistical-mechanics"]
+expert_time_estimate_hours = 2000
+
+# Work sees the Judge and every rubric at /tests, read-only, and every Judge
+# runs from the clean task image; the Judge calls the run's Agent only through
+# rsi-agent, which reaches the Agent's pinned endpoints only.
+[metadata.rsi_harness.verifier]
+gpus = 0
+visibility = "public"
+model_access = true
+
+# The Judge shares Work's resources: one recompute route at a time, then the
+# audit, then four rubric reviews (rsi-agent calls) at once.
+[environment]
+os = "linux"
+cpus = 4
+memory_mb = 8192
+storage_mb = 8192
+build_timeout_sec = 600
+workdir = "/workspace"
+gpus = 0
+network_mode = "no-network"
+
+[environment.env]
+PYTHONDONTWRITEBYTECODE = "1"
+OMP_NUM_THREADS = "1"
+
+[agent]
+timeout_sec = 21600
+network_mode = "public"
+
+# Two 60 s routes, a 1200 s audit and a 1800 s review deadline (tests/judge.py)
+# sum to 3120 s; the rest is slack for freeze, validation and output.
+[verifier]
+timeout_sec = 3600
+network_mode = "no-network"
+environment_mode = "shared"

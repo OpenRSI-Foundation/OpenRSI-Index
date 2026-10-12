@@ -21,6 +21,11 @@ from rsi_loop.harness.config import RSILoopConfig
 
 from rsi_loop.harness.agent.claude_code import ClaudeCodeAgent
 from rsi_loop.harness.agent.codex import CodexAgent
+from rsi_loop.harness.agent.kimi_code import KimiCodeAgent
+from rsi_loop.harness.agent.opencode import OpenCodeAgent
+from rsi_loop.harness.agent.pi import PiAgent
+from rsi_loop.harness.agent.qwen_code import QwenCodeAgent
+from rsi_loop.harness.agent.zcode import ZCodeAgent
 
 # ---------------------------------------------------------------------------
 # Registry: name → agent class
@@ -29,6 +34,11 @@ from rsi_loop.harness.agent.codex import CodexAgent
 _REGISTRY: dict[str, type[Agent]] = {
     "claude-code": ClaudeCodeAgent,
     "codex": CodexAgent,
+    "kimi-code": KimiCodeAgent,
+    "opencode": OpenCodeAgent,
+    "pi": PiAgent,
+    "qwen-code": QwenCodeAgent,
+    "zcode": ZCodeAgent,
 }
 
 

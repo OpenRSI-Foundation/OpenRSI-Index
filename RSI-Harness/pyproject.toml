@@ -61,7 +61,16 @@ extend-exclude = [
   # Verbatim Terminal-Bench 2 tasks shipped by the harbor-in-judge sample.
   "sample_tasks/harbor-in-judge/tests/tb2-subset",
   "sample_tasks/harbor-in-judge/tests/fix-git-build",
+  # The science-ising3d starter, ported unchanged; the Agent may replace it.
+  "sample_tasks/science-ising3d/environment/starter",
+  # The public science Judge library, a byte-for-byte copy of OpenRSI-X's
+  # science-task-agent assets/science_judge.py.
+  "sample_tasks/science-ising3d/tests/science_judge.py",
 ]
+
+[tool.ruff.per-file-target-version]
+# rsi-agent runs under the Judge image's own python3 (3.8 or later).
+"src/rsi_harness/judge_agent/rsi_agent.py" = "py38"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

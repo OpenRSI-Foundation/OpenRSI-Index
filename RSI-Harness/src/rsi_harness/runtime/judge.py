@@ -17,7 +17,15 @@ from rsi_harness.errors import (
     StateTransitionError,
     SubmissionError,
 )
+from rsi_harness.judge_agent import (
+    JUDGE_AGENT_CODE_TARGET,
+    JUDGE_AGENT_LAUNCHER,
+    JUDGE_AGENT_LAUNCHER_TARGET,
+    JUDGE_AGENT_TMPFS,
+    install_judge_agent,
+)
 from rsi_harness.models import (
+    JUDGE_TRAJECTORY_ROOT,
     VERIFIER_OUTPUT_TRUNCATION_MARKER,
     AgentRunResult,
     ContainerMount,
@@ -27,6 +35,7 @@ from rsi_harness.models import (
     ContainerVolumeMount,
     EvaluationRequest,
     GPUAllocation,
+    ImagePlan,
     JudgeGPUMode,
     ManagedNetwork,
     ManagedWorkdirVolume,
@@ -39,6 +48,7 @@ from rsi_harness.models import (
     SubmissionStatus,
     WorkQuiescence,
 )
+from rsi_harness.runtime.artifacts import _sudo_invoking_owner
 from rsi_harness.runtime.docker import DockerContainerRuntime
 from rsi_harness.runtime.environment import (
     MissingRuntimeEnvironmentError,
@@ -49,11 +59,24 @@ from rsi_harness.runtime.gpu import (
     NVIDIA_VISIBLE_DEVICES_ENV,
     nvidia_visible_devices_value,
 )
+from rsi_harness.runtime.judge_model_access import JudgeModelAccess
+from rsi_harness.runtime.local_auth import AgentAuthMaterial
 from rsi_harness.runtime.mount_topology import validate_split_workdir_target
-from rsi_harness.runtime.network import NetworkPolicyEnforcer, NetworkPolicyLease
+from rsi_harness.runtime.network import (
+    NetworkPolicyEnforcer,
+    NetworkPolicyLease,
+    PinnedEndpoint,
+    judge_requires_internal_bridge,
+    no_network_dns_servers,
+)
 from rsi_harness.runtime.redaction import redact_exact_values, redact_text
 from rsi_harness.runtime.reward import read_reward
 from rsi_harness.runtime.rootfs_snapshot import RootfsSnapshotNotCreatedError
+from rsi_harness.runtime.trajectory import (
+    capture_round_trajectory,
+    release_round_trajectory,
+)
+from rsi_harness.task.digest import require_tests_digest
 
 VERIFIER_COMMAND = ("/bin/bash", "/tests/test.sh")
 VERIFIER_EXPECTED_GPU_UUIDS_ENV = "RSI_HARNESS_EXPECTED_GPU_UUIDS"
@@ -64,6 +87,54 @@ _JUDGE_SNAPSHOT_REF = re.compile(r"rsi-harness-rootfs:judge-round-[0-9a-f]{64}\Z
 
 class _SubmissionRejected(Exception):
     """Internal control flow for a reportable pre-pause submission error."""
+
+
+def require_model_access(
+    plan: RunPlan, model_access: JudgeModelAccess | None
+) -> JudgeModelAccess | None:
+    """Model access exists exactly when the task declared it."""
+    if plan.task.verifier.model_access and model_access is None:
+        raise SetupError("task declares Judge model access but none was resolved")
+    if model_access is not None and not plan.task.verifier.model_access:
+        raise SetupError("Judge model access was supplied for a task without it")
+    return model_access
+
+
+# A public Judge's rootfs: writable only in /tmp; /tests and model
+# credentials keep their own tmpfs mounts. /tmp is noexec (Docker's tmpfs
+# default without "exec", stated here so the mount is what the docs say).
+PUBLIC_JUDGE_TMP = ContainerTmpfs(
+    target=PurePosixPath("/tmp"),
+    options="rw,nosuid,nodev,noexec,size=256m,mode=1777",
+)
+
+
+def public_judge_image(images: ImagePlan) -> str:
+    """The clean Work image a public Judge runs from, never Work's rootfs.
+
+    Work reads the public Judge procedure, so the Agent must not be able to
+    alter the programs that run it. The Judge therefore starts from the
+    immutable image Work started from (the task image plus the Agent CLI)
+    and reads only the Work WORKDIR snapshot, which requires a split WORKDIR.
+    """
+    if images.rootfs_snapshot_mode is not RootfsSnapshotMode.SPLIT_WORKDIR:
+        raise SetupError(
+            "public visibility requires a task WORKDIR other than /: its Judge "
+            "runs from the clean task image and reads only the Work WORKDIR"
+        )
+    image = images.work_digest
+    if image is None or _ROOTFS_IMAGE_ID.fullmatch(image) is None:
+        raise SetupError(
+            "public visibility requires an immutable Work image digest for its Judge"
+        )
+    return image
+
+
+def _auth_owner(user: str | None) -> str | None:
+    """The Judge user that must own injected credentials; None for root."""
+    if user is None or user.split(":", 1)[0] in {"", "0", "root"}:
+        return None
+    return user
 
 
 class WorkRuntime(Protocol):
@@ -82,6 +153,22 @@ class JudgeRoundRuntime(Protocol):
     def start(self, container: ContainerRef) -> None: ...
 
     def inject_tests(self, container: ContainerRef, source: Path) -> None: ...
+
+    def inject_agent_auth(
+        self,
+        container: ContainerRef,
+        material: AgentAuthMaterial,
+        *,
+        owner: str | None,
+    ) -> None: ...
+
+    def inject_judge_agent(
+        self,
+        container: ContainerRef,
+        launch: bytes,
+        *,
+        owner: str | None,
+    ) -> None: ...
 
     def exec(
         self,
@@ -170,6 +257,7 @@ class DockerJudgeRoundRuntime:
         round_id: str,
         planned_container_name: str,
         observer: JudgeResourceMutationObserver,
+        api_endpoints: tuple[PinnedEndpoint, ...] = (),
     ) -> None:
         self._runtime = runtime
         self._provisioner = provisioner
@@ -179,6 +267,9 @@ class DockerJudgeRoundRuntime:
         self._round_id = round_id
         self._planned_container_name = planned_container_name
         self._observer = observer
+        # Model access only: the pinned Agent endpoints, the sole exception
+        # to the Judge policy's default reject.
+        self._api_endpoints = api_endpoints
         self._lease: NetworkPolicyLease | None = None
         self._closed = False
         self._container: ContainerRef | None = None
@@ -201,6 +292,7 @@ class DockerJudgeRoundRuntime:
                 container,
                 self._policy,
                 network=self._network,
+                api_endpoints=self._api_endpoints,
             )
             # Keep the planned identity in memory before installation.  If a
             # partial install cannot roll back, recovery still has the exact
@@ -210,6 +302,7 @@ class DockerJudgeRoundRuntime:
                 container,
                 self._policy,
                 network=self._network,
+                api_endpoints=self._api_endpoints,
                 mutation_observer=self,
                 planned=planned_lease,
             )
@@ -255,6 +348,24 @@ class DockerJudgeRoundRuntime:
             source,
             PurePosixPath("/tests"),
         )
+
+    def inject_agent_auth(
+        self,
+        container: ContainerRef,
+        material: AgentAuthMaterial,
+        *,
+        owner: str | None,
+    ) -> None:
+        self._runtime.inject_agent_auth(container, material, owner=owner)
+
+    def inject_judge_agent(
+        self,
+        container: ContainerRef,
+        launch: bytes,
+        *,
+        owner: str | None,
+    ) -> None:
+        self._runtime.inject_judge_agent(container, launch, owner=owner)
 
     def exec(
         self,
@@ -380,12 +491,14 @@ class DockerJudgeRuntimeFactory:
         work_container: ContainerRef | None = None,
         omit_gpu_device_requests_for_tests: bool = False,
         sandbox_lifecycle: Any | None = None,
+        model_access: JudgeModelAccess | None = None,
     ) -> None:
         if sandbox_lifecycle is None:
             from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
 
             sandbox_lifecycle = NullSandboxLifecycle()
         self._sandbox_lifecycle = sandbox_lifecycle
+        self._model_access = model_access
         self._client = client
         self._run_id = run_id
         self._task_id = task_id
@@ -399,6 +512,8 @@ class DockerJudgeRuntimeFactory:
         self._omit_gpu_device_requests_for_tests = omit_gpu_device_requests_for_tests
 
     def __call__(self, plan: RunPlan, round_id: str) -> DockerJudgeRoundRuntime:
+        model_access = require_model_access(plan, self._model_access)
+        api_endpoints = () if model_access is None else model_access.endpoints
         sandbox_options = {}
         if self._sandbox_lifecycle.enabled:
             endpoint = self._sandbox_lifecycle.prepare_judge(round_id)
@@ -420,7 +535,9 @@ class DockerJudgeRuntimeFactory:
         try:
             network = provisioner.create_network(
                 round_id,
-                internal=plan.task.verifier.network.mode == "no-network",
+                internal=judge_requires_internal_bridge(
+                    "judge", plan.task.verifier.network.mode, bool(api_endpoints)
+                ),
             )
         except SetupError as primary:
             # The Docker boundary only returns SetupError after exact
@@ -447,6 +564,7 @@ class DockerJudgeRuntimeFactory:
                 workdir_volume_references=(
                     () if self._work_container is None else (self._work_container,)
                 ),
+                judge_model_access=bool(api_endpoints),
                 **sandbox_options,
             )
             return DockerJudgeRoundRuntime(
@@ -458,6 +576,7 @@ class DockerJudgeRuntimeFactory:
                 round_id=round_id,
                 planned_container_name=runtime.planned_container_name(round_id),
                 observer=self._observer,
+                api_endpoints=api_endpoints,
             )
         except BaseException as primary:
             try:
@@ -500,12 +619,14 @@ class JudgeRunner:
         verifier_secret_env: Mapping[str, str] | None = None,
         event_callback: Callable[[str, object], None] | None = None,
         sandbox_lifecycle: Any | None = None,
+        model_access: JudgeModelAccess | None = None,
     ) -> None:
         if sandbox_lifecycle is None:
             from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
 
             sandbox_lifecycle = NullSandboxLifecycle()
         self._sandbox_lifecycle = sandbox_lifecycle
+        self._model_access = model_access
         self._run_id = run_id
         self._workdir_volume = workdir_volume
         self._work_runtime = work_runtime
@@ -550,6 +671,9 @@ class JudgeRunner:
         family_frozen = False
         work_ended = False
         sandbox_endpoint = None
+        trajectory: Path | None = None
+        judge_removed = False
+        model_access: JudgeModelAccess | None = None
 
         try:
             self._validate_feedback_output(request)
@@ -558,6 +682,11 @@ class JudgeRunner:
                 raise RuntimeError(
                     "RunPlan verifier command is not the fixed Harbor test command"
                 )
+            model_access = require_model_access(plan, self._model_access)
+            if model_access is not None:
+                # Judge output becomes Agent feedback and run logs: the
+                # credentials never appear in either.
+                verifier_error_secrets.update(model_access.secret_values)
             if self._sandbox_lifecycle.enabled:
                 family_freeze_started = True
                 try:
@@ -597,6 +726,11 @@ class JudgeRunner:
                     primary_error = _error_text(error, verifier_error_secrets)
                     raise _SubmissionRejected from error
             log_dir = self._prepare_log_dir(request)
+            # Freeze the Agent's output now, while Work is paused: the Judge
+            # sees exactly what led to this submission and nothing later.
+            trajectory = capture_round_trajectory(
+                self._run_root(plan), request.round_id, owner=_sudo_invoking_owner()
+            )
             planned_snapshot_ref = self._snapshot_backend.planned_ref(
                 run_id=self._run_id,
                 task_id=plan.task.task_id,
@@ -660,6 +794,13 @@ class JudgeRunner:
                     token = sandbox_endpoint.environment.get("RSI_SANDBOX_TOKEN")
                     if token:
                         verifier_error_secrets.add(token)
+            judge_agent = (
+                None
+                if model_access is None
+                else install_judge_agent(
+                    self._run_root(plan), owner=_sudo_invoking_owner()
+                )
+            )
             judge_round = self._judge_runtime_factory(plan, request.round_id)
             judge_spec, verifier_environment = self._judge_spec(
                 request,
@@ -667,6 +808,9 @@ class JudgeRunner:
                 log_dir,
                 verifier_error_secrets,
                 sandbox_endpoint=sandbox_endpoint,
+                trajectory=trajectory,
+                model_access=model_access,
+                judge_agent=judge_agent,
             )
             judge = judge_round.create(judge_spec)
             self._observe(
@@ -675,10 +819,23 @@ class JudgeRunner:
                 recovery_context=judge_round.recovery_context(judge),
             )
             judge_round.start(judge)
+            if model_access is not None:
+                owner = _auth_owner(judge_spec.user)
+                if model_access.auth is not None:
+                    judge_round.inject_agent_auth(judge, model_access.auth, owner=owner)
+                # rsi-agent alone reads the Agent's credentials and launch spec.
+                judge_round.inject_judge_agent(judge, model_access.launch, owner=owner)
+            if plan.task.verifier.visibility == "public":
+                # Work saw these tests read-only: run exactly the same bytes.
+                require_tests_digest(
+                    plan.task.source_dir / "tests", plan.task.tests_digest
+                )
             judge_round.inject_tests(judge, plan.task.source_dir / "tests")
             self._event_callback("judge_exec_started", {"round_id": request.round_id})
             exec_options = {}
-            sandbox_output_secrets = ()
+            output_secrets: set[str] = set()
+            if model_access is not None:
+                output_secrets.update(model_access.secret_values)
             if self._sandbox_lifecycle.enabled:
                 deadline = self._monotonic() + plan.task.verifier.timeout_seconds
                 self._sandbox_lifecycle.activate_judge(deadline)
@@ -686,8 +843,10 @@ class JudgeRunner:
                 if sandbox_endpoint is not None:
                     token = sandbox_endpoint.environment.get("RSI_SANDBOX_TOKEN")
                     if token:
-                        sandbox_output_secrets = (token,)
-                        exec_options["output_redact_values"] = sandbox_output_secrets
+                        output_secrets.add(token)
+            exec_output_secrets = tuple(sorted(output_secrets))
+            if exec_output_secrets:
+                exec_options["output_redact_values"] = exec_output_secrets
             verifier_output_required = True
             result = judge_round.exec(
                 judge,
@@ -698,7 +857,7 @@ class JudgeRunner:
                 **exec_options,
             )
             output = _bounded_output(
-                redact_exact_values(result.output, sandbox_output_secrets),
+                redact_exact_values(result.output, exec_output_secrets),
                 limit=plan.task.verifier.output_limit_bytes,
                 truncated=result.output_truncated,
             )
@@ -852,6 +1011,7 @@ class JudgeRunner:
                 else:
                     try:
                         judge_round.remove(judge)
+                        judge_removed = True
                         self._observe(
                             "judge_removed", judge_container_id=judge.container_id
                         )
@@ -878,6 +1038,10 @@ class JudgeRunner:
                             cleanup_errors.append(
                                 "emergency containment proved Judge stopped or gone"
                             )
+            if trajectory is not None and (judge is None or judge_removed):
+                # The copied bytes are a range of the run's own output; only
+                # the manifest is kept once no Judge can read them.
+                release_round_trajectory(trajectory)
             if judge_round is not None and not judge_round.safe_to_release_isolation:
                 safe_to_release_isolation = False
             if judge_round is not None and safe_to_release_isolation:
@@ -1174,6 +1338,9 @@ class JudgeRunner:
         error_secret_values: set[str],
         *,
         sandbox_endpoint: Any | None = None,
+        trajectory: Path | None = None,
+        model_access: JudgeModelAccess | None = None,
+        judge_agent: Path | None = None,
     ) -> tuple[ContainerSpec, dict[str, str]]:
         plan = request.run_plan
         try:
@@ -1207,6 +1374,28 @@ class JudgeRunner:
             and runtime_template_name(template) in secret_names
             and environment[key]
         )
+        model_tmpfs: tuple[ContainerTmpfs, ...] = ()
+        agent_mounts: tuple[ContainerMount, ...] = ()
+        if model_access is not None:
+            # Only the Agent's name, model and effort: the procedure calls the
+            # model through rsi-agent, which alone holds the credentials.
+            environment.update(model_access.environment)
+            error_secret_values.update(model_access.secret_values)
+            if model_access.auth is not None:
+                model_tmpfs = tuple(mount.tmpfs for mount in model_access.auth.mounts)
+            model_tmpfs += JUDGE_AGENT_TMPFS
+            if judge_agent is None:
+                raise InfrastructureError("rsi-agent is not installed for this run")
+            agent_mounts = (
+                ContainerMount(
+                    source=judge_agent, target=JUDGE_AGENT_CODE_TARGET, read_only=True
+                ),
+                ContainerMount(
+                    source=judge_agent / JUDGE_AGENT_LAUNCHER,
+                    target=JUDGE_AGENT_LAUNCHER_TARGET,
+                    read_only=True,
+                ),
+            )
         sandbox_mounts = ()
         if sandbox_endpoint is not None:
             environment.update(sandbox_endpoint.environment)
@@ -1214,17 +1403,49 @@ class JudgeRunner:
             if token:
                 error_secret_values.add(token)
             sandbox_mounts = (sandbox_endpoint.mount,)
+        trajectory_mounts = ()
+        if trajectory is not None:
+            trajectory_mounts = (
+                ContainerMount(
+                    source=trajectory,
+                    target=JUDGE_TRAJECTORY_ROOT,
+                    read_only=True,
+                ),
+            )
+        public = plan.task.verifier.visibility == "public"
+        judge_user = (
+            plan.images.judge_user or plan.task.verifier.user or plan.task.service.user
+        )
+        # A root Judge runs rsi-agent's Agent as its own user: hidden tests
+        # stay out of its reach.
+        tests_mode = (
+            "0700"
+            if model_access is not None
+            and not public
+            and _auth_owner(judge_user) is None
+            else "0755"
+        )
+        image = lease.image_id
+        if public:
+            try:
+                image = public_judge_image(plan.images)
+            except SetupError as error:
+                raise InfrastructureError(str(error)) from None
         return (
             ContainerSpec(
-                image=lease.image_id,
+                image=image,
+                read_only_rootfs=public,
                 command=("/bin/sleep", "infinity"),
                 workdir=plan.workdir,
-                user=(
-                    plan.images.judge_user
-                    or plan.task.verifier.user
-                    or plan.task.service.user
-                ),
+                user=judge_user,
                 environment=(),
+                # Model access only: name the pinned endpoint addresses as
+                # Work does, and with "no-network" keep external DNS out of
+                # reach of the routable bridge.
+                extra_hosts=(() if model_access is None else model_access.extra_hosts),
+                dns=no_network_dns_servers(
+                    plan.task.verifier.network.mode, model_access is not None
+                ),
                 shm_size=plan.task.service.shm_size,
                 cpus=plan.task.service.cpus,
                 memory_mb=plan.task.service.memory_mb,
@@ -1232,15 +1453,19 @@ class JudgeRunner:
                 tmpfs=(
                     ContainerTmpfs(
                         target=PurePosixPath("/tests"),
-                        options="rw,exec,nosuid,nodev,mode=0755",
+                        options=f"rw,exec,nosuid,nodev,mode={tests_mode}",
                     ),
-                ),
+                )
+                + ((PUBLIC_JUDGE_TMP,) if public else ())
+                + model_tmpfs,
                 mounts=(
                     ContainerMount(
                         source=log_dir,
                         target=PurePosixPath("/logs/verifier"),
                     ),
                 )
+                + trajectory_mounts
+                + agent_mounts
                 + sandbox_mounts,
                 volume_mounts=(
                     (
@@ -1277,6 +1502,9 @@ class JudgeRunner:
                 )
         elif self._workdir_volume is not None:
             raise InfrastructureError("full-rootfs Judge received volume authority")
+
+    def _run_root(self, plan: RunPlan) -> Path:
+        return plan.paths.logs / "runs" / self._run_id / plan.task.task_id
 
     def _validate_feedback_output(self, request: EvaluationRequest) -> None:
         if re.fullmatch(r"agent-[1-9][0-9]*", request.round_id) is None:
@@ -1419,4 +1647,5 @@ __all__ = [
     "OUTPUT_TRUNCATION_MARKER",
     "VERIFIER_COMMAND",
     "VERIFIER_EXPECTED_GPU_UUIDS_ENV",
+    "public_judge_image",
 ]

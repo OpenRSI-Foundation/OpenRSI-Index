@@ -112,6 +112,20 @@ def _agent_launcher(agent_name: str) -> str:
     return command[0]
 
 
+def require_cluster_agent(agent_name: str) -> None:
+    """Refuse Agents whose Work image needs files a cluster image cannot carry."""
+    try:
+        agent_class = get_agent_class(agent_name)
+    except ValueError as error:
+        raise SetupError(str(error)) from error
+    if agent_class.image_files:
+        raise SetupError(
+            f"Agent {agent_name!r} needs files baked into its Work image (such "
+            "as rsi-agent-driver or pi's extension), which cluster images do "
+            "not carry yet; it runs on the local Docker backend only for now"
+        )
+
+
 def _resolve_agent_version(agent_name: str) -> str | None:
     launcher = _agent_launcher(agent_name)
     executable = shutil.which(launcher)
@@ -399,6 +413,10 @@ class BlueVelaClusterAdapter(ClusterAdapter):
     def _compile(self, request: ClusterRunRequest) -> TaskDefinition:
         definition = self.compiler.compile(request.task_dir, request.options)
         validate_sandbox_policy(definition.sandbox, request.sandbox_policy, "cluster")
+        from rsi_harness.cluster.bluevela.runtime import require_no_judge_model_access
+
+        require_no_judge_model_access(definition)
+        require_cluster_agent(definition.agent.name)
         if definition.gpu_requirement.count == 0 and not self.supports_cpu_work:
             raise SetupError(
                 "Blue Vela cluster runs require Work GPUs; "

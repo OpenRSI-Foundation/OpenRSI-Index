@@ -170,8 +170,8 @@ volumes and external services are not part of that snapshot model and are
 therefore rejected.
 
 The non-root WORKDIR must not overlap Engine-owned targets `/tests`,
-`/logs/verifier`, or `/run/rsi-harness/staging`. It cannot be one of those
-paths, an ancestor containing one, or a child below one.
+`/logs/verifier`, `/logs/agent`, or `/run/rsi-harness/staging`. It cannot be
+one of those paths, an ancestor containing one, or a child below one.
 
 ### Root WORKDIR `/`
 

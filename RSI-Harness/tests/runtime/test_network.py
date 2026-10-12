@@ -15,11 +15,13 @@ import pytest
 from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.models import ContainerRef, ManagedNetwork, NetworkPolicy
 from rsi_harness.runtime.network import (
+    UNREACHABLE_DNS_SERVER,
     DockerIptablesFirewallBackend,
     FirewallRuleNotFound,
     NetworkPolicyEnforcer,
     NetworkRuleSet,
     managed_bridge_interface,
+    no_network_dns_servers,
 )
 from tests.fakes import FakeDockerClient, FakeDockerContainer, FakeFirewallBackend
 
@@ -125,6 +127,87 @@ def test_judge_no_network_requests_internal_bridge_but_egress_modes_do_not():
 
     assert no_network.internal_network is True
     assert public.internal_network is False
+
+
+def test_judge_model_access_routes_only_to_the_pinned_model_endpoints():
+    """No-network plus model access: a routable bridge, default reject."""
+    enforcer, resolver, firewall = make_enforcer()
+    judge = ContainerRef(container_id="judge", role="judge")
+    endpoints = ("http://judge-model.test:8443/v1",)
+
+    with pytest.raises(SetupError, match="egress-capable bridge"):
+        enforcer.plan(
+            judge,
+            NetworkPolicy(mode="no-network"),
+            network=managed("judge-no-network-round-1", "judge"),
+            api_endpoints=endpoints,
+        )
+    lease = enforcer.apply(
+        judge,
+        NetworkPolicy(mode="no-network"),
+        network=replace(managed("judge-no-network-round-1", "judge"), internal=False),
+        api_endpoints=endpoints,
+        control_endpoints=("http://control.test:8020/",),
+    )
+
+    assert lease.internal_network is False
+    assert lease.allows_url("http://judge-model.test:8443/v1/responses")
+    assert lease.allows_destination("198.51.100.8", 8443)
+    assert not lease.allows_destination("198.51.100.8", 443)
+    assert not lease.allows_destination("93.184.216.34", 443)
+    assert not lease.allows_url("http://control.test:8020/")
+    assert not lease.allows_destination("172.30.0.1", 8020)
+    # The Judge's only DNS server is rejected like any other destination.
+    assert not lease.allows_destination(UNREACHABLE_DNS_SERVER, 53)
+    assert resolver.queries == ["judge-model.test"]
+    assert firewall.installed[lease.rule_id] == lease.rules
+
+
+def test_judge_model_access_compiles_exact_accepts_before_default_reject():
+    runner = InMemoryIptablesRunner()
+    enforcer = NetworkPolicyEnforcer(
+        run_id="run-1",
+        firewall=DockerIptablesFirewallBackend(FakeDockerClient(), runner=runner),
+        resolver=StaticResolver({"model.test": ("8.8.8.8",)}),
+        engine_destinations=("172.30.0.1",),
+    )
+
+    lease = enforcer.apply(
+        ContainerRef(container_id="judge", role="judge"),
+        NetworkPolicy(mode="no-network"),
+        network=replace(managed("judge-no-network", "judge"), internal=False),
+        api_endpoints=("https://model.test/v1",),
+    )
+
+    forward_chain = next(chain for chain in runner.chains if chain.startswith("RSI_F_"))
+    rules = [" ".join(rule) for rule in runner.chains[forward_chain]]
+    accept = next(
+        index
+        for index, rule in enumerate(rules)
+        if "-d 8.8.8.8/32" in rule and "--dport 443" in rule and "ACCEPT" in rule
+    )
+    assert accept < len(rules) - 1
+    assert rules[-1].startswith("-j REJECT")
+    assert not any(rule.startswith("-j ACCEPT") for rule in rules)
+    assert lease.internal_network is False
+    assert not any(UNREACHABLE_DNS_SERVER in rule for rule in rules)
+
+
+@pytest.mark.parametrize(
+    ("mode", "has_api_endpoints", "servers"),
+    [
+        ("no-network", True, (UNREACHABLE_DNS_SERVER,)),
+        # Docker-internal bridge: the embedded resolver forwards nothing.
+        ("no-network", False, ()),
+        # These modes already resolve names through the host's resolver.
+        ("allowlist", True, ()),
+        ("public", True, ()),
+    ],
+)
+def test_only_no_network_with_pinned_endpoints_gets_the_unreachable_dns(
+    mode, has_api_endpoints, servers
+):
+    assert no_network_dns_servers(mode, has_api_endpoints) == servers
 
 
 @pytest.mark.parametrize(
@@ -985,10 +1068,12 @@ def test_parent_phase_policies_never_compile_an_intra_bridge_accept(
         dns_resolvers=("127.0.0.11",),
     )
 
+    # Pinned model endpoints make even a no-network Judge's bridge routable.
+    network = replace(managed(f"{role}-{mode}", role), internal=False)
     lease = enforcer.apply(
         ContainerRef(container_id=role, role=role),
         NetworkPolicy(mode=mode),
-        network=managed(f"{role}-{mode}", role),
+        network=network,
         api_endpoints=("https://model.test/v1",),
     )
 

@@ -81,8 +81,14 @@ class _Runtime:
     def require_work_idle(self) -> None:
         self.events.append("idle")
 
-    def run_judge(self, workspace, request, environment):
+    def run_judge(self, workspace, request, environment, *, trajectory=None):
         del workspace, environment
+        self.trajectory = trajectory
+        self.trajectory_files = (
+            None
+            if trajectory is None
+            else sorted(path.name for path in trajectory.iterdir())
+        )
         (request.verifier_logs / self.reward_file).write_text(self.reward_content)
         request.verifier_output.write_text("passed\n")
         return AgentRunResult(
@@ -245,6 +251,12 @@ def test_workspace_snapshot_uses_path_authority_and_native_artifacts(
     assert (request.verifier_logs / reward_file).read_text() == reward_content
     if reward_file == "reward.json":
         assert dict(report.rewards) == {"reward": 1.0, "accuracy": 0.75}
+    # The Judge read this round's trajectory copy; only its manifest remains.
+    assert runtime.trajectory == writer.root / "judge-trajectory" / "agent-1"
+    assert runtime.trajectory_files == ["agent_output.txt", "manifest.json"]
+    assert sorted(path.name for path in runtime.trajectory.iterdir()) == [
+        "manifest.json"
+    ]
 
 
 def test_active_remote_work_makes_submission_retryable_before_snapshot(
@@ -328,7 +340,7 @@ def test_final_native_judge_is_registered_after_agent_exit(
     writer.start()
     judge_rounds = 0
 
-    def judge(_snapshot, request, _environment):
+    def judge(_snapshot, request, _environment, *, trajectory=None):
         nonlocal judge_rounds
         judge_rounds += 1
         (request.verifier_logs / "reward.json").write_text(
@@ -718,11 +730,16 @@ def test_judge_gets_fresh_writable_tmp_without_mutating_preserved_assets(
         assert (judge_tmp / "setup_patch.diff").stat().st_size == 0
         (judge_tmp / "test_patch.diff").write_text("judge mutation\n")
         (judge_tmp / "f2p_output.txt").write_text("passed\n")
+        assert (trajectory, PurePosixPath("/logs/agent"), True) in options[
+            "extra_binds"
+        ]
         return AgentRunResult(exit_code=0, output="passed\n")
 
     monkeypatch.setattr(runtime, "_run", fake_run)
+    trajectory = tmp_path / "judge-trajectory" / "agent-1"
+    trajectory.mkdir(parents=True)
 
-    result = runtime.run_judge(workspace, request, {})
+    result = runtime.run_judge(workspace, request, {}, trajectory=trajectory)
 
     assert result.exit_code == 0
     assert (runtime.task_assets / "test_patch.diff").read_text() == "original\n"
@@ -803,6 +820,7 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
         }
         assert binds[(snapshot, plan.workdir)] is True
         assert binds[(plan.task.source_dir / "tests", PurePosixPath("/tests"))] is True
+        assert binds[(trajectory, PurePosixPath("/logs/agent"))] is True
         assert any("paloma" in str(source) for source, _target in binds)
         torchrun_sources = tuple(
             item.source
@@ -823,8 +841,10 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
         return AgentRunResult(exit_code=0, output="passed\n")
 
     monkeypatch.setattr(runtime, "_run_host_controller", controller)
+    trajectory = tmp_path / "judge-trajectory" / "agent-1"
+    trajectory.mkdir(parents=True)
 
-    result = runtime.run_judge(snapshot, request, {})
+    result = runtime.run_judge(snapshot, request, {}, trajectory=trajectory)
 
     assert result.exit_code == 0
     prefix_length = 3 + len(profile.scheduler.remote_args)

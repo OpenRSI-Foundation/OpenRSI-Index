@@ -42,6 +42,7 @@ from rsi_harness.models import (
 )
 from rsi_harness.runtime.artifacts import RunArtifactWriter
 from tests.factories import DEFAULT_TASK_TOML, write_cluster_task, write_harbor_task
+from tests.fakes import register_fake_driven_agent
 
 
 @pytest.fixture(autouse=True)
@@ -202,6 +203,73 @@ def test_cpu_work_is_rejected_before_cluster_runtime_or_storage(
     )
 
     with pytest.raises(SetupError, match="local Docker"):
+        adapter.run(request)
+
+    assert scheduler.events == []
+    assert scheduler.specs == []
+    assert not profile.storage.run_root.parent.exists()
+    assert not request.logs_root.exists()
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_judge_model_access_is_rejected_before_cluster_runtime_or_storage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dry_run: bool,
+) -> None:
+    """Apptainer Judges have no network and no Agent relay."""
+    task_dir = write_harbor_task(
+        tmp_path,
+        task_toml=(
+            DEFAULT_TASK_TOML
+            + "\n[metadata.rsi_harness.verifier]\nmodel_access = true\n"
+        ),
+    )
+    profile = _profile(tmp_path)
+    scheduler = RecordingScheduler()
+    adapter = BlueVelaClusterAdapter(profile, scheduler=scheduler)
+    monkeypatch.setattr(
+        adapter,
+        "_validate_runtime_inputs",
+        lambda _request: pytest.fail("model access reached runtime validation"),
+    )
+    request = _request(tmp_path, dry_run=dry_run).model_copy(
+        update={"task_dir": task_dir.resolve()}
+    )
+
+    with pytest.raises(SetupError, match="not supported on cluster runs"):
+        adapter.run(request)
+
+    assert scheduler.events == []
+    assert not profile.storage.run_root.parent.exists()
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_driven_agent_is_refused_before_cluster_runtime_or_storage(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    dry_run: bool,
+) -> None:
+    """Cluster images cannot carry rsi-agent-driver yet."""
+    register_fake_driven_agent(monkeypatch)
+    profile = _profile(tmp_path)
+    scheduler = RecordingScheduler()
+    adapter = BlueVelaClusterAdapter(profile, scheduler=scheduler)
+    monkeypatch.setattr(
+        adapter,
+        "_validate_runtime_inputs",
+        lambda _request: pytest.fail("driven Agent reached runtime validation"),
+    )
+    request = _request(tmp_path, dry_run=dry_run).model_copy(
+        update={
+            "agent_name": "fake-driven",
+            "options": CompileOptions(agent_name="fake-driven"),
+            "model": None,
+            "reasoning_effort": None,
+        }
+    )
+
+    with pytest.raises(SetupError, match="local Docker backend only"):
         adapter.run(request)
 
     assert scheduler.events == []

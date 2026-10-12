@@ -6,7 +6,7 @@ import hashlib
 import json
 import tomllib
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from harbor.models.task.config import TaskOS, VerifierEnvironmentMode
 from harbor.models.task.task import Task
@@ -32,6 +32,8 @@ from rsi_harness.models import (
 from rsi_harness.runtime.sandbox_policy import parse_sandbox_task
 from rsi_harness.task.compose import ComposeMainServiceParser
 from rsi_harness.task.digest import hash_tree
+
+_VERIFIER_METADATA_FIELDS = frozenset({"gpus", "model_access", "visibility"})
 
 
 class HarborTaskCompiler:
@@ -109,6 +111,8 @@ class HarborTaskCompiler:
                     primary_reward=options.primary_reward,
                     network=self._network_policy(task, task.config.verifier),
                     gpu_count=self._verifier_gpu_count(task),
+                    visibility=self._verifier_visibility(task),
+                    model_access=self._verifier_model_access(task),
                 ),
                 agent=AgentPlan(
                     name=options.agent_name,
@@ -344,28 +348,55 @@ class HarborTaskCompiler:
         )
 
     @staticmethod
-    def _verifier_gpu_count(task: Task) -> int:
+    def _verifier_metadata(task: Task, field: str, expected: str) -> object:
+        """Return one field of the namespaced verifier table, or None if absent."""
+        invalid = f"metadata.rsi_harness.verifier.{field} must be {expected}"
         metadata = task.config.metadata
         if "rsi_harness" not in metadata:
-            return 0
+            return None
         rsi_harness = metadata["rsi_harness"]
         if not isinstance(rsi_harness, dict):
-            raise UnsupportedTaskError(
-                "metadata.rsi_harness.verifier.gpus must be an integer"
-            )
+            raise UnsupportedTaskError(invalid)
         if "verifier" not in rsi_harness:
-            return 0
+            return None
         verifier = rsi_harness["verifier"]
         if not isinstance(verifier, dict):
-            raise UnsupportedTaskError(
-                "metadata.rsi_harness.verifier.gpus must be an integer"
-            )
-        if set(verifier) - {"gpus"}:
-            raise UnsupportedTaskError("unknown verifier GPU metadata")
-        value = verifier.get("gpus", 0)
+            raise UnsupportedTaskError(invalid)
+        if set(verifier) - _VERIFIER_METADATA_FIELDS:
+            raise UnsupportedTaskError("unknown verifier metadata")
+        return verifier.get(field)
+
+    @classmethod
+    def _verifier_gpu_count(cls, task: Task) -> int:
+        value = cls._verifier_metadata(task, "gpus", "an integer")
+        if value is None:
+            return 0
         if type(value) is not int or value < 0:
             raise UnsupportedTaskError(
                 "metadata.rsi_harness.verifier.gpus must be a non-negative integer"
+            )
+        return value
+
+    @classmethod
+    def _verifier_visibility(cls, task: Task) -> Literal["hidden", "public"]:
+        expected = '"hidden" or "public"'
+        value = cls._verifier_metadata(task, "visibility", expected)
+        if value is None:
+            return "hidden"
+        if value not in ("hidden", "public"):
+            raise UnsupportedTaskError(
+                f"metadata.rsi_harness.verifier.visibility must be {expected}"
+            )
+        return value
+
+    @classmethod
+    def _verifier_model_access(cls, task: Task) -> bool:
+        value = cls._verifier_metadata(task, "model_access", "a boolean")
+        if value is None:
+            return False
+        if type(value) is not bool:
+            raise UnsupportedTaskError(
+                "metadata.rsi_harness.verifier.model_access must be a boolean"
             )
         return value
 

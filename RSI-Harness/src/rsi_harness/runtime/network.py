@@ -557,6 +557,37 @@ class DockerIptablesFirewallBackend:
         return firewall_rule_chains(rule_id)
 
 
+def judge_requires_internal_bridge(
+    role: str, mode: str, has_api_endpoints: bool
+) -> bool:
+    """A no-network Judge without model access gets a Docker-internal bridge.
+
+    With model access its bridge can route, and the firewall's default
+    REJECT admits only the pinned model endpoints.
+    """
+    return role == "judge" and mode == "no-network" and not has_api_endpoints
+
+
+# RFC 5737 TEST-NET-1: no resolver answers here, and the firewall's default
+# REJECT drops queries to it.
+UNREACHABLE_DNS_SERVER = "192.0.2.1"
+
+
+def no_network_dns_servers(mode: str, has_api_endpoints: bool) -> tuple[str, ...]:
+    """Keep a no-network Work or model-access Judge without external DNS.
+
+    Its bridge routes to the pinned endpoints, so Docker's embedded resolver
+    would forward any name to the host's resolver. A host loopback resolver
+    is queried from the host namespace, out of the firewall's reach. A
+    non-loopback upstream is queried from the container's own namespace,
+    where this one is rejected. The pinned endpoints are named in /etc/hosts
+    instead.
+    """
+    if mode == "no-network" and has_api_endpoints:
+        return (UNREACHABLE_DNS_SERVER,)
+    return ()
+
+
 def firewall_rule_chains(rule_id: str) -> tuple[str, str, str]:
     """The forward, input and allow chains of a rule; every install command
     names one. Only brokered allowlist envs have the allow chain; removal
@@ -577,7 +608,9 @@ class NetworkPolicyLease:
     @property
     def internal_network(self) -> bool:
         """Whether Docker must create this phase bridge without external egress."""
-        return self.rules.role == "judge" and self.rules.mode == "no-network"
+        return judge_requires_internal_bridge(
+            self.rules.role, self.rules.mode, bool(self.rules.exact_endpoints)
+        )
 
     def allows_url(self, url: str) -> bool:
         parsed = urlsplit(url)
@@ -666,7 +699,9 @@ class NetworkPolicyEnforcer:
         role = container.role
         if network.run_id != self._run_id or network.role != role:
             raise SetupError("network identity is not bound to this run and role")
-        requires_internal = role == "judge" and policy.mode == "no-network"
+        requires_internal = judge_requires_internal_bridge(
+            role, policy.mode, bool(api_endpoints)
+        )
         if network.internal != requires_internal:
             if requires_internal:
                 raise SetupError("Judge no-network policy requires an internal bridge")

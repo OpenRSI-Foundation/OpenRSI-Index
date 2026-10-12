@@ -124,8 +124,9 @@ tags = ["gpu"]
 ```
 
 These are descriptive benchmark fields. RSI Harness preserves Harbor parsing
-but does not use them to allocate resources. The only runtime metadata read by
-RSI Harness is the namespaced Judge GPU field described below.
+but does not use them to allocate resources. RSI Harness reads runtime
+metadata only from its namespaced `[metadata.rsi_harness]` tables, such as the
+Judge fields described below.
 
 ### `source`
 
@@ -314,11 +315,14 @@ When the effective WORKDIR is non-root, RSI Harness uses split-WORKDIR mode:
   path;
 - Judge writes cannot modify Work or later Judge rounds;
 - large checkpoints inside the WORKDIR are not copied into every rootfs image;
-- system changes outside the WORKDIR are still captured so Judge sees packages,
-  commands, and libraries installed by the Agent.
+- system changes outside the WORKDIR are still captured so a hidden Judge sees
+  packages, commands, and libraries installed by the Agent; a public Judge
+  starts from the clean image instead (see
+  [`visibility`](#visibility)).
 
 The WORKDIR must not equal, contain, or sit below Engine-owned mount targets
-such as `/tests`, `/logs/verifier`, or `/run/rsi-harness/staging`.
+such as `/tests`, `/logs/verifier`, `/logs/agent`, or
+`/run/rsi-harness/staging`.
 
 When the effective WORKDIR is `/`, RSI Harness uses full-rootfs mode. Judge sees
 the complete modified Work filesystem, but each submission requires a Docker
@@ -340,6 +344,8 @@ network_mode = "no-network"
 - This is the baseline for Agent and Verifier.
 - RSI Harness creates and enforces its own Docker network policy. Do not use
   Compose `network_mode`.
+- With `"no-network"`, Work reaches only the pinned Agent provider or proxy
+  endpoints, named in its `/etc/hosts`, and cannot resolve any other name.
 
 ### `allowed_hosts`
 
@@ -458,6 +464,8 @@ user = "root"
 - Overrides the Compose/image user for Judge execution when set.
 - The selected user must exist and must be able to access the effective
   WORKDIR and required test dependencies.
+- The Judge's `/tests` stays mode `0755` after the task tests are copied in,
+  so a non-root user can read them; file modes come from the task's `tests/`.
 
 ### `network_mode` and `allowed_hosts`
 
@@ -493,7 +501,42 @@ environment_mode = "shared"
 - Harbor `"separate"` Verifier environments and `[verifier.environment]` are
   rejected. RSI Harness does not accept a separately authored Judge image.
 
+### Agent trajectory in the Judge
+
+Every Judge round, with either visibility, can read the Agent's trajectory
+read-only at `/logs/agent`. Nothing needs to be declared. It holds:
+
+- `agent_prompt.md`: the prompt the Agent was started with;
+- `agent_output.txt`: the Agent's output as captured by RSI Harness, with
+  secrets redacted, up to the moment Work was paused for this submission;
+- `manifest.json`: `{schema_version, round_id, previous_round_id,
+  limit_bytes, files}`, with `schema_version` the integer `1`, `round_id`
+  this round (`agent-<n>`), `previous_round_id` the round the previous sizes
+  come from (or `null`) and `limit_bytes` the per-file limit. Each entry of
+  `files` is `{path, source_size, offset, bytes, sha256, truncated,
+  previous_size}`: the path of the copy below `/logs/agent`, the source size
+  at capture, the copied range of the source (`offset` to `offset + bytes`),
+  the copy's sha256, whether the range was truncated, and the source size at
+  the previous round (`null` for the first), so the Judge can read only what
+  is new since the last submission: the copy's bytes from
+  `max(previous_size - offset, 0)`.
+
+The copy comes from the current run only and is frozen when Work is paused,
+so it never contains another run's output or anything the Agent did after
+submitting. Each file is limited to its most recent 256 MiB; `offset` is then
+non-zero and `truncated` is true. The files are world-readable inside the
+Judge, so a non-root Verifier user can read them. After the round only the
+manifest is kept, in `judge-trajectory/<round>/` of the run's log directory;
+the copied range can be recovered from the run's `agent_output.txt`.
+
 ## `[metadata.rsi_harness.verifier]`
+
+[`sample_tasks/science-ising3d`](../../sample_tasks/science-ising3d)
+illustrates `visibility` and `model_access`: its Judge, the public science
+Judge library of OpenRSI-X's `science-task-agent` skill with the task's own
+configuration, re-executes the candidate as unprivileged users and reviews it
+with the run's Agent through `rsi-agent`. It is a demonstration, not a
+template to copy.
 
 ### `gpus`
 
@@ -525,6 +568,161 @@ disjoint spare pair. RSI Harness therefore uses release-all mode:
 
 If the pool contains fewer devices than either phase requires, setup fails
 before the Agent starts.
+
+### `visibility`
+
+```toml
+[metadata.rsi_harness.verifier]
+visibility = "public"
+```
+
+- Type: `"hidden"` or `"public"`.
+- Default when the table or field is absent: `"hidden"`.
+- `"hidden"`: the task's `tests/` directory exists only in each Judge, as
+  `/tests`. Work never sees it.
+- `"public"`: Work also sees the same `tests/` directory, read-only, at
+  `/tests` for the whole run. Use it when the Judge's procedure is meant to
+  be read, such as a published rubric or a review procedure.
+
+The run plan records one digest of `tests/` at compile time (`tests_digest`
+in `run-plan.json`). With `"public"`, RSI Harness checks the directory against
+that digest before Work is created and again before every Judge round, so Work
+reads exactly the bytes the Judge runs. If the directory changes during the
+run, Work creation fails, or the round reports an infrastructure error, instead
+of judging with tests the Agent never saw. Files keep their modes. Keep them
+readable by the Agent's user.
+
+Because Work can read the Judge procedure, a public Judge also runs from a
+clean image, so the Agent cannot change the programs that judge it. Each
+public Judge starts from the immutable image Work started from (the task image
+plus the Agent CLI, built before the Agent ran) instead of a snapshot of Work,
+with a read-only root filesystem and a 256 MiB `noexec` `/tmp` tmpfs: run a
+file written there through its interpreter (`python3 file.py`, `sh file.sh`);
+executing it or loading a compiled library from it fails, although Work's
+`/tmp` allows both. It reads Work's
+`WORKDIR` snapshot read-only; nothing the Agent installs or changes elsewhere
+reaches it, so a submission must live in `WORKDIR`. A public task therefore
+needs a `WORKDIR` other than `/`; setup fails otherwise. On a cluster, every
+Judge already runs from the task image with only a copy of the workspace.
+
+A public task should not rely on secrets in `tests/`. Values the Agent must not
+see belong in `[verifier.env]` runtime templates, which only the Judge
+receives. The Agent prompt states that `/tests` is public.
+
+### `model_access`
+
+```toml
+[metadata.rsi_harness.verifier]
+model_access = true
+```
+
+- Type: boolean.
+- Default when the table or field is absent: `false`.
+- `true`: each Judge can call the run's own Agent, for example to review a
+  submission against a rubric, through `rsi-agent`.
+
+`rsi-agent` is the only supported way for a Judge to call a model. It runs
+the run's Agent (the same CLI, credentials, provider or proxy, model and
+reasoning effort as Work) on one prompt and writes its final message, so a
+task works with every Agent RSI Harness supports and needs no change for a
+new one. The Judge procedure never calls a model API or an Agent CLI itself,
+and never sees the credentials.
+
+```bash
+rsi-agent exec --prompt-file FILE --output FILE [--schema FILE] \
+    [--timeout SEC] [--workdir DIR] [--log FILE]
+```
+
+- `--prompt-file`: the prompt, read by the caller (at most 4 MiB). The Agent
+  reads it as its task and may read files, such as evidence the procedure
+  placed in the working directory or anywhere world-readable.
+- `--output`: receives the Agent's final message, written atomically only
+  when the call succeeds.
+- `--schema`: a JSON Schema object. The Agent is asked for a final message
+  that is only JSON conforming to it, through its own structured-output
+  option when it has one, otherwise in the prompt. Validate the result: the
+  schema is a request, not a guarantee.
+- `--timeout`: seconds, default 1800, for the whole call. On expiry the
+  Agent's whole process group gets `SIGTERM`, then `SIGKILL` after 5
+  seconds. A caller with its own deadline should pass a timeout some seconds
+  before it, so rsi-agent stops the Agent and cleans up first. rsi-agent
+  stops its Agent at once when it receives `SIGTERM` itself.
+- `--workdir`: the Agent's working directory. The Agent owns it for the
+  call: it may delete, replace or add any entry in it, so never place a
+  trusted file there, and read what it leaves as the Agent's output.
+  Afterwards the directory's own owner and mode are restored. `--output`
+  and `--log` inside it are refused. Without it the Agent works in a private
+  scratch directory. `/`, top-level directories, `/tests`, `/logs/verifier`,
+  `/logs/agent` and rsi-agent's state are refused.
+- `--log`: also writes the Agent's stdout and stderr, redacted.
+
+Exit status: `0` the output was written; `1` the Agent failed (non-zero exit,
+no, empty or symlinked final message, or an error it reported), with one
+reason line and the tail of its stderr; `2` a usage error (including a prompt over 4 MiB or a schema over
+1 MiB); `3` model access
+is unavailable (no `model_access = true`, the Agent CLI is missing, or the
+run's Agent cannot run one-shot); `124` the timeout expired; `125` an
+internal setup failure; `143` rsi-agent was terminated. Credential values
+never appear in its output, the final message, the log or stderr.
+
+The Judge receives `rsi-agent` from RSI Harness, read-only, at
+`/usr/local/bin/rsi-agent` (and `/opt/rsi-agent`); it is not part of the
+Work image, and Judges without model access do not have it. It needs
+`python3` 3.8 or later in the Judge's image, which setup checks.
+
+Isolation. When the Judge runs as root, each call runs the Agent as its own
+unprivileged user with a fresh private `HOME` holding copies of a local
+login's files, and with `no_new_privs`. Calls may run concurrently, up to 16
+at a time (more wait for a free user within their timeout), and no two
+concurrent calls share a user: uids 61000 to 61015 and gids of the same
+numbers, which must not exist in the image (setup checks). That user cannot
+write `/logs/verifier` or the reward, cannot read rsi-agent's launch spec or
+the credential store, cannot read a hidden Judge's `/tests` (mode `0700`
+there), and cannot read, change or signal another call's files or
+processes. It can read `WORKDIR`, `/logs/agent`, a public Judge's `/tests`,
+its working directory and anything world-readable, so stage evidence the
+Agent must read accordingly. Its network is the Judge's. When a call ends,
+every process still running as its user is killed, including any that left
+the Agent's process group. A Judge whose Verifier user is not root gets no
+such isolation: every call's Agent then runs as that user, which rsi-agent
+states on stderr.
+
+The Judge also has:
+
+- **Network:** the Judge reaches the Agent provider or proxy endpoints that
+  RSI Harness pinned for Work, at the same addresses, named in the Judge's
+  `/etc/hosts`. Every other destination follows `[verifier] network_mode`;
+  with `"no-network"` it is rejected, and the Judge cannot resolve any other
+  name: its DNS server is an address the firewall rejects. Model access never
+  opens general egress.
+- **Environment:** of the Agent's settings, the test command receives only
+  `RSI_AGENT_NAME`, `RSI_AGENT_MODEL` and `RSI_AGENT_REASONING_EFFORT` (when
+  set), for records; the task's `[environment.env]` and `[verifier.env]`
+  reach it as usual. The Agent's API key, base URL and proxy reach only
+  `rsi-agent`.
+- **Local login** (`--agent-auth local`): the login files are placed, from
+  memory, in a private tmpfs that only root (or a non-root Verifier user)
+  reads; `rsi-agent` copies them into each call's private `HOME`. They are
+  not part of any snapshot.
+- **Redaction:** these credential values are replaced with `[REDACTED]` in
+  Judge output, feedback, events and errors.
+
+`[verifier] timeout_sec` bounds the whole test command, every `rsi-agent`
+call included: size it to cover the procedure's own work plus its model
+calls, and give each call a `--timeout` that ends before the procedure's own
+deadline.
+
+Setup fails if no endpoint can be pinned: configure the Agent API base URL or
+a proxy, or use an Agent with a registered default API URL. Only local Docker
+runs support model access; cluster runs reject the task before submitting a
+job.
+
+A hidden Judge's image is a snapshot of Work, so the Agent can change programs
+it runs, including the Python interpreter and the model CLI that `rsi-agent`
+uses. The Judge holds only the credential the Agent already has, but a hidden
+review procedure should not trust Work-installed tools to report its verdict.
+A public Judge runs from the clean image instead (see
+[`visibility`](#visibility)).
 
 ## Unsupported `task.toml` features
 

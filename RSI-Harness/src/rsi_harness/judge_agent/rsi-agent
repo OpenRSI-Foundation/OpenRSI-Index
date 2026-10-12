@@ -1,0 +1,8 @@
+#!/bin/sh
+# rsi-agent: the run's own Agent, one prompt at a time, inside a model-access
+# Judge. Installed read-only by RSI Harness; see /opt/rsi-agent/rsi_agent.py.
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "rsi-agent: python3 is required in the Judge image" >&2
+    exit 127
+fi
+exec python3 -I -S -B /opt/rsi-agent/rsi_agent.py "$@"
