@@ -1,0 +1,961 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Matched nine-run TTS calibration",
+  "type": "object",
+  "required": [
+    "schema",
+    "status",
+    "identity",
+    "run_id",
+    "created_unix",
+    "total_wall_seconds",
+    "runs",
+    "means",
+    "source_sha256"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "status": {
+      "const": "calibrated"
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "created_unix": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "total_wall_seconds": {
+      "type": "number",
+      "exclusiveMinimum": 0
+    },
+    "identity": {
+      "type": "object",
+      "required": [
+        "source",
+        "protocol_sha256",
+        "assets_sha256",
+        "software",
+        "hardware",
+        "evaluator_sha256"
+      ],
+      "properties": {
+        "source": {
+          "const": "1523543056bf334bc2f4d69db23aad0a002cedf2"
+        },
+        "software": {
+          "type": "object",
+          "required": [
+            "versions",
+            "files_sha256",
+            "interpreter_sha256"
+          ]
+        },
+        "hardware": {
+          "type": "object",
+          "required": [
+            "gpus",
+            "cpus",
+            "numa",
+            "topology"
+          ],
+          "properties": {
+            "gpus": {
+              "type": "array",
+              "minItems": 3,
+              "maxItems": 3
+            }
+          }
+        }
+      }
+    },
+    "runs": {
+      "type": "object",
+      "required": [
+        "base",
+        "moss",
+        "cosy"
+      ],
+      "properties": {
+        "base": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "required": [
+              "repetition",
+              "seed",
+              "metrics",
+              "coverage",
+              "contention",
+              "resources",
+              "timings",
+              "audio",
+              "diagnostic_stock_wer",
+              "native_performance_summary"
+            ],
+            "properties": {
+              "repetition": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2
+              },
+              "metrics": {
+                "type": "object",
+                "required": [
+                  "wer_corpus",
+                  "latency_mean_s",
+                  "latency_median_s",
+                  "latency_p95_s",
+                  "latency_p99_s",
+                  "rtf_mean",
+                  "rtf_median",
+                  "rtf_p95",
+                  "rtf_p99",
+                  "throughput_qps",
+                  "audio_throughput_s_per_s"
+                ],
+                "properties": {
+                  "wer_corpus": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "latency_mean_s": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "latency_median_s": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "latency_p95_s": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "latency_p99_s": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "rtf_mean": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "rtf_median": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "rtf_p95": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "rtf_p99": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "throughput_qps": {
+                    "type": "number",
+                    "minimum": 0,
+                    "exclusiveMinimum": 0
+                  },
+                  "audio_throughput_s_per_s": {
+                    "type": "number",
+                    "minimum": 0,
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "additionalProperties": false
+              },
+              "coverage": {
+                "const": {
+                  "tts": 1088,
+                  "wavs": 1088,
+                  "asr": 1088,
+                  "failed": 0,
+                  "skipped": 0,
+                  "tts_warmup": 16,
+                  "asr_warmup": 64
+                }
+              },
+              "contention": {
+                "type": "object",
+                "required": [
+                  "windows",
+                  "errors",
+                  "peak_foreign_cores",
+                  "mean_foreign_cores"
+                ],
+                "properties": {
+                  "windows": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "errors": {
+                    "const": 0
+                  },
+                  "peak_foreign_cores": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 2
+                  },
+                  "mean_foreign_cores": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                }
+              },
+              "resources": {
+                "type": "object",
+                "required": [
+                  "rss_peak_bytes",
+                  "uss_peak_bytes",
+                  "gpu_peak_mib",
+                  "samples"
+                ],
+                "properties": {
+                  "rss_peak_bytes": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "uss_peak_bytes": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "gpu_peak_mib": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "samples": {
+                    "type": "number",
+                    "minimum": 1
+                  }
+                }
+              },
+              "timings": {
+                "type": "object",
+                "required": [
+                  "native_tts_and_asr_seconds",
+                  "authoritative_asr_seconds",
+                  "repetition_seconds",
+                  "startup_and_warmup_events"
+                ]
+              },
+              "audio": {
+                "type": "object",
+                "required": [
+                  "duration_min_s",
+                  "duration_max_s",
+                  "duration_mean_s",
+                  "sample_rates",
+                  "formats"
+                ],
+                "properties": {
+                  "sample_rates": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "formats": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "array",
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "prefixItems": [
+                        {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              "diagnostic_stock_wer": {
+                "type": "number",
+                "minimum": 0
+              },
+              "native_performance_summary": {
+                "type": "object"
+              },
+              "seed": {
+                "type": "integer",
+                "enum": [
+                  42,
+                  43,
+                  44
+                ]
+              }
+            }
+          }
+        },
+        "moss": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "required": [
+              "repetition",
+              "seed",
+              "metrics",
+              "coverage",
+              "contention",
+              "resources",
+              "timings",
+              "audio",
+              "diagnostic_stock_wer",
+              "native_performance_summary"
+            ],
+            "properties": {
+              "repetition": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2
+              },
+              "metrics": {
+                "type": "object",
+                "required": [
+                  "wer_corpus",
+                  "latency_mean_s",
+                  "latency_median_s",
+                  "latency_p95_s",
+                  "latency_p99_s",
+                  "rtf_mean",
+                  "rtf_median",
+                  "rtf_p95",
+                  "rtf_p99",
+                  "throughput_qps",
+                  "audio_throughput_s_per_s"
+                ],
+                "properties": {
+                  "wer_corpus": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "latency_mean_s": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "latency_median_s": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "latency_p95_s": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "latency_p99_s": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "rtf_mean": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "rtf_median": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "rtf_p95": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "rtf_p99": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "throughput_qps": {
+                    "type": "number",
+                    "minimum": 0,
+                    "exclusiveMinimum": 0
+                  },
+                  "audio_throughput_s_per_s": {
+                    "type": "number",
+                    "minimum": 0,
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "additionalProperties": false
+              },
+              "coverage": {
+                "const": {
+                  "tts": 1088,
+                  "wavs": 1088,
+                  "asr": 1088,
+                  "failed": 0,
+                  "skipped": 0,
+                  "tts_warmup": 16,
+                  "asr_warmup": 64
+                }
+              },
+              "contention": {
+                "type": "object",
+                "required": [
+                  "windows",
+                  "errors",
+                  "peak_foreign_cores",
+                  "mean_foreign_cores"
+                ],
+                "properties": {
+                  "windows": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "errors": {
+                    "const": 0
+                  },
+                  "peak_foreign_cores": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 2
+                  },
+                  "mean_foreign_cores": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                }
+              },
+              "resources": {
+                "type": "object",
+                "required": [
+                  "rss_peak_bytes",
+                  "uss_peak_bytes",
+                  "gpu_peak_mib",
+                  "samples"
+                ],
+                "properties": {
+                  "rss_peak_bytes": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "uss_peak_bytes": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "gpu_peak_mib": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "samples": {
+                    "type": "number",
+                    "minimum": 1
+                  }
+                }
+              },
+              "timings": {
+                "type": "object",
+                "required": [
+                  "native_tts_and_asr_seconds",
+                  "authoritative_asr_seconds",
+                  "repetition_seconds",
+                  "startup_and_warmup_events"
+                ]
+              },
+              "audio": {
+                "type": "object",
+                "required": [
+                  "duration_min_s",
+                  "duration_max_s",
+                  "duration_mean_s",
+                  "sample_rates",
+                  "formats"
+                ],
+                "properties": {
+                  "sample_rates": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "formats": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "array",
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "prefixItems": [
+                        {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              "diagnostic_stock_wer": {
+                "type": "number",
+                "minimum": 0
+              },
+              "native_performance_summary": {
+                "type": "object"
+              },
+              "seed": {
+                "type": "integer",
+                "enum": [
+                  42,
+                  43,
+                  44
+                ]
+              }
+            }
+          }
+        },
+        "cosy": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "items": {
+            "type": "object",
+            "required": [
+              "repetition",
+              "seed",
+              "metrics",
+              "coverage",
+              "contention",
+              "resources",
+              "timings",
+              "audio",
+              "diagnostic_stock_wer",
+              "native_performance_summary"
+            ],
+            "properties": {
+              "repetition": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 2
+              },
+              "metrics": {
+                "type": "object",
+                "required": [
+                  "wer_corpus",
+                  "latency_mean_s",
+                  "latency_median_s",
+                  "latency_p95_s",
+                  "latency_p99_s",
+                  "rtf_mean",
+                  "rtf_median",
+                  "rtf_p95",
+                  "rtf_p99",
+                  "throughput_qps",
+                  "audio_throughput_s_per_s"
+                ],
+                "properties": {
+                  "wer_corpus": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "latency_mean_s": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "latency_median_s": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "latency_p95_s": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "latency_p99_s": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "rtf_mean": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "rtf_median": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "rtf_p95": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "rtf_p99": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "throughput_qps": {
+                    "type": "number",
+                    "minimum": 0,
+                    "exclusiveMinimum": 0
+                  },
+                  "audio_throughput_s_per_s": {
+                    "type": "number",
+                    "minimum": 0,
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "additionalProperties": false
+              },
+              "coverage": {
+                "const": {
+                  "tts": 1088,
+                  "wavs": 1088,
+                  "asr": 1088,
+                  "failed": 0,
+                  "skipped": 0,
+                  "tts_warmup": 16,
+                  "asr_warmup": 64
+                }
+              },
+              "contention": {
+                "type": "object",
+                "required": [
+                  "windows",
+                  "errors",
+                  "peak_foreign_cores",
+                  "mean_foreign_cores"
+                ],
+                "properties": {
+                  "windows": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "errors": {
+                    "const": 0
+                  },
+                  "peak_foreign_cores": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 2
+                  },
+                  "mean_foreign_cores": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                }
+              },
+              "resources": {
+                "type": "object",
+                "required": [
+                  "rss_peak_bytes",
+                  "uss_peak_bytes",
+                  "gpu_peak_mib",
+                  "samples"
+                ],
+                "properties": {
+                  "rss_peak_bytes": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "uss_peak_bytes": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "gpu_peak_mib": {
+                    "type": "number",
+                    "minimum": 1
+                  },
+                  "samples": {
+                    "type": "number",
+                    "minimum": 1
+                  }
+                }
+              },
+              "timings": {
+                "type": "object",
+                "required": [
+                  "native_tts_and_asr_seconds",
+                  "authoritative_asr_seconds",
+                  "repetition_seconds",
+                  "startup_and_warmup_events"
+                ]
+              },
+              "audio": {
+                "type": "object",
+                "required": [
+                  "duration_min_s",
+                  "duration_max_s",
+                  "duration_mean_s",
+                  "sample_rates",
+                  "formats"
+                ],
+                "properties": {
+                  "sample_rates": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "formats": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "array",
+                      "minItems": 2,
+                      "maxItems": 2,
+                      "prefixItems": [
+                        {
+                          "type": "integer",
+                          "minimum": 1
+                        },
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      ]
+                    }
+                  }
+                }
+              },
+              "diagnostic_stock_wer": {
+                "type": "number",
+                "minimum": 0
+              },
+              "native_performance_summary": {
+                "type": "object"
+              },
+              "seed": {
+                "type": "integer",
+                "enum": [
+                  42,
+                  43,
+                  44
+                ]
+              }
+            }
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "means": {
+      "type": "object",
+      "required": [
+        "base",
+        "moss",
+        "cosy"
+      ],
+      "properties": {
+        "base": {
+          "type": "object",
+          "required": [
+            "wer_corpus",
+            "latency_mean_s",
+            "latency_median_s",
+            "latency_p95_s",
+            "latency_p99_s",
+            "rtf_mean",
+            "rtf_median",
+            "rtf_p95",
+            "rtf_p99",
+            "throughput_qps",
+            "audio_throughput_s_per_s"
+          ],
+          "properties": {
+            "wer_corpus": {
+              "type": "number",
+              "minimum": 0
+            },
+            "latency_mean_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "latency_median_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "latency_p95_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "latency_p99_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "rtf_mean": {
+              "type": "number",
+              "minimum": 0
+            },
+            "rtf_median": {
+              "type": "number",
+              "minimum": 0
+            },
+            "rtf_p95": {
+              "type": "number",
+              "minimum": 0
+            },
+            "rtf_p99": {
+              "type": "number",
+              "minimum": 0
+            },
+            "throughput_qps": {
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMinimum": 0
+            },
+            "audio_throughput_s_per_s": {
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMinimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "moss": {
+          "type": "object",
+          "required": [
+            "wer_corpus",
+            "latency_mean_s",
+            "latency_median_s",
+            "latency_p95_s",
+            "latency_p99_s",
+            "rtf_mean",
+            "rtf_median",
+            "rtf_p95",
+            "rtf_p99",
+            "throughput_qps",
+            "audio_throughput_s_per_s"
+          ],
+          "properties": {
+            "wer_corpus": {
+              "type": "number",
+              "minimum": 0
+            },
+            "latency_mean_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "latency_median_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "latency_p95_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "latency_p99_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "rtf_mean": {
+              "type": "number",
+              "minimum": 0
+            },
+            "rtf_median": {
+              "type": "number",
+              "minimum": 0
+            },
+            "rtf_p95": {
+              "type": "number",
+              "minimum": 0
+            },
+            "rtf_p99": {
+              "type": "number",
+              "minimum": 0
+            },
+            "throughput_qps": {
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMinimum": 0
+            },
+            "audio_throughput_s_per_s": {
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMinimum": 0
+            }
+          },
+          "additionalProperties": false
+        },
+        "cosy": {
+          "type": "object",
+          "required": [
+            "wer_corpus",
+            "latency_mean_s",
+            "latency_median_s",
+            "latency_p95_s",
+            "latency_p99_s",
+            "rtf_mean",
+            "rtf_median",
+            "rtf_p95",
+            "rtf_p99",
+            "throughput_qps",
+            "audio_throughput_s_per_s"
+          ],
+          "properties": {
+            "wer_corpus": {
+              "type": "number",
+              "minimum": 0
+            },
+            "latency_mean_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "latency_median_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "latency_p95_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "latency_p99_s": {
+              "type": "number",
+              "minimum": 0
+            },
+            "rtf_mean": {
+              "type": "number",
+              "minimum": 0
+            },
+            "rtf_median": {
+              "type": "number",
+              "minimum": 0
+            },
+            "rtf_p95": {
+              "type": "number",
+              "minimum": 0
+            },
+            "rtf_p99": {
+              "type": "number",
+              "minimum": 0
+            },
+            "throughput_qps": {
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMinimum": 0
+            },
+            "audio_throughput_s_per_s": {
+              "type": "number",
+              "minimum": 0,
+              "exclusiveMinimum": 0
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "source_sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "additionalProperties": false
+}
