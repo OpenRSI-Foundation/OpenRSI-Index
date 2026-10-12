@@ -17,7 +17,7 @@ This task studies whether bounded intrinsic inspection and repair improves seque
 
 The post-build workspace contains the scoreable single-repeat unadapted no-op under `/workspace/submission/runs/repeat-1/`. `solution/solve.sh` idempotently restores the identical state and the stock permitted surface. It does not perform adaptation; use `/usr/local/bin/run-stock-baseline --output-root /workspace/submission` in Work for that stateful check.
 
-The [published runs](../../rsi-logs/ace-playbook-repair/) contain 30 Claude submissions and 18 Codex submissions, with best rewards of `0.730` and `0.705`. The stock adapted baseline above is distinct from Claude's initial empty-playbook control (`0.565`). These are measurements of this lightweight protocol, not the upstream paper's aggregate result.
+The [published runs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/ace-playbook-repair) contain 30 Claude submissions and 18 Codex submissions, with best rewards of `0.730` and `0.705`. The stock adapted baseline above is distinct from Claude's initial empty-playbook control (`0.565`). These are measurements of this lightweight protocol, not the upstream paper's aggregate result.
 
 ## Lightweight Work budget
 

@@ -125,8 +125,8 @@ This is a task-description update from the logs, not a migration of that
 runtime. Reproducing the logged runs also requires their common checkpoint,
 subset manifest, host launchers, and matching policy/evaluation setup.
 
-[logs]: ../../../rsi-logs/signature-tasks/gpic-10m-autoresearch/
-[codex-notes]: ../../../rsi-logs/signature-tasks/gpic-10m-autoresearch/codex-gpt-5.6-sol/RESEARCH_NOTES.md
-[codex-ledger]: ../../../rsi-logs/signature-tasks/gpic-10m-autoresearch/codex-gpt-5.6-sol/experiments.jsonl
-[claude-notes]: ../../../rsi-logs/signature-tasks/gpic-10m-autoresearch/claude-code-claude-opus-5/RESEARCH_NOTES.md
-[summary]: ../../../rsi-logs/signature-tasks/gpic-10m-autoresearch/summary/traj_progress_summary.md
+[logs]: https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/signature-tasks/gpic-10m-autoresearch
+[codex-notes]: https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/blob/main/signature-tasks/gpic-10m-autoresearch/codex-gpt-5.6-sol/RESEARCH_NOTES.md
+[codex-ledger]: https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/blob/main/signature-tasks/gpic-10m-autoresearch/codex-gpt-5.6-sol/experiments.jsonl
+[claude-notes]: https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/blob/main/signature-tasks/gpic-10m-autoresearch/claude-code-claude-opus-5/RESEARCH_NOTES.md
+[summary]: https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/blob/main/signature-tasks/gpic-10m-autoresearch/summary/traj_progress_summary.md

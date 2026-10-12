@@ -43,16 +43,16 @@ We are witnessing the dawn of a new era: AI is entering a recursive self-improve
 
 ### Task taxonomy
 
-We are actively developing this project and welcome [contributions](https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md) from the community. Tasks and execution logs are available in [rsi-tasks/](rsi-tasks/) and [rsi-logs/](rsi-logs/), respectively. Open the [RSI Logs Viewer](https://openrsi-logs.zhuofengli12345.workers.dev/) to explore results visually. See [Quick Start](assets/docs/quick-start.md) for instructions on running these tasks.
+We are actively developing this project and welcome [contributions](https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md) from the community. Tasks are in [rsi-tasks/](rsi-tasks/); their execution logs are in the [OpenRSI-Index-Logs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs) dataset (see [Research logs](#research-logs)). Open the [RSI Logs Viewer](https://openrsi-logs.zhuofengli12345.workers.dev/) to explore results visually. See [Quick Start](assets/docs/quick-start.md) for instructions on running these tasks.
 
 <details>
 <summary><strong>View tasks</strong></summary>
 
 | Task                                                                | Track          | Category      | Description                                                           | GPU requirement |
 | ------------------------------------------------------------------- | -------------- | ------------- | --------------------------------------------------------------------- | --------------- |
-| [`Qwen-122B-RL`](rsi-tasks/signature-tasks/post-training-qwen-122B-rl/) · [Research report](rsi-logs/signature-tasks/post-training-qwen-122B-rl/) | Signature Task | Post-training | Optimize a full post-training stack under one fixed budget.           | 256× H100       |
+| [`Qwen-122B-RL`](rsi-tasks/signature-tasks/post-training-qwen-122B-rl/) · [Research report](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/signature-tasks/post-training-qwen-122B-rl) | Signature Task | Post-training | Optimize a full post-training stack under one fixed budget.           | 256× H100       |
 | [`marin-optimizer-update-geometry`](rsi-tasks/signature-tasks/pre-training-optimizer-update-geometry/) | Signature Task | Pre-training  | Design a scale-general optimizer for the Marin scaling ladder.        | 256× H100       |
-| [`gpic-text-to-image`](rsi-tasks/signature-tasks/gpic_generation/) · [Research trajectories](rsi-logs/signature-tasks/gpic-10m-autoresearch/) | Signature Task | Vision        | Improve a shared PixelGen checkpoint on a fixed GPIC 10M subset.      | 4× H100 per job |
+| [`gpic-text-to-image`](rsi-tasks/signature-tasks/gpic_generation/) · [Research trajectories](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/signature-tasks/gpic-10m-autoresearch) | Signature Task | Vision        | Improve a shared PixelGen checkpoint on a fixed GPIC 10M subset.      | 4× H100 per job |
 | [`depth-width-allocation`](rsi-tasks/depth-width-allocation/)       | Public Task    | Pre-training  | Optimize decoder-width allocation under a fixed 200M training budget. | 8× H100         |
 | [`learnability-cot`](rsi-tasks/learnability-cot/)                   | Public Task    | Post-training | Adapt reasoning traces for small-model math SFT.                      | 4× H100         |
 | [`gemm-h100-refined`](rsi-tasks/gemm-h100-refined/)                 | Public Task    | MLSys         | Optimize an FP16 CUDA GEMM kernel for H100 throughput.                | 1× H100         |
@@ -65,9 +65,20 @@ We are actively developing this project and welcome [contributions](https://gith
 | [`reasonir-difficulty-curriculum`](rsi-tasks/reasonir-difficulty-curriculum/) | Public Task | Post-training | Optimize a fixed-budget retrieval LoRA through difficulty-aware curricula. | 4× H100 minimum |
 | [`isaaclab-peginsert-reward-search`](rsi-tasks/isaaclab-peginsert-reward-search/) | Public Task | Robotics      | Design bounded reward graphs for fixed-budget Isaac Lab peg insertion. | 4× H100         |
 | [`kev-decision-architecture`](rsi-tasks/kev-decision-architecture/) | Public Task | Post-training | Redesign a 0.5B decision architecture under a fixed training corpus and recipe. | 2× H100 minimum |
-| [`sglang-omni-tts-runtime`](rsi-tasks/sglang-omni-tts-runtime/) · [Research log](rsi-logs/sglang-omni-tts-runtime/) | Public Task | MLSys | Improve CosyVoice3 TTS serving throughput with Qwen Base and MOSS regression checks. | 1 Work + 3 Judge GPUs; recorded on H200 |
+| [`sglang-omni-tts-runtime`](rsi-tasks/sglang-omni-tts-runtime/) · [Research log](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/sglang-omni-tts-runtime) | Public Task | MLSys | Improve CosyVoice3 TTS serving throughput with Qwen Base and MOSS regression checks. | 1 Work + 3 Judge GPUs; recorded on H200 |
 
 </details>
+
+### Research logs
+
+Research logs live in the Hugging Face dataset [OpenRSI-Foundation/OpenRSI-Index-Logs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs), with one top-level directory per task (signature tasks under `signature-tasks/`). Every file is stored uncompressed, so logs can be browsed and downloaded as-is. To download the logs of one task:
+
+```bash
+hf download OpenRSI-Foundation/OpenRSI-Index-Logs --repo-type dataset \
+  --include "sglang-omni-tts-runtime/*" --local-dir openrsi-index-logs
+```
+
+Omit `--include` to download the full set, which is about 1.7 GB of raw files.
 
 ### How an evaluation works: RSI-Harness
 

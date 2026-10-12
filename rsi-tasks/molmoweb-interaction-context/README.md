@@ -17,7 +17,7 @@ This task studies inference-time context allocation for frozen MolmoWeb-4B. A ca
 
 The upstream live-browser/LLM-judge results are protocol-mismatched and are not treated as the baseline. `solution/solve.sh` idempotently restores the baseline strategy without training, evaluation, submission, `/tests` access, or reward writing.
 
-The [published runs](../../rsi-logs/molmoweb-interaction-context/) contain 39 Claude submissions and 40 Codex submissions. Both reproduce the unchanged-strategy baseline in submission 1; their best rewards are `0.6057279631114341` and `0.6053201061214462`, respectively. Persisted submissions include one final result per run beyond the stale shutdown-summary count; the archive documents this without rewriting either record.
+The [published runs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/molmoweb-interaction-context) contain 39 Claude submissions and 40 Codex submissions. Both reproduce the unchanged-strategy baseline in submission 1; their best rewards are `0.6057279631114341` and `0.6053201061214462`, respectively. Persisted submissions include one final result per run beyond the stale shutdown-summary count; the archive documents this without rewriting either record.
 
 ## Environment and evaluation
 
