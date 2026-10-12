@@ -1,0 +1,7 @@
+# Explicit historical archives, not blanket exceptions for new tasks.
+[log_task_aliases]
+"signature-tasks/gpic-10m-autoresearch" = "signature-tasks/gpic_generation"
+
+[historical_tasks]
+"signature-tasks/gpic_generation" = "Published schema-1.3 archive; its runtime differs from the logged 10M continuation. See its README."
+"signature-tasks/pre-training-optimizer-update-geometry" = "Published scaling-ladder archive has no standard tests/test.sh; see its recorded Slurm evaluation protocol."

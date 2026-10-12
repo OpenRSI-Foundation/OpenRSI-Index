@@ -1,0 +1,24 @@
+[extend]
+useDefault = true
+
+# Narrow mathematical/code/digest false positives; never exempt a log directory,
+# arbitrary 64-character string, credential provider rule, or entire transcript.
+[[rules]]
+id = "generic-api-key"
+[[rules.allowlists]]
+description = "Torch serialization key CLI flag, not an API credential"
+regexTarget = "match"
+regexes = ['''--torch-key=''']
+[[rules.allowlists]]
+description = "Explicit Python file inventories and experiment SHA-256 fields"
+regexTarget = "match"
+regexes = [
+  '''(?:[A-Za-z_][A-Za-z0-9_]*\.py["']\s*:\s*["']|(?:content_key_sequence|key_chunks)_sha256"\s*:\s*")[0-9a-f]{64}''',
+  '''prepare_h32_key_tables\.py','[0-9a-f]{64}''',
+  '''prepare_h32_key_tables\.py','prepare_h32_validation\.py''',
+  '''(?:added_tokens|special_tokens_map|tokenizer|tokenizer_config)\.json["']\s*:\s*["'][0-9a-f]{64}''',
+]
+[[rules.allowlists]]
+description = "Triton bitonic sorting mathematical variable"
+regexTarget = "match"
+regexes = ['''^keys,\s*log2_num_keys\s*$''']
