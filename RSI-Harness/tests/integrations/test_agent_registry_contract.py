@@ -210,13 +210,18 @@ def test_driven_agent_command_runs_with_a_hostile_model_name(
     command = agent.format_run_cmd(
         "/tmp/rsi-agent-prompt.md", model=model, cwd="/w", continuation=STOP_HOOK_REASON
     )
+    # Some preludes run node; keep the one on PATH, wherever it is installed.
+    node = shutil.which("node")
+    if node is None and "node " in command:
+        pytest.skip("node is not installed")
+    node_dir = f"{Path(node).parent}:" if node else ""
     completed = subprocess.run(
         ["/bin/bash", "-c", command],
         # The Agent's real environment, key included: a prelude that wrote the
         # key's value under home would be caught below.
         env={
             **rsi_loop_agent_environment(_config(), agent, model),
-            "PATH": f"{stub_bin}:/usr/bin:/bin",
+            "PATH": f"{stub_bin}:{node_dir}/usr/bin:/bin",
             "HOME": str(home),
         },
         capture_output=True,
