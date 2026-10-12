@@ -81,8 +81,13 @@ cannot suppress findings.
 All files in an affected package are scanned, not just changed lines. Gzip,
 tar (including gzip/bzip2/xz), zip, xz and bzip2 are read with bounded traversal;
 compression signatures are recognized even after renaming. Archive members are
-copied as inert regular files; archive links, devices, traversal paths, encrypted
-ZIPs and unsupported rar/7z/zstd wrappers fail. No executable modes are restored.
+copied as inert regular files; log archive links, devices, traversal paths,
+encrypted ZIPs and unsupported rar/7z/zstd wrappers fail. Task-source tar archives
+may contain safe relative symbolic-link declarations naming a regular file in
+the same archive (for example, upstream `CLAUDE.md` → `AGENTS.md`). These are
+scanned as inert link-target metadata, never created or followed; the target
+file is scanned independently. Absolute/traversal, missing, chained and hard
+links remain errors. No executable modes are restored.
 These archive-safety and integrity failures remain blocking even though suspected
 credentials are advisory.
 

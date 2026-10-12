@@ -8,6 +8,7 @@ import bz2
 import contextlib
 import gzip
 import hashlib
+import io
 import json
 import lzma
 import math
@@ -379,9 +380,35 @@ class ScanStage:
             or header[257:262] == b"ustar"
         ):
             with tarfile.open(target, "r:*") as archive:
+                members = []
                 for member in archive:
                     safe_relative(member.name)
+                    if self.count + len(members) >= MAX_ENTRIES:
+                        raise CheckError("more than 100000 archive entries")
+                    members.append(member)
+                regular_names = {m.name for m in members if m.isfile()}
+                for member in members:
                     if member.isdir():
+                        continue
+                    if not structured and member.issym():
+                        # Upstream task sources may alias CLAUDE.md to AGENTS.md.
+                        # Never create/follow links. Permit only a safe relative
+                        # declaration whose target is a regular file in this tar;
+                        # all regular target bytes are independently scanned.
+                        relative = safe_relative(member.linkname)
+                        link_target = (
+                            PurePosixPath(member.name).parent / relative.as_posix()
+                        ).as_posix()
+                        if link_target not in regular_names:
+                            raise CheckError(
+                                "source archive link must name a regular file in the same archive"
+                            )
+                        self.add(
+                            io.BytesIO(member.linkname.encode()),
+                            member.name + ".symlink-target.txt",
+                            depth + 1,
+                            structured=False,
+                        )
                         continue
                     if not member.isfile():
                         raise CheckError(
