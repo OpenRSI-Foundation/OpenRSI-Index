@@ -138,6 +138,55 @@ class ArchiveTests(unittest.TestCase):
         with self.assertRaises(pub.CheckError):
             self.stage.add(io.BytesIO(data.getvalue()), "payload.tar")
 
+    def source_tar(self, link="AGENTS.md", kind=tarfile.SYMTYPE):
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode="w") as archive:
+            regular = tarfile.TarInfo("source/AGENTS.md")
+            regular.size = 12
+            archive.addfile(regular, io.BytesIO(b"source notes"))
+            item = tarfile.TarInfo("source/CLAUDE.md")
+            item.type, item.linkname = kind, link
+            archive.addfile(item)
+        return io.BytesIO(data.getvalue())
+
+    def test_safe_source_link_is_inert_and_target_is_scanned(self):
+        self.stage.add(self.source_tar(), "source.tar", structured=False)
+        files = list((self.root / "scan").rglob("*"))
+        self.assertFalse(any(p.is_symlink() for p in files))
+        self.assertTrue(
+            any(
+                p.name == "AGENTS.md" and p.read_bytes() == b"source notes"
+                for p in files
+                if p.is_file()
+            )
+        )
+        self.assertTrue(any(p.name == "CLAUDE.md.symlink-target.txt" for p in files))
+
+    def test_safe_link_in_log_archive_still_rejected(self):
+        with self.assertRaises(pub.CheckError):
+            self.stage.add(self.source_tar(), "log.tar")
+
+    def test_unsafe_missing_and_chained_source_links_rejected(self):
+        for link in ("/outside", "../../outside", "missing.md", "CLAUDE.md"):
+            with self.subTest(link=link), self.assertRaises(pub.CheckError):
+                self.stage.add(self.source_tar(link), "source.tar", structured=False)
+        with self.assertRaises(pub.CheckError):
+            self.stage.add(
+                self.source_tar("source/AGENTS.md", tarfile.LNKTYPE),
+                "source.tar",
+                structured=False,
+            )
+
+    def test_tar_directory_entries_are_bounded(self):
+        data = io.BytesIO()
+        with tarfile.open(fileobj=data, mode="w") as archive:
+            for number in range(5):
+                item = tarfile.TarInfo(f"dir-{number}")
+                item.type = tarfile.DIRTYPE
+                archive.addfile(item)
+        with patch.object(pub, "MAX_ENTRIES", 4), self.assertRaises(pub.CheckError):
+            self.stage.add(io.BytesIO(data.getvalue()), "source.tar", structured=False)
+
     def test_nested_zip_gzip_scanned(self):
         data = io.BytesIO()
         with zipfile.ZipFile(data, "w") as archive:
@@ -371,6 +420,36 @@ class RepositoryTests(unittest.TestCase):
         with contextlib.closing(pub.PartStream(paths)) as stream:
             self.assertEqual(stream.read(100), content)
             self.assertEqual(stream.read(100), b"")
+
+    def test_gzip_chunks_validated_only_after_complete_reassembly(self):
+        self.task()
+        self.write("rsi-logs/demo-task/README.md", "Recorded run\n")
+        content = b"complete sanitized transcript\n" * 100
+        compressed = gzip.compress(content, mtime=0)
+        parts = []
+        for number, block in enumerate((compressed[:12], compressed[12:])):
+            name = f"part-{number}.bin"
+            self.write(f"rsi-logs/demo-task/model/{name}", block)
+            parts.append(
+                {
+                    "path": name,
+                    "bytes": len(block),
+                    "sha256": hashlib.sha256(block).hexdigest(),
+                }
+            )
+        self.write(
+            "rsi-logs/demo-task/model/manifest.json",
+            json.dumps(
+                {
+                    "source_name": "agent_output.txt.gz",
+                    "bytes": len(compressed),
+                    "sha256": hashlib.sha256(compressed).hexdigest(),
+                    "parts": parts,
+                }
+            ),
+        )
+        self.commit()
+        self.check()
 
     def test_compressed_manifest_verified(self):
         raw = b"line one\nline two\n"
