@@ -1,0 +1,139 @@
+{
+  "schema_version": 1,
+  "run_id": "omni-resume3-669485-20261004T141956Z-resume3",
+  "round": "agent-4",
+  "source_feedback": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/feedback/agent-4.log",
+  "judge_status": "eligible",
+  "reward": 1.5389225880993647,
+  "candidate_source_sha256": "260c25cced15953f85e7b729c1477ba294c252f02bd9b56f6f25b8ef307a42b8",
+  "initial_means": {
+    "base": {
+      "audio_throughput_s_per_s": 90.82933333333334,
+      "latency_mean_s": 0.7293333333333333,
+      "latency_median_s": 0.7086666666666667,
+      "latency_p95_s": 0.9969999999999999,
+      "latency_p99_s": 1.6523333333333332,
+      "rtf_mean": 0.1812,
+      "rtf_median": 0.17086666666666664,
+      "rtf_p95": 0.24349999999999997,
+      "rtf_p99": 0.4368666666666667,
+      "throughput_qps": 21.83966666666667,
+      "wer_corpus": 0.010298919869379553
+    },
+    "cosy": {
+      "audio_throughput_s_per_s": 44.494,
+      "latency_mean_s": 1.723,
+      "latency_median_s": 1.6616666666666664,
+      "latency_p95_s": 2.343666666666667,
+      "latency_p99_s": 2.7593333333333336,
+      "rtf_mean": 0.39353333333333335,
+      "rtf_median": 0.35886666666666667,
+      "rtf_p95": 0.5297666666666667,
+      "rtf_p99": 0.6459,
+      "throughput_qps": 9.232,
+      "wer_corpus": 0.013006224008484746
+    },
+    "moss": {
+      "audio_throughput_s_per_s": 52.160333333333334,
+      "latency_mean_s": 1.3683333333333334,
+      "latency_median_s": 1.360666666666667,
+      "latency_p95_s": 1.7286666666666666,
+      "latency_p99_s": 1.9736666666666667,
+      "rtf_mean": 0.31493333333333334,
+      "rtf_median": 0.3039,
+      "rtf_p95": 0.40673333333333334,
+      "rtf_p99": 0.44913333333333333,
+      "throughput_qps": 11.643666666666666,
+      "wer_corpus": 0.019258142845181278
+    }
+  },
+  "candidate_means": {
+    "base": {
+      "audio_throughput_s_per_s": 92.53533333333333,
+      "latency_mean_s": 0.7133333333333333,
+      "latency_median_s": 0.6993333333333333,
+      "latency_p95_s": 0.9933333333333333,
+      "latency_p99_s": 1.3026666666666666,
+      "rtf_mean": 0.17776666666666666,
+      "rtf_median": 0.1691666666666667,
+      "rtf_p95": 0.24616666666666667,
+      "rtf_p99": 0.36283333333333334,
+      "throughput_qps": 22.314666666666668,
+      "wer_corpus": 0.010354740573278629
+    },
+    "cosy": {
+      "audio_throughput_s_per_s": 68.48966666666666,
+      "latency_mean_s": 1.095,
+      "latency_median_s": 1.0526666666666669,
+      "latency_p95_s": 1.4886666666666668,
+      "latency_p99_s": 1.7516666666666667,
+      "rtf_mean": 0.25123333333333336,
+      "rtf_median": 0.2278,
+      "rtf_p95": 0.3394333333333333,
+      "rtf_p99": 0.41819999999999996,
+      "throughput_qps": 14.207333333333333,
+      "wer_corpus": 0.012587568729241674
+    },
+    "moss": {
+      "audio_throughput_s_per_s": 52.776,
+      "latency_mean_s": 1.353,
+      "latency_median_s": 1.3393333333333335,
+      "latency_p95_s": 1.7066666666666668,
+      "latency_p99_s": 1.9926666666666666,
+      "rtf_mean": 0.31139999999999995,
+      "rtf_median": 0.3005,
+      "rtf_p95": 0.40526666666666666,
+      "rtf_p99": 0.4518333333333333,
+      "throughput_qps": 11.780000000000001,
+      "wer_corpus": 0.019481425660777582
+    }
+  },
+  "guards": {
+    "base": {
+      "audio_throughput_s_per_s": true,
+      "latency_mean_s": true,
+      "latency_median_s": true,
+      "latency_p95_s": true,
+      "latency_p99_s": true,
+      "rtf_mean": true,
+      "rtf_median": true,
+      "rtf_p95": true,
+      "rtf_p99": true,
+      "throughput_qps": true,
+      "wer_corpus": true
+    },
+    "cosy": {
+      "audio_throughput_s_per_s": true,
+      "latency_mean_s": true,
+      "latency_median_s": true,
+      "latency_p95_s": true,
+      "latency_p99_s": true,
+      "rtf_mean": true,
+      "rtf_median": true,
+      "rtf_p95": true,
+      "rtf_p99": true,
+      "throughput_qps": true,
+      "wer_corpus": true
+    },
+    "moss": {
+      "audio_throughput_s_per_s": true,
+      "latency_mean_s": true,
+      "latency_median_s": true,
+      "latency_p95_s": true,
+      "latency_p99_s": true,
+      "rtf_mean": true,
+      "rtf_median": true,
+      "rtf_p95": true,
+      "rtf_p99": true,
+      "throughput_qps": true,
+      "wer_corpus": true
+    }
+  },
+  "operator_baseline_promotion_verified": false,
+  "upstream_pull_requests": [
+    2524,
+    2525,
+    2555
+  ],
+  "note": "Judge result and PR-specific serving studies are distinct measurements."
+}

@@ -1,0 +1,13 @@
+{
+  "error": "verifier exited with 1",
+  "exit_code": 1,
+  "full_output_captured": true,
+  "metrics": {},
+  "round": "agent-2",
+  "runtime_seconds": 543.4012904129922,
+  "score": null,
+  "status": "verifier_error",
+  "submitted_at": 1791141386.039471,
+  "timed_out": false,
+  "verifier_output_required": true
+}

@@ -1,0 +1,12 @@
+{
+  "agent": "codex",
+  "best_rewards": {},
+  "best_round": null,
+  "best_score": null,
+  "model": "gpt-6-astra",
+  "runtime_seconds": 86411.38676901604,
+  "status": "no_valid_submission",
+  "timed_out": true,
+  "timeout_seconds": 86400.0,
+  "total_rounds": 6
+}

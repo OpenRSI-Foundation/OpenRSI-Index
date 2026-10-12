@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "source_name": "agent_output.txt.gz",
+  "sha256": "a59ec46aa7fb7d520558c5f9abbb6f4f825e477539fc73fab94aa2bda169c126",
+  "bytes": 110968823,
+  "uncompressed_sha256": "baaf98251d3206ea6f84f76f8ef43364598d8265a3e5e0bede05abbf8d7da135",
+  "uncompressed_bytes": 491993246,
+  "line_count": 7007523,
+  "compression": "gzip",
+  "parts": [
+    {
+      "path": "part-0001.bin",
+      "bytes": 67108864,
+      "sha256": "0d9915bedaf274030879960a05431a07a08fccdf5f1823e38f149ef29a2df8d9"
+    },
+    {
+      "path": "part-0002.bin",
+      "bytes": 43859959,
+      "sha256": "3d1f1b41e55546d506c94d92c3ec0d2a577f7ef25e90517ac66d553eefce1715"
+    }
+  ],
+  "note": "Concatenate every part in manifest order to restore the complete gzip; no bytes were truncated."
+}

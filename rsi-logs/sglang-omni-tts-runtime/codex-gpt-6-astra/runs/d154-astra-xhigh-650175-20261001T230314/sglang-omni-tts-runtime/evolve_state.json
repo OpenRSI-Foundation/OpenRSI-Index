@@ -1,0 +1,30 @@
+{
+  "best_round": null,
+  "best_score": null,
+  "submissions": [
+    {
+      "at": 1790919520.426296,
+      "kind": "agent",
+      "rewards": {},
+      "round": "agent-1",
+      "score": null,
+      "status": "verifier_error"
+    },
+    {
+      "at": 1790925200.39528,
+      "kind": "agent",
+      "rewards": {},
+      "round": "agent-2",
+      "score": null,
+      "status": "verifier_error"
+    },
+    {
+      "at": 1790953064.619859,
+      "kind": "agent",
+      "rewards": {},
+      "round": "agent-8",
+      "score": null,
+      "status": "verifier_error"
+    }
+  ]
+}

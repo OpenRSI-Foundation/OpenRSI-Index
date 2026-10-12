@@ -1,0 +1,157 @@
+{
+  "files": {
+    "sglang-omni-tts-runtime/agent_output.txt": {
+      "git_blob_oid": "8925a8f81a01d71d905927147af234b546fdc5e6",
+      "sha256": "abf4424fa6f15d0d6e3d00dba9c89209c53208b5a8842eaedfc20e6c53f8d7b7",
+      "source_mtime": 1791046850.833025,
+      "source_size": 1506357
+    },
+    "sglang-omni-tts-runtime/agent_prompt.md": {
+      "git_blob_oid": "5be02cc3eb5c6cec4eb8fff86a570dd27b4ace88",
+      "sha256": "a21723afa3704f1b96db77c7a6a29f4f84ab4b164fd7859d10a3dbddaaaccc35",
+      "source_mtime": 1790960450.8096302,
+      "source_size": 16140
+    },
+    "sglang-omni-tts-runtime/evolve_state.json": {
+      "git_blob_oid": "71ab8878b8c734a8ba8b31383ac3d22bfd6ba504",
+      "sha256": "f3f5b62ab49593f3888fc352b91ec82977a55721d3574be850090e0f8c4ed34a",
+      "source_mtime": 1791045961.673687,
+      "source_size": 1078
+    },
+    "sglang-omni-tts-runtime/feedback/agent-1.log": {
+      "git_blob_oid": "ab7d7c4c7071663ec51d323623da2043858b0730",
+      "sha256": "5d147269275218a5b16fedbeab2495eadd50bbd587ac3ab36738764101359f1f",
+      "source_mtime": 1790962926.9029686,
+      "source_size": 8486602
+    },
+    "sglang-omni-tts-runtime/feedback/agent-13.log": {
+      "git_blob_oid": "3d3253bb6ada9e60d8260939600a18e2ca234f8e",
+      "sha256": "bcbf8fc4907e8893bac469fa09b81f4f48c3ed185f729ddfaf6229fbc5fe602b",
+      "source_mtime": 1791045957.191525,
+      "source_size": 8479401
+    },
+    "sglang-omni-tts-runtime/feedback/agent-2.log": {
+      "git_blob_oid": "b1db8f81b2f0d023f0de47d4d22d7617c123cd8d",
+      "sha256": "5b048fa1e0e2b247ad251514484288703eafc0cb9771ca24a25a6794c9d83226",
+      "source_mtime": 1790969168.3563454,
+      "source_size": 8526678
+    },
+    "sglang-omni-tts-runtime/feedback/agent-5.log": {
+      "git_blob_oid": "addf80c87c313de506b3dcfbb1b695e7508e6a0d",
+      "sha256": "1373acfda5b4dc48ce3212c7e9e4a6b184e46c98ab7eaf17868ea5ee6d1350dc",
+      "source_mtime": 1790971932.816444,
+      "source_size": 8538139
+    },
+    "sglang-omni-tts-runtime/feedback/agent-6.log": {
+      "git_blob_oid": "92882b660d1636f906987b22b7a3db9a2203fd10",
+      "sha256": "60b7153f849c876e5eabc88c35e3d46284ce3b0a700b1584c42d3db9ab4db1f2",
+      "source_mtime": 1791021575.6546342,
+      "source_size": 8458950
+    },
+    "sglang-omni-tts-runtime/feedback/agent-7.log": {
+      "git_blob_oid": "839c2bee7bd0daab4b7254b60a4ebd730f3eaaba",
+      "sha256": "43a9e82347e96bfb026407fe4742494d7c361991f51e8ef683a1f1d9719b91ae",
+      "source_mtime": 1791026690.4668734,
+      "source_size": 8557689
+    },
+    "sglang-omni-tts-runtime/final_result.json": {
+      "git_blob_oid": "c873fbc20124bad666a1671a442a9ea3978af111",
+      "sha256": "50d1f66ddcda6f34f539302aa58073b939ddbb45103a882fd029fee641f70af7",
+      "source_mtime": 1791046851.8477678,
+      "source_size": 262
+    },
+    "sglang-omni-tts-runtime/run-plan.json": {
+      "git_blob_oid": "ed476a9f9d1106493d7279cd436fdc92b6e5b75a",
+      "sha256": "2c38dff720c4c93a4bdb65210e7e176a22f30b2ab540da1d08b3efbbee3da6af",
+      "source_mtime": 1790960440.489088,
+      "source_size": 20477
+    },
+    "sglang-omni-tts-runtime/run_agent.log": {
+      "git_blob_oid": "d8061de68354dbb96b36c12b909e4dce0380b742",
+      "sha256": "cf338d37be0c186a8b63e3962fa3ab1a32239674fdec6298b6bcfc53c8e21fd3",
+      "source_mtime": 1791046851.5519416,
+      "source_size": 1506357
+    },
+    "sglang-omni-tts-runtime/started_at": {
+      "git_blob_oid": "a4b766b67f97ab39661ef20636cb49bec724af3e",
+      "sha256": "6c6402bed5f09f81cb81ccaf0240d6c5390adf7bbf9032703fafc3f03aa705d4",
+      "source_mtime": 1790960440.4842415,
+      "source_size": 51
+    },
+    "sglang-omni-tts-runtime/submissions/agent-1/report.json": {
+      "git_blob_oid": "838bb889d118cf5a06efd0a75129c3ee1f48c5a0",
+      "sha256": "6d32312a209e9593541c0fed31819b8719d0a257f17c31b1a70c04cbd69ee8ab",
+      "source_mtime": 1790962927.0366251,
+      "source_size": 312
+    },
+    "sglang-omni-tts-runtime/submissions/agent-1/test_output.txt": {
+      "git_blob_oid": "ab7d7c4c7071663ec51d323623da2043858b0730",
+      "sha256": "5d147269275218a5b16fedbeab2495eadd50bbd587ac3ab36738764101359f1f",
+      "source_mtime": 1790962926.9029686,
+      "source_size": 8486602
+    },
+    "sglang-omni-tts-runtime/submissions/agent-13/report.json": {
+      "git_blob_oid": "41d15a15eff9cff2dadf6cbd06dce85b5bb85537",
+      "sha256": "10b77de20d1db6f1b7ab6eabe1927d62138608a262392bebc870a824f89e633d",
+      "source_mtime": 1791045961.6629472,
+      "source_size": 311
+    },
+    "sglang-omni-tts-runtime/submissions/agent-13/test_output.txt": {
+      "git_blob_oid": "3d3253bb6ada9e60d8260939600a18e2ca234f8e",
+      "sha256": "bcbf8fc4907e8893bac469fa09b81f4f48c3ed185f729ddfaf6229fbc5fe602b",
+      "source_mtime": 1791045957.191525,
+      "source_size": 8479401
+    },
+    "sglang-omni-tts-runtime/submissions/agent-2/report.json": {
+      "git_blob_oid": "4bef6dc3b7ba684b8f868a149ad620c045920afe",
+      "sha256": "c9a3fd800cd776611877f1db01c183c2af0bc689af005ed07f56e6ef1b4e91b9",
+      "source_mtime": 1790969168.485377,
+      "source_size": 311
+    },
+    "sglang-omni-tts-runtime/submissions/agent-2/test_output.txt": {
+      "git_blob_oid": "b1db8f81b2f0d023f0de47d4d22d7617c123cd8d",
+      "sha256": "5b048fa1e0e2b247ad251514484288703eafc0cb9771ca24a25a6794c9d83226",
+      "source_mtime": 1790969168.3563454,
+      "source_size": 8526678
+    },
+    "sglang-omni-tts-runtime/submissions/agent-5/report.json": {
+      "git_blob_oid": "902326f26cf1438bade19d0750184d8e70a5dbc9",
+      "sha256": "8c74468bea27ed80a176e788ff9dd08cb47edb030789aef2ffd7d2e192a71953",
+      "source_mtime": 1790971932.9232602,
+      "source_size": 311
+    },
+    "sglang-omni-tts-runtime/submissions/agent-5/test_output.txt": {
+      "git_blob_oid": "addf80c87c313de506b3dcfbb1b695e7508e6a0d",
+      "sha256": "1373acfda5b4dc48ce3212c7e9e4a6b184e46c98ab7eaf17868ea5ee6d1350dc",
+      "source_mtime": 1790971932.816444,
+      "source_size": 8538139
+    },
+    "sglang-omni-tts-runtime/submissions/agent-6/report.json": {
+      "git_blob_oid": "dd16aa58d3a82bfa7e8c20fd403c837c45648ec6",
+      "sha256": "46395dd447cc79f29f071b5f7c2d1b49c4af2cdf193700c1d377ce41930d621e",
+      "source_mtime": 1791021575.757572,
+      "source_size": 312
+    },
+    "sglang-omni-tts-runtime/submissions/agent-6/test_output.txt": {
+      "git_blob_oid": "92882b660d1636f906987b22b7a3db9a2203fd10",
+      "sha256": "60b7153f849c876e5eabc88c35e3d46284ce3b0a700b1584c42d3db9ab4db1f2",
+      "source_mtime": 1791021575.6546342,
+      "source_size": 8458950
+    },
+    "sglang-omni-tts-runtime/submissions/agent-7/report.json": {
+      "git_blob_oid": "6d920467301d9c4d24fde59d95fd6b2ea4e3042e",
+      "sha256": "b53b1f2c111a58bf722fa82086c792b3f33d987aede4ed0334cd2cb63bca7873",
+      "source_mtime": 1791026690.5864475,
+      "source_size": 311
+    },
+    "sglang-omni-tts-runtime/submissions/agent-7/test_output.txt": {
+      "git_blob_oid": "839c2bee7bd0daab4b7254b60a4ebd730f3eaaba",
+      "sha256": "43a9e82347e96bfb026407fe4742494d7c361991f51e8ef683a1f1d9719b91ae",
+      "source_mtime": 1791026690.4668734,
+      "source_size": 8557689
+    }
+  },
+  "phase": "final",
+  "run_id": "d154-rolling-astra-xhigh-655820-20261002T120036",
+  "version": 2
+}
