@@ -32,7 +32,7 @@ concurrency:
 # source recovery discovery, so a GitHub outage cannot create notice storms.
 jobs:
   notice:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Checkout public recovery helper

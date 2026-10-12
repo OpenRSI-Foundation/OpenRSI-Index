@@ -37,7 +37,7 @@ def test_dispatch_workflow_is_public_only_and_minimally_privileged():
     )
 
     assert workflow["permissions"] == {"contents": "read"}
-    assert workflow["jobs"]["dispatch"]["runs-on"] == "ubuntu-latest"
+    assert workflow["jobs"]["dispatch"]["runs-on"] == "ubuntu-24.04"
     assert checkout == {
         "name": "Checkout public default branch",
         "id": "public-checkout",
