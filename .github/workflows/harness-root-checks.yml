@@ -1,0 +1,68 @@
+name: Harness root checks
+
+# The checks a non-root host skips: a full run with the real iptables
+# firewall (no-network Work reaching only its pinned endpoint), Judge
+# snapshots, and managed sandboxes in root mode. Kept small so every engine
+# change can run them; hosted runners grant the root and firewall authority
+# these need.
+on:
+  pull_request:
+    paths:
+      - RSI-Harness/src/**
+      - RSI-Harness/tests/integration/test_run_engine.py
+      - RSI-Harness/tests/integration/test_judge_container.py
+      - RSI-Harness/tests/integration/test_sandbox_e2e.py
+      - RSI-Harness/tests/integration/test_sandbox_network_docker.py
+      - RSI-Harness/tests/integration/sandbox_support.py
+      - RSI-Harness/uv.lock
+      - .github/workflows/harness-root-checks.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-root-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  root:
+    name: Harness root checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: RSI-Harness
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+        with:
+          version: "0.6.5"
+      - name: Install the test environment
+        run: uv sync --frozen --group test --python 3.12
+      - name: Pull the test base images
+        run: |
+          docker pull ubuntu:24.04
+          docker pull python:3.12-slim-bookworm
+          docker pull busybox:1.37.0
+      - name: Run the root and firewall tests
+        # Root mode uses the real firewall; a check that cannot get its
+        # authority must fail the job, not skip.
+        run: |
+          set -o pipefail
+          sudo -E env "PATH=$PATH" RSI_SANDBOX_ROOT_MODE=1 RSI_REQUIRE_SANDBOX_INTEGRATION=1 \
+            .venv/bin/python -m pytest -m integration -q -rs -p no:cacheprovider \
+            tests/integration/test_run_engine.py::test_real_docker_split_workdir_fake_agent_submits_two_fresh_judges \
+            tests/integration/test_judge_container.py \
+            tests/integration/test_sandbox_e2e.py \
+            tests/integration/test_sandbox_network_docker.py | tee "$RUNNER_TEMP/pytest.log"
+          ! grep -Eq '[0-9]+ skipped' "$RUNNER_TEMP/pytest.log"
+      - name: Check no firewall rule or container is left
+        if: always()
+        run: |
+          leftovers=$(sudo iptables -S | grep -c 'rsi-' || true)
+          containers=$(docker ps -aq --filter label=rsi-harness.run-id | wc -l)
+          echo "firewall lines: $leftovers, containers: $containers"
+          test "$leftovers" = 0 && test "$containers" = 0

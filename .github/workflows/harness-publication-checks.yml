@@ -76,6 +76,10 @@ jobs:
           uv sync --frozen --group test --python 3.12
           uv run --frozen --group test ruff check .
           uv run --frozen --group test ruff format --check .
+      - name: Set up the node the Agent driver runs on
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1
+        with:
+          node-version: "22.23.3"
       - name: Test Harness without Docker or GPUs
         working-directory: ${{ steps.archive.outputs.root }}/RSI-Harness
         run: |
