@@ -1,0 +1,54 @@
+{
+  "best_round": null,
+  "best_score": null,
+  "submissions": [
+    {
+      "at": 1790962927.032254,
+      "kind": "agent",
+      "rewards": {},
+      "round": "agent-1",
+      "score": null,
+      "status": "verifier_error"
+    },
+    {
+      "at": 1790969168.480813,
+      "kind": "agent",
+      "rewards": {},
+      "round": "agent-2",
+      "score": null,
+      "status": "verifier_error"
+    },
+    {
+      "at": 1790971932.921543,
+      "kind": "agent",
+      "rewards": {},
+      "round": "agent-5",
+      "score": null,
+      "status": "verifier_error"
+    },
+    {
+      "at": 1791021575.752983,
+      "kind": "agent",
+      "rewards": {},
+      "round": "agent-6",
+      "score": null,
+      "status": "verifier_error"
+    },
+    {
+      "at": 1791026690.582365,
+      "kind": "agent",
+      "rewards": {},
+      "round": "agent-7",
+      "score": null,
+      "status": "verifier_error"
+    },
+    {
+      "at": 1791045961.65871,
+      "kind": "agent",
+      "rewards": {},
+      "round": "agent-13",
+      "score": null,
+      "status": "verifier_error"
+    }
+  ]
+}

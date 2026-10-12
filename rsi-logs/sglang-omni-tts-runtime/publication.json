@@ -1,0 +1,1009 @@
+{
+  "schema_version": 1,
+  "derived_evidence": [
+    {
+      "path": "measurements.json",
+      "sha256": "154567f66f062fd5bc67e80f4aeba0686841765e7d4907bdad76822856b37c47",
+      "description": "11 complete Judge measurements, 14 unchanged rewards, two separate local controlled studies; source locations and hashes retained"
+    },
+    {
+      "path": "summarize_measurements.py",
+      "sha256": "9f5077dcf8897fc7ee6c39f111b8606c701a33146a1f36c7bcda6cd41e153568",
+      "description": "CPU-only evidence extractor; no evaluator or GPU execution"
+    }
+  ],
+  "source_repository": "OpenRSI-Foundation/sglang-omni-tts-runtime-d154",
+  "source_commit": "c819dc10aaf7dab0c2d0ed5eea5499e449a6a9d5",
+  "agent": "codex",
+  "model": "gpt-6-astra",
+  "reasoning_effort": "xhigh",
+  "runs": [
+    {
+      "run_id": "d154-astra-xhigh-650175-20261001T230314",
+      "persisted_submissions": 3,
+      "best_score": null,
+      "best_round": null,
+      "recorded_rounds": [
+        "agent-1",
+        "agent-2",
+        "agent-8"
+      ]
+    },
+    {
+      "run_id": "d154-rolling-astra-xhigh-655820-20261002T120036",
+      "persisted_submissions": 6,
+      "best_score": null,
+      "best_round": null,
+      "recorded_rounds": [
+        "agent-1",
+        "agent-2",
+        "agent-5",
+        "agent-6",
+        "agent-7",
+        "agent-13"
+      ]
+    },
+    {
+      "run_id": "omni-resume3-669485-20261004T141956Z-resume3",
+      "persisted_submissions": 5,
+      "best_score": 1.5389225880993647,
+      "best_round": "agent-4",
+      "recorded_rounds": [
+        "agent-1",
+        "agent-2",
+        "agent-3",
+        "agent-4",
+        "agent-5"
+      ]
+    }
+  ],
+  "files": [
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/agent_output.txt.gz",
+      "bytes": 12089686,
+      "sha256": "2975138dd1886bcb11df5393a78628fadac4b6b837a846d511029eb6ede209ff",
+      "uncompressed_bytes": 45485968,
+      "uncompressed_sha256": "8ba9fe49826eca69f4675e3fe74527f59fa41dbb42b2aa89887dcce472a46abf",
+      "line_count": 689722,
+      "compression": "gzip"
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/agent_prompt.md",
+      "bytes": 10115,
+      "sha256": "b73ab41ea2bb58d9b0e95c3b550630f6ecb123492c0c30524c8f1e148bd095b1",
+      "uncompressed_bytes": 10115,
+      "uncompressed_sha256": "b73ab41ea2bb58d9b0e95c3b550630f6ecb123492c0c30524c8f1e148bd095b1",
+      "line_count": 82,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/evolve_state.json",
+      "bytes": 573,
+      "sha256": "778b655c917a4677a9a8f9e5f5f8ff205fd0024e63d5e7127445b07c1f43450f",
+      "uncompressed_bytes": 573,
+      "uncompressed_sha256": "778b655c917a4677a9a8f9e5f5f8ff205fd0024e63d5e7127445b07c1f43450f",
+      "line_count": 30,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/feedback/agent-1.log",
+      "bytes": 8481045,
+      "sha256": "ec4b1c8cdef34dd48aef70590ec966d481c476adea8adc34828796a4d1454207",
+      "uncompressed_bytes": 8481045,
+      "uncompressed_sha256": "ec4b1c8cdef34dd48aef70590ec966d481c476adea8adc34828796a4d1454207",
+      "line_count": 72231,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/feedback/agent-2.log",
+      "bytes": 8418710,
+      "sha256": "be573b8761d03fa55a10cc5da367c9117b93010a683509372e73d0d3f5b3328b",
+      "uncompressed_bytes": 8418710,
+      "uncompressed_sha256": "be573b8761d03fa55a10cc5da367c9117b93010a683509372e73d0d3f5b3328b",
+      "line_count": 71957,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/feedback/agent-8.log",
+      "bytes": 8505548,
+      "sha256": "aacd531ecc7c718f34674f4430dfa5bce9745de2eaaaf47ab0faa340df7804ee",
+      "uncompressed_bytes": 8505548,
+      "uncompressed_sha256": "aacd531ecc7c718f34674f4430dfa5bce9745de2eaaaf47ab0faa340df7804ee",
+      "line_count": 72287,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/run-plan.json",
+      "bytes": 14274,
+      "sha256": "6150fadcbe5786a56d58ad9dd6e40a3bb18e1089a62cc7d04b398026f4404057",
+      "uncompressed_bytes": 14274,
+      "uncompressed_sha256": "6150fadcbe5786a56d58ad9dd6e40a3bb18e1089a62cc7d04b398026f4404057",
+      "line_count": 162,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/run_agent.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "uncompressed_bytes": 0,
+      "uncompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "line_count": 0,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/started_at",
+      "bytes": 50,
+      "sha256": "f2b0603d7855e4d7eae582f1d289ffb95598d105e3e7c8d0d71d0335df6bc8e0",
+      "uncompressed_bytes": 50,
+      "uncompressed_sha256": "f2b0603d7855e4d7eae582f1d289ffb95598d105e3e7c8d0d71d0335df6bc8e0",
+      "line_count": 2,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/submissions/agent-1/report.json",
+      "bytes": 311,
+      "sha256": "562c61ab7dbc30901c4bcb7782156d406df31eac82d9d1a56a9de3d7be902258",
+      "uncompressed_bytes": 311,
+      "uncompressed_sha256": "562c61ab7dbc30901c4bcb7782156d406df31eac82d9d1a56a9de3d7be902258",
+      "line_count": 13,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/submissions/agent-1/test_output.txt",
+      "bytes": 8481045,
+      "sha256": "ec4b1c8cdef34dd48aef70590ec966d481c476adea8adc34828796a4d1454207",
+      "uncompressed_bytes": 8481045,
+      "uncompressed_sha256": "ec4b1c8cdef34dd48aef70590ec966d481c476adea8adc34828796a4d1454207",
+      "line_count": 72231,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/submissions/agent-2/report.json",
+      "bytes": 311,
+      "sha256": "569b22ac7b51cb74fe53c491cc0383d884c3973648373fd8edd9e5e23efb70bd",
+      "uncompressed_bytes": 311,
+      "uncompressed_sha256": "569b22ac7b51cb74fe53c491cc0383d884c3973648373fd8edd9e5e23efb70bd",
+      "line_count": 13,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/submissions/agent-2/test_output.txt",
+      "bytes": 8418710,
+      "sha256": "be573b8761d03fa55a10cc5da367c9117b93010a683509372e73d0d3f5b3328b",
+      "uncompressed_bytes": 8418710,
+      "uncompressed_sha256": "be573b8761d03fa55a10cc5da367c9117b93010a683509372e73d0d3f5b3328b",
+      "line_count": 71957,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/submissions/agent-8/report.json",
+      "bytes": 312,
+      "sha256": "04bec502f566a99310509f8e8efdc36d157d434352af1638e6e0afee765ad0fd",
+      "uncompressed_bytes": 312,
+      "uncompressed_sha256": "04bec502f566a99310509f8e8efdc36d157d434352af1638e6e0afee765ad0fd",
+      "line_count": 13,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/submissions/agent-8/test_output.txt",
+      "bytes": 8505548,
+      "sha256": "aacd531ecc7c718f34674f4430dfa5bce9745de2eaaaf47ab0faa340df7804ee",
+      "uncompressed_bytes": 8505548,
+      "uncompressed_sha256": "aacd531ecc7c718f34674f4430dfa5bce9745de2eaaaf47ab0faa340df7804ee",
+      "line_count": 72287,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/source-publication.json",
+      "bytes": 94,
+      "sha256": "a13af863e4c2766f1e18d398f39d1ed1ea3eb8106db57030bdb02165b1961f62",
+      "uncompressed_bytes": 94,
+      "uncompressed_sha256": "a13af863e4c2766f1e18d398f39d1ed1ea3eb8106db57030bdb02165b1961f62",
+      "line_count": 5,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/agent_output.txt.gz",
+      "bytes": 203397,
+      "sha256": "5dbe7772e2ae76a7c6dd3f10f8c3f79c1a10c59c248c284f40e50865695cc20b",
+      "uncompressed_bytes": 1505879,
+      "uncompressed_sha256": "bb22906e8ef9e7ee412d5047af434c8715cfaf3ff4c0304651c9e6530bf41910",
+      "line_count": 15306,
+      "compression": "gzip"
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/agent_prompt.md",
+      "bytes": 16140,
+      "sha256": "a21723afa3704f1b96db77c7a6a29f4f84ab4b164fd7859d10a3dbddaaaccc35",
+      "uncompressed_bytes": 16140,
+      "uncompressed_sha256": "a21723afa3704f1b96db77c7a6a29f4f84ab4b164fd7859d10a3dbddaaaccc35",
+      "line_count": 118,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/evolve_state.json",
+      "bytes": 1078,
+      "sha256": "f3f5b62ab49593f3888fc352b91ec82977a55721d3574be850090e0f8c4ed34a",
+      "uncompressed_bytes": 1078,
+      "uncompressed_sha256": "f3f5b62ab49593f3888fc352b91ec82977a55721d3574be850090e0f8c4ed34a",
+      "line_count": 54,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/feedback/agent-1.log",
+      "bytes": 8486443,
+      "sha256": "2ea5088e5c6c1ceeec2c68b09998f8809db6867a65cf24bbb6741cd04badbd10",
+      "uncompressed_bytes": 8486443,
+      "uncompressed_sha256": "2ea5088e5c6c1ceeec2c68b09998f8809db6867a65cf24bbb6741cd04badbd10",
+      "line_count": 72177,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/feedback/agent-13.log",
+      "bytes": 8479242,
+      "sha256": "906931e601f42618f59af90dd88410e72fe1ee760d85d19e03a711381ca310fe",
+      "uncompressed_bytes": 8479242,
+      "uncompressed_sha256": "906931e601f42618f59af90dd88410e72fe1ee760d85d19e03a711381ca310fe",
+      "line_count": 72202,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/feedback/agent-2.log",
+      "bytes": 8526519,
+      "sha256": "15fdd3314f44c39cede1ce73240a677b0bdc08f54a9dca1a29bbda2330f92cd0",
+      "uncompressed_bytes": 8526519,
+      "uncompressed_sha256": "15fdd3314f44c39cede1ce73240a677b0bdc08f54a9dca1a29bbda2330f92cd0",
+      "line_count": 72230,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/feedback/agent-5.log",
+      "bytes": 8537980,
+      "sha256": "3f4b2f28d729c2eb1360467809ccf50babc53c6e775a5c0709e03ad14ffd2824",
+      "uncompressed_bytes": 8537980,
+      "uncompressed_sha256": "3f4b2f28d729c2eb1360467809ccf50babc53c6e775a5c0709e03ad14ffd2824",
+      "line_count": 72416,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/feedback/agent-6.log",
+      "bytes": 8458791,
+      "sha256": "45a185083a157284b753edfa6e9261c27810ee93ba8eff8d0603a02d36aa150c",
+      "uncompressed_bytes": 8458791,
+      "uncompressed_sha256": "45a185083a157284b753edfa6e9261c27810ee93ba8eff8d0603a02d36aa150c",
+      "line_count": 72050,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/feedback/agent-7.log",
+      "bytes": 8557530,
+      "sha256": "68cd45f50fcfbf62674fb639f6375067deeead6d05b9039c9f2ba504a6f14892",
+      "uncompressed_bytes": 8557530,
+      "uncompressed_sha256": "68cd45f50fcfbf62674fb639f6375067deeead6d05b9039c9f2ba504a6f14892",
+      "line_count": 72437,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/final_result.json",
+      "bytes": 262,
+      "sha256": "50d1f66ddcda6f34f539302aa58073b939ddbb45103a882fd029fee641f70af7",
+      "uncompressed_bytes": 262,
+      "uncompressed_sha256": "50d1f66ddcda6f34f539302aa58073b939ddbb45103a882fd029fee641f70af7",
+      "line_count": 12,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/run-plan.json",
+      "bytes": 20169,
+      "sha256": "3a5682331c39558edf4cda9541faf9e86fa6a35e7a650f3e50b3f0b379d3cc6b",
+      "uncompressed_bytes": 20169,
+      "uncompressed_sha256": "3a5682331c39558edf4cda9541faf9e86fa6a35e7a650f3e50b3f0b379d3cc6b",
+      "line_count": 162,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/run_agent.log",
+      "bytes": 1505879,
+      "sha256": "0c13444c920c9b2b170142a11469f47d2b71aefcf6ce4af88c7e06f8d9f39ec9",
+      "uncompressed_bytes": 1505879,
+      "uncompressed_sha256": "0c13444c920c9b2b170142a11469f47d2b71aefcf6ce4af88c7e06f8d9f39ec9",
+      "line_count": 15311,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/started_at",
+      "bytes": 51,
+      "sha256": "6c6402bed5f09f81cb81ccaf0240d6c5390adf7bbf9032703fafc3f03aa705d4",
+      "uncompressed_bytes": 51,
+      "uncompressed_sha256": "6c6402bed5f09f81cb81ccaf0240d6c5390adf7bbf9032703fafc3f03aa705d4",
+      "line_count": 2,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-1/report.json",
+      "bytes": 312,
+      "sha256": "6d32312a209e9593541c0fed31819b8719d0a257f17c31b1a70c04cbd69ee8ab",
+      "uncompressed_bytes": 312,
+      "uncompressed_sha256": "6d32312a209e9593541c0fed31819b8719d0a257f17c31b1a70c04cbd69ee8ab",
+      "line_count": 13,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-1/test_output.txt",
+      "bytes": 8486443,
+      "sha256": "2ea5088e5c6c1ceeec2c68b09998f8809db6867a65cf24bbb6741cd04badbd10",
+      "uncompressed_bytes": 8486443,
+      "uncompressed_sha256": "2ea5088e5c6c1ceeec2c68b09998f8809db6867a65cf24bbb6741cd04badbd10",
+      "line_count": 72177,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-13/report.json",
+      "bytes": 311,
+      "sha256": "10b77de20d1db6f1b7ab6eabe1927d62138608a262392bebc870a824f89e633d",
+      "uncompressed_bytes": 311,
+      "uncompressed_sha256": "10b77de20d1db6f1b7ab6eabe1927d62138608a262392bebc870a824f89e633d",
+      "line_count": 13,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-13/test_output.txt",
+      "bytes": 8479242,
+      "sha256": "906931e601f42618f59af90dd88410e72fe1ee760d85d19e03a711381ca310fe",
+      "uncompressed_bytes": 8479242,
+      "uncompressed_sha256": "906931e601f42618f59af90dd88410e72fe1ee760d85d19e03a711381ca310fe",
+      "line_count": 72202,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-2/report.json",
+      "bytes": 311,
+      "sha256": "c9a3fd800cd776611877f1db01c183c2af0bc689af005ed07f56e6ef1b4e91b9",
+      "uncompressed_bytes": 311,
+      "uncompressed_sha256": "c9a3fd800cd776611877f1db01c183c2af0bc689af005ed07f56e6ef1b4e91b9",
+      "line_count": 13,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-2/test_output.txt",
+      "bytes": 8526519,
+      "sha256": "15fdd3314f44c39cede1ce73240a677b0bdc08f54a9dca1a29bbda2330f92cd0",
+      "uncompressed_bytes": 8526519,
+      "uncompressed_sha256": "15fdd3314f44c39cede1ce73240a677b0bdc08f54a9dca1a29bbda2330f92cd0",
+      "line_count": 72230,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-5/report.json",
+      "bytes": 311,
+      "sha256": "8c74468bea27ed80a176e788ff9dd08cb47edb030789aef2ffd7d2e192a71953",
+      "uncompressed_bytes": 311,
+      "uncompressed_sha256": "8c74468bea27ed80a176e788ff9dd08cb47edb030789aef2ffd7d2e192a71953",
+      "line_count": 13,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-5/test_output.txt",
+      "bytes": 8537980,
+      "sha256": "3f4b2f28d729c2eb1360467809ccf50babc53c6e775a5c0709e03ad14ffd2824",
+      "uncompressed_bytes": 8537980,
+      "uncompressed_sha256": "3f4b2f28d729c2eb1360467809ccf50babc53c6e775a5c0709e03ad14ffd2824",
+      "line_count": 72416,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-6/report.json",
+      "bytes": 312,
+      "sha256": "46395dd447cc79f29f071b5f7c2d1b49c4af2cdf193700c1d377ce41930d621e",
+      "uncompressed_bytes": 312,
+      "uncompressed_sha256": "46395dd447cc79f29f071b5f7c2d1b49c4af2cdf193700c1d377ce41930d621e",
+      "line_count": 13,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-6/test_output.txt",
+      "bytes": 8458791,
+      "sha256": "45a185083a157284b753edfa6e9261c27810ee93ba8eff8d0603a02d36aa150c",
+      "uncompressed_bytes": 8458791,
+      "uncompressed_sha256": "45a185083a157284b753edfa6e9261c27810ee93ba8eff8d0603a02d36aa150c",
+      "line_count": 72050,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-7/report.json",
+      "bytes": 311,
+      "sha256": "b53b1f2c111a58bf722fa82086c792b3f33d987aede4ed0334cd2cb63bca7873",
+      "uncompressed_bytes": 311,
+      "uncompressed_sha256": "b53b1f2c111a58bf722fa82086c792b3f33d987aede4ed0334cd2cb63bca7873",
+      "line_count": 13,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-7/test_output.txt",
+      "bytes": 8557530,
+      "sha256": "68cd45f50fcfbf62674fb639f6375067deeead6d05b9039c9f2ba504a6f14892",
+      "uncompressed_bytes": 8557530,
+      "uncompressed_sha256": "68cd45f50fcfbf62674fb639f6375067deeead6d05b9039c9f2ba504a6f14892",
+      "line_count": 72437,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/source-publication.json",
+      "bytes": 7240,
+      "sha256": "670532ab43a19d73a35ca9d5974088b9176b9d1c7ee97f1a9c1c0af6fbffc862",
+      "uncompressed_bytes": 7240,
+      "uncompressed_sha256": "670532ab43a19d73a35ca9d5974088b9176b9d1c7ee97f1a9c1c0af6fbffc862",
+      "line_count": 157,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/research-summary.json",
+      "bytes": 33089,
+      "sha256": "6b8c343ad2c2344a7953b30e062ddf61ea47222dc4e8c42506034d1a0a3c9f6f",
+      "uncompressed_bytes": 33089,
+      "uncompressed_sha256": "6b8c343ad2c2344a7953b30e062ddf61ea47222dc4e8c42506034d1a0a3c9f6f",
+      "line_count": 12,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/research-summary.md",
+      "bytes": 30566,
+      "sha256": "e9f9fb36f9f53f3168f72525bed4b9ec68b10d8a1e369601b057bd1ad0aa65bf",
+      "uncompressed_bytes": 30566,
+      "uncompressed_sha256": "e9f9fb36f9f53f3168f72525bed4b9ec68b10d8a1e369601b057bd1ad0aa65bf",
+      "line_count": 117,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_output.txt.gz.parts/part-0001.bin",
+      "bytes": 67108864,
+      "sha256": "0d9915bedaf274030879960a05431a07a08fccdf5f1823e38f149ef29a2df8d9"
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_output.txt.gz.parts/part-0002.bin",
+      "bytes": 43859959,
+      "sha256": "3d1f1b41e55546d506c94d92c3ec0d2a577f7ef25e90517ac66d553eefce1715"
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_output.txt.gz.parts/manifest.json",
+      "bytes": 776,
+      "sha256": "7e48af31140d3f0ed5452ff5587eb7bbb7762fe56c87808bae958f733d7c55a0"
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_prompt.md",
+      "bytes": 17655,
+      "sha256": "ba9dd114b80f9626b4f4617ef2e4609d0bfee7563dd163aa6627452025c5b6d9",
+      "uncompressed_bytes": 17655,
+      "uncompressed_sha256": "ba9dd114b80f9626b4f4617ef2e4609d0bfee7563dd163aa6627452025c5b6d9",
+      "line_count": 126,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/evolve_state.json",
+      "bytes": 980,
+      "sha256": "9dff0ef56de558e589e7a3b073cda94df2dfaade8e4d348d03bdeac7efbc1977",
+      "uncompressed_bytes": 980,
+      "uncompressed_sha256": "9dff0ef56de558e589e7a3b073cda94df2dfaade8e4d348d03bdeac7efbc1977",
+      "line_count": 48,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/feedback/agent-1.log",
+      "bytes": 1046899,
+      "sha256": "1b6d4f80884649425a71a4a4dbf85e217f72b5d62b30cab2f1fdcfe313e5a24f",
+      "uncompressed_bytes": 1046899,
+      "uncompressed_sha256": "1b6d4f80884649425a71a4a4dbf85e217f72b5d62b30cab2f1fdcfe313e5a24f",
+      "line_count": 8433,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/feedback/agent-2.log",
+      "bytes": 1115730,
+      "sha256": "60f58118be6b2329353b0d3bf915742cb1e72341f1f246bcdd80c0d9a4749d1d",
+      "uncompressed_bytes": 1115730,
+      "uncompressed_sha256": "60f58118be6b2329353b0d3bf915742cb1e72341f1f246bcdd80c0d9a4749d1d",
+      "line_count": 9312,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/feedback/agent-3.log",
+      "bytes": 6579424,
+      "sha256": "7933911dfbab9a50828c461f3f57ae19c8b320fbd93481956687d21e4ecfe301",
+      "uncompressed_bytes": 6579424,
+      "uncompressed_sha256": "7933911dfbab9a50828c461f3f57ae19c8b320fbd93481956687d21e4ecfe301",
+      "line_count": 54799,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/feedback/agent-4.log",
+      "bytes": 6548278,
+      "sha256": "54bd0fabeefe29e02e71fbc008451de636459ef3368453e2e774f6947d3c4f1c",
+      "uncompressed_bytes": 6548278,
+      "uncompressed_sha256": "54bd0fabeefe29e02e71fbc008451de636459ef3368453e2e774f6947d3c4f1c",
+      "line_count": 54644,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/feedback/agent-5.log",
+      "bytes": 1638542,
+      "sha256": "5cc006951a3e831ecdd91582c519193b3c3da5f5a0145229579147ec340fba22",
+      "uncompressed_bytes": 1638542,
+      "uncompressed_sha256": "5cc006951a3e831ecdd91582c519193b3c3da5f5a0145229579147ec340fba22",
+      "line_count": 13255,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/run-plan.json",
+      "bytes": 21638,
+      "sha256": "b81050709e6997104741c51a5397fe0beccfc9f91cb37c049f707663b1bb3226",
+      "uncompressed_bytes": 21638,
+      "uncompressed_sha256": "b81050709e6997104741c51a5397fe0beccfc9f91cb37c049f707663b1bb3226",
+      "line_count": 162,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/run_agent.log",
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "uncompressed_bytes": 0,
+      "uncompressed_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "line_count": 0,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/started_at",
+      "bytes": 51,
+      "sha256": "f924420e833f7f19fb359ebfeba04996e698d5f8ebd8297c8cc1e61d3ce33c09",
+      "uncompressed_bytes": 51,
+      "uncompressed_sha256": "f924420e833f7f19fb359ebfeba04996e698d5f8ebd8297c8cc1e61d3ce33c09",
+      "line_count": 2,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-1/report.json",
+      "bytes": 310,
+      "sha256": "f5e24ed9f6ea4eaa692997d51b74a824dad18c73ee0983ea8efcba07d8685c31",
+      "uncompressed_bytes": 310,
+      "uncompressed_sha256": "f5e24ed9f6ea4eaa692997d51b74a824dad18c73ee0983ea8efcba07d8685c31",
+      "line_count": 13,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-1/test_output.txt",
+      "bytes": 1046899,
+      "sha256": "1b6d4f80884649425a71a4a4dbf85e217f72b5d62b30cab2f1fdcfe313e5a24f",
+      "uncompressed_bytes": 1046899,
+      "uncompressed_sha256": "1b6d4f80884649425a71a4a4dbf85e217f72b5d62b30cab2f1fdcfe313e5a24f",
+      "line_count": 8433,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-2/report.json",
+      "bytes": 311,
+      "sha256": "293d242018af344209c7e1b56720029132752d6e91919c3a6306e622a64f92de",
+      "uncompressed_bytes": 311,
+      "uncompressed_sha256": "293d242018af344209c7e1b56720029132752d6e91919c3a6306e622a64f92de",
+      "line_count": 13,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-2/test_output.txt",
+      "bytes": 1115730,
+      "sha256": "60f58118be6b2329353b0d3bf915742cb1e72341f1f246bcdd80c0d9a4749d1d",
+      "uncompressed_bytes": 1115730,
+      "uncompressed_sha256": "60f58118be6b2329353b0d3bf915742cb1e72341f1f246bcdd80c0d9a4749d1d",
+      "line_count": 9312,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-3/report.json",
+      "bytes": 310,
+      "sha256": "bd55c3af35482d880ee72fc129c97283d659bd5ea377dc1f3756e80141a5df19",
+      "uncompressed_bytes": 310,
+      "uncompressed_sha256": "bd55c3af35482d880ee72fc129c97283d659bd5ea377dc1f3756e80141a5df19",
+      "line_count": 13,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-3/test_output.txt",
+      "bytes": 6579424,
+      "sha256": "7933911dfbab9a50828c461f3f57ae19c8b320fbd93481956687d21e4ecfe301",
+      "uncompressed_bytes": 6579424,
+      "uncompressed_sha256": "7933911dfbab9a50828c461f3f57ae19c8b320fbd93481956687d21e4ecfe301",
+      "line_count": 54799,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-4/report.json",
+      "bytes": 336,
+      "sha256": "a0a29a10610a5cbf3b3ff67f8dd1ead48c2594d42bac10af395709e5935c28bb",
+      "uncompressed_bytes": 336,
+      "uncompressed_sha256": "a0a29a10610a5cbf3b3ff67f8dd1ead48c2594d42bac10af395709e5935c28bb",
+      "line_count": 15,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-4/test_output.txt",
+      "bytes": 6548278,
+      "sha256": "54bd0fabeefe29e02e71fbc008451de636459ef3368453e2e774f6947d3c4f1c",
+      "uncompressed_bytes": 6548278,
+      "uncompressed_sha256": "54bd0fabeefe29e02e71fbc008451de636459ef3368453e2e774f6947d3c4f1c",
+      "line_count": 54644,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-5/report.json",
+      "bytes": 310,
+      "sha256": "342be9384c4703cd36cf796d351e63629046840324bbb04f373ae8793377d67f",
+      "uncompressed_bytes": 310,
+      "uncompressed_sha256": "342be9384c4703cd36cf796d351e63629046840324bbb04f373ae8793377d67f",
+      "line_count": 13,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-5/test_output.txt",
+      "bytes": 1638542,
+      "sha256": "5cc006951a3e831ecdd91582c519193b3c3da5f5a0145229579147ec340fba22",
+      "uncompressed_bytes": 1638542,
+      "uncompressed_sha256": "5cc006951a3e831ecdd91582c519193b3c3da5f5a0145229579147ec340fba22",
+      "line_count": 13255,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/source-publication.json",
+      "bytes": 6860,
+      "sha256": "9aeb3aa6be9fbb20ecd83ccbd5381c596625d22204af6970f5ee5c5f91050f72",
+      "uncompressed_bytes": 6860,
+      "uncompressed_sha256": "9aeb3aa6be9fbb20ecd83ccbd5381c596625d22204af6970f5ee5c5f91050f72",
+      "line_count": 151,
+      "compression": null
+    },
+    {
+      "path": "codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/summary-generation.json",
+      "bytes": 264,
+      "sha256": "0b10dad2f62c388d29df14e066b5e87f1d2551f34ee972e00056dac66a5db17d",
+      "uncompressed_bytes": 264,
+      "uncompressed_sha256": "0b10dad2f62c388d29df14e066b5e87f1d2551f34ee972e00056dac66a5db17d",
+      "line_count": 6,
+      "compression": null
+    }
+  ],
+  "redaction_counts": {
+    "provider-key": 0,
+    "github-token": 0,
+    "aws-key": 0,
+    "jwt": 0,
+    "private-key": 0,
+    "home": 67,
+    "scratch": 262,
+    "job-scratch": 114,
+    "gpu-uuid": 831,
+    "host": 33,
+    "private-ip": 32,
+    "ssh-user": 0
+  },
+  "compression": "Complete sanitized gzip streams; oversized streams are losslessly chunked with reconstruction manifests; no truncation",
+  "secret_scan": "Gitleaks 8.30.1; full uncompressed logs; contextual false positives reviewed",
+  "source_file_hashes": {
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/.gitattributes": {
+      "bytes": 16,
+      "sha256": "cdbe181deee63cd6b76a34f4c3b69bc306a09375c256444c313f7e2e0080521d"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/.gitignore": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/publication.json": {
+      "bytes": 94,
+      "sha256": "a13af863e4c2766f1e18d398f39d1ed1ea3eb8106db57030bdb02165b1961f62"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/agent_output.txt": {
+      "bytes": 45506236,
+      "sha256": "c103df166d5bcf4df789116d90d63dd6c390f9b2c1cda304e34543645159fa8b"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/agent_prompt.md": {
+      "bytes": 10115,
+      "sha256": "b73ab41ea2bb58d9b0e95c3b550630f6ecb123492c0c30524c8f1e148bd095b1"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/evolve_state.json": {
+      "bytes": 573,
+      "sha256": "778b655c917a4677a9a8f9e5f5f8ff205fd0024e63d5e7127445b07c1f43450f"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/feedback/agent-1.log": {
+      "bytes": 8481204,
+      "sha256": "4658f1e072d78178cf33b511778ffed06d12f3298240cee299a6b7fbfc814b1a"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/feedback/agent-2.log": {
+      "bytes": 8418869,
+      "sha256": "8b95f32327dccec3ed2e6be302feacf3ba3586b66b389f7597384c9f82e1da95"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/feedback/agent-8.log": {
+      "bytes": 8505707,
+      "sha256": "aba45297dd27f1ecdb73fe0e8b575d387ffff626f7e89bf838793fdc02e764ec"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/run-plan.json": {
+      "bytes": 14506,
+      "sha256": "c2ac4ee8199ed55ad000afb18cdbe181fe9d3061b3830923a7424bfcad5ecd32"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/run_agent.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/started_at": {
+      "bytes": 50,
+      "sha256": "f2b0603d7855e4d7eae582f1d289ffb95598d105e3e7c8d0d71d0335df6bc8e0"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/submissions/agent-1/report.json": {
+      "bytes": 311,
+      "sha256": "562c61ab7dbc30901c4bcb7782156d406df31eac82d9d1a56a9de3d7be902258"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/submissions/agent-1/test_output.txt": {
+      "bytes": 8481204,
+      "sha256": "4658f1e072d78178cf33b511778ffed06d12f3298240cee299a6b7fbfc814b1a"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/submissions/agent-2/report.json": {
+      "bytes": 311,
+      "sha256": "569b22ac7b51cb74fe53c491cc0383d884c3973648373fd8edd9e5e23efb70bd"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/submissions/agent-2/test_output.txt": {
+      "bytes": 8418869,
+      "sha256": "8b95f32327dccec3ed2e6be302feacf3ba3586b66b389f7597384c9f82e1da95"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/submissions/agent-8/report.json": {
+      "bytes": 312,
+      "sha256": "04bec502f566a99310509f8e8efdc36d157d434352af1638e6e0afee765ad0fd"
+    },
+    "logs/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/submissions/agent-8/test_output.txt": {
+      "bytes": 8505707,
+      "sha256": "aba45297dd27f1ecdb73fe0e8b575d387ffff626f7e89bf838793fdc02e764ec"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/.gitattributes": {
+      "bytes": 16,
+      "sha256": "cdbe181deee63cd6b76a34f4c3b69bc306a09375c256444c313f7e2e0080521d"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/.gitignore": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/publication.json": {
+      "bytes": 7240,
+      "sha256": "670532ab43a19d73a35ca9d5974088b9176b9d1c7ee97f1a9c1c0af6fbffc862"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/agent_output.txt": {
+      "bytes": 1506357,
+      "sha256": "abf4424fa6f15d0d6e3d00dba9c89209c53208b5a8842eaedfc20e6c53f8d7b7"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/agent_prompt.md": {
+      "bytes": 16140,
+      "sha256": "a21723afa3704f1b96db77c7a6a29f4f84ab4b164fd7859d10a3dbddaaaccc35"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/evolve_state.json": {
+      "bytes": 1078,
+      "sha256": "f3f5b62ab49593f3888fc352b91ec82977a55721d3574be850090e0f8c4ed34a"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/feedback/agent-1.log": {
+      "bytes": 8486602,
+      "sha256": "5d147269275218a5b16fedbeab2495eadd50bbd587ac3ab36738764101359f1f"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/feedback/agent-13.log": {
+      "bytes": 8479401,
+      "sha256": "bcbf8fc4907e8893bac469fa09b81f4f48c3ed185f729ddfaf6229fbc5fe602b"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/feedback/agent-2.log": {
+      "bytes": 8526678,
+      "sha256": "5b048fa1e0e2b247ad251514484288703eafc0cb9771ca24a25a6794c9d83226"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/feedback/agent-5.log": {
+      "bytes": 8538139,
+      "sha256": "1373acfda5b4dc48ce3212c7e9e4a6b184e46c98ab7eaf17868ea5ee6d1350dc"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/feedback/agent-6.log": {
+      "bytes": 8458950,
+      "sha256": "60b7153f849c876e5eabc88c35e3d46284ce3b0a700b1584c42d3db9ab4db1f2"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/feedback/agent-7.log": {
+      "bytes": 8557689,
+      "sha256": "43a9e82347e96bfb026407fe4742494d7c361991f51e8ef683a1f1d9719b91ae"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/final_result.json": {
+      "bytes": 262,
+      "sha256": "50d1f66ddcda6f34f539302aa58073b939ddbb45103a882fd029fee641f70af7"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/run-plan.json": {
+      "bytes": 20477,
+      "sha256": "2c38dff720c4c93a4bdb65210e7e176a22f30b2ab540da1d08b3efbbee3da6af"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/run_agent.log": {
+      "bytes": 1506357,
+      "sha256": "cf338d37be0c186a8b63e3962fa3ab1a32239674fdec6298b6bcfc53c8e21fd3"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/started_at": {
+      "bytes": 51,
+      "sha256": "6c6402bed5f09f81cb81ccaf0240d6c5390adf7bbf9032703fafc3f03aa705d4"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-1/report.json": {
+      "bytes": 312,
+      "sha256": "6d32312a209e9593541c0fed31819b8719d0a257f17c31b1a70c04cbd69ee8ab"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-1/test_output.txt": {
+      "bytes": 8486602,
+      "sha256": "5d147269275218a5b16fedbeab2495eadd50bbd587ac3ab36738764101359f1f"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-13/report.json": {
+      "bytes": 311,
+      "sha256": "10b77de20d1db6f1b7ab6eabe1927d62138608a262392bebc870a824f89e633d"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-13/test_output.txt": {
+      "bytes": 8479401,
+      "sha256": "bcbf8fc4907e8893bac469fa09b81f4f48c3ed185f729ddfaf6229fbc5fe602b"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-2/report.json": {
+      "bytes": 311,
+      "sha256": "c9a3fd800cd776611877f1db01c183c2af0bc689af005ed07f56e6ef1b4e91b9"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-2/test_output.txt": {
+      "bytes": 8526678,
+      "sha256": "5b048fa1e0e2b247ad251514484288703eafc0cb9771ca24a25a6794c9d83226"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-5/report.json": {
+      "bytes": 311,
+      "sha256": "8c74468bea27ed80a176e788ff9dd08cb47edb030789aef2ffd7d2e192a71953"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-5/test_output.txt": {
+      "bytes": 8538139,
+      "sha256": "1373acfda5b4dc48ce3212c7e9e4a6b184e46c98ab7eaf17868ea5ee6d1350dc"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-6/report.json": {
+      "bytes": 312,
+      "sha256": "46395dd447cc79f29f071b5f7c2d1b49c4af2cdf193700c1d377ce41930d621e"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-6/test_output.txt": {
+      "bytes": 8458950,
+      "sha256": "60b7153f849c876e5eabc88c35e3d46284ce3b0a700b1584c42d3db9ab4db1f2"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-7/report.json": {
+      "bytes": 311,
+      "sha256": "b53b1f2c111a58bf722fa82086c792b3f33d987aede4ed0334cd2cb63bca7873"
+    },
+    "logs/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/submissions/agent-7/test_output.txt": {
+      "bytes": 8557689,
+      "sha256": "43a9e82347e96bfb026407fe4742494d7c361991f51e8ef683a1f1d9719b91ae"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/.gitattributes": {
+      "bytes": 16,
+      "sha256": "cdbe181deee63cd6b76a34f4c3b69bc306a09375c256444c313f7e2e0080521d"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/.gitignore": {
+      "bytes": 42,
+      "sha256": "576d0a89ad450560595978ab5c9fd8ec77fe2d435a27a2a486582df7fed58bb4"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/publication.json": {
+      "bytes": 6860,
+      "sha256": "9aeb3aa6be9fbb20ecd83ccbd5381c596625d22204af6970f5ee5c5f91050f72"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/research-summary.json": {
+      "bytes": 33089,
+      "sha256": "6b8c343ad2c2344a7953b30e062ddf61ea47222dc4e8c42506034d1a0a3c9f6f"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/research-summary.md": {
+      "bytes": 30566,
+      "sha256": "e9f9fb36f9f53f3168f72525bed4b9ec68b10d8a1e369601b057bd1ad0aa65bf"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_output.txt.parts/.gitattributes": {
+      "bytes": 25,
+      "sha256": "8fcdca4897179b91dbd5f06e726c692e89dc6fd4496ff23009f7252a130bff9b"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_output.txt.parts/manifest.json": {
+      "bytes": 1132,
+      "sha256": "002d88dfd9d06fe0113f61c6c608877f08f5389b767ed26098f1f17486091ca4"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_output.txt.parts/part-000001.bin": {
+      "bytes": 83886080,
+      "sha256": "1547586293c9f50f8efae9ebb32cd23781bbc46531ae0b17341a0886d69fd45b"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_output.txt.parts/part-000002.bin": {
+      "bytes": 83886080,
+      "sha256": "a10578b8b33c044782fd5c4d6fe5caaac19378776919dc2160a52c67ec7ac97f"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_output.txt.parts/part-000003.bin": {
+      "bytes": 83886080,
+      "sha256": "5f8240eeeff8f1d8218bb25410946dcd2ea25429ebfd61451cc4aa1801bcacbf"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_output.txt.parts/part-000004.bin": {
+      "bytes": 83886080,
+      "sha256": "cc7c35bd24da6102aa4e41b4e2b8b838fadfec8ec24966110dc7e51fdf7d1473"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_output.txt.parts/part-000005.bin": {
+      "bytes": 83886080,
+      "sha256": "a5122183274cbaa660775e220c57011d9d6102242e122193320d3a9d0e621f4f"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_output.txt.parts/part-000006.bin": {
+      "bytes": 72563170,
+      "sha256": "555e6e82551268fab356f6c9d1a6efda7c8c93cc82d92c62e3e57471d784304f"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_prompt.md": {
+      "bytes": 17655,
+      "sha256": "ba9dd114b80f9626b4f4617ef2e4609d0bfee7563dd163aa6627452025c5b6d9"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/evolve_state.json": {
+      "bytes": 980,
+      "sha256": "9dff0ef56de558e589e7a3b073cda94df2dfaade8e4d348d03bdeac7efbc1977"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/feedback/agent-1.log": {
+      "bytes": 1046929,
+      "sha256": "e734e7edd865fe89dbb1d9c2c32d8b8be4145c88152dfbb0ac9697679d511c7a"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/feedback/agent-2.log": {
+      "bytes": 1115760,
+      "sha256": "b0e9865a6e544b922461976d627868b63569cb3eb41368de3dedc038bc2019d6"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/feedback/agent-3.log": {
+      "bytes": 6579581,
+      "sha256": "f5d5cae4a1077cf736905cd1853a214bbb51918f2856fc59a8de39af56ac452e"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/feedback/agent-4.log": {
+      "bytes": 6548437,
+      "sha256": "ed2063e0b0dc78e6713d6c836dbe9f19f0e7854c9e9cac96148dd9390acf712e"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/feedback/agent-5.log": {
+      "bytes": 1638572,
+      "sha256": "cde6181421aea88f8e8454c4dc08245b618aa6c2fd05ad942b709a38a80e4d1f"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/run-plan.json": {
+      "bytes": 21917,
+      "sha256": "7339db88faafeb30d4b250b04385c20ad9970ebf61a631e269d0c800582664b6"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/run_agent.log": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/started_at": {
+      "bytes": 51,
+      "sha256": "f924420e833f7f19fb359ebfeba04996e698d5f8ebd8297c8cc1e61d3ce33c09"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-1/report.json": {
+      "bytes": 310,
+      "sha256": "f5e24ed9f6ea4eaa692997d51b74a824dad18c73ee0983ea8efcba07d8685c31"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-1/test_output.txt": {
+      "bytes": 1046929,
+      "sha256": "e734e7edd865fe89dbb1d9c2c32d8b8be4145c88152dfbb0ac9697679d511c7a"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-2/report.json": {
+      "bytes": 311,
+      "sha256": "293d242018af344209c7e1b56720029132752d6e91919c3a6306e622a64f92de"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-2/test_output.txt": {
+      "bytes": 1115760,
+      "sha256": "b0e9865a6e544b922461976d627868b63569cb3eb41368de3dedc038bc2019d6"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-3/report.json": {
+      "bytes": 310,
+      "sha256": "bd55c3af35482d880ee72fc129c97283d659bd5ea377dc1f3756e80141a5df19"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-3/test_output.txt": {
+      "bytes": 6579581,
+      "sha256": "f5d5cae4a1077cf736905cd1853a214bbb51918f2856fc59a8de39af56ac452e"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-4/report.json": {
+      "bytes": 336,
+      "sha256": "a0a29a10610a5cbf3b3ff67f8dd1ead48c2594d42bac10af395709e5935c28bb"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-4/test_output.txt": {
+      "bytes": 6548437,
+      "sha256": "ed2063e0b0dc78e6713d6c836dbe9f19f0e7854c9e9cac96148dd9390acf712e"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-5/report.json": {
+      "bytes": 310,
+      "sha256": "342be9384c4703cd36cf796d351e63629046840324bbb04f373ae8793377d67f"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/submissions/agent-5/test_output.txt": {
+      "bytes": 1638572,
+      "sha256": "cde6181421aea88f8e8454c4dc08245b618aa6c2fd05ad942b709a38a80e4d1f"
+    },
+    "logs/runs/omni-resume3-669485-20261004T141956Z-resume3/summary-generation.json": {
+      "bytes": 264,
+      "sha256": "0b10dad2f62c388d29df14e066b5e87f1d2551f34ee972e00056dac66a5db17d"
+    }
+  }
+}
