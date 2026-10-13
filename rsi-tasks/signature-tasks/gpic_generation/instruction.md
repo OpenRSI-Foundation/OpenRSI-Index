@@ -2,7 +2,7 @@
 
 > **Protocol version:** The prompt below belongs to the original 100M-image,
 > 1×8-H100 Harbor runtime retained in this directory. The published
-> [GPIC 10M trajectories](../../../rsi-logs/signature-tasks/gpic-10m-autoresearch/)
+> [GPIC 10M trajectories](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/signature-tasks/gpic-10m-autoresearch)
 > instead continue from a common step-39060 checkpoint on a fixed 802-shard
 > subset, with global batch 256, 1×4 H100 per job, and a 6,144-H100-hour
 > budget per trajectory. Their FD measurements are validation screens with
