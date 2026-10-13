@@ -2399,6 +2399,11 @@ class HfLogsAuditWorkflowTests(unittest.TestCase):
         for step in self.job["steps"]:
             self.assertNotIn("${{", step.get("run", ""), step.get("name"))
 
+    def test_pinned_runners(self):
+        self.assertEqual(self.job["runs-on"], "ubuntu-24.04")
+        guard = load_workflow(self, GUARD_WORKFLOW)
+        self.assertEqual(guard["jobs"]["history-guard"]["runs-on"], "ubuntu-24.04")
+
     def test_repository_id_comes_from_the_upload_tool(self):
         self.assertNotIn("OpenRSI-Index-Logs", HF_WORKFLOW.read_text())
         self.assertIn("publish_logs.py\" --print-repo", self.step("Locate the Logs repository")["run"])

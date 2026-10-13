@@ -19,7 +19,7 @@ concurrency:
 jobs:
   history-guard:
     name: history-guard
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Fetch commit history (trees only)

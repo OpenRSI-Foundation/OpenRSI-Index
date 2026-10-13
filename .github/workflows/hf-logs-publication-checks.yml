@@ -47,7 +47,7 @@ jobs:
     # revision: the pushed revision on main, the PR's base for a pull request.
     # The evaluated revision supplies only the task list, read as data.
     name: Logs repository audit (CPU only)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
       PYTHONDONTWRITEBYTECODE: "1"
