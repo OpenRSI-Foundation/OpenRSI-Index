@@ -77,7 +77,8 @@ jobs:
           if [ -n "$added" ]; then
             count=$(printf '%s\n' "$added" | wc -l)
             echo "::error::This PR's commits add $count file(s) under a path removed from this repository's history (${prefixes[*]}). Recreate the branch from the current main without those files; deleting them in a later commit is not enough."
-            printf '%s\n' "$added" | head -n 50 | sed 's/^/  removed path: /'
+            # No pipe: under pipefail, head closing early would SIGPIPE printf.
+            sed -e 's/^/  removed path: /' -e 50q <<<"$added"
             exit 1
           fi
           echo "History is related to the base and adds nothing under: ${prefixes[*]}"

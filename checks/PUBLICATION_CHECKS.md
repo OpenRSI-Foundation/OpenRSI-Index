@@ -227,8 +227,8 @@ trigger computation.
 
 PR area labels are kept in sync on every push and base-branch change by
 `auto-label-pr.yml` from the
-path table in `checks/auto_label.py`: `tasks` (`rsi-tasks/`), `logs`
-(`rsi-logs/`), `harness` (`RSI-Harness/`), `CI` (workflows, `checks/`,
+path table in `checks/auto_label.py`: `tasks` (`rsi-tasks/`),
+`harness` (`RSI-Harness/`), `CI` (workflows, `checks/`,
 `.github/WORKFLOW_API.md`, top-level dotfiles such as `.gitignore`), `docs` (README, CONTRIBUTING, LICENSE, PR template,
 `assets/`) and `skills` (`.agents/`, `.claude/`, `.codex/`). A label is added
 while the PR (or a renamed file's old path) touches its paths and removed once it
