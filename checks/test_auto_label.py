@@ -37,7 +37,6 @@ def files(*paths, renamed_from=None):
     ("path", "expected"),
     [
         ("rsi-tasks/demo/task.toml", {"tasks"}),
-        ("rsi-logs/demo/run/result.json", {"logs"}),
         ("RSI-Harness/src/rsi/cli.py", {"harness"}),
         (".github/workflows/discussion-review.yml", {"CI"}),
         ("checks/auto_label.py", {"CI"}),
@@ -67,20 +66,20 @@ def test_each_path_maps_to_its_area(path, expected):
 
 def test_mixed_pr_gets_every_touched_area():
     assert labels_for(
-        files("rsi-tasks/a/task.toml", "rsi-logs/a/x.json", "checks/x.py", "README.md")
-    ) == {"tasks", "logs", "CI", "docs"}
+        files("rsi-tasks/a/task.toml", ".claude/x", "checks/x.py", "README.md")
+    ) == {"tasks", "skills", "CI", "docs"}
 
 
 def test_rename_counts_both_the_new_and_previous_path():
     assert labels_for(
-        files("rsi-tasks/new/task.toml", renamed_from="rsi-logs/old/task.toml")
-    ) == {"tasks", "logs"}
+        files("rsi-tasks/new/task.toml", renamed_from="RSI-Harness/old/task.toml")
+    ) == {"tasks", "harness"}
     assert labels_for(files("archive/x.md", renamed_from="README.md")) == {"docs"}
 
 
 def test_label_table_is_well_formed():
     names = [label.name for label in LABELS]
-    assert names == ["tasks", "logs", "harness", "CI", "docs", "skills"]
+    assert names == ["tasks", "harness", "CI", "docs", "skills"]
     assert MANAGED == set(names)
     for label in LABELS:
         assert len(label.color) == 6 and int(label.color, 16) >= 0
@@ -101,7 +100,7 @@ def test_later_push_that_drops_paths_removes_the_label():
 
 
 def test_partial_file_list_never_removes():
-    assert plan({"logs"}, ["tasks"], complete=False) == (["logs"], [])
+    assert plan({"docs"}, ["tasks"], complete=False) == (["docs"], [])
 
 
 class FakeGh:
@@ -183,8 +182,8 @@ def test_label_removed_meanwhile_is_not_an_error():
 
 
 def test_truncated_file_list_only_adds(capsys):
-    gh = FakeGh(pr_files=files("rsi-logs/a"), current=["tasks"], changed_files=5000)
-    assert sync_pull(GitHub("o/r", gh), 7) == (["logs"], [])
+    gh = FakeGh(pr_files=files("README.md"), current=["tasks"], changed_files=5000)
+    assert sync_pull(GitHub("o/r", gh), 7) == (["docs"], [])
     assert "::warning::" in capsys.readouterr().out
 
 

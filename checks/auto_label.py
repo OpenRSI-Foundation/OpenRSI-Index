@@ -35,7 +35,6 @@ class AreaLabel:
 
 LABELS = (
     AreaLabel("tasks", "0e8a16", "Changes Harbor tasks under rsi-tasks/", ("rsi-tasks/",)),
-    AreaLabel("logs", "c5def5", "Changes run logs under rsi-logs/", ("rsi-logs/",)),
     AreaLabel("harness", "5319e7", "Changes RSI-Harness", ("RSI-Harness/",)),
     AreaLabel(
         "CI",
