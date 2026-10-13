@@ -3,10 +3,9 @@ name: Task and log publication checks
 on:
   # Only changes that can affect the result: task and log content, the checker,
   # its tests and policies, the Harness it compiles tasks with and runs its tests
-  # in, and this workflow; plus the Logs-repository workflow, its report script,
-  # the history guard and the webhook relay, whose contract tests run here. Main
-  # has no required status checks, so a path-filtered check never leaves a merge
-  # waiting on it.
+  # in, and this workflow; plus the Logs upload tool, the Logs audit workflow and
+  # the history guard, whose tests run here. Main has no required status
+  # checks, so a path-filtered check never leaves a merge waiting on it.
   pull_request:
     paths:
       - rsi-tasks/**
@@ -20,8 +19,8 @@ on:
       - .github/workflows/task-log-publication-checks.yml
       - .github/workflows/hf-logs-publication-checks.yml
       - .github/workflows/history-guard.yml
-      - checks/hf_logs_report.py
-      - infra/hf-webhook-relay/**
+      - checks/publish_logs.py
+      - checks/test_publish_logs.py
   push:
     branches: [main]
     paths:
@@ -36,8 +35,8 @@ on:
       - .github/workflows/task-log-publication-checks.yml
       - .github/workflows/hf-logs-publication-checks.yml
       - .github/workflows/history-guard.yml
-      - checks/hf_logs_report.py
-      - infra/hf-webhook-relay/**
+      - checks/publish_logs.py
+      - checks/test_publish_logs.py
   # A manual run audits every published package (--full), not an empty diff.
   workflow_dispatch:
 
@@ -93,7 +92,10 @@ jobs:
           PUBLICATION_GITLEAKS_BIN: ${{ runner.temp }}/publication-gitleaks/gitleaks
           # Scanner and compiler integration tests must run here, not skip.
           PUBLICATION_REQUIRE_INTEGRATION: "1"
-        run: uv run --frozen --no-dev python -I ../checks/test_publication.py
+        run: |
+          set -euo pipefail
+          uv run --frozen --no-dev python -I ../checks/test_publication.py
+          uv run --frozen --no-dev python -I ../checks/test_publish_logs.py
 
   publication:
     # Enforcement executes only the base revision's checker, policies and

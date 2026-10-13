@@ -1,9 +1,0 @@
-{
-  "name": "hf-webhook-relay",
-  "private": true,
-  "description": "Relays Hugging Face Logs repository webhooks to a GitHub repository_dispatch. No dependencies.",
-  "type": "module",
-  "scripts": {
-    "test": "node --test worker.test.mjs"
-  }
-}

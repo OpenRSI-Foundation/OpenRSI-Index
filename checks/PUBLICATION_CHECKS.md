@@ -3,9 +3,9 @@
 `Task and log publication (CPU only)` runs on pull requests and pushes to
 `main` that touch `rsi-tasks/`, `rsi-logs/`, the publication checker, its tests
 and policies, the RSI-Harness sources and lockfile it compiles tasks with, the
-workflow itself, or the Logs-repository workflow, report script, history guard
-and webhook relay whose contract tests it runs. Only affected `rsi-tasks/` packages and `rsi-logs/` archives are
-checked; a run with no package change passes with “not applicable”. A manual run
+workflow itself, or the Logs upload tool, Logs audit workflow and history guard
+whose tests it runs. Only affected `rsi-tasks/` packages and `rsi-logs/`
+archives are checked; a run with no package change passes with “not applicable”. A manual run
 (`workflow_dispatch`) audits every published package (`--full`), and so does a
 push to `main` that was forced (for example after a history rewrite) or whose
 previous revision the checkout cannot find: with no usable base there is no diff
@@ -179,7 +179,8 @@ for example with code-owner review.
 ## Logs repository checks (Hugging Face)
 
 Run logs can also be published in a separate Hugging Face dataset repository,
-`OpenRSI-Foundation/OpenRSI-Index-Logs`, whose root has the layout of
+`OpenRSI-Foundation/OpenRSI-Index-Logs` (`LOGS_REPO` in `checks/publish_logs.py`),
+whose root has the layout of
 `rsi-logs/` (`<task>/…`, `signature-tasks/<task>/…`). The checker's **Logs
 mode** checks such a repository with the same rules as `rsi-logs/` here:
 
@@ -215,44 +216,76 @@ python3 -I checks/check_publication.py \
 - `--base-ref` may be omitted with `--full`. A base that is missing or shares no
   history with the head fails with a request to audit with `--full`.
 
-`.github/workflows/hf-logs-publication-checks.yml` runs Logs mode:
+### Publishing logs: `checks/publish_logs.py`
 
-1. A Hub webhook on the Logs repository (scope `repo.content`, secret header
-   `X-Webhook-Secret`) calls the relay in `infra/hf-webhook-relay/` (a
-   Cloudflare Worker; setup in its README). For every update of `main` or of a
-   PR ref `refs/pr/<N>`, the relay sends a `repository_dispatch` of type
-   `hf-logs` to this repository with `client_payload`
-   `{repo, ref, sha, old_sha, pr}`.
-2. The workflow validates that payload before use (`repo` must be the Logs
-   repository, `ref` must match `^refs/(pr/[0-9]+|heads/main)$`, `sha` 40 hex
-   digits, `pr` the number in the ref) and passes it to scripts only through
-   environment variables.
-3. It checks out this repository's `main` (checker, policies, report script and
-   task list; the trusted revision), installs the same checksum-pinned gitleaks,
-   and fetches the Logs ref anonymously over HTTPS with LFS downloads deferred.
-   If the ref no longer points at the announced revision, a PR run reports
-   *stale* and stops (the newer revision's run reports); a `main` run still
-   audits the announced revision when it is in `main`'s history.
-4. It downloads LFS content for what the check reads (everything for `--full`)
-   and runs the checker. A PR is checked from its merge base with `main`, a
-   `main` update from the previous `main`; with no usable base (a new or
-   rewritten `main`) the run is `--full`. The Logs revision is data only and
-   never executed.
-5. For a PR it posts one comment with the result and the checker's output
-   (paths, rules, line numbers; never matched text) on the Hub PR, using a
-   pinned `huggingface_hub` and the repository secret `HF_TOKEN`. Without that
-   secret it skips the comment; every run writes a job summary.
+Logs reach the Logs repository through `checks/publish_logs.py`, which checks
+them before anything is uploaded:
 
-A daily scheduled run audits all of the Logs repository's `main` (`--full`), which
-also catches logs whose task was later removed or renamed in OpenRSI-Index and
-updates whose dispatch was lost. A manual run takes a `ref` (default
-`refs/heads/main`, always audited in full) and a `full` switch for PR refs. Runs
-for one Hub PR supersede each other; `main` runs are never cancelled.
+```bash
+pip install huggingface_hub==2.0.0      # the pinned client the tool requires
+hf auth login                           # or set HF_TOKEN; the token is never printed
+python3 -I checks/publish_logs.py <run directory or log tree> \
+  --task <task path under rsi-tasks/, e.g. signature-tasks/x> \
+  [--dest <path in the dataset; default: the task's log root>] \
+  [--create-pr] [--dry-run] [--gitleaks <gitleaks>] [--staging <empty dir>]
+python3 -I checks/publish_logs.py --check-pr <N>
+```
 
-Hub PRs have no required checks: maintainers merge a Logs PR only after its
-comment reports PASS and their own review. The relay and the workflow trust only
-the webhook secret and the validated payload; the checker and policy come from
-OpenRSI-Index `main`, so a Logs PR cannot change how it is checked.
+1. **Stage.** The source is copied (never modified) into a staging directory at
+   `--dest`, which must lie inside the task's log root (the reviewed alias in
+   `[log_task_aliases]` when there is one). Symbolic links and Git metadata are
+   refused.
+2. **Normalize** with the same rules as the conversion of the existing
+   `rsi-logs/` history. A chunk directory (a `manifest.json` with ordered
+   `parts`, in either chunk format above) is reassembled after every part and
+   the whole stream are verified; `<x>.gz` (also a reassembled one) is
+   decompressed to `<x>` and checked against any original manifest. Each
+   converted file gets a version 2 manifest, keeping the replaced manifest as
+   `original_manifest` (a chunked file that was not compressed records
+   `"compression": "none"`), and listing manifests (`publication.json`,
+   `*manifest.json` with `files`) are pointed at the raw file. Any other
+   compressed or archived file (`.xz`, `.bz2`, `.zst`, `.zip`, `.tar`, gzip
+   content under another name, …) is refused: unpack it yourself. Raw input
+   passes through unchanged, and normalizing a normalized tree changes nothing.
+3. **Check.** The staged tree is committed to a temporary Git repository and
+   checked in Logs mode with `--full`, tasks from `--task-ref` (default `HEAD`)
+   of the OpenRSI-Index checkout the tool lives in (`--index` to choose another).
+   This covers the uploaded files only; a new log root also needs a `README.md`,
+   staged or already on the Hub. Without `--gitleaks` (or
+   `PUBLICATION_GITLEAKS_BIN`) the secret scan is skipped locally.
+4. **Upload**, only if all of that passed: `huggingface_hub`'s `upload_folder`
+   to `main` (maintainers) or, with `--create-pr`, as a Hub pull request.
+   Large and binary files go through LFS/Xet automatically. `--dry-run` stops
+   before the upload; `--staging` keeps the staged tree for inspection.
+
+The upload does not delete files on the Hub. Because the pre-upload check sees
+only the staged files, maintainers check a Hub pull request with
+`publish_logs.py --check-pr N` before merging it: it fetches `refs/pr/N` and
+`main` anonymously, downloads the LFS content of the affected log roots and runs
+the checker incrementally from their merge base, exactly as for a PR here. Hub
+pull requests have no required checks; that local result and the maintainers'
+review are the gate.
+
+### Audit: `hf-logs-publication-checks.yml`
+
+`Logs repository audit (CPU only)` checks the Hub's `main` (`--full`) against
+this repository's tasks. It runs on pushes to `main` and pull requests that
+change the checker, its policies, `publish_logs.py`, `rsi-tasks/` (a removed or
+renamed task leaves orphaned logs) or the workflow, and manually with a
+`revision` (`main`, `refs/pr/<N>` or a commit id). It has a read-only token and
+no secrets.
+
+- The checker and policies come from the trusted revision (the pushed revision,
+  or a PR's base); the task list comes from the evaluated revision (the push, or
+  the PR head), read with `git ls-tree` as data.
+- The Logs repository id is read from `publish_logs.py` (`LOGS_REPO`), the only
+  place it is defined. It is fetched anonymously over HTTPS and all of its LFS
+  content is downloaded; the Logs revision is data and is never executed.
+- While the Logs repository is not published (the Hub answers 401/404), or when
+  the trusted revision predates these checks, the run passes with a notice;
+  any other Hub failure fails the run.
+- Every run writes a job summary with the checker's output (paths, rules and
+  line numbers only).
 
 ## History guard
 
@@ -283,18 +316,19 @@ RSI-Harness/.venv/bin/python -I checks/check_publication.py \
   --secret-config checks/publication-gitleaks.toml
 
 python3 -I checks/test_publication.py
+python3 -I checks/test_publish_logs.py
 ```
 
 The checkout must match the checked HEAD. Local checks without `--gitleaks`
 explicitly report that secret scanning was not performed; PR CI always supplies
-it. Logs mode is described above. `--full` requests a whole-repository audit rather than an incremental PR
-check; a manual workflow run uses it. The checker tests also cover Logs mode, the
-Logs-repository and history-guard workflows (running their shell steps against
-local fixture repositories) and the relay (`node --test
-infra/hf-webhook-relay/worker.test.mjs`, which needs no network or npm
-packages). The scanner, compiler and relay
-integration tests skip without `PUBLICATION_GITLEAKS_BIN`, the Harness or Node.js unless
-`PUBLICATION_REQUIRE_INTEGRATION=1`, which CI sets. The legacy shell scripts and
+it. Logs mode is described above. `--full` requests a whole-repository audit
+rather than an incremental PR check; a manual workflow run uses it. The checker
+tests also cover Logs mode and the Logs audit and history-guard workflows
+(running their shell steps against local fixture repositories);
+`test_publish_logs.py` covers the upload tool's normalization, checks and
+`--check-pr` with the upload mocked and no network. The scanner, compiler and
+Git LFS integration tests skip without `PUBLICATION_GITLEAKS_BIN`, the Harness
+or `git-lfs` unless `PUBLICATION_REQUIRE_INTEGRATION=1`, which CI sets. The legacy shell scripts and
 planted fixtures in `checks/` are retained for historical reference, **not** used
 as the current publication policy.
 `check-task-timeout.sh` has been updated to positive/finite validation with no cap.

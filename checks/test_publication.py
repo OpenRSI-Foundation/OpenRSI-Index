@@ -17,6 +17,7 @@ import json
 import lzma
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -2123,8 +2124,8 @@ class WorkflowTests(unittest.TestCase):
             ".github/workflows/task-log-publication-checks.yml",
             ".github/workflows/hf-logs-publication-checks.yml",
             ".github/workflows/history-guard.yml",
-            "checks/hf_logs_report.py",
-            "infra/hf-webhook-relay/**",
+            "checks/publish_logs.py",
+            "checks/test_publish_logs.py",
         ]
         self.assertEqual(on["pull_request"]["paths"], watched)
         self.assertEqual(on["push"]["paths"], watched)
@@ -2254,12 +2255,10 @@ class WorkflowTests(unittest.TestCase):
 WORKFLOWS = HERE.parent / ".github/workflows"
 HF_WORKFLOW = WORKFLOWS / "hf-logs-publication-checks.yml"
 GUARD_WORKFLOW = WORKFLOWS / "history-guard.yml"
-RELAY = HERE.parent / "infra/hf-webhook-relay"
-SPEC_REPORT = importlib.util.spec_from_file_location(
-    "hf_logs_report", HERE / "hf_logs_report.py"
-)
-report = importlib.util.module_from_spec(SPEC_REPORT)
-SPEC_REPORT.loader.exec_module(report)
+_SPEC_TOOL = importlib.util.spec_from_file_location("publish_logs", HERE / "publish_logs.py")
+publish_logs = importlib.util.module_from_spec(_SPEC_TOOL)
+_SPEC_TOOL.loader.exec_module(publish_logs)
+LOGS_REPO = publish_logs.LOGS_REPO
 
 
 def load_workflow(test: unittest.TestCase, path: Path):
@@ -2300,152 +2299,141 @@ def run_step(script: str, cwd: Path, env: dict):
     return result, values
 
 
-class HfLogsWorkflowTests(unittest.TestCase):
+class HfLogsAuditWorkflowTests(unittest.TestCase):
+    WATCHED = [
+        "checks/check_publication.py",
+        "checks/publication-*.toml",
+        "checks/publish_logs.py",
+        "rsi-tasks/**",
+        ".github/workflows/hf-logs-publication-checks.yml",
+    ]
+
     def setUp(self):
         self.wf = load_workflow(self, HF_WORKFLOW)
-        self.job = self.wf["jobs"]["logs"]
+        self.job = self.wf["jobs"]["audit"]
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
 
-    def validate(self, **env):
-        step = named_step(self.job, "Validate request")
-        defaults = {
-            "LOGS_REPO": self.wf["env"]["LOGS_REPO"],
-            "EVENT_NAME": "repository_dispatch",
-            "PAYLOAD_REPO": self.wf["env"]["LOGS_REPO"],
-            "PAYLOAD_REF": "refs/pr/12",
-            "PAYLOAD_SHA": "a" * 40,
-            "PAYLOAD_OLD_SHA": "b" * 40,
-            "PAYLOAD_PR": "12",
-            "INPUT_REF": "",
-            "INPUT_FULL": "",
-        }
-        return run_step(step["run"], HERE, {**defaults, **env})
+    def step(self, name):
+        return named_step(self.job, name)
 
     def test_triggers(self):
         on = self.wf[True]
-        self.assertEqual(set(on), {"repository_dispatch", "schedule", "workflow_dispatch"})
-        self.assertEqual(on["repository_dispatch"], {"types": ["hf-logs"]})
-        self.assertEqual(len(on["schedule"]), 1)
+        self.assertEqual(set(on), {"push", "pull_request", "workflow_dispatch"})
+        self.assertEqual(on["push"]["branches"], ["main"])
+        self.assertEqual(on["push"]["paths"], self.WATCHED)
+        self.assertEqual(on["pull_request"]["paths"], self.WATCHED)
         inputs = on["workflow_dispatch"]["inputs"]
-        self.assertEqual(inputs["ref"]["default"], "refs/heads/main")
-        self.assertEqual(inputs["full"]["type"], "boolean")
+        self.assertEqual(set(inputs), {"revision"})
+        self.assertEqual(inputs["revision"]["default"], "main")
 
-    def test_read_only_and_payload_never_reaches_a_shell_directly(self):
+    def test_read_only_without_secrets_or_inline_expressions(self):
+        text = HF_WORKFLOW.read_text()
         self.assertEqual(self.wf["permissions"], {"contents": "read"})
-        self.assertNotIn("permissions", self.job)
+        self.assertNotIn("secrets.", text)
+        self.assertNotIn("pull_request_target", text)
+        self.assertNotIn("persist-credentials: true", text)
+        self.assertEqual(text.count("persist-credentials: false"), 2)
         for step in self.job["steps"]:
             self.assertNotIn("${{", step.get("run", ""), step.get("name"))
-        text = HF_WORKFLOW.read_text()
-        self.assertNotIn("pull_request", text)
-        self.assertNotIn("persist-credentials: true", text)
-        # The Hub token reaches only the job-level presence flag and the report.
-        users = [
-            s["name"] for s in self.job["steps"] if "secrets." in json.dumps(s)
-        ]
-        self.assertEqual(users, ["Report (job summary; comment on the Hub PR)"])
-        self.assertEqual(self.job["env"]["HAS_HF_TOKEN"], "${{ secrets.HF_TOKEN != '' }}")
-        self.assertEqual(text.count("secrets."), 2)
 
-    def test_logs_repository_named_once_and_matches_the_relay(self):
-        repo = self.wf["env"]["LOGS_REPO"]
-        self.assertEqual(repo, "OpenRSI-Foundation/OpenRSI-Index-Logs")
-        self.assertEqual(HF_WORKFLOW.read_text().count(repo), 1)
-        config = tomllib_loads((RELAY / "wrangler.toml").read_text())
-        self.assertEqual(config["vars"]["HF_REPO"], repo)
-        self.assertEqual(config["vars"]["GITHUB_REPO"], "OpenRSI-Foundation/OpenRSI-Index")
+    def test_repository_id_comes_from_the_upload_tool(self):
+        self.assertNotIn("OpenRSI-Index-Logs", HF_WORKFLOW.read_text())
+        self.assertIn("publish_logs.py\" --print-repo", self.step("Locate the Logs repository")["run"])
 
-    def test_valid_requests(self):
-        result, out = self.validate()
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(
-            out,
-            {"ref": "refs/pr/12", "expected": "a" * 40, "old": "b" * 40, "pr": "12", "full": "false"},
-        )
-        result, out = self.validate(
-            PAYLOAD_REF="refs/heads/main", PAYLOAD_PR="", PAYLOAD_OLD_SHA=""
-        )
-        self.assertEqual(result.returncode, 0, result.stdout)
-        self.assertEqual((out["pr"], out["old"], out["full"]), ("", "", "true"))
-        result, out = self.validate(
-            PAYLOAD_REF="refs/heads/main", PAYLOAD_PR="", PAYLOAD_OLD_SHA="0" * 40
-        )
-        self.assertEqual((out["old"], out["full"]), ("", "true"))
-        result, out = self.validate(PAYLOAD_REF="refs/heads/main", PAYLOAD_PR="")
-        self.assertEqual((out["old"], out["full"]), ("b" * 40, "false"))
-        result, out = self.validate(EVENT_NAME="schedule")
-        self.assertEqual((out["ref"], out["full"], out["expected"]), ("refs/heads/main", "true", ""))
-        result, out = self.validate(
-            EVENT_NAME="workflow_dispatch", INPUT_REF="refs/pr/3", INPUT_FULL="true"
-        )
-        self.assertEqual((out["ref"], out["pr"], out["full"]), ("refs/pr/3", "3", "true"))
-        result, out = self.validate(
-            EVENT_NAME="workflow_dispatch", INPUT_REF="refs/heads/main", INPUT_FULL="false"
-        )
-        self.assertEqual(out["full"], "true")
-
-    def test_invalid_requests_rejected(self):
-        bad = {
-            "repo": dict(PAYLOAD_REPO="someone/else"),
-            "ref": dict(PAYLOAD_REF="refs/heads/dev"),
-            "ref injection": dict(PAYLOAD_REF="refs/pr/1; rm -rf /"),
-            "ref newline": dict(PAYLOAD_REF="refs/pr/1\nrefs/heads/main"),
-            "tag": dict(PAYLOAD_REF="refs/tags/v1"),
-            "sha": dict(PAYLOAD_SHA="A" * 40),
-            "short sha": dict(PAYLOAD_SHA="a" * 39),
-            "old sha": dict(PAYLOAD_OLD_SHA="$(id)"),
-            "pr mismatch": dict(PAYLOAD_PR="13"),
-            "pr on main": dict(PAYLOAD_REF="refs/heads/main", PAYLOAD_PR="1"),
-            "input ref": dict(EVENT_NAME="workflow_dispatch", INPUT_REF="main"),
-            "event": dict(EVENT_NAME="push"),
+    def test_trusted_checker_and_evaluated_task_list(self):
+        checkouts = {
+            s["with"]["path"]: s["with"]
+            for s in self.job["steps"]
+            if s.get("uses", "").startswith("actions/checkout@")
         }
-        for label, env in bad.items():
-            with self.subTest(label=label):
-                result, out = self.validate(**env)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("::error::Rejected request", result.stdout)
-                self.assertEqual(out, {})
-
-    def test_concurrency_per_pr_ref_never_drops_main_updates(self):
-        group = self.wf["concurrency"]["group"]
-        self.assertIn("'refs/pr/'", group)
-        self.assertIn("format('hf-logs-main-{0}', github.run_id)", group)
-        self.assertIn("startsWith(", self.wf["concurrency"]["cancel-in-progress"])
-
-    def test_trusted_main_checkout_and_pinned_scanner(self):
-        (checkout,) = [
-            s for s in self.job["steps"] if s.get("uses", "").startswith("actions/checkout@")
-        ]
-        self.assertEqual(checkout["with"]["ref"], "main")
-        self.assertEqual(checkout["with"]["path"], "trusted")
-        self.assertEqual(checkout["with"]["sparse-checkout"], "checks")
-        self.assertFalse(checkout["with"]["persist-credentials"])
-        task_log = load_workflow(self, WORKFLOW)
-        expected = named_step(task_log["jobs"]["publication"], "Install checksum-pinned secret scanner")
-        actual = named_step(self.job, "Install checksum-pinned secret scanner")
-        self.assertEqual(actual, expected)
+        self.assertEqual(set(checkouts), {"index", "trusted"})
         self.assertEqual(
-            checkout["uses"],
-            named_step(task_log["jobs"]["publication"], "Checkout submitted publication data")["uses"],
+            checkouts["trusted"]["ref"],
+            "${{ github.event.pull_request.base.sha || github.sha }}",
+        )
+        self.assertEqual(checkouts["trusted"]["sparse-checkout"], "checks")
+        self.assertEqual(
+            checkouts["index"]["ref"],
+            "${{ github.event.pull_request.head.sha || github.sha }}",
+        )
+        self.assertEqual(checkouts["index"]["filter"], "blob:none")
+        run = self.step("Audit every published log (--full)")["run"]
+        self.assertIn('checks="$GITHUB_WORKSPACE/trusted/checks"', run)
+        for flag in (
+            '--repo "$GITHUB_WORKSPACE/logs" --mount rsi-logs --full',
+            '--task-repo "$GITHUB_WORKSPACE/index" --task-ref HEAD',
+            '--policy "$checks/publication-policy.toml"',
+            '--secret-config "$checks/publication-gitleaks.toml"',
+            '--gitleaks "$SCANNER_DIR/gitleaks"',
+            'exit "$status"',
+        ):
+            self.assertIn(flag, run)
+        self.assertNotIn("index/checks", HF_WORKFLOW.read_text())
+
+    def test_scanner_install_matches_the_task_workflow(self):
+        task_log = load_workflow(self, WORKFLOW)
+        name = "Install checksum-pinned secret scanner"
+        self.assertEqual(self.step(name), named_step(task_log["jobs"]["publication"], name))
+        self.assertEqual(
+            {s["uses"] for s in self.job["steps"] if "uses" in s},
+            {named_step(task_log["jobs"]["publication"], "Checkout submitted publication data")["uses"]},
         )
 
-    def test_fetch_is_anonymous_and_checks_the_announced_revision(self):
-        run = named_step(self.job, "Fetch the Logs revision (anonymous; LFS content deferred)")["run"]
-        self.assertIn('git config credential.helper ""', run)
-        self.assertIn("git lfs install --local --skip-smudge", run)
-        self.assertIn('"https://huggingface.co/datasets/$LOGS_REPO"', run)
-        self.assertIn('"$resolved" != "$EXPECTED"', run)
-        self.assertIn('echo "stale=true"', run)
-        self.assertIn("git merge-base refs/remotes/origin/main", run)
-        self.assertIn('base=$OLD', run)
+    def locate(self, code="200", revision="main", tool=True):
+        checks = self.root / "trusted/checks"
+        checks.mkdir(parents=True, exist_ok=True)
+        for name in ("check_publication.py", "publication-policy.toml", "publication-gitleaks.toml"):
+            shutil.copy(HERE / name, checks / name)
+        if tool:
+            shutil.copy(HERE / "publish_logs.py", checks / "publish_logs.py")
+        else:
+            (checks / "publish_logs.py").unlink(missing_ok=True)
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir(exist_ok=True)
+        curl = bin_dir / "curl"
+        curl.write_text('#!/bin/sh\nprintf %s "$FAKE_HTTP_CODE"\n')
+        curl.chmod(0o755)
+        return run_step(
+            self.step("Locate the Logs repository")["run"],
+            self.root,
+            {
+                "GITHUB_WORKSPACE": str(self.root),
+                "REVISION": revision,
+                "FAKE_HTTP_CODE": code,
+                "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            },
+        )
+
+    def test_locate_outcomes(self):
+        result, out = self.locate()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(out, {"available": "true", "repo": LOGS_REPO, "revision": "main"})
+        for code in ("401", "404"):
+            result, out = self.locate(code)
+            self.assertEqual((result.returncode, out), (0, {"available": "false"}))
+            self.assertIn("is not published", result.stdout)
+        result, out = self.locate("503")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("audit did not run", result.stdout)
+        result, out = self.locate(tool=False)
+        self.assertEqual((result.returncode, out), (0, {"available": "false"}))
+        self.assertIn("predates Logs repository audits", result.stdout)
+        for revision in ("refs/pr/7", "a" * 40):
+            self.assertEqual(self.locate(revision=revision)[1]["revision"], revision)
+        for revision in ("dev", "refs/heads/main;id", "A" * 40, "refs/pr/x"):
+            result, out = self.locate(revision=revision)
+            self.assertEqual(result.returncode, 1, revision)
+            self.assertNotIn("available", out)
 
     def test_fetch_step_against_a_local_logs_repository(self):
-        tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(tmp.cleanup)
-        root = Path(tmp.name)
-        remote = root / "remote"
+        need(self, shutil.which("git-lfs"), "git-lfs is not installed")
+        remote = self.root / "remote"
         remote.mkdir()
 
-        def git(*args, cwd=remote):
-            return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
+        def git(*args):
+            return subprocess.check_output(["git", "-C", str(remote), *args], text=True).strip()
 
         git("init", "-q", "-b", "main")
         git("config", "user.name", "t")
@@ -2453,7 +2441,7 @@ class HfLogsWorkflowTests(unittest.TestCase):
         (remote / "README.md").write_text("x\n")
         git("add", "-A")
         git("commit", "-qm", "one")
-        first = git("rev-parse", "HEAD")
+        main = git("rev-parse", "HEAD")
         git("checkout", "-qb", "pr")
         (remote / "a.txt").write_text("a\n")
         git("add", "-A")
@@ -2461,150 +2449,65 @@ class HfLogsWorkflowTests(unittest.TestCase):
         pr = git("rev-parse", "HEAD")
         git("update-ref", "refs/pr/5", pr)
         git("checkout", "-q", "main")
-        (remote / "b.txt").write_text("b\n")
-        git("add", "-A")
-        git("commit", "-qm", "two")
-        second = git("rev-parse", "HEAD")
-        run = named_step(self.job, "Fetch the Logs revision (anonymous; LFS content deferred)")["run"]
-        # Point the fixed Hub URL at the local repository.
+        run = self.step("Fetch the Logs revision with its LFS content (anonymous)")["run"]
+        self.assertIn('"https://huggingface.co/datasets/$LOGS_REPO"', run)
         run = run.replace('"https://huggingface.co/datasets/$LOGS_REPO"', '"$LOCAL_REMOTE"')
 
-        def fetch(case, **env):
-            work = root / case
+        def fetch(case, revision):
+            work = self.root / case
             work.mkdir()
             return run_step(
-                run, work,
-                {"LOGS_REPO": "x/y", "LOCAL_REMOTE": str(remote), "OLD": "", "FULL": "false", **env},
+                run, work, {"LOGS_REPO": "x/y", "LOCAL_REMOTE": str(remote), "REVISION": revision}
             )
 
-        result, out = fetch("pr", REF="refs/pr/5", EXPECTED=pr)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual((out["stale"], out["sha"], out["base"], out["full"]), ("false", pr, first, "false"))
-        result, out = fetch("stale-pr", REF="refs/pr/5", EXPECTED="c" * 40)
-        self.assertEqual((out["stale"], out["sha"]), ("true", "c" * 40))
-        result, out = fetch("main", REF="refs/heads/main", EXPECTED=second, OLD=first)
-        self.assertEqual((out["sha"], out["base"], out["mode"]), (second, first, f"incremental from {first}"))
-        # Main moved on after the announcement: the announced update is still audited.
-        result, out = fetch("main-moved", REF="refs/heads/main", EXPECTED=first, OLD="")
-        self.assertEqual((out["stale"], out["sha"]), ("false", first))
-        # A rewritten main (old revision unknown) is audited in full.
-        result, out = fetch("rewritten", REF="refs/heads/main", EXPECTED=second, OLD="d" * 40)
-        self.assertEqual((out["full"], out["base"], out["mode"]), ("true", "", "full"))
-
-    def test_lfs_download_uses_the_checker_selection(self):
-        run = named_step(self.job, "Download the LFS content the check reads")["run"]
-        self.assertIn("--mount rsi-logs", run)
-        self.assertIn("--lfs-include", run)
-        self.assertIn('git lfs pull --include="$pattern"', run)
-        self.assertIn("git lfs pull\n", run)
-
-    def test_checker_runs_from_trusted_main_in_logs_mode(self):
-        step = named_step(self.job, "Check the Logs revision")
-        run = step["run"]
-        self.assertIn('PUBLICATION_CHECKS="$GITHUB_WORKSPACE/trusted/checks"', run)
-        self.assertIn('python3 -I "$PUBLICATION_CHECKS/check_publication.py"', run)
-        for flag in (
-            "--mount rsi-logs",
-            '--task-repo "$GITHUB_WORKSPACE/trusted" --task-ref HEAD',
-            '--repo "$GITHUB_WORKSPACE/logs"',
-            "--gitleaks",
-            "--secret-config",
-            "--policy",
-            "mode=(--full)",
+        for case, revision, expected in (
+            ("main", "main", main),
+            ("pr", "refs/pr/5", pr),
+            ("sha", pr, pr),
         ):
-            self.assertIn(flag, run)
-        self.assertIn("exit 1", run)
-        self.assertNotIn("--compile", run)
+            result, out = fetch(case, revision)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(out, {"sha": expected})
+            head = subprocess.check_output(
+                ["git", "-C", str(self.root / case / "logs"), "rev-parse", "HEAD"], text=True
+            ).strip()
+            self.assertEqual(head, expected)
+        result, out = fetch("unknown", "c" * 40)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("is not on main or a pull request", result.stdout)
 
-    def test_report_comments_only_on_prs_with_a_pinned_client(self):
-        install = named_step(self.job, "Install pinned Hub client")
-        self.assertRegex(install["run"], r'"huggingface_hub==[0-9]+\.[0-9]+\.[0-9]+"')
-        self.assertIn("env.HAS_HF_TOKEN == 'true'", install["if"])
-        self.assertIn("steps.request.outputs.pr != ''", install["if"])
-        step = named_step(self.job, "Report (job summary; comment on the Hub PR)")
+    def test_job_summary(self):
+        output = self.root / "logs-audit.txt"
+        output.write_text("::warning::Possible credential: a```b; rule=x, line=1\nFAIL done\n")
+        step = self.step("Job summary")
         self.assertIn("always()", step["if"])
-        self.assertEqual(step["env"]["HF_TOKEN"], "${{ secrets.HF_TOKEN }}")
-        self.assertIn('--summary "$GITHUB_STEP_SUMMARY"', step["run"])
-        self.assertIn('comment=(--comment-pr "$PR")', step["run"])
-        self.assertIn('[ "$STATUS" != stale ]', step["run"])
-        self.assertIn("hf_logs_report.py", step["run"])
+        summary = self.root / "summary.md"
+        result, _ = run_step(
+            step["run"],
+            self.root,
+            {
+                "RUNNER_TEMP": str(self.root),
+                "GITHUB_STEP_SUMMARY": str(summary),
+                "OUTCOME": "failure",
+                "LOGS_REPO": "o/r",
+                "REVISION": "main",
+                "SHA": "a" * 40,
+                "INDEX_SHA": "b" * 40,
+            },
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        text = summary.read_text()
+        self.assertIn("### Logs repository audit: failure", text)
+        self.assertIn("WARNING: Possible credential", text)
+        self.assertNotIn("::warning::", text)
+        self.assertIn("````text\n", text)
+        self.assertIn("FAIL done", text)
 
 
 def tomllib_loads(text):
     import tomllib
 
     return tomllib.loads(text)
-
-
-class HfLogsReportTests(unittest.TestCase):
-    def build(self, status="pass", output="PASS 3 published files\n", **kw):
-        return report.build_report(
-            status, output, repo="o/r", ref="refs/pr/2", sha="a" * 40, mode="full", **kw
-        )
-
-    def test_report_contents(self):
-        body = self.build(run_url="https://example.invalid/run")
-        self.assertIn("publication check: PASS", body)
-        self.assertIn("`refs/pr/2`", body)
-        self.assertIn("https://example.invalid/run", body)
-        self.assertIn("```text\nPASS 3 published files\n```", body)
-        self.assertIn("FAIL", self.build("fail"))
-        self.assertIn("ERROR", self.build("error", ""))
-        self.assertIn("newer", self.build("stale", ""))
-
-    def test_fence_outlasts_backticks_and_commands_become_text(self):
-        body = self.build(output="::warning::Possible credential: a````b.txt; rule=x, line=1\n")
-        self.assertIn("WARNING: Possible credential", body)
-        self.assertNotIn("::warning::", body)
-        self.assertIn("`````text\n", body)
-
-    def test_long_output_keeps_the_end(self):
-        output = "x" * (report.MAX_OUTPUT + 100) + "\nFAIL final line\n"
-        body = self.build("fail", output)
-        self.assertIn("FAIL final line", body)
-        self.assertIn("earlier output omitted", body)
-        self.assertLess(len(body), report.MAX_OUTPUT + 2000)
-
-    def run_main(self, *extra, token=None):
-        with tempfile.TemporaryDirectory() as tmp:
-            out = Path(tmp) / "out.txt"
-            out.write_text("PASS ok\n")
-            summary = Path(tmp) / "summary.md"
-            args = [
-                "--status", "pass", "--output", str(out), "--repo", "o/r",
-                "--ref", "refs/pr/2", "--sha", "a" * 40, "--mode", "full",
-                "--summary", str(summary), *extra,
-            ]
-            env = {k: v for k, v in os.environ.items() if k != "HF_TOKEN"}
-            if token:
-                env["HF_TOKEN"] = token
-            stdout = io.StringIO()
-            with patch.dict(os.environ, env, clear=True), contextlib.redirect_stdout(stdout):
-                code = report.main(args)
-            return code, stdout.getvalue(), summary.read_text()
-
-    def test_summary_without_token_posts_nothing(self):
-        with patch.object(report, "post_comment") as post:
-            code, stdout, summary = self.run_main("--comment-pr", "2")
-        self.assertEqual(code, 0)
-        post.assert_not_called()
-        self.assertIn("HF_TOKEN is not configured", stdout)
-        self.assertIn("PASS ok", summary)
-
-    def test_comment_posted_once_with_token(self):
-        with patch.object(report, "post_comment") as post:
-            code, stdout, _ = self.run_main("--comment-pr", "2", token="hf_test")
-        self.assertEqual(code, 0)
-        post.assert_called_once()
-        self.assertEqual(post.call_args.args[:2], ("o/r", 2))
-        self.assertNotIn("hf_test", stdout)
-
-    def test_comment_failure_is_reported_without_details(self):
-        with patch.object(report, "post_comment", side_effect=RuntimeError("hf_secret_echo")):
-            code, stdout, _ = self.run_main("--comment-pr", "2", token="hf_test")
-        self.assertEqual(code, 1)
-        self.assertIn("(RuntimeError)", stdout)
-        self.assertNotIn("hf_secret_echo", stdout)
 
 
 class HistoryGuardTests(unittest.TestCase):
@@ -2726,40 +2629,6 @@ class HistoryGuardTests(unittest.TestCase):
         self.write("x.md", "x\n")
         self.commit()
         self.assertNotEqual(self.guard().returncode, 0)
-
-
-class RelayTests(unittest.TestCase):
-    def test_wrangler_config_has_no_secrets(self):
-        text = (RELAY / "wrangler.toml").read_text()
-        config = tomllib_loads(text)
-        self.assertEqual(config["main"], "worker.js")
-        self.assertEqual(set(config["vars"]), {"HF_REPO", "GITHUB_REPO"})
-        self.assertIn("wrangler secret put WEBHOOK_SECRET", text)
-        self.assertIn("wrangler secret put GITHUB_TOKEN", text)
-
-    def test_relay_has_no_dependencies(self):
-        package = json.loads((RELAY / "package.json").read_text())
-        self.assertNotIn("dependencies", package)
-        self.assertNotIn("devDependencies", package)
-
-    def test_relay_and_workflow_agree_on_the_ref_pattern_and_event(self):
-        worker = (RELAY / "worker.js").read_text()
-        self.assertIn(r"/^refs\/(pr\/[0-9]+|heads\/main)$/", worker)
-        self.assertIn('EVENT_TYPE = "hf-logs"', worker)
-        run = HF_WORKFLOW.read_text()
-        self.assertIn("ref_re='^refs/(pr/[0-9]+|heads/main)$'", run)
-
-    def test_node_tests_pass(self):
-        import shutil
-
-        node = shutil.which("node")
-        need(self, node, "Node.js is not installed")
-        result = subprocess.run(
-            [node, "--test", str(RELAY / "worker.test.mjs")],
-            capture_output=True,
-            text=True,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout[-2000:])
 
 
 class SecretScannerTests(unittest.TestCase):
