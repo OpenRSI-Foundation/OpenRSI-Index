@@ -21,6 +21,10 @@ git clone https://github.com/OpenRSI-Foundation/OpenRSI-Index.git
 cd OpenRSI-Index
 ```
 
+`main`'s history was rewritten in October 2026. If your clone or fork is
+older, see [the history rewrite notes](assets/docs/history-rewrite-2026-10.md)
+before you continue.
+
 Open Codex or Claude Code (app or CLI), start a fresh session, and paste:
 
 ```text

@@ -2175,7 +2175,6 @@ class WorkflowTests(unittest.TestCase):
         on = self.workflow()[True]
         watched = [
             "rsi-tasks/**",
-            "rsi-logs/**",
             "checks/check_publication.py",
             "checks/test_publication.py",
             "checks/publication-*.toml",
@@ -2725,7 +2724,10 @@ class HistoryGuardTests(unittest.TestCase):
         policy = tomllib_loads((HERE / "publication-policy.toml").read_text())
         self.assertEqual(
             policy["history_guard"]["forbidden_prefixes"],
-            ["rsi-tasks/reasonir-difficulty-curriculum/tests/assets/bright/"],
+            [
+                "rsi-logs/",
+                "rsi-tasks/reasonir-difficulty-curriculum/tests/assets/bright/",
+            ],
         )
 
     def test_related_pr_passes(self):

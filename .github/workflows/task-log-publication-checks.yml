@@ -1,15 +1,16 @@
 name: Task and log publication checks
 
 on:
-  # Only changes that can affect the result: task and log content, the checker,
-  # its tests and policies, the Harness it compiles tasks with and runs its tests
+  # Only changes that can affect the result: task content, the checker, its
+  # tests and policies, the Harness it compiles tasks with and runs its tests
   # in, and this workflow; plus the Logs upload tool, the Logs audit workflow and
-  # the history guard, whose tests run here. Main has no required status
-  # checks, so a path-filtered check never leaves a merge waiting on it.
+  # the history guard, whose tests run here. Run logs live in the Hugging Face
+  # Logs dataset, and the history guard rejects any PR that adds rsi-logs/.
+  # Main has no required status checks, so a path-filtered check never leaves a
+  # merge waiting on it.
   pull_request:
     paths:
       - rsi-tasks/**
-      - rsi-logs/**
       - checks/check_publication.py
       - checks/test_publication.py
       - checks/publication-*.toml
@@ -25,7 +26,6 @@ on:
     branches: [main]
     paths:
       - rsi-tasks/**
-      - rsi-logs/**
       - checks/check_publication.py
       - checks/test_publication.py
       - checks/publication-*.toml

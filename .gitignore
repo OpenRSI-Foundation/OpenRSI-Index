@@ -61,6 +61,8 @@ CLUSTER_INSTRUCTIONS (1).md
 !/assets/docs/
 /assets/docs/*
 !/assets/docs/quick-start.md
+!/assets/docs/history-rewrite-2026-10.md
+!/assets/docs/history-rewrite-2026-10-commit-map.tsv
 
 AGENTS.md
 .agents/

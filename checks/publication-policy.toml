@@ -11,5 +11,6 @@
 # PR's base revision.
 [history_guard]
 forbidden_prefixes = [
+  "rsi-logs/",
   "rsi-tasks/reasonir-difficulty-curriculum/tests/assets/bright/",
 ]

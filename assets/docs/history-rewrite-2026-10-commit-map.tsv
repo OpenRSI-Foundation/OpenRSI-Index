@@ -1,0 +1,196 @@
+old_commit	new_commit	logs_commit	subject
+b1e370e7656dd483c3675bb9fe427db91ed38069	ba67e5536e2b2f6335b63c9a7df0cb62a66adbba	6804fdb51e0c8d3df7ac83fbd3370cbeee495264	Initial commit
+31fb7ca02a2bb22b9ad18cbf148fdfbfa27b3598	bf499b9bfe174c39da108c8bd020307823a156fc	-	Clarify shared-runtime proposal review boundary
+2b85cea3e6ec27cf8d822f2e08b7d827af2468e3	06d4faa406dc410a86b2d25581478c9729a4ef6b	-	Merge pull request #56 from RSI-Index/fix/shared-runtime-review-boundary
+5d878eda137d11c633be4a5769a636296fdeb636	f90c8cd536ea86328a32d8c5f7271dc4e0a1a63c	-	revise hash
+bd4190de9a8e6b703aafa968777c55f491cfe3c8	9fa626e8f755b262932be44f354e5db9a77175ee	-	Merge pull request #58 from RSI-Index/fix/task-protected-hashes
+f8fff92898d21f4c69f9a01393e56c6e20fa0c68	90e5ecde667f9b7b19eb3725e9cc17ec30e85391	-	simplify proposal onboarding and remove hook dependency
+c70ef288299a2e916b830ddedf211ab2c4aa33c4	1dbb9f6cda7b9dbc004e21933705fbe74f36eb84	-	docs: clarify the RSI checkout root
+9329c72b136d5aa1136876d74ceb0c6cd9cda1d4	0d0f13df12be21af95ef08fc0998b39a0c57c56f	-	Merge pull request #59 from RSI-Index/feat/hookless-proposal
+de13b3189a35fba73dfeabe1feaa9b89348f9159	1d0f5b81250f40da57c14d25cdbdd754b028402a	-	feat: support CPU-only proposals and local task execution
+3425ec75550938a34e183a9cc749abebd64ca377	063e134565e858a8ba6e9237da1370189208074b	-	Merge pull request #60 from RSI-Index/feat/cpu-only-task-support
+ac837eaddfd8a18050a87433a4d194053b00b33d	43cff1a2dfb1c74c8a048d6911b59b68f0b7531a	-	fix: parse repository evidence from proposal tables
+3b0c2d5937e4d5047af04aeb2174e7b61e5c062d	9bc38b7bf80573e584dce1c08196fbd59892eb2a	-	Merge pull request #62 from RSI-Index/fix/rubric-table-evidence
+55a8e17b1af9666804ff4259982d51dff640dc6a	10ca0f253a7171c5a203014d817436a85fb64c19	-	docs: clarify proposal-agent onboarding and chat prompts
+98544f1b104b6f1081037d050d7ae76ccf4f1719	f57ebe0d05a052555bcbe155964a2c274ced7b28	-	Merge pull request #63 from RSI-Index/docs/proposal-agent-chat-guidance
+d6fd96d7a36ffbe0a69621c4929afbef2e8fd035	9c28ffda808a98c2b6cb00fe5742bd2e5d990923	-	fix: notify discussions when task preparation is queued
+76dda7416932e9f142eb7801b4241e4e58b37133	ea25fddedf3748c60b8a5aa7a31923b6ac18c220	-	Merge pull request #65 from RSI-Index/fix/task-queue-notice
+919c43e64a02d78c5ac563313f1892c7315ecbcf	8f8d96605ddceb1345a106b57b497a1f9ff6b003	-	Recover Discussion GitHub operations and deduplicate public notices
+1292e4ec019188108c7361ea4f1012d8ef372eba	c2ec12153408bd143d1296235dd7541097d0a676	-	Recover EYES acknowledgements without rerunning submissions
+54689fc962fb8d5db1350fee7ad6c978b9572cd2	df43fc5b854378de4c77426b557519fe0891e7cd	-	Classify uv setup outages as GitHub recovery
+b79363fb46d8d02ffea40a989ac4780bbd2de981	40a5da3ab0f1899b41c9eaa4ab04b4673f834101	-	Merge pull request #67 from RSI-Index/feat/github-recovery
+b006d6d03b3b1240fc876db301bcd7b703758a49	6065dcbf635e01fc62886f7cebd8ec137ef0c1af	-	Enhance contributor section with co-authorship details
+7054220098b01065630c8f78da28fb0f40f2c4cf	dec47bab7f283c752bba3fb4867c1ed5c7e3dc53	-	Merge pull request #69 from RSI-Index/Zhuofeng-Li-patch-1
+1bde52421dd44414a8fec380bf1b6390e364c818	7e1ba947b00b5e0d027774abf9a93167ba6b7e73	-	Update README.md
+a379b2df7dcc421d4b3758d2c91ac7a576652a24	4dbfc9bfbbe6c55913c927782297eee4143cf971	-	Merge pull request #70 from RSI-Index/Zhuofeng-Li-patch-1
+9497016a28cbf6b0cf14b2e649ffcce1f3bcd0e6	ed1a3f41b227544d59db86170e3512f8c3647350	-	fix(harness): attest concurrent per-bridge firewall policies
+0412a0fc8c2a2a55082c19069384ae811f66559d	5305ac4c832feee84c2e8b8c64dc2f2c46258234	-	Merge pull request #71 from RSI-Index/fix/harness-concurrent-firewall
+66479644907d2007d26aaa2ce948a15015836cd0	2745a8a6b83d8b526630ee72fa093269bf79ad01	-	fix(harness): resolve pinned agent hosts without external DNS
+94941033c430814bfbf9cc394004f6dbc2147bcd	c8ecebab24cfb8b8cff7ee8ba0dfe829f95ac862	-	fix(harness): run Claude Code as root in Work and pin its OAuth refresh host
+03e2b566726c327c01e0cd7287d651e5b5526670	de31da023fc5fa038fae0aa13a2c999ce5ef3fe9	-	Merge pull request #72 from RSI-Index/fix/harness-pinned-agent-hosts
+ffc936237937b0e0ebea7308a248a390abaecdd2	cd072dc729364afbc0dd92e93add1c4831af70ee	-	fix(harness): feed the Claude Code prompt on stdin instead of argv
+1c172236b992d29ce07d3499c300f8b9d27a7590	a72d290eeb9e2d506fc8b2834faa34df3432367c	-	Merge pull request #73 from RSI-Index/fix/harness-prompt-via-stdin
+37db168a1b92231a863dc6a2060ebac133a0d56a	d394a78c6c65e451e8e04d3155346d2b60d15bd2	-	Rename project to OpenRSI-Index and update workflows and header
+09d6f222226f91c87c369f7898c14b8e8f08c2c5	0a20d3fdb689f39ab0a940e82e997c8ee818fce8	-	Replace remaining project display names with OpenRSI Index
+74db45ca9fc683d63f81f7346133d0b609241ba2	6a91e3c5b41a31546cd4834df955902c164ba0f3	-	Keep concurrent advisor edits separate from the branding update
+8d86ee3f57f8b0fc9c158b321157030b2888b32a	6ee2f3258558843bdfc6d50fd8f517e81c1f3fef	-	Update WeChat invitation caption to OpenRSI Index
+a39d5ce1c2de75271d5dcb1723ee863e3b680ccf	b443a55d99711a6bb326a399a16fbb5d5ed0b1a3	-	docs: add alphabetized advisors with profile links
+065fa5cc241c9a4e3de0abc963036acb050e8c7a	ed171ff239649db7b39ce412fee0c3e24160671c	-	docs: update README layout and contact information
+7fc831a90ed7f6e3cbca195ff6021c48269727b1	c75ae15fd027669822f2a7f782af8495aa3ecff3	-	Merge pull request #74 from OpenRSI-Foundation/fix/openrsi-index-rename
+0cffc674d3fcf35a965d692e6b5e186a20b8b9fb	53686f539d1ab6e7f3ce9d0ab4bba281f9e983f6	-	Fix README centering, badge spacing, and title lettering
+5b0c918527da1cc69a3cb8715573b7bd14e6cb20	d0cf42c597aa6a828f34fdd7e78b112445601685	-	Merge pull request #75 from OpenRSI-Foundation/fix/readme-centered-layout
+90b4ad8c4220f603c2cf8e096ed595ac027864ac	021564dbf13c7993271a63a9642c112e552851e5	-	docs: add call for compute below contributor guide
+f329400394319d554b38c6987db6db2dab2a4bad	8c9ca0ff53db0f42639e595066d803f14c21a5a9	-	docs: shorten compute call and update heading emoji
+dad443b2f9946145d77faf79fa0db48bacb35d30	4d8ede3cacbc21751194d21faa5e927fd21df87c	-	docs: use burning-compute emoji for compute call
+2195df2ba9183dec2551f07b1cc68cc2e54dae1c	2de49f82b8c33cf1a2db640d60c44d63461203f8	-	docs: refine call for compute wording
+2b3ff1afef9b2c26d54ed839cf698cc139a8082e	a16e535ec045f7aa29615204ba5afa58ac5fb3e1	-	Merge pull request #76 from OpenRSI-Foundation/docs/call-for-compute
+312c7b96f527a77a4161a2082b84c1d54239604c	f3aa713031d1b556f065f620d3b24d41e2d2e9a1	-	test: retire obsolete checks and run the full public suite
+b274327aa74e423f255739266db3b8b824b7bdb5	831a1b992d2f6edec103975101fcab50b09e4a45	-	fix: release BlueVela nodes before publishing completion
+a481310c4f65079a465e8d5e70ba755bca43c69e	ba14c9db08e0382dfcfb7cbee4c4e2cf1e1b9a0f	-	Merge pull request #77 from OpenRSI-Foundation/fix/stale-test-contracts
+c618e8e48cbec2d43198f7d86c4e45db2749eb8f	f2d1ebe962752b6877b77f3b4f848c54bc6210d5	-	fix: support Python 3.9 in proposal submission helper
+3b71d155f11621609de2246194b079251a8f1666	8e8bc7675f011dac4d49767d75d5a9738e68cdfe	-	Merge pull request #80 from OpenRSI-Foundation/fix/proposal-helper-python39
+67ff72159629b80d888aebc56d8645f32516533e	afcf7ae42a142012c0e817fab905d58c30106b33	-	fix(harness): let an accepted Judge round finish when the Agent times out
+7af56eea240ad1d971a2c91cb85bce0e36835eab	e3b9dfe7529592eaf4c210d0b6c72f8a36cfc3fc	-	Merge pull request #81 from OpenRSI-Foundation/fix/harness-drain-inflight-judge
+29e580943e8f3cecac543a9142c8b8c5dbefc9d7	660ed066991acdb6e197a18c744380a5c9ef3d1e	e4a7660fe5127e491d307a06864340498b4e2b7d	Publish ACE playbook repair task and complete run archives
+6251e2d1a4894e032f99a8eb69acedf9015d2e65	4f7346cdd26cf18657e134896474e6c52c06e41f	e3212d4f6c5315c4a3c7bb10a06b87a8007f2683	Publish MolmoWeb context task and paired run archives
+d0046044455a1ed08e1d9ba38ccf1871c5356c31	289f5651aee2c327977016c2fe9e62246bbe2bd4	2fdc75ba6b7dfe3b3078641d3d2f97339450e05f	Publish ReasonIR curriculum with verified upstream asset preparation
+7ec093c6d2d202f42961c3e222012098d9a3bc47	6bd0d4b3744af1c461c34cf9d727f508f4761f49	89a2ae18eb59ba33174e0017525059a0f0d6efef	Merge pull request #82 from OpenRSI-Foundation/publish/lightweight-d12-d32-d36
+1b30b3cdb9ac80b5c9ffa5e9cd2aee7443bf48e6	be9093efed82fc955132d71f0660f87057547cc4	-	fix(harness): raise the Docker API read timeout above a large rootfs commit
+738c0ea2874389e9b7250909aa78c0f6b6a92384	a39ce4e5b67a021f010878d1bb85939c1667396d	89a2ae18eb59ba33174e0017525059a0f0d6efef	Merge pull request #83 from OpenRSI-Foundation/fix/harness-docker-api-timeout
+08e700f0519e208c5b91041d2758781e19dc2a90	removed	946cf66046eb2a567c584466c7e2caa90663a510	Publish learnability-cot Codex run with a 7.7 h budget, replacing the short recording
+6162e2b305ca84c51113f03e5f0049ad8c0df0b1	removed	db33455997e0fd5db3e7572089a675299ba3b3e0	Merge pull request #84 from OpenRSI-Foundation/logs/learnability-cot-codex-20260918
+0f24a8f1c88488c55f04206355dd068bec7b42b0	removed	7f88c550eb70d017fbf6f585cbcb7e47b65b24e4	rsi-logs: remove the datacomp-small-filtering and depth-width-allocation archives; trim SANITIZATION.md
+e016c9540733580f0ad51b3f75667df3f3b95200	removed	41f04df83f77ff863723bd4980e1081d5c3dd335	Merge pull request #86 from OpenRSI-Foundation/logs/remove-datacomp-depthwidth-archives
+cbe0c3a41334b4d588fb0551fdffb4b607caba32	ed60467c0768418d465dbd05e362cac421c3cde3	-	docs(skills): sync proposal research-loop budget guidance
+b0f3514a5ed04401cff4f167d61a1e019b9346fd	6e97369c10364e8534ef053f9641dd89b0a82bc6	-	Merge pull request #87 from OpenRSI-Foundation/skills/research-loop-budgets-20260919
+9bf19242c1ce2c30c6929d24d17f3313daec70a5	711dc79a5f8a479b6f13af174f60d91570c7d8b6	-	Publish Isaac Lab PegInsert reward-search task
+72bd6f7889e8cf7fd8d8759928ce2c82b8cea757	afc89de2d7e160a0534cd760e230ddb1854026ba	-	Correct task author attribution for four published tasks
+5f87bd5bc9c947dd55fb53099befdb85b91a0531	removed	d5e8a91b6298ba899205a0a0792dcdafcfe904ed	Publish paired Isaac Lab PegInsert reward-search run archives
+134a428db0d0e99b743ce57cf36ac9b222671077	0c6989079d99ed36194cc04ca4f8d53ab2f4b3bf	e61dd2b272bd51e8b9bb843a79a1d9865007f6c3	Merge pull request #88 from OpenRSI-Foundation/tasks/isaaclab-peginsert-reward-search-20260920
+84abc62c927efe709fb7c6902e1534d0c2da7a59	29784dd00514d70d204edfb7d20ddde9db2b0d22	3886fdb8964ceec330e4b405adbce13568348c40	Add portable optimizer task, reproducible data setup, and sanitized trajectories
+159c85c61e7e9ea896f4d8887e1be93a069cde27	6f2904132810a21fdddbac912431fb1c16dae571	-	Ignore local agent configuration directories
+9a6a02dc055a290309b335265cfc61fbd44650ab	1e9fbede79ebbf96f660f8b73c497e0f27c25dd6	9e1e16d48d4ee5478403fc9a024e45265bdfd947	Merge pull request #90 from OpenRSI-Foundation/tasks/optimizer-geometry-data-setup-20260920
+b0d7fd1997356676176f5798d7bfd0ec4cf3287c	2748328f9fe05e83e82ecdac01e76dfde6244e27	-	Add portable Harbor task for Qwen 122B synthetic RL data
+d4d0e8c31ad8b68e33388a6d73edb979b8f4aa8d	dd05beca7c26a5257e84b294f1d6cdcfa741fd50	9e1e16d48d4ee5478403fc9a024e45265bdfd947	Merge pull request #89 from OpenRSI-Foundation/tasks/post-training-qwen-122b-rl
+1a86b9830a2a06e65d395d2bf5a791309c2ef7ac	f97c995bc12c832d45ba40c15a8973102c7fceb0	-	Delete rsi-tasks/datacomp-small-filtering directory
+ebc64ae5a030507e2b6de646e2d54ffd7f7183c1	a9955d5b2dc8c50d100482c8a4648bf78aab26dc	-	Merge pull request #91 from OpenRSI-Foundation/Zhuofeng-Li-patch-1
+bd42360c9a9d001ef8e06bc6521400fded763130	98afca28c37179606410ffcc51ef6286fd197ba5	-	docs: align contributor roster with project team layout
+cca1fc02e96b93a36953a0db7580786294365796	1bf8c1437272fb09841be0f4279d3cc1b25a2809	-	docs: Contributors table matches the site's Team page
+fc6d9f3a4cbc82d17e833553c628e2c2737d6dc7	701f73692b2f16920f9b54e775037bebdb36c9a9	-	Merge pull request #93 from OpenRSI-Foundation/docs/contributors-layout-links
+091495efbf924473ef4e27626a82816c511bd91b	deb2c716e85dd9e9309ee94e9f72173cb04e3503	2d4b10a2669337ca62f3cebbca665c360087bb12	docs: archive Qwen-122B-RL Formal v8 research visualization
+1db29776756427ccda41631034c8b34349fe9f1a	654214ee738cfd0734de95e9413ccfde667bc623	2d4b10a2669337ca62f3cebbca665c360087bb12	Merge pull request #92 from OpenRSI-Foundation/logs/qwen-122b-formal-v8-visualization
+5ae662a3d426c285978f498082b5c992076a1814	ec5d48161370908d3af444280e826f018c72d001	-	docs: Shangding Gu links to Google Scholar; his own domain no longer resolves
+b5fd8332f2885043b9f35fc972ffadded8866f0b	03a6ee1a1eef718930bc40d1459b2b465efb4920	-	docs: links for Shujia Liang, Xiang Liu, Guan Wang and Ning Wang
+f6c6e6ad8c2ab727b152184232b04dc8eaf3fa46	a23fd8afd628d2ee9585046e254bc4a1b3059d1d	-	docs: Guan Wang unlinked until the right page is confirmed
+e1b81405e874bf93a28a6184083501cb193a5ab9	3204fc15139281af706c9dcc7b6c96c16381f67f	-	docs: Guan Wang links to Google Scholar
+1f7b66509914d7e9335691ea33f9eeaf53d7471a	5a98cd9ae66f4c837a523fecc3b3a1b2d9d2ebe2	-	docs: sync contributor links and roster with team page
+304837ef5246a7a2d9d128e31ab7eb1ba577dd91	af1c916ab21b9fccd0084e52a2b0300f315c176d	2d4b10a2669337ca62f3cebbca665c360087bb12	Merge pull request #96 from OpenRSI-Foundation/docs/contributors-layout-links
+6bf51ee1922fe6429b454b0d97fec67fa9f365ca	16f55b6b949a384e3bdc8109f5c87232ec177b42	-	docs: update website link and WeChat group image
+b2bba1052f9960ca92a0e7e5ff1c6d783b675a43	9e26f13c00219c124002823817bdc7418a18824c	-	Merge pull request #97 from OpenRSI-Foundation/codex/update-readme-links-wechat
+813c55255a6a3337958c64965dacfee924c16212	8fe713e1a9c00c4f1178e0af9ead6ff6be545b3a	-	Delete .agents/skills/redact-release-artifacts directory
+ca299dd638f5f37d21839879b6c6b88fc44ec8d7	a2a7b3d08ce6ab1e0ecfc9d545945861b38b2511	-	Merge pull request #98 from OpenRSI-Foundation/Zhuofeng-Li-patch-1
+75e5979aa6ef0203f27e9e08cc080cd24143e518	fce79b21cbbf047be891fe464e93159f6bc566be	43710e7419b00e7afcf5733aa446e37733a1659e	Publish Kev decision-architecture task and paired 12 h run archives
+a986601c33f646c242b666803f1f5928759f8fa2	faa3ac12cc7b156c32161aef325995a0fbc57b1f	-	Add the Kev decision-architecture row to the task table
+2ff0b2d515657c27d9e515c8fcbdf368d8ec10be	2c543d88aef94b9ef67bdef3457142307d397d57	597e88aefb1d3e4e0525aa1d55c85d63af522140	Merge pull request #99 from OpenRSI-Foundation/tasks/kev-decision-architecture-20260922
+7c25c7d3b2c919b18252a599ac954976e7b724ff	removed	e6f5cd33bfe891e095df14efa92f4f5a236a50a5	Add GPIC 10M autoresearch trajectories
+fa331c8872508699213caa77a2b0def49d463c97	removed	ee28b61e142358dddd89ce61d53f50754275644a	Align GPIC trajectory directory names with agent-model convention
+9a1c8bb561943640aab578d6596008426c289566	removed	df32ef8971c4fd1d06c1bdd90501e077fcefe83a	Merge pull request #100 from OpenRSI-Foundation/add-gpic-10m-autoresearch
+e754dc7a6409014136cd2a96e1c3e547afe0498f	99a9636253e124c7e6105e27a2d6b18eb5e3cd38	3d99563901547e0debcddec6cb4614a1fdb1a54e	Move GPIC research trajectories under signature tasks
+6dec5170016b289f572c45140a431426a8a4a0da	480981a22117427b4e90aeee41c2d234b901e099	865b4df63bcd8e8baebb925f5f0c016b24dd9b08	Merge pull request #102 from OpenRSI-Foundation/chore/gpic-signature-task-logs
+03e744c0c75c37b64c261cfbd45d4d4377e276e3	03877e4fa91aaedc3fd9b7f9743956cad001698e	-	Add Kaiyuan Zheng to organizers
+f9285b22ca1f8fa5668b4b88559d2dca9a2c4ba4	5c1a7a3e603f50d9f954dc3cf62c3d7552630010	-	Merge pull request #104 from OpenRSI-Foundation/docs/add-kaiyuan-zheng-organizer
+899157c91e8148135280452ffc9abf98c1ad8abc	2897db40809aebd7c5e7be29ccfada8b24249929	-	docs: align GPIC task description with logged 10M settings
+068a0ba409514f90a885e42051822413e2445be7	15cfd4d1ce743e4f668bd70a86838bf60d33945f	-	Merge pull request #105 from OpenRSI-Foundation/chore/gpic-signature-task-logs
+a1bd75addd403294226572744a0a655c8203e0bf	6e759ae188349636c603edd74a9eeaef1b78839c	-	chore: use GPT-6 Luna high for proposal rubric review
+602ac1ca30c3dd748db4779ae7b9abdae3167a06	0d75e7823882409269b940cd0a062bbca9575e3b	-	Merge pull request #106 from OpenRSI-Foundation/feat/rubric-gpt6-luna-high
+4450d3fd771bacc9fb27607303ac81e0057688ba	removed	af87b4af0c5faeaa54e9463b1d521e624a17fa9b	add sanitized optimizer task environment
+1ca6b78a19b7402d2cca1b899e1237c2d19522b8	b502b8dff44dece8a8e342b3392c6bb8cf25111d	41b3708502b4283df6b52cad2f6c406fb2418f4d	Archive the as-run optimizer environment under the task, not the logs
+e9a20bcc4017282a869c055c9e97cdf84d1d7cef	a58916cab01394eb3fcd8dde5166f984fd36a683	-	Ship the optimizer task as its sanitized as-run LSF/Apptainer environment
+2418ca1b552d9ef5e8d1792c2c99e79ad0139a94	c70cf436a019271ca88fb268f44a006587b8be5d	-	Merge pull request #103 from OpenRSI-Foundation/dev-rh/marin-environment
+94790a1c42a86967572e5cd2b46fe7848c76357b	68c0d4ef63fd8b657c98c12f5d10ba23b436fc08	-	fix: retry transient rubric API failures with exponential backoff
+20395e0d6224795f588ec67ae56557b3d838f3e6	a457a85ab11d7eea459c3af65e081675c9e7ead3	-	Merge pull request #108 from OpenRSI-Foundation/fix/rubric-openai-backoff
+60a75eef1dfc6f3d7ab139498ddf4bd0194d98f7	436d38081a430295d9463e5c8f44e1724f75aa3c	-	fix: restore Terra medium for proposal rubric review
+a4325ab0d3c0b374879e6a35bd8f2dc788c9190b	c08f5b61946f04c8864dd46138f64407b7a71478	-	Merge pull request #109 from OpenRSI-Foundation/fix/rubric-terra-medium
+4c4738ae7a1572e13180cd9f60784ae1dad5a8ce	210d041bb120dfca80327f95bf8e4e29412e22fe	-	fix: post task queue notices before worker dispatch
+9407664e37dfc84f630945569f5a7c3584083d8a	67ed9d7f1b57cb1e00816569e7173d955aeb959f	-	test: include queue token in review workflow expectations
+644349ac108feefc0489acda8e6536125f9587f3	923104bf9b50e1f60b592b557e0c1b4769dbbe09	-	Merge pull request #110 from OpenRSI-Foundation/fix/task-queue-notice-order
+bacadde807bb8bee4a05936cd542eb9f050f8d6c	9486722946e3ed605d544d7ba02ac8b38eec7170	-	feat: route rubric review through Luna proxy
+f427bc7946e50546419750f8ae10d13f153e171c	a0178da69ff546f57fa7118fcd5f485719a3bb2e	-	ci: share proxy credentials with PR agent trials
+bca7a0c4b94167f5836a00c44f3fb81ea96c930a	ab6422283c82f4d43f7318e99f33983184cd66c1	-	Merge pull request #111 from OpenRSI-Foundation/feat/rubric-proxy-luna
+f10ba5a9097b49a13437edbbba66bb3f758558c3	4212197bcc72c74e76d3aad1afc5bbd1d3a406fc	-	Require every prediction to come from the Kev decision head
+a439b8c72bbac15af4ba00adab45043fb506090d	removed	7a0052d8a1e2e0257f80fcbd952118315a786ad0	Remove the Claude run archive pending a rerun under the decision-head rule
+4a231b001dd60f3172f50bfbe73db60add4d90ac	removed	655d9c0d51a26e918c16cf5d2538838061056fb4	Update the Kev run archive README for the withdrawn Claude run
+fffdbb6a855656fc602244cd5fe9dc80a918a8eb	removed	6b8ec6edc0d71a8e97873dce6043ecfd4c61a4f6	Add the Claude Opus 5 kev run recorded under the decision-head rule
+3ba94c5194f010be045dad6893ad2b43f93ffc9c	2c7de89fa042c97e8ece8a42033ad53c5dd907a6	b9fb5d70d395b5199aea52a21e46a48e1ec0b028	Merge pull request #101 from OpenRSI-Foundation/tasks/kev-decision-architecture-rule-and-rerun
+bdd15265d77b5eeb3025597b34ddf629daa67432	1c74511996c400b9352c28f64c1f6e58b28d811c	-	docs: restore project README on repository homepage
+b3ef9a60749bdc2fe97e25be18bccaa498d04631	9b300c36f034cd07de14925f2f239376b21f93cb	-	Merge pull request #114 from OpenRSI-Foundation/fix/restore-repository-readme
+6254e2be8a22bcd2e04a864db6e29199c6deb2b2	b576bd3d68634e5494af480c3ada3e52af508a96	-	Update README.md
+6579298c2c3a6f4bbfa41495ac7fea198de583ad	0706b9add4eb41df2f5219dfb46b6bcb879719df	-	Merge pull request #115 from OpenRSI-Foundation/Zhuofeng-Li-patch-1
+452cbd055f19201c2a21292b30b64756a839a7b2	0348408dd7600adba98b9bfb0270d1ec5efa0470	-	Update README.md
+ffd7a23c279ce9a7f1904e4c9e296f4426c5f6af	a857e45823c155feabaf2323e801f99264477546	-	Merge pull request #116 from OpenRSI-Foundation/Zhuofeng-Li-patch-2
+94c3b56769d48a3318861fbe2abc9011bf7e2d4c	2de5fb8cb72606274dcf1c3a26c2c1045644ba11	-	Remove Twitter badge from README
+3ee9ee4989bb2a9126bd257a3f7d8beb2ce74321	8e9c0fb4766b715a54bad75acb93733107b5f5bd	-	Merge pull request #117 from OpenRSI-Foundation/Zhuofeng-Li-patch-3
+a53502b812736ff2c0c8c83a6925af3359449896	a3d335abce39b92ec38c87d36d281e684f815d8d	-	Update README.md
+1160ac0895dbd327967ea45eadf99e5d28fddb41	4a7c9364e52d1fd1fc4c8bc3be71d1f70f8b07fc	-	Merge pull request #120 from OpenRSI-Foundation/Zhuofeng-Li-patch-4
+fd0c0a8fcb7c1bdde89f5aa47e7d89f067c6a9e3	84b2478f2f3b73f228395a9bf4e9c46645ba13c5	-	Update README to include RSI Logs Viewer link
+77cf0c965f6415f2878828fe087ef80b5f10edc4	f25fe13ea357d4e211b1c5f6f086be03e7fb8219	-	Merge pull request #121 from OpenRSI-Foundation/Zhuofeng-Li-patch-5
+4770dd9eab3f4921ccecc6f6a064a55994d691f5	f5a6113ab7a484581964571f7185d19882dc568c	-	docs: align contributors with the team page
+5d411876624e78b84499e2759b50febbf8cf75a7	36be307e6707e94d386d1f0ca1f82800d0db0fd2	-	Merge pull request #122 from OpenRSI-Foundation/docs/complete-contributors
+1dd1cd0b7d460ae70b51f86bd5d1d71a34a7ef76	a044bfd02b8dd29aaa91e7b1807aeded55dec2cf	-	Add isolated Slurm scheduling for the shared cluster runtime
+53a4b93935c4c6f6cde59ee654fdd8037e897d36	28f1b16c8d36dcd0f2c5eeb78765abac279ad49b	-	Merge pull request #124 from OpenRSI-Foundation/codex/slurm-compatibility
+37299378b1eb122f046864e225470cfa759f541a	161e8782592cd6fb9b010ea7e98d7e449a69662a	-	Sync proposal execution feasibility guidance
+1808ffb281ce9fab247dd24c4f10155dd0bd411d	18e186892b6a60d8ad88ee2ba0505c8b12274951	-	Merge pull request #125 from OpenRSI-Foundation/sync/proposal-execution-feasibility
+fce41e60c37ed1e2a03d5586294d770755b8fe63	f1178439745e59be6e7cfcdc80b3d30d138f30e5	-	Update README.md
+15802c426faf12798765a3e2acfcbb8f2b9d2f87	57b480a20dcb90cb776842c00cca0c64465d75e3	-	Merge pull request #128 from OpenRSI-Foundation/Zhuofeng-Li-patch-1
+b9874f69e62efd925199e6e2fdb6bd90a5e8d51f	9810982429139447471b76a96e639a275f0cdae1	-	Fix cluster hook permissions, GPU release checks, and task umask
+d6842eba77a8d3e06698ff49814f91e140e04b3d	413503248e99c220b1d33beb3d354a2d7df65b5a	-	Merge pull request #135 from OpenRSI-Foundation/fix/cluster-runtime-feedback
+1e746b4886e22a07220bdb29e4e00b8552862e60	9eb605afaff1eb694f18c8874df04565e13dc43f	-	fix(harness): preserve agent trajectories and disable Claude stop cap
+150bff20e565096f65bd8260e223f7ea8bea5969	babd83108d948c92449f7ca19e80a591fdf21f0c	-	fix(harness): preserve trajectory content during credential redaction
+2646b96a314fe87ea64673d898fcd9633fc75dfd	02bddcdc6c517d145c0f89db4a79b5876364247a	-	Merge pull request #136 from OpenRSI-Foundation/fix/claude-stop-cap
+edea364aaf9243856a773efd196dcb820eb8b3f1	9a53287329c921182dbde8c107b107e736ccb342	11c73db9265daad7dc807b4d662c9fbac1699f39	fix(harness): stop recording Agent budget exhaustion as failed
+1e0f8fe50d40e99a24ef4b36687fe97c7ec8fc06	ffb07eb21b1cea81ce1aa6021b4bf7000fac04e0	a568bc121547c5fdcfedb2049eeb2fe44e799600	Merge pull request #140 from OpenRSI-Foundation/fix/agent-timeout-completed
+382352fc4aa2b93af3377ab6676803a470861269	2456410c9b8320e679068ae30cdd69922ea8fae4	-	chore(harness): update Codex and Claude Code CLI versions
+57d9ea7127f91bdde94f89ae47d95cf1ad374836	61a7d3fcd6a63d4057229b8f057d9f752047258e	-	Merge pull request #144 from OpenRSI-Foundation/chore/harness-agent-cli-versions
+e808984d47bd7092152fdf2b7287419da56b41f5	5f1283e1e318ba5abd00a24e600151236f026b9c	-	docs: add Fengqing Jiang to organizers
+20d7b65f70396e5d15a83e00eb8733f599b2dd19	e121015d1bfb13d4bd7ff994c4a44446a766b94f	-	Merge pull request #151 from OpenRSI-Foundation/docs/add-fengqing-jiang-organizer
+62198bcb5a9285f2bb2c914182c0e559d3394e99	e2d47cd0b4593585d44ffb3105649c05bd14d11e	-	fix(harness): allow multiple CUDA processes in job-exclusive LSF allocations
+393189f7e1b1850d20675bd3bc8cb66751df453b	2da64c140252542603dd4f39186ade6cba580c27	-	Merge pull request #155 from OpenRSI-Foundation/fix/harness-bluevela-lsf-compat
+de5584bc4d20823f09371940fc68397008bc847a	892a59b9cc1366acfa4d161f30f7a616f5aea111	-	chore(review): use GPT-6.1 Sol with high reasoning
+369b93dadcf4632785d44596d3eeaf5574af50ac	4acebad2799281306737ed3c932687c2ff2cd6f6	-	Merge pull request #156 from OpenRSI-Foundation/chore/rubric-gpt-6-1-sol
+a39387761e0300e6cceb5011918e018c613d53fa	3045fd06d29427d0173928f282265f20e4abcb83	-	Add files via upload
+4cc30d76ad6eb9b22f07ca327e7e07e764c15330	d7da369e11962fcdf0231d47bae432c5185441d6	-	Merge pull request #162 from OpenRSI-Foundation/yichen-f-patch-1
+279530863ce882249ceaf13b627ed85eb24db7b6	0c935f2182b9ffbb0c273e3ee819692b7b565858	-	docs: correct WeChat community invite image (#169)
+40d5026a9f880603dbc706ce1dae6deb7e75f6b6	5cff11d156f6394915065a0c4b8eec8e60a2641b	-	RSI-Harness: support CPU-only Slurm runs with Apptainer (#193)
+df5959bd44a90fb7f155747a9292586e496ddba3	25bef9a774e7a45c848082f7c9f5eb930548d5e0	-	Fix repository ref parsing and provider errors in Discussion reviews (#200)
+18a3f8f257879871ff3ba309fafd1535dc9558e2	7732b6edb246d11a62c651ae4fa076951642e16b	-	Check Harness publication compatibility on PRs (#202)
+9f58127baa670e91b2c99f5e18c332d19694ef45	57653a7dea2e6d17996fc7c2c622ac44df63da77	-	RSI-Harness: managed Docker sandboxes for Work and Judge, with an E2B backend (#201)
+51f6b4bcac37689a3bd0c9d6d0bc162ed0265785	b85a1c970867795f97a4a9b79ca1f341aa58de12	-	update README (#203)
+7cb5913c4f485219f43874df72b2e32de3ffbe53	4995ae55a90f247d55a3ee16a88fed16df1f416a	-	CI: lint RSI-Harness with ruff (#204)
+36e66104d2e03ed25d9e7c2e458aa471a5805ff3	4638ffe239e1d2c22a6bed36c84ed04acef1dc7f	-	docs: link the RSI-Harness README from the evaluation section (#205)
+dcfbc43b117b92d276837aa0d48f291d544fcf7a	17a8834a434f240ae83d40ae3adf21147edd2a2d	-	Fix final Judge counting and retain raw rewards (#198)
+a5af33641cc9f8c90cb6eea506ed495f94d46f97	2e69bc247be4e6bb11a3a78aef64a0a936bfb231	-	RSI-Harness: five more coding Agents, rsi-agent for Judges, and Agent/root CI (#231)
+04ef5176bc13a0d8665101d75e98be75653a300d	cdc4d4e83e289dc697631b30a3d93aff00c921a1	-	RSI-Harness: run an Agent's Judge one-shot tests when bumping it (#233)
+7e0e9191883c491fc87735de07c49330760f1dd4	16e94e6bf053656383eafb764f4591d22f606134	-	Replace legacy task trials with CPU-only task and log publication checks (#234)
+c9f3bece9fdd4ead074fa88fdf50b180fe536b1c	4cbf7f60ac00634787aec2d5d7a36a2d733dc213	-	CI: run only the Harness checks a change can affect (#235)
+dcaa9916dffd3b916c7c4053278138809c89ed0c	9e43629ed4f48d958c8f774d7fc915b81f4648df	-	RSI-Harness: bump Codex to 0.162.1 and Claude Code to 2.1.296 (#232)
+bb141504bf6345a35dfd58904a94a3d0f11c3239	48c09817d303a6eea981c35b9d63faf679c5fefa	-	CI: scan safe source aliases and verified compressed chunks (#236)
+41518588874bfd879fdf1eae67ecd73f80062362	662e07bfc1692ba4049613954968362f193d9d77	-	CI: fix task/log publication check gaps (#238)
+139dc2f48c7751e369de80631eab4f8301a5629a	0167542e7995aabf3dca7bbcb18b495260208db7	7cebd78a9f168c3c93686bbe6ff445cf5c19fef7	Publish SGLang Omni TTS runtime task and complete research logs (#237)
+e00f0a9a720021e1ac7c81a89192689fa4b2d1b0	297ee08233727ba84868c16d1772d84144e9609e	-	Task: download every BRIGHT asset instead of shipping 300 MB of parquet (#241)
+dfc76dcc3221c09be932e394c0835fd233cddd03	4d187d0407deb5f1946982789d77d3ff94643e3d	-	Label PRs by area from one path table
+396ff089b58e9ec2932bceed47528907f054bc44	915ff02137a238f20e29e5fc23c64ceb666e6779	-	Label Task Ideas Discussions by domain
+82aa275eda3a7c368cab178e9ab5bb2ac2c1c203	bae603ad2d87d78b17330be1c6a3965de4f6a06a	-	Document PR area and Discussion domain labels
+0b800e7ec75ab7c4b49e4bb61767fd660fd238a6	0f3cebba4f9d9d08d6604d2dcb6c1568bb173100	-	Leave AI4Sci proposals without model training to a science pipeline
+ddb0e5e747cffcc4bc2779d40fc05e232dfb227b	cb7cc5cc7bc179cb2287d7bcb6a9d5a1fe2c53ce	-	Start contributors with the task-intake skill
+5d5f71af50338ed830ba695bad8b1772b893c086	53ec35831da87184767ebb61def09110a50a6dab	-	Update setup-uv and pin Ubuntu runners (#242)
+a9174f2bd36b1ce839da2d0d4edc3e452d440a28	00af94d175625338b1592d33c29222e3c6dc7e2b	-	Merge remote-tracking branch 'origin/main' into labels/pr-areas-discussion-domain
+f7fd64515081765b5a21719abd15d93fcdf57b4f	8fd482539e581becb4558dea2af0ecf869d767ea	-	Relabel a PR when its base branch changes
+054edacea128804ed46a5461077843da06a30d22	2f2ad218fbdbacd6809c35f52fc2ee7f201a39bb	-	Merge remote-tracking branch 'origin/labels/pr-areas-discussion-domain' into intake/task-intake
+eb583575543527c7401df294b923a3c5a61b9f98	5a193f8bd977dee52825e110985df311d4fb11ab	-	Fall back to the general review and retire stale progress on science
+b67b2680cef1865dd3a32571fd0962d281c4fab7	c8a2f91fc1318dd89f1a88408d28f83fdc502241	-	Note the Index pipeline routing when adding a domain
+6b293ed007a638f99621cc8e8d3d04713974f5f8	ed1843e72830ea9a31b539062f7140b65fd8f7f6	-	Path-based PR area labels and Task Ideas domain labels (#244)
+ff3fa0ae3f52ed66ae0096a4f47f63d5ec6eb55f	1ec16828bc607c6362d1235343e1d1cbf993dfbe	-	Merge remote-tracking branch 'origin/main' into tmp-245
+62783396b79a514acd93720c310b7810760fc719	6e665669687cdb8f2e28bfa75a662bdf7ee1e8bc	-	Label top-level config files such as .gitignore as CI (#246)
+c580f1ab9c2f212daf1786f8932f4fb7cd3658b2	5286b4ce2656fae6c90d05d5648d48b788cb409c	-	CI: publish research logs to the Hugging Face Logs dataset and audit it (#247)
+9527ce3e1a6482f6f50c297deae3ce5ebaf4d6de	6299d2b99a2c8875bd5211633d99930795adfd13	-	Docs: link research logs to the Hugging Face Logs dataset (#248)
+2c2ab9f47dabf73eef19f31d704c7eb148503745	b414e56bab7bdead9e6b31bb0cff8a48fc557329	-	Docs: simplify the research log notes (#249)

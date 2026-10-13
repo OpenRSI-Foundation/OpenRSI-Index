@@ -104,8 +104,9 @@ SGLANG_RUNS = (
 
 def history_fixture(root: Path) -> dict[str, bytes]:
     """Miniatures of the three log roots OpenRSI-Index published compressed
-    (rsi-logs/ at e00f0a9a): the same paths, manifest formats, key order,
-    listing order and field sets, with small transcripts. Returns path -> bytes."""
+    (rsi-logs/ at e00f0a9a, before the October 2026 history rewrite): the
+    same paths, manifest formats, key order, listing order and field sets, with
+    small transcripts. Returns path -> bytes."""
     files: dict[str, bytes] = {}
 
     def put(path, data):

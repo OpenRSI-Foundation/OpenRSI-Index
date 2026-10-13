@@ -1,15 +1,16 @@
 # Task and log publication checks
 
 `Task and log publication (CPU only)` runs on pull requests and pushes to
-`main` that touch `rsi-tasks/`, `rsi-logs/`, the publication checker, its tests
-and policies, the RSI-Harness sources and lockfile it compiles tasks with, or the
-workflow itself. Only affected `rsi-tasks/` packages and `rsi-logs/` archives are
-checked; a run with no package change passes with “not applicable”. A manual run
+`main` that touch `rsi-tasks/`, the publication checker, its tests and
+policies, the RSI-Harness sources and lockfile it compiles tasks with, or the
+workflow itself. Run logs are not stored here; they are in the Hugging Face
+dataset (see [Logs on Hugging Face](#logs-on-hugging-face)), where the log rules
+below apply with paths reported as `rsi-logs/<path>`. Only affected task
+packages are checked; a run with no package change passes with “not applicable”. A manual run
 (`workflow_dispatch`) audits every published package (`--full`), and so does a
 forced push to `main` (for example after a history rewrite). A newer push to
 a PR cancels that PR's running check; runs for pushes to `main` and manual runs
-are never cancelled, so each push's changes are audited. Nested `signature-tasks/` paths are supported. Task-only, log-only and
-combined task/log PRs are all supported.
+are never cancelled, so each push's changes are audited. Nested `signature-tasks/` paths are supported.
 
 Files directly under `rsi-tasks/`, `rsi-tasks/signature-tasks/`, `rsi-logs/` or
 `rsi-logs/signature-tasks/` belong to no package. Only Markdown documentation
@@ -162,7 +163,7 @@ for example with code-owner review.
 
 Run logs are published in the Hugging Face dataset
 [OpenRSI-Foundation/OpenRSI-Index-Logs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs).
-Its layout is the same as `rsi-logs/` here, and files are stored raw: no gzip,
+Its layout is the same as the former `rsi-logs/` folder, and files are stored raw: no gzip,
 no chunk parts.
 
 Upload logs with `checks/publish_logs.py`:
@@ -190,8 +191,9 @@ LFS pointer fails, and `.gitattributes` may only hold LFS rules at the root.
 
 `history-guard.yml` runs on every pull request. It fails a PR that does not
 share history with its base branch, or that adds files under a path listed in
-`[history_guard] forbidden_prefixes` of `checks/publication-policy.toml`, for
-example paths removed from history by a rewrite.
+`[history_guard] forbidden_prefixes` of `checks/publication-policy.toml`:
+`rsi-logs/` and the BRIGHT assets, which were removed from history in the
+[2026-10 rewrite](../assets/docs/history-rewrite-2026-10.md).
 
 ## Local use
 
