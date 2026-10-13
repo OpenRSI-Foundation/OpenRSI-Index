@@ -27,7 +27,7 @@ concurrency:
 jobs:
   publication-compatibility:
     name: Harness publication compatibility
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
@@ -46,9 +46,10 @@ jobs:
             fi
           done
           printf 'root=%s\n' "$archive_root" >> "$GITHUB_OUTPUT"
-      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
           version: "0.6.5"
+          enable-cache: false
       - name: Install the publisher compiler environment
         working-directory: ${{ steps.archive.outputs.root }}/RSI-Harness
         run: uv sync --frozen --no-dev --python 3.12

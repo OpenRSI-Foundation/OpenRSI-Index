@@ -27,7 +27,7 @@ def test_publication_check_runs_on_harness_changes_without_private_secrets():
     assert workflow["permissions"] == {"contents": "read"}
     assert "secrets." not in text
     assert "RSI-Skills" not in text
-    assert workflow["jobs"]["publication-compatibility"]["runs-on"] == "ubuntu-latest"
+    assert workflow["jobs"]["publication-compatibility"]["runs-on"] == "ubuntu-24.04"
     automation = yaml.load(
         (WORKFLOW.parent / "discussion-automation-checks.yml").read_text(),
         Loader=yaml.BaseLoader,
