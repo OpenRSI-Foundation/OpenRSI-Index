@@ -23,7 +23,7 @@ To find the new ID of an old commit, look it up in
 ## Updating your clone
 
 If `git log --oneline -1 main -- rsi-logs` prints anything, your clone still
-has the old history. Commit or stash your work, then:
+has the old history. Stash your changes or commit them to another branch, then:
 
 ```bash
 git fetch origin
