@@ -11,7 +11,7 @@ WORKFLOW = Path(__file__).parent.parent / ".github/workflows/discussion-review.y
 ROOT = WORKFLOW.parent.parent.parent
 CHECKOUT_SHA = "fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09"
 APP_TOKEN_SHA = "bcd2ba49218906704ab6c1aa796996da409d3eb1"
-SETUP_UV_SHA = "38f3f104447c67c051c4a08e39b64a148898af3a"
+SETUP_UV_SHA = "1c37ad07a6a961277cf70c0d37d6f313000f5884"
 AUTOMATIC_DISPATCH_GUARD = (
     "steps.review.outputs.decision == 'Pass' && "
     "steps.publish-review.outcome == 'success' && "
@@ -310,6 +310,7 @@ def test_review_workflow_pins_actions_and_drops_checkout_credentials():
         checkout.get("with", {}).get("persist-credentials") for checkout in checkouts
     ] == ["false", "false"]
     assert setup_uv["uses"] == f"astral-sh/setup-uv@{SETUP_UV_SHA}"
+    assert setup_uv["with"] == {"enable-cache": "false"}
 
 
 def test_review_workflow_marks_uv_download_failure_as_github_setup():

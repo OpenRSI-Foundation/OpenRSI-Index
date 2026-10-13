@@ -24,7 +24,7 @@ ENTRIES = (
 def notice_steps(filename: str, job: str) -> tuple[list[dict], dict]:
     workflow = yaml.load((WORKFLOWS / filename).read_text(), Loader=yaml.BaseLoader)
     assert "queue-notice" not in workflow["jobs"]
-    assert workflow["jobs"][job]["runs-on"] == "ubuntu-latest"
+    assert workflow["jobs"][job]["runs-on"] == "ubuntu-24.04"
     steps = workflow["jobs"][job]["steps"]
     notices = [step for step in steps if step.get("name") == "Post task queue notice"]
     assert len(notices) == 1, (

@@ -182,7 +182,8 @@ remains recoverable in Git history. Discussion proposal review/build dispatch,
 Harness CPU tests and labels remain independent; labels only describe and never
 trigger computation.
 
-PR area labels are kept in sync on every push by `auto-label-pr.yml` from the
+PR area labels are kept in sync on every push and base-branch change by
+`auto-label-pr.yml` from the
 path table in `checks/auto_label.py`: `tasks` (`rsi-tasks/`), `logs`
 (`rsi-logs/`), `harness` (`RSI-Harness/`), `CI` (workflows, `checks/`,
 `.github/WORKFLOW_API.md`), `docs` (README, CONTRIBUTING, LICENSE, PR template,

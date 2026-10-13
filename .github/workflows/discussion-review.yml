@@ -39,7 +39,7 @@ jobs:
     # review would be a separate job gated on the science pipeline.
     needs: route
     if: github.event.discussion.category.name == 'Task Ideas' && needs.route.outputs.pipeline == 'general'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       task_dispatched: ${{ steps.task-dispatch.outcome == 'success' }}
       trigger_comment_id: ${{ steps.publish-review.outputs.review_comment_id }}
@@ -173,7 +173,9 @@ jobs:
       - name: Install uv from GitHub
         id: setup-uv
         if: steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'
-        uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+        uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          enable-cache: false
 
       - name: Write proposal to file
         if: steps.reuse.outputs.current == 'true' && steps.reuse.outputs.reused != 'true'
@@ -506,7 +508,7 @@ jobs:
 
   reaction-notice:
     if: github.event.discussion.category.name == 'Task Ideas'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
