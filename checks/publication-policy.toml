@@ -5,3 +5,11 @@
 [historical_tasks]
 "signature-tasks/gpic_generation" = "Published schema-1.3 archive; its runtime differs from the logged 10M continuation. See its README."
 "signature-tasks/pre-training-optimizer-update-geometry" = "Published scaling-ladder archive has no standard tests/test.sh; see its recorded Slurm evaluation protocol."
+
+# Paths removed from this repository's history. The history-guard workflow fails
+# a PR whose commits add a file under one of them; it reads this list from the
+# PR's base revision.
+[history_guard]
+forbidden_prefixes = [
+  "rsi-tasks/reasonir-difficulty-curriculum/tests/assets/bright/",
+]

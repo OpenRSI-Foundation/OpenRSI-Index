@@ -57,6 +57,51 @@ PATH_RULE_SUFFIXES = (
     ".pfx",
     "nuget.config",
 )
+# Logs mode reads a separate Logs repository whose root is mounted at this
+# Index path; every Logs path p is checked as rsi-logs/<p>.
+LOGS_MOUNT = "rsi-logs"
+# Root files of the Logs repository that are repository infrastructure, not logs:
+# they are secret-scanned only.
+LOGS_INFRASTRUCTURE = ("README.md", "LICENSE", ".gitattributes")
+# The Logs repository stores raw files (large ones through LFS/Xet), so new or
+# modified compressed wrappers and lossless chunk parts are rejected there.
+PACKED_SUFFIXES = (
+    ".gz",
+    ".tgz",
+    ".xz",
+    ".txz",
+    ".bz2",
+    ".tbz2",
+    ".zst",
+    ".zstd",
+    ".zip",
+    ".7z",
+    ".rar",
+    ".tar",
+    ".lz4",
+    ".lzma",
+)
+# Compression signatures, recognized after renaming. ZIP is matched by suffix
+# only: NumPy, PyTorch and office files are ZIP containers, not wrappers.
+PACKED_SIGNATURES = (
+    b"\x1f\x8b",
+    b"\xfd7zXZ\0",
+    b"BZh1",
+    b"BZh2",
+    b"BZh3",
+    b"BZh4",
+    b"BZh5",
+    b"BZh6",
+    b"BZh7",
+    b"BZh8",
+    b"BZh9",
+    b"\x28\xb5\x2f\xfd",
+    b"7z\xbc\xaf\x27\x1c",
+    b"Rar!",
+)
+# A Git LFS pointer is a small text file starting with this line. In a checkout
+# whose LFS content was not downloaded, published files are such pointers.
+LFS_POINTER = b"version https://git-lfs.github.com/spec/"
 
 
 class CheckError(ValueError):
@@ -287,7 +332,7 @@ def verify_entry(p: Path, entry: dict, tracked: set[str], repo: Path):
     ):
         raise CheckError("manifest references missing/untracked/linked file")
     with p.open("rb") as f:
-        sha, size, lines = digest(f)
+        stored = sha, size, lines = digest(f)
     if (
         not re.fullmatch(r"[0-9a-f]{64}", str(entry.get("sha256", "")))
         or sha != entry["sha256"]
@@ -313,6 +358,7 @@ def verify_entry(p: Path, entry: dict, tracked: set[str], repo: Path):
             raise CheckError("manifest uncompressed hash/size mismatch")
         if "line_count" in entry and entry["line_count"] != lines:
             raise CheckError("manifest line_count mismatch")
+    return stored
 
 
 ARTIFACT_FIELDS = (
@@ -333,9 +379,86 @@ RUNNER_CHUNK_FIELDS = {
 }
 
 
+def hex_digest(value) -> bool:
+    return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+def count(value) -> bool:
+    return type(value) is int and value >= 0
+
+
+def verify_restored(path: Path, doc: dict, tracked: set[str], repo: Path):
+    """Version-2 manifest: one raw file, optionally restored from a compressed or
+    chunked publication. Only the raw file is published, so the description of
+    the former publication is checked for shape, not against bytes."""
+    missing = [f for f in ("artifact", "size", "sha256", "line_feeds") if f not in doc]
+    if missing:
+        raise CheckError(f"version 2 manifest lacks {', '.join(missing)}")
+    artifact = doc["artifact"]
+    if not isinstance(artifact, str) or "/" in artifact:
+        raise CheckError(
+            "version 2 manifest artifact must be a file name in its directory"
+        )
+    safe_relative(artifact)
+    expected = artifact.split(".", 1)[0] + ".manifest.json"
+    if path.name != expected:
+        raise CheckError(f"version 2 manifest for {artifact} must be named {expected}")
+    if not count(doc["size"]) or not count(doc["line_feeds"]):
+        raise CheckError("version 2 manifest size and line_feeds must be integers")
+    if not hex_digest(doc["sha256"]):
+        raise CheckError("version 2 manifest sha256 must be a SHA-256 hex digest")
+    try:
+        _, _, lines = verify_entry(
+            path.parent / safe_relative(artifact),
+            {"sha256": doc["sha256"], "bytes": doc["size"]},
+            tracked,
+            repo,
+        )
+        if lines != doc["line_feeds"]:
+            raise CheckError("manifest line_feeds mismatch")
+    except CheckError as exc:
+        raise CheckError(f"{artifact}: {exc}") from exc
+    source = doc.get("converted_from")
+    if source is None:
+        return
+    if (
+        not isinstance(source, dict)
+        or not isinstance(source.get("artifact"), str)
+        or not isinstance(source.get("compression"), str)
+        or not count(source.get("compressed_size"))
+        or not hex_digest(source.get("compressed_sha256"))
+        or not isinstance(source.get("original_manifest", {}), dict)
+    ):
+        raise CheckError(
+            "converted_from requires artifact, compression, compressed_size and "
+            "compressed_sha256; original_manifest must be an object"
+        )
+    if "parts" in source and (
+        not isinstance(source["parts"], list)
+        or not source["parts"]
+        or not all(
+            isinstance(e, dict)
+            and isinstance(e.get("path"), str)
+            and count(e.get("bytes"))
+            and hex_digest(e.get("sha256"))
+            for e in source["parts"]
+        )
+    ):
+        raise CheckError("converted_from parts require path, bytes and sha256")
+
+
 def verify_manifest(path: Path, doc, tracked: set[str], repo: Path):
     if not isinstance(doc, dict):
         raise CheckError("manifest must be an object")
+    # Route every version-2 manifest by name or shape, so a typo in a field name
+    # fails as "lacks artifact" instead of falling through unverified.
+    if (
+        doc.get("version") == 2
+        and type(doc["version"]) is int
+        and ("artifact" in doc or path.name.endswith(".manifest.json"))
+    ):
+        verify_restored(path, doc, tracked, repo)
+        return None
     entries = doc.get("files")
     if "files" in doc:
         if not isinstance(entries, list) or not all(
@@ -805,37 +928,181 @@ def check_python(name: str, path: Path, root: str):
         )
 
 
+def packed_reason(name: str, path: Path) -> str | None:
+    """Why a Logs-repository file is not a raw file, or None."""
+    p = PurePosixPath(name)
+    if any(part.endswith(".parts") for part in p.parts[:-1]):
+        return "lossless chunk part"
+    lower = p.name.lower()
+    if lower.endswith(PACKED_SUFFIXES) or ".tar." in lower:
+        return "compressed or archived file"
+    with path.open("rb") as f:
+        header = f.read(512)
+    if header.startswith(PACKED_SIGNATURES) or header[257:262] == b"ustar":
+        return "compressed or archived file (by content)"
+    return None
+
+
+LFS_ATTRIBUTES = frozenset(("filter=lfs", "diff=lfs", "merge=lfs", "-text"))
+
+
+def check_lfs_attributes(path: Path):
+    """The Logs repository root .gitattributes may only route paths to LFS.
+
+    Other attributes (text, eol, ident, working-tree-encoding, ...) change the
+    bytes a checkout writes, so the checked file would differ from the blob the
+    Hub serves; a re-encoded file could also hide a credential from the scanner.
+    """
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        fields = line.split()
+        if not fields or fields[0].startswith("#"):
+            continue
+        pattern, attributes = fields[0], fields[1:]
+        if (
+            pattern.startswith(('"', "[attr]", "!"))
+            or len(attributes) != len(LFS_ATTRIBUTES)
+            or set(attributes) != LFS_ATTRIBUTES
+        ):
+            raise CheckError(
+                f"line {number}: only '<pattern> filter=lfs diff=lfs merge=lfs -text' "
+                "rules are allowed"
+            )
+
+
+def lfs_pointer(path: Path) -> bool:
+    if path.stat().st_size >= 1024:
+        return False
+    with path.open("rb") as f:
+        return f.read(len(LFS_POINTER)) == LFS_POINTER
+
+
+class Revisions:
+    """The checked revisions and paths of one run.
+
+    In Logs mode ``prefix`` is ``rsi-logs/``: every Logs-repository path is
+    handled under that name, so log rules, messages and labels are the same as
+    for the Index tree. ``local`` maps such a name back to the checkout.
+    """
+
+    def __init__(self, repo: Path, base_ref, head_ref: str, full: bool, mount=None):
+        self.repo = repo.resolve()
+        self.prefix = mount + "/" if mount else ""
+        current = git(self.repo, "rev-parse", "HEAD").decode().strip()
+        try:
+            head = (
+                git(self.repo, "rev-parse", "--verify", head_ref + "^{commit}")
+                .decode()
+                .strip()
+            )
+        except subprocess.CalledProcessError as exc:
+            raise CheckError("head revision not found") from exc
+        if current != head:
+            raise CheckError("checkout must match the checked PR head")
+        if base_ref is None:
+            if not full:
+                raise CheckError("--base-ref is required unless --full is given")
+            base = head
+        else:
+            try:
+                base = git(self.repo, "merge-base", base_ref, head).decode().strip()
+            except subprocess.CalledProcessError as exc:
+                raise CheckError(
+                    "base revision is missing or shares no history with the head; "
+                    "audit the head with --full"
+                ) from exc
+        self.head, self.base = head, base
+        # Repository paths as stored; manifests are verified against these.
+        self.stored = tracked_files(self.repo, head)
+        self.files = {self.prefix + p for p in self.stored}
+        self.old_files = {self.prefix + p for p in tracked_files(self.repo, base)}
+        self.changed = (
+            self.files | self.old_files
+            if full
+            else {
+                self.prefix + p
+                for p in git(
+                    self.repo, "diff", "--name-only", "--no-renames", "-z", base, head
+                )
+                .decode()
+                .split("\0")
+                if p
+            }
+        )
+
+    def local(self, name: str) -> Path:
+        return self.repo / name[len(self.prefix) :]
+
+
+def lfs_includes(revisions: Revisions) -> list[str]:
+    """Git LFS include patterns for what an incremental Logs-mode check reads."""
+    patterns = set()
+    for p in revisions.changed:
+        # A deletion still makes the rest of its log root part of the check.
+        if root := log_root(p):
+            patterns.add(root[len(revisions.prefix) :] + "/**")
+        elif p in revisions.files:
+            patterns.add(p[len(revisions.prefix) :])
+    return sorted(patterns)
+
+
 def check(
     repo: Path,
-    base_ref: str,
+    base_ref: str | None,
     head_ref: str,
     policy: Path,
     compile_task=False,
     gitleaks: Path | None = None,
     secret_config: Path | None = None,
     full=False,
+    mount: str | None = None,
+    task_repo: Path | None = None,
+    task_ref: str | None = None,
 ):
-    repo = repo.resolve()
-    current = git(repo, "rev-parse", "HEAD").decode().strip()
-    head = git(repo, "rev-parse", "--verify", head_ref + "^{commit}").decode().strip()
-    if current != head:
-        raise CheckError("checkout must match the checked PR head")
-    base = git(repo, "merge-base", base_ref, head).decode().strip()
-    files, old_files = tracked_files(repo, head), tracked_files(repo, base)
-    changed = (
-        files | old_files
-        if full
-        else set(
-            git(repo, "diff", "--name-only", "--no-renames", "-z", base, head)
-            .decode()
-            .split("\0")
+    logs_mode = mount is not None
+    if logs_mode and (mount != LOGS_MOUNT or task_repo is None or task_ref is None):
+        raise CheckError(
+            f"Logs mode needs --mount {LOGS_MOUNT}, --task-repo and --task-ref"
         )
-        - {""}
+    if not logs_mode and (task_repo is not None or task_ref is not None):
+        raise CheckError("--task-repo and --task-ref are only used with --mount")
+    revisions = Revisions(repo, base_ref, head_ref, full, mount)
+    repo, files, old_files, changed = (
+        revisions.repo,
+        revisions.files,
+        revisions.old_files,
+        revisions.changed,
     )
     config = tomllib.loads(policy.read_text())
+    if logs_mode:
+        # Tasks come from the task repository (OpenRSI-Index main in CI), never
+        # from the Logs repository under review.
+        try:
+            task_files = set(
+                git(
+                    task_repo.resolve(),
+                    "ls-tree",
+                    "-r",
+                    "--name-only",
+                    "-z",
+                    task_ref,
+                    "--",
+                    "rsi-tasks",
+                )
+                .decode()
+                .split("\0")
+            ) - {""}
+        except subprocess.CalledProcessError as exc:
+            raise CheckError("task repository revision not found") from exc
+        infrastructure = {revisions.prefix + n for n in LOGS_INFRASTRUCTURE}
+        print(
+            f"NOTICE Logs mode: Logs repository paths are shown as {LOGS_MOUNT}/<path>; "
+            "tasks are read from the task repository"
+        )
+    else:
+        task_files, infrastructure = files | old_files, set()
     roots = {
         str(PurePosixPath(p).parent)
-        for p in files | old_files
+        for p in task_files
         if p.startswith("rsi-tasks/") and p.endswith("/task.toml")
     }
     tasks = {r for p in changed if (r := task_root(p, roots))}
@@ -853,22 +1120,57 @@ def check(
             or log_root(p)
         ):
             continue
-        if collection_doc(p):
+        if collection_doc(p) or p in infrastructure:
             docs.add(p)
         elif p.startswith("rsi-tasks/"):
             raise CheckError(f"{p}: task files have no enclosing task.toml")
+        elif logs_mode:
+            raise CheckError(
+                f"{p}: log files must be inside <task>/ or signature-tasks/<task>/ "
+                "of the Logs repository; only .md documentation, README.md, LICENSE "
+                "and .gitattributes may sit outside them"
+            )
         else:
             raise CheckError(
                 f"{p}: log files must be inside rsi-logs/<task>/ or "
                 "rsi-logs/signature-tasks/<task>/; only .md documentation may sit beside them"
             )
+    if logs_mode:
+        attributes = revisions.prefix + ".gitattributes"
+        for p in sorted(files):
+            if PurePosixPath(p).name == ".gitattributes" and p != attributes:
+                raise CheckError(
+                    f"{p}: .gitattributes is only allowed at the Logs repository root"
+                )
+        if attributes in files:
+            try:
+                check_lfs_attributes(revisions.local(attributes))
+            except CheckError as exc:
+                raise CheckError(f"{attributes}: {exc}") from exc
+            except (OSError, UnicodeError) as exc:
+                raise CheckError(
+                    f"{attributes}: unreadable file ({type(exc).__name__})"
+                ) from exc
     selected = {p for p in files if any(p.startswith(r + "/") for r in tasks | logs)}
     published = selected | docs
     for p in sorted(published):
-        f = repo / p
+        f = revisions.local(p)
         if f.is_symlink() or not f.is_file():
             raise CheckError(f"{p}: publication must use regular files, not symlinks")
-        if f.stat().st_size >= MAX_STORED:
+        if logs_mode:
+            # A skipped LFS download must never pass as a clean (tiny) file.
+            if lfs_pointer(f):
+                raise CheckError(
+                    f"{p}: Git LFS pointer, not content; download LFS objects "
+                    "(git lfs pull) before checking"
+                )
+            if p in changed and (reason := packed_reason(p, f)):
+                raise CheckError(
+                    f"{p}: {reason}; the Logs repository stores raw files only "
+                    "(large files go through LFS/Xet), so upload the uncompressed, "
+                    "unsplit file instead"
+                )
+        elif f.stat().st_size >= MAX_STORED:
             raise CheckError(
                 f"{p}: stored file must be below GitHub 100 MiB limit; use lossless chunks"
             )
@@ -906,7 +1208,13 @@ def check(
             + config.get("log_task_aliases", {}).get(slug, slug)
             + "/task.toml"
         )
-        if matched not in files:
+        if matched not in task_files:
+            if logs_mode:
+                raise CheckError(
+                    f"{root}: corresponding public task.toml not found in the task "
+                    "repository; merge the task into OpenRSI-Index first (or declare "
+                    "a reviewed alias)"
+                )
             raise CheckError(
                 f"{root}: corresponding public task.toml not found (declare a reviewed alias if needed)"
             )
@@ -917,7 +1225,7 @@ def check(
             )
     chunk_manifests, chunk_parts = [], set()
     for name in sorted(selected):
-        p = repo / name
+        p = revisions.local(name)
         try:
             # Validate new/modified structured records; existing historical
             # contents are not retroactively coerced to a different data schema.
@@ -939,15 +1247,38 @@ def check(
                 doc = runner_chunk_manifest(p)
             else:
                 doc = None
-            parts = None if doc is None else verify_manifest(p, doc, files, repo)
+            if (
+                logs_mode
+                and name in changed
+                and p.name.endswith(".manifest.json")
+                and isinstance(doc, dict)
+                and not (doc.get("version") == 2 and type(doc["version"]) is int)
+                and "files" not in doc
+                and "parts" not in doc
+            ):
+                raise CheckError(
+                    'a *.manifest.json in the Logs repository must be a version 2 '
+                    'manifest ({"version": 2, "artifact": ..., "size": ..., '
+                    '"sha256": ..., "line_feeds": ...})'
+                )
+            parts = (
+                None if doc is None else verify_manifest(p, doc, revisions.stored, repo)
+            )
             if parts is not None:
+                if logs_mode and name in changed:
+                    raise CheckError(
+                        "chunk manifest; the Logs repository stores raw files only, "
+                        "so upload the reassembled file instead"
+                    )
                 source = doc.get("source_name", "reassembled-transcript.txt")
                 if not isinstance(source, str):
                     raise CheckError("chunk manifest source_name must be a string")
                 safe_relative(source)
                 paths = [p.parent / safe_relative(e["path"]) for e in parts]
                 chunk_manifests.append((name, source, paths, log))
-                chunk_parts.update(x.relative_to(repo).as_posix() for x in paths)
+                chunk_parts.update(
+                    revisions.prefix + x.relative_to(repo).as_posix() for x in paths
+                )
         except CheckError as exc:
             raise CheckError(f"{name}: {exc}") from exc
         except (OSError, UnicodeError) as exc:
@@ -958,7 +1289,7 @@ def check(
         with tempfile.TemporaryDirectory(prefix="rsi-publication-") as temporary:
             stage = ScanStage(Path(temporary) / "scan")
             for name in sorted(published):
-                with (repo / name).open("rb") as f:
+                with revisions.local(name).open("rb") as f:
                     stage.add(
                         f,
                         name,
@@ -991,7 +1322,9 @@ def check(
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo", type=Path, required=True)
-    parser.add_argument("--base-ref", required=True)
+    parser.add_argument(
+        "--base-ref", help="Required unless --full; the diff starts at the merge base"
+    )
     parser.add_argument("--head-ref", default="HEAD")
     parser.add_argument(
         "--policy",
@@ -1006,8 +1339,30 @@ def main():
         action="store_true",
         help="Audit every published package, not just changes (used by manual workflow runs)",
     )
+    logs = parser.add_argument_group(
+        "Logs mode",
+        "Check a separate Logs repository checkout (--repo) whose root is mounted "
+        "at rsi-logs/; tasks are read from --task-ref of --task-repo",
+    )
+    logs.add_argument("--mount", choices=[LOGS_MOUNT])
+    logs.add_argument("--task-repo", type=Path)
+    logs.add_argument("--task-ref")
+    logs.add_argument(
+        "--lfs-include",
+        action="store_true",
+        help="Print the Git LFS include patterns an incremental check reads, one "
+        "per line, and exit",
+    )
     args = parser.parse_args()
     try:
+        if args.lfs_include:
+            if args.mount is None:
+                raise CheckError("--lfs-include is only used with --mount")
+            for pattern in lfs_includes(
+                Revisions(args.repo, args.base_ref, args.head_ref, args.full, args.mount)
+            ):
+                print(pattern)
+            return 0
         check(
             args.repo,
             args.base_ref,
@@ -1017,6 +1372,9 @@ def main():
             args.gitleaks,
             args.secret_config,
             args.full,
+            args.mount,
+            args.task_repo,
+            args.task_ref,
         )
     except Exception as exc:  # noqa: BLE001 -- never leak parser/tool excerpts at CLI boundary
         # No exception contents beyond our controlled errors: TOML/JSON or tool
