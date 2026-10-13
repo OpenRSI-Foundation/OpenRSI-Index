@@ -201,15 +201,18 @@ def workflow():
 def test_workflow_runs_on_every_pr_push_from_the_base_revision():
     parsed = workflow()
     trigger = parsed["on"]["pull_request_target"]
-    assert trigger == {"types": ["opened", "synchronize", "reopened"]}
+    assert trigger == {"types": ["opened", "synchronize", "reopened", "edited"]}
     assert "pr" in parsed["on"]["workflow_dispatch"]["inputs"]
     assert parsed["permissions"] == {
         "contents": "read",
         "pull-requests": "write",
         "issues": "write",
     }
-    assert "github.event.pull_request.number" in parsed["concurrency"]["group"]
-    steps = parsed["jobs"]["label"]["steps"]
+    group = parsed["concurrency"]["group"]
+    assert "github.event.pull_request.number" in group
+    job = parsed["jobs"]["label"]
+    assert job["runs-on"] == "ubuntu-24.04"
+    steps = job["steps"]
     checkout = steps[0]
     assert checkout["uses"].startswith("actions/checkout@")
     assert len(checkout["uses"].split("@")[1]) == 40
@@ -220,6 +223,17 @@ def test_workflow_runs_on_every_pr_push_from_the_base_revision():
     assert "|| true" not in text
     for step in steps:
         assert "${{" not in step.get("run", "")
+
+
+def test_only_a_base_change_edit_relabels():
+    # Retargeting changes the file list; title or body edits do not, and must
+    # neither run nor share (and so cancel) the group of a running sync.
+    parsed = workflow()
+    gate = "github.event.action != 'edited' || github.event.changes.base"
+    assert parsed["jobs"]["label"]["if"] == gate
+    assert parsed["concurrency"]["group"] == (
+        "auto-label-pr-${{ (" + gate + ") && github.event.pull_request.number || github.run_id }}"
+    )
 
 
 def test_only_one_pr_labeler_remains():
