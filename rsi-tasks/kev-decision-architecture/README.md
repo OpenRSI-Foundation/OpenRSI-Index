@@ -147,7 +147,7 @@ sudo -E rsi-harness run "$PWD/rsi-tasks/kev-decision-architecture" \
 
 Run the example from the OpenRSI-Index repository root after installing [RSI-Harness](../../RSI-Harness/). Set the model, reasoning effort, and GPU pool variables for your environment; a two-GPU pool runs Judge on a Work GPU after training stops (release-all), a three-GPU pool keeps Judge separate. There is no task-imposed submission-count cap. The default Agent budget is 12 hours (`[agent].timeout_sec = 43200`); the validated cycle of reference training plus Judge is about 13 minutes.
 
-The task was validated on 2026-09-21 with the `harbor-task-validator`: image build and pristine starting state, the Judge's Landlock-restricted worker, the Work-trained reference, a smoke and a full Judge evaluation, and the budget projection. Recorded runs are in [`kev-decision-architecture/` in OpenRSI-Index-Logs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/kev-decision-architecture).
+The task was validated on 2026-09-21 with the `harbor-task-validator`: image build and pristine starting state, the Judge's Landlock-restricted worker, the Work-trained reference, a smoke and a full Judge evaluation, and the budget projection. Recorded runs are in [`OpenRSI-Index-Logs/kev-decision-architecture`](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/kev-decision-architecture).
 
 Python syntax check (not an environment build or GPU validation):
 
