@@ -420,6 +420,27 @@ def test_review_reactions_and_comments_use_just_in_time_scoped_app_tokens():
     assert all("[bot]" not in login for login in bot_logins)
 
 
+
+def test_reaction_job_applies_the_domain_label_with_the_reaction_token():
+    steps = parsed_workflow()["jobs"]["reaction-notice"]["steps"]
+    names = [step.get("name") for step in steps]
+    label = steps[names.index("Apply Discussion domain label")]
+
+    assert names.index("Create reaction Discussion App token") < names.index(
+        "Apply Discussion domain label"
+    )
+    assert label == {
+        "name": "Apply Discussion domain label",
+        "if": "${{ !cancelled() && steps.reaction-token.outcome == 'success' }}",
+        "env": {
+            "GH_TOKEN": "${{ steps.reaction-token.outputs.token }}",
+            "DISCUSSION_NODE_ID": "${{ github.event.discussion.node_id }}",
+        },
+        "run": "python3 checks/task_domain.py apply",
+    }
+    for step in steps:
+        assert "${{" not in step.get("run", "")
+
 def test_public_repository_does_not_ship_or_migrate_the_private_rubric():
     workflows = "\n".join(
         path.read_text(encoding="utf-8")
