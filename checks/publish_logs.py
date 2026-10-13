@@ -651,6 +651,22 @@ def hub_git_url(repo: str) -> str:
     return f"{HUB_URL}/datasets/{repo}"
 
 
+# Attributes a submitted tree may not apply to the checkout: conversions would
+# make the checked bytes differ from the blobs the Hub serves (and a re-encoded
+# file could hide a credential from the scanner). LFS (filter=lfs) still applies.
+NEUTRAL_ATTRIBUTES = "* -text -eol -ident -working-tree-encoding\n"
+
+
+def neutralize_attributes(logs: Path, repo: str):
+    """Check out the published blobs byte for byte, with LFS objects from the Hub."""
+    run_git(logs, "config", "core.autocrlf", "false")
+    info = logs / ".git" / "info"
+    info.mkdir(parents=True, exist_ok=True)
+    (info / "attributes").write_text(NEUTRAL_ATTRIBUTES)
+    # Local configuration outranks a submitted .lfsconfig.
+    run_git(logs, "config", "lfs.url", hub_git_url(repo) + ".git/info/lfs")
+
+
 def check_pr(args) -> int:
     with Staging(args.staging) as staging:
         logs = staging / "logs"
@@ -659,6 +675,7 @@ def check_pr(args) -> int:
         # Anonymous read: no credential helper; LFS content is fetched below.
         run_git(logs, "config", "credential.helper", "")
         run_git(logs, "lfs", "install", "--local", "--skip-smudge")
+        neutralize_attributes(logs, args.repo)
         run_git(logs, "remote", "add", "origin", hub_git_url(args.repo))
         run_git(
             logs,

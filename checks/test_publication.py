@@ -1919,6 +1919,45 @@ class LogsModeTests(unittest.TestCase):
         self.commit()
         self.assertFails("^rsi-logs/LICENSE: Git LFS pointer")
 
+    def test_gitattributes_only_at_root_and_only_for_lfs(self):
+        self.log()
+        self.write(self.repo, "demo-task/m/b.txt", "b\n")
+        self.commit()
+        self.check()
+        # A nested .gitattributes could re-encode the checkout of a log file.
+        self.write(self.repo, "demo-task/.gitattributes", "m/b.txt working-tree-encoding=UTF-16LE\n")
+        self.commit()
+        self.assertFails(
+            "^rsi-logs/demo-task/.gitattributes: .gitattributes is only allowed at "
+            "the Logs repository root"
+        )
+        (self.repo / "demo-task/.gitattributes").unlink()
+        self.commit()
+        self.check()
+        lfs = "*.bin filter=lfs diff=lfs merge=lfs -text\n"
+        self.write(self.repo, ".gitattributes", "# Large files\n\n" + lfs + "*.parquet -text merge=lfs diff=lfs filter=lfs\n")
+        self.commit()
+        self.check()
+        for label, rule in {
+            "encoding": "*.txt working-tree-encoding=UTF-16LE",
+            "eol": "*.txt eol=crlf",
+            "text": "* text",
+            "ident": "*.txt ident",
+            "extra": "*.bin filter=lfs diff=lfs merge=lfs -text text",
+            "macro": "[attr]lfs filter=lfs diff=lfs merge=lfs -text",
+            "partial": "*.bin filter=lfs",
+        }.items():
+            with self.subTest(label=label):
+                self.write(self.repo, ".gitattributes", lfs + rule + "\n")
+                self.commit()
+                self.assertFails(
+                    "^rsi-logs/.gitattributes: line 2: only '<pattern> filter=lfs "
+                    "diff=lfs merge=lfs -text' rules are allowed"
+                )
+        # A --full audit applies the same rule to an unchanged tree.
+        self.base = self.commit()
+        self.assertFails("^rsi-logs/.gitattributes: line 2", base=None, full=True)
+
     def test_lfs_includes_cover_what_the_check_reads(self):
         self.log()
         self.log("signature-tasks/gpic-10m-autoresearch")
@@ -2012,6 +2051,28 @@ class LogsModeTests(unittest.TestCase):
         )
         self.commit()
         self.assertFails("agent_output.txt: manifest references missing")
+
+    def test_misnamed_v2_fields_are_not_skipped(self):
+        raw = b"line one\nline two\n"
+        self.log()
+        self.write(self.repo, "demo-task/m/agent_output.txt", raw)
+        manifest = "demo-task/m/agent_output.manifest.json"
+        doc = v2_manifest(raw, size=999, sha256="0" * 64, line_feeds=7)
+        doc["artifcat"] = doc.pop("artifact")
+        self.write(self.repo, manifest, json.dumps(doc))
+        self.commit()
+        self.assertFails(f"^rsi-logs/{manifest}: version 2 manifest lacks artifact")
+        # A version typo is not a pass either: in the Logs repository a
+        # *.manifest.json must be a version 2 manifest.
+        self.write(self.repo, manifest, json.dumps(dict(v2_manifest(raw), version="2")))
+        self.commit()
+        self.assertFails(
+            f"^rsi-logs/{manifest}: a \\*.manifest.json in the Logs repository must "
+            "be a version 2 manifest"
+        )
+        self.write(self.repo, manifest, json.dumps(v2_manifest(raw)))
+        self.commit()
+        self.check()
 
     def test_publication_manifest_lists_raw_files(self):
         raw = b"restored\n"
@@ -2426,6 +2487,52 @@ class HfLogsAuditWorkflowTests(unittest.TestCase):
             result, out = self.locate(revision=revision)
             self.assertEqual(result.returncode, 1, revision)
             self.assertNotIn("available", out)
+
+    def test_fetch_checks_out_blobs_not_attribute_conversions(self):
+        need(self, shutil.which("git-lfs"), "git-lfs is not installed")
+        remote = self.root / "remote"
+        remote.mkdir()
+
+        def git(*args, cwd=remote):
+            return subprocess.check_output(["git", "-C", str(cwd), *args], text=True).strip()
+
+        git("init", "-q", "-b", "main")
+        git("config", "user.name", "t")
+        git("config", "user.email", "t@example.invalid")
+        blobs = {
+            "secret.txt": "token=example-value\n",
+            "crlf.txt": "one\ntwo\n",
+            ".gitattributes": (
+                "secret.txt working-tree-encoding=UTF-16LE\n"
+                "crlf.txt text eol=crlf\n"
+            ),
+        }
+        for name, content in blobs.items():
+            (remote / name).write_text(content)
+            # Store the bytes as they are, bypassing the attributes being added.
+            oid = git("hash-object", "-w", "--no-filters", name)
+            git("update-index", "--add", "--cacheinfo", f"100644,{oid},{name}")
+        git("commit", "-qm", "attributes")
+        sha = git("rev-parse", "HEAD")
+        # A plain clone applies the in-tree attributes.
+        subprocess.run(["git", "clone", "-q", str(remote), str(self.root / "plain")], check=True)
+        self.assertNotEqual((self.root / "plain/secret.txt").read_bytes(), blobs["secret.txt"].encode())
+        self.assertNotEqual((self.root / "plain/crlf.txt").read_bytes(), blobs["crlf.txt"].encode())
+        run = self.step("Fetch the Logs revision with its LFS content (anonymous)")["run"]
+        run = run.replace('"https://huggingface.co/datasets/$LOGS_REPO"', '"$LOCAL_REMOTE"')
+        work = self.root / "work"
+        work.mkdir()
+        result, out = run_step(
+            run, work, {"LOGS_REPO": "x/y", "LOCAL_REMOTE": str(remote), "REVISION": "main"}
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(out, {"sha": sha})
+        for name, content in blobs.items():
+            self.assertEqual((work / "logs" / name).read_bytes(), content.encode(), name)
+        self.assertEqual(
+            git("config", "lfs.url", cwd=work / "logs"),
+            "https://huggingface.co/datasets/x/y.git/info/lfs",
+        )
 
     def test_fetch_step_against_a_local_logs_repository(self):
         need(self, shutil.which("git-lfs"), "git-lfs is not installed")

@@ -201,6 +201,14 @@ python3 -I checks/check_publication.py \
   repository infrastructure and are secret-scanned only. `.md` files at the root
   or under `signature-tasks/` are collection documentation; any other file
   outside a log root fails.
+- `.gitattributes` is allowed only at the root, and only with
+  `<pattern> filter=lfs diff=lfs merge=lfs -text` rules. Other attributes
+  (`text`, `eol`, `ident`, `working-tree-encoding`, ...) would make a checkout
+  differ from the blobs the Hub serves, so the checked bytes (and a re-encoded
+  credential) would not be what is published.
+- A new or modified `*.manifest.json` must be a version 2 manifest; any
+  manifest with `"version": 2` named `*.manifest.json` or carrying `artifact`
+  is verified as one, so a misspelled field fails instead of being skipped.
 - The repository stores **raw files only**; large and binary files go through
   LFS/Xet, so there is no stored-size limit (the scan bounds below still apply).
   A new or modified compressed or archived file (`.gz`, `.xz`, `.bz2`, `.zst`,
@@ -262,7 +270,10 @@ The upload does not delete files on the Hub. Because the pre-upload check sees
 only the staged files, maintainers check a Hub pull request with
 `publish_logs.py --check-pr N` before merging it: it fetches `refs/pr/N` and
 `main` anonymously, downloads the LFS content of the affected log roots and runs
-the checker incrementally from their merge base, exactly as for a PR here. Hub
+the checker incrementally from their merge base, exactly as for a PR here. The
+checkout ignores conversion attributes in the submitted tree (`.git/info/attributes`:
+`* -text -eol -ident -working-tree-encoding`, `core.autocrlf=false`) and pins the
+LFS endpoint to the Hub repository, so the checked files are the published blobs. Hub
 pull requests have no required checks; that local result and the maintainers'
 review are the gate.
 
@@ -280,7 +291,9 @@ no secrets.
   the PR head), read with `git ls-tree` as data.
 - The Logs repository id is read from `publish_logs.py` (`LOGS_REPO`), the only
   place it is defined. It is fetched anonymously over HTTPS and all of its LFS
-  content is downloaded; the Logs revision is data and is never executed.
+  content is downloaded; the Logs revision is data and is never executed. The
+  checkout neutralizes conversion attributes and pins the LFS endpoint exactly
+  as `--check-pr` does.
 - While the Logs repository is not published (the Hub answers 401/404), or when
   the trusted revision predates these checks, the run passes with a notice;
   any other Hub failure fails the run.

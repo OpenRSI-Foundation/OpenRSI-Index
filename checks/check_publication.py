@@ -450,7 +450,13 @@ def verify_restored(path: Path, doc: dict, tracked: set[str], repo: Path):
 def verify_manifest(path: Path, doc, tracked: set[str], repo: Path):
     if not isinstance(doc, dict):
         raise CheckError("manifest must be an object")
-    if doc.get("version") == 2 and type(doc["version"]) is int and "artifact" in doc:
+    # Route every version-2 manifest by name or shape, so a typo in a field name
+    # fails as "lacks artifact" instead of falling through unverified.
+    if (
+        doc.get("version") == 2
+        and type(doc["version"]) is int
+        and ("artifact" in doc or path.name.endswith(".manifest.json"))
+    ):
         verify_restored(path, doc, tracked, repo)
         return None
     entries = doc.get("files")
@@ -937,6 +943,32 @@ def packed_reason(name: str, path: Path) -> str | None:
     return None
 
 
+LFS_ATTRIBUTES = frozenset(("filter=lfs", "diff=lfs", "merge=lfs", "-text"))
+
+
+def check_lfs_attributes(path: Path):
+    """The Logs repository root .gitattributes may only route paths to LFS.
+
+    Other attributes (text, eol, ident, working-tree-encoding, ...) change the
+    bytes a checkout writes, so the checked file would differ from the blob the
+    Hub serves; a re-encoded file could also hide a credential from the scanner.
+    """
+    for number, line in enumerate(path.read_text().splitlines(), 1):
+        fields = line.split()
+        if not fields or fields[0].startswith("#"):
+            continue
+        pattern, attributes = fields[0], fields[1:]
+        if (
+            pattern.startswith(('"', "[attr]", "!"))
+            or len(attributes) != len(LFS_ATTRIBUTES)
+            or set(attributes) != LFS_ATTRIBUTES
+        ):
+            raise CheckError(
+                f"line {number}: only '<pattern> filter=lfs diff=lfs merge=lfs -text' "
+                "rules are allowed"
+            )
+
+
 def lfs_pointer(path: Path) -> bool:
     if path.stat().st_size >= 1024:
         return False
@@ -1103,6 +1135,22 @@ def check(
                 f"{p}: log files must be inside rsi-logs/<task>/ or "
                 "rsi-logs/signature-tasks/<task>/; only .md documentation may sit beside them"
             )
+    if logs_mode:
+        attributes = revisions.prefix + ".gitattributes"
+        for p in sorted(files):
+            if PurePosixPath(p).name == ".gitattributes" and p != attributes:
+                raise CheckError(
+                    f"{p}: .gitattributes is only allowed at the Logs repository root"
+                )
+        if attributes in files:
+            try:
+                check_lfs_attributes(revisions.local(attributes))
+            except CheckError as exc:
+                raise CheckError(f"{attributes}: {exc}") from exc
+            except (OSError, UnicodeError) as exc:
+                raise CheckError(
+                    f"{attributes}: unreadable file ({type(exc).__name__})"
+                ) from exc
     selected = {p for p in files if any(p.startswith(r + "/") for r in tasks | logs)}
     published = selected | docs
     for p in sorted(published):
@@ -1199,6 +1247,20 @@ def check(
                 doc = runner_chunk_manifest(p)
             else:
                 doc = None
+            if (
+                logs_mode
+                and name in changed
+                and p.name.endswith(".manifest.json")
+                and isinstance(doc, dict)
+                and not (doc.get("version") == 2 and type(doc["version"]) is int)
+                and "files" not in doc
+                and "parts" not in doc
+            ):
+                raise CheckError(
+                    'a *.manifest.json in the Logs repository must be a version 2 '
+                    'manifest ({"version": 2, "artifact": ..., "size": ..., '
+                    '"sha256": ..., "line_feeds": ...})'
+                )
             parts = (
                 None if doc is None else verify_manifest(p, doc, revisions.stored, repo)
             )

@@ -620,5 +620,38 @@ class CheckPrTests(unittest.TestCase):
         self.assertIn("ERROR git fetch failed", out)
 
 
+    def test_checkout_ignores_submitted_conversion_attributes(self):
+        git(self.remote, "checkout", "-qb", "pr3", "main")
+        log = self.remote / "demo-task/run.log"
+        log.write_text("one\ntwo\n")
+        (self.remote / ".gitattributes").write_text("demo-task/run.log text eol=crlf\n")
+        git(self.remote, "update-ref", "refs/pr/3", commit(self.remote))
+        git(self.remote, "checkout", "-q", "main")
+        staging = Path(self.tmp.name) / "staging"
+        output = io.StringIO()
+        with (
+            patch.object(tool, "hub_git_url", return_value=str(self.remote)),
+            contextlib.redirect_stdout(output),
+        ):
+            code = tool.main(
+                ["--check-pr", "3", "--index", str(self.index), "--staging", str(staging)]
+            )
+        out = output.getvalue()
+        self.assertEqual(code, 1, out)
+        self.assertIn(
+            "FAIL rsi-logs/.gitattributes: line 1: only '<pattern> filter=lfs diff=lfs "
+            "merge=lfs -text' rules are allowed",
+            out,
+        )
+        # The checked file is the blob, not the CRLF conversion it asks for.
+        self.assertEqual((staging / "logs/demo-task/run.log").read_bytes(), b"one\ntwo\n")
+        self.assertEqual(
+            (staging / "logs/.git/info/attributes").read_text(), tool.NEUTRAL_ATTRIBUTES
+        )
+        self.assertEqual(
+            git(staging / "logs", "config", "lfs.url"), str(self.remote) + ".git/info/lfs"
+        )
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

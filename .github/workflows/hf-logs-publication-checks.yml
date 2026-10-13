@@ -138,6 +138,14 @@ jobs:
           # Anonymous public read: no credential helper; LFS content after checkout.
           git config credential.helper ""
           git lfs install --local --skip-smudge >/dev/null
+          # Check out the published blobs byte for byte (as publish_logs.py
+          # --check-pr does): attributes in the audited tree must not re-encode or
+          # convert files (only LFS applies), and LFS objects come from the Hub,
+          # not from a .lfsconfig in the tree.
+          git config core.autocrlf false
+          mkdir -p .git/info
+          printf '%s\n' '* -text -eol -ident -working-tree-encoding' > .git/info/attributes
+          git config lfs.url "https://huggingface.co/datasets/$LOGS_REPO.git/info/lfs"
           git remote add origin "https://huggingface.co/datasets/$LOGS_REPO"
           case "$REVISION" in
             main) refspecs=("+refs/heads/main:refs/remotes/origin/main") ;;
