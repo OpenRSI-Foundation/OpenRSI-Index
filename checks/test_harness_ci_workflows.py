@@ -28,7 +28,7 @@ def test_harness_docker_workflows_run_on_relevant_prs_without_secrets(path):
     assert workflow["permissions"] == {"contents": "read"}
     assert "secrets." not in text
     for job in workflow["jobs"].values():
-        assert job["runs-on"] == "ubuntu-latest"
+        assert job["runs-on"] == "ubuntu-24.04"
     automation = _load(WORKFLOWS / "discussion-automation-checks.yml")
     assert f".github/workflows/{path.name}" in automation["on"]["pull_request"]["paths"]
 

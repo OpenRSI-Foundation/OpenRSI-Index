@@ -46,7 +46,7 @@ jobs:
     # Runs the proposed checker's own tests. They are PR-controlled code, so
     # they get their own job and runner and cannot touch enforcement files.
     name: Publication checker tests (proposed revision)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
       PYTHONDONTWRITEBYTECODE: "1"
@@ -57,9 +57,10 @@ jobs:
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
-      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
           version: "0.6.5"
+          enable-cache: false
       - name: Install checksum-pinned secret scanner
         env:
           SCANNER_DIR: ${{ runner.temp }}/publication-gitleaks
@@ -88,7 +89,7 @@ jobs:
     # Enforcement executes only the base revision's checker, policies and
     # Harness; the proposed revision is read as data and never run.
     name: Task and log publication (CPU only)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
       PYTHONDONTWRITEBYTECODE: "1"
@@ -110,9 +111,10 @@ jobs:
           sparse-checkout: |
             RSI-Harness
             checks
-      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
           version: "0.6.5"
+          enable-cache: false
       - name: Install base-revision compiler dependencies (no task dependencies)
         working-directory: trusted-base/RSI-Harness
         run: uv sync --frozen --no-dev --python 3.12

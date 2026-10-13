@@ -33,7 +33,7 @@ concurrency:
 jobs:
   plan:
     name: Choose the Agents to test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       agents: ${{ steps.select.outputs.agents }}
@@ -43,9 +43,10 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
           version: "0.6.5"
+          enable-cache: false
       - name: Select the Agents this change can affect
         id: select
         # One Agent's own files or version line test that Agent; shared code
@@ -64,7 +65,7 @@ jobs:
     name: Agent ${{ matrix.agent }}
     needs: plan
     if: needs.plan.outputs.agents != '[]'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
       fail-fast: false
@@ -77,9 +78,10 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
           version: "0.6.5"
+          enable-cache: false
       - name: Install the test environment
         run: uv sync --frozen --group test --python 3.12
       - name: Pull the test base images
@@ -102,7 +104,7 @@ jobs:
     name: Judge model access
     needs: plan
     if: needs.plan.outputs.model_access == 'true'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     defaults:
       run:
@@ -111,9 +113,10 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           persist-credentials: false
-      - uses: astral-sh/setup-uv@38f3f104447c67c051c4a08e39b64a148898af3a
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
         with:
           version: "0.6.5"
+          enable-cache: false
       - name: Install the test environment
         run: uv sync --frozen --group test --python 3.12
       - name: Pull the test base images
