@@ -68,7 +68,7 @@ default_agent_session = "async submit wrapper; 30-minute status.json polling wit
 
 # Descriptive metadata only; these values do not override the legacy runtime.
 [metadata.logged_protocol]
-source_logs = "../../../rsi-logs/signature-tasks/gpic-10m-autoresearch"
+source_logs = "https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/signature-tasks/gpic-10m-autoresearch"
 initialization = "common step-39060 PixelGen checkpoint; weights-only continuation with fresh optimizer and scheduler"
 root_checkpoint = "/shared/gpic-output/baseline_16x8/exp_pretraining_jit_256_gpic_full/epoch=0-step=39060.ckpt"
 denoiser_parameters = 1122396928
