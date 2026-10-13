@@ -1,11 +1,34 @@
 from pathlib import Path
 
+from checks import task_domain
+
 ROOT = Path(__file__).resolve().parents[1]
+TASK_INTAKE = ROOT / ".agents" / "skills" / "task-intake"
+TASK_TYPES = TASK_INTAKE / "references" / "task-types.md"
 PROPOSAL_AGENT = ROOT / ".agents" / "skills" / "proposal-agent"
 SKILL = PROPOSAL_AGENT / "SKILL.md"
 TEMPLATE = PROPOSAL_AGENT / "references" / "proposal-template.md"
 RUBRIC = PROPOSAL_AGENT / "references" / "task-proposal-rubric.md"
 CONTRIBUTING = ROOT / "CONTRIBUTING.md"
+README = ROOT / "README.md"
+
+
+def task_types_table(heading: str) -> list[list[str]]:
+    markdown = TASK_TYPES.read_text(encoding="utf-8")
+    section = markdown.split(f"## {heading}\n", 1)[1].split("\n## ", 1)[0]
+    rows = [
+        [cell.strip() for cell in line.strip().strip("|").split("|")]
+        for line in section.splitlines()
+        if line.startswith("|")
+    ]
+    return rows[2:]
+
+
+def intake_rows(domain: str, training: str) -> str:
+    return (
+        f"| Task Type | Domain | {domain} |\n"
+        f"| Task Type | Involves model training | {training} |\n"
+    )
 
 
 def rubric_copies() -> dict[str, Path]:
@@ -175,3 +198,64 @@ def test_contributing_preserves_automatic_build_and_gpu_trajectory_contract():
     assert "without gpu" not in private_repo.lower()
     assert "with gpu" not in private_repo.lower()
     assert "no-gpu contribution path" not in private_repo.lower()
+
+
+def test_contributor_entry_prompts_start_with_task_intake():
+    assert (TASK_INTAKE / "SKILL.md").is_file()
+    for document, path in (
+        (README, ".agents/skills/task-intake/SKILL.md"),
+        (CONTRIBUTING, "OpenRSI-Index/.agents/skills/task-intake/SKILL.md"),
+    ):
+        text = document.read_text(encoding="utf-8")
+        assert f"Use the task-intake skill at {path} in my local" in text, document
+        assert "Use the proposal-agent skill at" not in text, document
+
+
+def test_task_intake_domains_match_the_discussion_labels():
+    domains = {row[0]: row[2] for row in task_types_table("Domains")}
+
+    assert {domain.casefold(): label for domain, label in domains.items()} == (
+        task_domain.DOMAIN_LABELS
+    )
+    for domain, label in domains.items():
+        assert task_domain.domain_label(intake_rows(domain, "Yes")) == label
+
+
+def test_task_intake_routes_match_the_review_pipelines():
+    routes = task_types_table("Routes")
+
+    assert routes
+    for domain, training, next_skill in routes:
+        expected = (
+            task_domain.GENERAL_PIPELINE
+            if next_skill == "proposal-agent"
+            else task_domain.SCIENCE_PIPELINE
+        )
+        assert task_domain.pipeline(intake_rows(domain, training)) == expected, (
+            domain,
+            training,
+        )
+
+
+def test_recorded_intake_rows_are_the_rows_the_automation_reads():
+    types = TASK_TYPES.read_text(encoding="utf-8")
+    example = types.split("For example:\n\n```text\n", 1)[1].split("```", 1)[0]
+
+    assert example == intake_rows("AI4Sci", "No")
+    assert task_domain.parse_domain(example) == "AI4Sci"
+    assert task_domain.parse_training(example) == "No"
+    assert task_domain.pipeline(example) == task_domain.SCIENCE_PIPELINE
+
+
+def test_proposal_agent_records_the_intake_rows_first():
+    template = TEMPLATE.read_text(encoding="utf-8")
+    rows = [line for line in template.splitlines() if line.startswith("| ")]
+    skill = SKILL.read_text(encoding="utf-8")
+
+    assert rows[2].startswith("| Task Type | Domain | [")
+    assert rows[3].startswith("| Task Type | Involves model training | [")
+    assert rows[4].startswith("| Contributor | Full name |")
+    assert "`| Task Type | Domain | <ID> |`" in skill
+    assert "`| Task Type | Involves model training | Yes |`" in skill
+    assert "`| Task Type | Involves model training | No |`" in skill
+    assert "`../task-intake/SKILL.md`" in skill

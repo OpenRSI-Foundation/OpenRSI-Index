@@ -24,15 +24,18 @@ cd OpenRSI-Index
 Open Codex or Claude Code (app or CLI), start a fresh session, and paste:
 
 ```text
-Use the proposal-agent skill at OpenRSI-Index/.agents/skills/proposal-agent/SKILL.md in my local OpenRSI-Index repository. Locate the repository if needed, then follow the skill to complete setup and guide me step by step through creating and submitting an RSI proposal.
+Use the task-intake skill at OpenRSI-Index/.agents/skills/task-intake/SKILL.md in my local OpenRSI-Index repository. Locate the repository if needed, then follow the skill to complete setup and guide me step by step through creating and submitting an RSI proposal.
 ```
 
 Run it on a frontier model at its maximum reasoning setting: at least **Codex
 with GPT-5.6 Sol at max** or **Claude Code with Opus 5 at max**.
-Use that one session for one proposal. The agent will help you define the
-research question, baseline, evaluation, scope, and compute requirements, then
-generate an RSI task proposal. Review the completed proposal before confirming
-it.
+Use that one session for one proposal. The agent first asks two short
+questions: your task's domain (AI4AI or AI4Sci) and whether it involves model
+training. It then hands you to the matching proposal skill, which helps you
+define the research question, baseline, evaluation, scope, and compute
+requirements, then generates an RSI task proposal. AI4Sci tasks without model
+training belong to a science pipeline that is not available yet; the agent
+tells you so and stops. Review the completed proposal before confirming it.
 
 ### 2. Submit the proposal
 

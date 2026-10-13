@@ -7,6 +7,8 @@ runtime, or final verifier behavior.
 
 | Section | Field | Proposal |
 | --- | --- | --- |
+| Task Type | Domain | [Domain ID from task intake, exactly as listed in its task types, such as AI4AI or AI4Sci] |
+| Task Type | Involves model training | [Yes or No, from task intake] |
 | Contributor | Full name | [Contributor's full professional name; contributor provides, proposal agent verifies against public expertise evidence] |
 | Contributor | Email | [Contributor-provided email for publication metadata; proposal agent records verbatim and does not infer] |
 | Research Question | Repository URL | [Official source repository URL; contributor provides, proposal agent verifies] |
