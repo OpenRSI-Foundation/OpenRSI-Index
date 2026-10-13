@@ -42,6 +42,9 @@ def files(*paths, renamed_from=None):
         (".github/workflows/discussion-review.yml", {"CI"}),
         ("checks/auto_label.py", {"CI"}),
         (".github/WORKFLOW_API.md", {"CI"}),
+        (".gitignore", {"CI"}),
+        (".gitattributes", {"CI"}),
+        ("rsi-tasks/demo/.gitignore", {"tasks"}),
         ("README.md", {"docs"}),
         ("CONTRIBUTING.md", {"docs"}),
         ("LICENSE", {"docs"}),
@@ -56,7 +59,6 @@ def files(*paths, renamed_from=None):
         ("rsi-tasks-old/x", set()),
         ("README.md.bak", set()),
         (".github/CODEOWNERS", set()),
-        (".gitignore", set()),
     ],
 )
 def test_each_path_maps_to_its_area(path, expected):

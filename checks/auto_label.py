@@ -29,6 +29,8 @@ class AreaLabel:
     # An entry ending in "/" matches everything below that directory; any
     # other entry matches exactly one repository-relative file.
     paths: tuple[str, ...]
+    # Also match top-level dotfiles such as .gitignore and .gitattributes.
+    root_dotfiles: bool = False
 
 
 LABELS = (
@@ -38,8 +40,9 @@ LABELS = (
     AreaLabel(
         "CI",
         "fbca04",
-        "Changes workflows or repository checks",
+        "Changes workflows, repository checks or top-level config files",
         (".github/workflows/", "checks/", ".github/WORKFLOW_API.md"),
+        root_dotfiles=True,
     ),
     AreaLabel(
         "docs",
@@ -63,6 +66,10 @@ def _matches(path: str, pattern: str) -> bool:
     return path.startswith(pattern) if pattern.endswith("/") else path == pattern
 
 
+def _is_root_dotfile(path: str) -> bool:
+    return path.startswith(".") and "/" not in path
+
+
 def labels_for(files: Iterable[Mapping[str, object]]) -> set[str]:
     """Managed labels for a PR's changed files (REST `pulls/{n}/files` items)."""
     paths = set()
@@ -75,6 +82,7 @@ def labels_for(files: Iterable[Mapping[str, object]]) -> set[str]:
         label.name
         for label in LABELS
         if any(_matches(path, pattern) for path in paths for pattern in label.paths)
+        or (label.root_dotfiles and any(_is_root_dotfile(path) for path in paths))
     }
 
 
