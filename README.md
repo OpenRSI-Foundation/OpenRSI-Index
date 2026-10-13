@@ -7,7 +7,7 @@
   <!-- <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index"><img src="https://img.shields.io/badge/GitHub-35434D?style=for-the-badge&logo=github&logoColor=white" alt="GitHub"></a>&nbsp; -->
   <a href="https://x.com/OpenRSI/status/2102831770458890626"><img src="https://img.shields.io/badge/Twitter-35434D?style=for-the-badge&logo=X&logoColor=white" alt="X"></a>&nbsp;
   <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md"><img src="assets/figures/contribution-call.svg" alt="Contribution Call"></a>&nbsp;
-  <a href="https://openrsi-logs.zhuofengli12345.workers.dev/"><img src="https://img.shields.io/badge/RSI%20Logs-14967F?style=for-the-badge&logo=google-sheets&logoColor=white" alt="RSI Logs"></a>&nbsp;
+  <a href="https://index.openrsi.foundation/logs/"><img src="https://img.shields.io/badge/RSI%20Logs-14967F?style=for-the-badge&logo=google-sheets&logoColor=white" alt="RSI Logs"></a>&nbsp;
   <a href="assets/figures/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-24A36F?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat Group"></a>&nbsp;
   <a href="https://discord.gg/3EG8Qhmfsa"><img src="https://img.shields.io/badge/Discord-6674D8?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
 </div>
@@ -43,7 +43,7 @@ We are witnessing the dawn of a new era: AI is entering a recursive self-improve
 
 ### Task taxonomy
 
-We are actively developing this project and welcome [contributions](https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md) from the community. Tasks and execution logs are available in [rsi-tasks/](rsi-tasks/) and [OpenRSI-Index-Logs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs), respectively. Open the [RSI Logs Viewer](https://openrsi-logs.zhuofengli12345.workers.dev/) to explore results visually. See [Quick Start](assets/docs/quick-start.md) for instructions on running these tasks.
+We are actively developing this project and welcome [contributions](https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md) from the community. Tasks and execution logs are available in [rsi-tasks/](rsi-tasks/) and [OpenRSI-Index-Logs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs), respectively. Open the [RSI Logs Viewer](https://index.openrsi.foundation/logs/) to explore results visually. See [Quick Start](assets/docs/quick-start.md) for instructions on running these tasks.
 
 <details>
 <summary><strong>View tasks</strong></summary>
