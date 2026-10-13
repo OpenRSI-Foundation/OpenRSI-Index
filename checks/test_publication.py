@@ -2586,7 +2586,15 @@ class HfLogsAuditWorkflowTests(unittest.TestCase):
             self.assertEqual(head, expected)
         result, out = fetch("unknown", "c" * 40)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("is not on main or a pull request", result.stdout)
+        message = f"Commit {'c' * 40} is not on main or a pull request of x/y."
+        self.assertIn(f"::error::{message}", result.stdout)
+        self.assertEqual(out, {"error": message})
+        # A pull request that does not exist: an annotation, not just git's fatal.
+        result, out = fetch("missing-pr", "refs/pr/9")
+        self.assertEqual(result.returncode, 1)
+        message = "Could not fetch refs/pr/9 from x/y (no such pull request or commit?)"
+        self.assertIn(f"::error::{message}\n", result.stdout)
+        self.assertEqual(out, {"error": message})
 
     def test_job_summary(self):
         output = self.root / "logs-audit.txt"
@@ -2614,6 +2622,41 @@ class HfLogsAuditWorkflowTests(unittest.TestCase):
         self.assertNotIn("::warning::", text)
         self.assertIn("````text\n", text)
         self.assertIn("FAIL done", text)
+        self.assertNotIn("Not audited", text)
+
+    def test_job_summary_explains_a_failed_fetch(self):
+        step = self.step("Job summary")
+        self.assertEqual(step["env"]["FETCH_OUTCOME"], "${{ steps.fetch.outcome }}")
+        self.assertEqual(step["env"]["FETCH_ERROR"], "${{ steps.fetch.outputs.error }}")
+        base = {
+            "RUNNER_TEMP": str(self.root),
+            "OUTCOME": "skipped",
+            "LOGS_REPO": "o/r",
+            "REVISION": "refs/pr/9",
+            "SHA": "",
+            "INDEX_SHA": "b" * 40,
+            "FETCH_OUTCOME": "failure",
+        }
+        for case, error, reason in (
+            (
+                "annotated",
+                "Could not fetch refs/pr/9 from o/r (no such pull request or commit?)",
+                "Could not fetch refs/pr/9 from o/r (no such pull request or commit?)",
+            ),
+            ("unannotated", "", "the fetch step failed; see its log."),
+        ):
+            summary = self.root / f"{case}.md"
+            result, _ = run_step(
+                step["run"],
+                self.root,
+                {**base, "FETCH_ERROR": error, "GITHUB_STEP_SUMMARY": str(summary)},
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            text = summary.read_text()
+            self.assertIn("### Logs repository audit: failure", text)
+            self.assertIn("at `refs/pr/9` (`not fetched`)", text)
+            self.assertIn(f"- Not audited: {reason}", text)
+            self.assertNotIn("```", text)
 
 
 def tomllib_loads(text):

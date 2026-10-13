@@ -133,6 +133,13 @@ jobs:
           REVISION: ${{ steps.locate.outputs.revision }}
         run: |
           set -euo pipefail
+          # A failure is reported as an annotation and, for the job summary, as
+          # the step's "error" output.
+          fail() {
+            echo "::error::$1"
+            echo "error=$1" >> "$GITHUB_OUTPUT"
+            exit 1
+          }
           git init -q logs
           cd logs
           # Anonymous public read: no credential helper; LFS content after checkout.
@@ -152,20 +159,23 @@ jobs:
             refs/pr/*) refspecs=("+$REVISION:refs/remotes/origin/checked") ;;
             *) refspecs=("+refs/heads/main:refs/remotes/origin/main" "+refs/pr/*:refs/remotes/origin/pr/*") ;;
           esac
-          git fetch --no-tags --quiet origin "${refspecs[@]}"
+          if ! git fetch --no-tags --quiet origin "${refspecs[@]}"; then
+            fail "Could not fetch $REVISION from $LOGS_REPO (no such pull request or commit?)"
+          fi
           case "$REVISION" in
             main) sha=$(git rev-parse refs/remotes/origin/main) ;;
             refs/pr/*) sha=$(git rev-parse refs/remotes/origin/checked) ;;
             *)
               if ! git cat-file -e "${REVISION}^{commit}" 2>/dev/null; then
-                echo "::error::Commit $REVISION is not on main or a pull request of $LOGS_REPO."
-                exit 1
+                fail "Commit $REVISION is not on main or a pull request of $LOGS_REPO."
               fi
               sha=$REVISION
               ;;
           esac
           git checkout -q --detach "$sha"
-          git lfs pull
+          if ! git lfs pull; then
+            fail "Could not download the LFS content of $REVISION from $LOGS_REPO."
+          fi
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
       - name: Audit every published log (--full)
         id: audit
@@ -189,6 +199,8 @@ jobs:
         if: always() && steps.locate.outputs.available == 'true'
         env:
           OUTCOME: ${{ steps.audit.outcome }}
+          FETCH_OUTCOME: ${{ steps.fetch.outcome }}
+          FETCH_ERROR: ${{ steps.fetch.outputs.error }}
           LOGS_REPO: ${{ steps.locate.outputs.repo }}
           REVISION: ${{ steps.locate.outputs.revision }}
           SHA: ${{ steps.fetch.outputs.sha }}
@@ -206,8 +218,14 @@ jobs:
               text = "[earlier output omitted]\n" + text[-60000:]
           fence = "`" * max(3, 1 + max((len(r) for r in re.findall(r"`+", text)), default=0))
           env = os.environ
-          print(f"### Logs repository audit: {env['OUTCOME']}\n")
+          fetch_failed = env.get("FETCH_OUTCOME") == "failure"
+          print(f"### Logs repository audit: {'failure' if fetch_failed else env['OUTCOME']}\n")
           print(f"- Logs repository: `{env['LOGS_REPO']}` at `{env['REVISION']}` (`{env['SHA'] or 'not fetched'}`)")
+          if fetch_failed:
+              # The fetch step's own messages; repository and revision were validated.
+              reason = env.get("FETCH_ERROR") or "the fetch step failed; see its log."
+              print(f"- Not audited: {reason}")
           print(f"- Tasks from OpenRSI-Index `{env['INDEX_SHA']}`\n")
-          print(f"{fence}text\n{text.rstrip()}\n{fence}")
+          if text.strip():
+              print(f"{fence}text\n{text.rstrip()}\n{fence}")
           PY
