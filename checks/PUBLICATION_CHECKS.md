@@ -179,10 +179,23 @@ as the current publication policy.
 The old PR `/run`, `/cheat`, `/validate`, `/review`, `/fortify`, automatic trial
 dispatch/status and missing-tool chart/rubric workflows are retired. Their source
 remains recoverable in Git history. Discussion proposal review/build dispatch,
-Harness CPU tests and labels remain independent. The `gpu` label only describes
-declared Work/Judge resources; it does not trigger computation. The labelling job
-creates the label if it is missing and its token may; otherwise it leaves a
-notice instead of failing.
+Harness CPU tests and labels remain independent; labels only describe and never
+trigger computation.
+
+PR area labels are kept in sync on every push by `auto-label-pr.yml` from the
+path table in `checks/auto_label.py`: `tasks` (`rsi-tasks/`), `logs`
+(`rsi-logs/`), `harness` (`RSI-Harness/`), `CI` (workflows, `checks/`,
+`.github/WORKFLOW_API.md`), `docs` (README, CONTRIBUTING, LICENSE, PR template,
+`assets/`) and `skills` (`.agents/`, `.claude/`, `.codex/`). A label is added
+while the PR (or a renamed file's old path) touches its paths and removed once it
+no longer does; other labels are left alone, and a missing area label is
+created. A manual run with `open` relabels every open PR. Each Task Ideas
+Discussion gets exactly one domain label from its `| Task Type | Domain | … |`
+row (`checks/task_domain.py`): `AI4Sci` → `science task`; `AI4AI`, a missing
+row or an unknown value → `general task`. The two Discussion labels are created
+by a maintainer; the review workflow fails visibly if one is missing.
+`checks/backfill_discussion_domain_labels.py` (dry run unless `--apply`) labels
+existing Discussions.
 
 Branch protection is unchanged. Before requiring `Task and log publication (CPU
 only)` as a merge gate, remove its path filter (an unrelated PR then passes with
