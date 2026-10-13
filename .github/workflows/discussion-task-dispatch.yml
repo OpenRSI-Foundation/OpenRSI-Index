@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   dispatch:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       command_dispatched: ${{ steps.task-dispatch.outcome == 'success' }}
       task_dispatched: ${{ steps.task-dispatch.outcome == 'success' && steps.gate.outputs.command == 'task' }}
