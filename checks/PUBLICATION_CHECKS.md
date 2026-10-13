@@ -269,8 +269,9 @@ python3 -I checks/publish_logs.py --check-pr <N> --gitleaks <gitleaks 8.30.1>
 3. **Check.** The staged tree is committed to a temporary Git repository and
    checked in Logs mode with `--full`, tasks from `--task-ref` (default `HEAD`)
    of the OpenRSI-Index checkout the tool lives in (`--index` to choose another).
-   This covers the uploaded files only; a new log root also needs a `README.md`,
-   staged or already on the Hub. Nothing scans a Hub upload or merge
+   This covers the uploaded files only, so the tool also applies the checker's
+   rule for a newly added archive: a log root with no files on the Hub yet
+   needs a staged `README.md`. Nothing scans a Hub upload or merge
    automatically, so an upload and `--check-pr` refuse to run without
    `--gitleaks` (or `PUBLICATION_GITLEAKS_BIN`); only a `--dry-run` upload
    check may skip the secret scan.

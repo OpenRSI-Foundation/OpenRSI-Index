@@ -23,8 +23,9 @@ normalized the same way the history was converted for the Hub:
 
 The staged tree is then committed to a temporary Git repository and checked with
 the publication checker in Logs mode (``--full`` over the staged files, tasks
-from the local OpenRSI-Index checkout). A new log root also needs a README.md,
-either staged or already on the Hub. Only if everything passes is the staged
+from the local OpenRSI-Index checkout). A new log root (one with no files on
+the Hub yet) also needs a staged README.md, as the checker requires of a newly
+added archive. Only if everything passes is the staged
 tree uploaded with ``huggingface_hub`` (``upload_folder``) to ``main`` or, with
 ``--create-pr``, as a Hub pull request. The Hub token comes from the standard
 Hugging Face login or the ``HF_TOKEN`` environment variable and is never printed.
@@ -606,7 +607,8 @@ def resolve_dest(task: str, dest: str | None, policy: dict) -> tuple[str, str]:
     return dest, root
 
 
-def hub_api():
+def hub():
+    """The pinned huggingface_hub module."""
     try:
         import huggingface_hub
     except ImportError as exc:
@@ -618,16 +620,26 @@ def hub_api():
             f"huggingface_hub {huggingface_hub.__version__} is installed; this tool uses "
             f"{HUB_VERSION}: pip install huggingface_hub=={HUB_VERSION}"
         )
-    return huggingface_hub.HfApi()
+    import huggingface_hub.errors  # noqa: F401 -- for hub().errors
+
+    return huggingface_hub
 
 
-def remote_has_file(repo: str, path: str) -> bool:
-    api = hub_api()
+def hub_api():
+    return hub().HfApi()
+
+
+def remote_root_has_files(repo: str, root: str) -> bool:
+    """Whether the Logs repository's main already has files under ``root``/."""
+    hf = hub()
     try:
-        return api.file_exists(repo, path, repo_type="dataset")
+        entries = hf.HfApi().list_repo_tree(repo, root, repo_type="dataset")
+        return next(iter(entries), None) is not None
+    except hf.errors.EntryNotFoundError:
+        return False
     except Exception as exc:  # noqa: BLE001 -- report the type; never a response body
         raise PublishError(
-            f"could not ask the Hub whether {path} exists ({type(exc).__name__})"
+            f"could not ask the Hub whether {root}/ has files ({type(exc).__name__})"
         ) from exc
 
 
@@ -684,12 +696,18 @@ def publish(args) -> int:
         print(f"Staged {args.source} at {dest}/ in {tree}")
         for line in normalize(tree, args.note):
             print(f"CONVERTED {line}")
-        if not (tree / root / "README.md").is_file() and not remote_has_file(
-            args.repo, f"{root}/README.md"
+        # As in the checker: only a newly added archive must bring a README.
+        if not (tree / root / "README.md").is_file() and not remote_root_has_files(
+            args.repo, root
         ):
+            fix = (
+                "add it to SOURCE"
+                if dest == root
+                else f"publish {root}/README.md first (SOURCE is staged at {dest}/)"
+            )
             raise PublishError(
-                f"{root}: new log archive needs README.md describing source and "
-                "recorded protocol; add it to SOURCE"
+                f"{root}: new log archive (no files under {root}/ on the Hub yet) needs "
+                f"README.md describing source and recorded protocol; {fix}"
             )
         check_staged(tree, args.index.resolve(), args.task_ref, args.gitleaks)
         if args.dry_run:

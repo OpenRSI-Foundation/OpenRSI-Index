@@ -778,7 +778,7 @@ class MainTests(Base):
             args = (*args, "--gitleaks", GITLEAKS)
         output = io.StringIO()
         with (
-            patch.object(tool, "remote_has_file", return_value=remote) as remote_mock,
+            patch.object(tool, "remote_root_has_files", return_value=remote) as remote_mock,
             patch.object(tool, "upload", return_value=upload_url) as upload_mock,
             contextlib.redirect_stdout(output),
         ):
@@ -830,15 +830,39 @@ class MainTests(Base):
         self.assertIn("ERROR demo-task/m/x.xz", out)
         upload.assert_not_called()
 
-    def test_new_log_root_needs_a_readme_here_or_on_the_hub(self):
+    def test_only_a_log_root_new_to_the_hub_needs_a_readme(self):
         (self.src / "README.md").unlink()
-        args = (str(self.src), "--task", "demo-task", "--dest", "demo-task/codex/run-1", "--dry-run")
-        code, out, _, remote = self.main(*args, remote=False)
-        self.assertEqual(code, 1)
-        self.assertIn("new log archive needs README.md", out)
-        remote.assert_called_once_with(tool.LOGS_REPO, "demo-task/README.md")
-        code, out, _, _ = self.main(*args, remote=True)
-        self.assertEqual(code, 0, out)
+        # The root has no files on the Hub yet: a new archive must bring a README.
+        for dest, fix in (
+            (None, "add it to SOURCE"),
+            (
+                "demo-task/codex/run-1",
+                "publish demo-task/README.md first (SOURCE is staged at demo-task/codex/run-1/)",
+            ),
+        ):
+            with self.subTest(dest=dest):
+                args = (str(self.src), "--task", "demo-task", "--dry-run")
+                args += ("--dest", dest) if dest else ()
+                code, out, upload, remote = self.main(*args, remote=False)
+                self.assertEqual(code, 1, out)
+                self.assertIn(
+                    "ERROR demo-task: new log archive (no files under demo-task/ on the Hub "
+                    "yet) needs README.md describing source and recorded protocol; " + fix,
+                    out,
+                )
+                remote.assert_called_once_with(tool.LOGS_REPO, "demo-task")
+                upload.assert_not_called()
+        # The root already has files on the Hub (with or without a README there),
+        # as the checker accepts for an archive that is not newly added.
+        for args in (
+            (str(self.src), "--task", "demo-task", "--dry-run"),
+            (str(self.src), "--task", "demo-task", "--dest", "demo-task/codex/run-1"),
+        ):
+            with self.subTest(args=args):
+                code, out, upload, remote = self.main(*args, remote=True)
+                self.assertEqual(code, 0, out)
+                remote.assert_called_once_with(tool.LOGS_REPO, "demo-task")
+                self.assertEqual(upload.call_count, 0 if "--dry-run" in args else 1)
 
     def test_cli_arguments(self):
         code, out, _, _ = self.main("--print-repo")
@@ -911,14 +935,46 @@ class HubClientTests(unittest.TestCase):
         self.assertIn(".git", kwargs["ignore_patterns"])
         self.assertNotIn("token", kwargs)
 
-    def test_hub_errors_are_reported_by_type(self):
-        class FakeApi:
-            def file_exists(self, *args, **kwargs):
-                raise RuntimeError("response body")
+    @staticmethod
+    def fake_hub(list_repo_tree):
+        class EntryNotFoundError(Exception):
+            pass
 
-        with patch.object(tool, "hub_api", return_value=FakeApi()):
-            with self.assertRaisesRegex(tool.PublishError, r"\(RuntimeError\)$"):
-                tool.remote_has_file("o/r", "x/README.md")
+        class FakeApi:
+            def list_repo_tree(self, *args, **kwargs):
+                return list_repo_tree(EntryNotFoundError, *args, **kwargs)
+
+        return types.SimpleNamespace(
+            HfApi=FakeApi, errors=types.SimpleNamespace(EntryNotFoundError=EntryNotFoundError)
+        )
+
+    def test_log_root_presence_on_the_hub(self):
+        calls = []
+
+        def tree(missing, repo, path, **kwargs):
+            calls.append((repo, path, kwargs))
+            if path == "absent":
+                raise missing("404")
+
+            def entries():
+                yield from {"listed": ["listed/run"], "empty": []}[path]
+
+            return entries()
+
+        with patch.object(tool, "hub", return_value=self.fake_hub(tree)):
+            self.assertTrue(tool.remote_root_has_files("o/r", "listed"))
+            self.assertFalse(tool.remote_root_has_files("o/r", "empty"))
+            self.assertFalse(tool.remote_root_has_files("o/r", "absent"))
+        # Anonymous unless the user logged in: no token is passed explicitly.
+        self.assertEqual(calls[0], ("o/r", "listed", {"repo_type": "dataset"}))
+
+    def test_hub_errors_are_reported_by_type(self):
+        def tree(missing, *args, **kwargs):
+            raise RuntimeError("response body")
+
+        with patch.object(tool, "hub", return_value=self.fake_hub(tree)):
+            with self.assertRaisesRegex(tool.PublishError, r"x/ has files \(RuntimeError\)$"):
+                tool.remote_root_has_files("o/r", "x")
 
 
 class CheckPrTests(unittest.TestCase):
