@@ -25,7 +25,7 @@ the pretokenized Marin data, and the Paloma evaluation assets.
 | Bridge runtime used by the recorded runs | [Marin runtime revision](https://github.com/OpenRSI-Foundation/Megatron-Bridge/tree/9e5b537db01db83e94264e3f6f35e9ba89101e41) |
 | Megatron-LM submodule | `58bf14e9e68915a5e0c7d70451620e6e713c07d5` |
 | lm-evaluation-harness | `f4d4b3de3ee6741a7151a9fe74945ee515262f4c` |
-| Historical trajectories | [Local recovered logs](../../../rsi-logs/signature-tasks/pre-training-optimizer-update-geometry/) |
+| Historical trajectories | [Recovered logs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/signature-tasks/pre-training-optimizer-update-geometry) |
 
 The runtime revision adds the Marin/Paloma support needed by the trusted
 entrypoint. Its locked dependency graph is used with the runtime release
@@ -72,5 +72,5 @@ manifest. Work and Judge have no network.
 
 Sanitized trajectories of the Claude Opus 5 (high) and Codex GPT-5.6 Sol
 (xhigh) runs under this environment are in
-[`rsi-logs/signature-tasks/pre-training-optimizer-update-geometry/`](../../../rsi-logs/signature-tasks/pre-training-optimizer-update-geometry/),
+[`signature-tasks/pre-training-optimizer-update-geometry/` in OpenRSI-Index-Logs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/signature-tasks/pre-training-optimizer-update-geometry),
 with file hashes in their `release-manifest.json`.
