@@ -375,7 +375,7 @@ def test_recovery_workflow_is_dispatch_only_and_names_the_episode():
         == "rsi-recovery:${{ inputs.episode_id }}:${{ inputs.status }}"
     )
     job = workflow["jobs"]["notice"]
-    assert job["runs-on"] == "ubuntu-latest"
+    assert job["runs-on"] == "ubuntu-24.04"
     assert workflow["permissions"] == {"contents": "read"}
     token = next(step for step in job["steps"] if step.get("id") == "comment-token")
     assert token["with"]["owner"] == "${{ github.repository_owner }}"
@@ -400,7 +400,7 @@ def test_eyes_recovery_keeps_review_isolated_and_follows_command_dispatch(
     ]
     assert len(reactions) == 1
     notification, reaction = reactions[0]
-    assert notification["runs-on"] == "ubuntu-latest"
+    assert notification["runs-on"] == "ubuntu-24.04"
     assert "continue-on-error" not in reaction
     assert all(
         "continue-on-error" not in step
