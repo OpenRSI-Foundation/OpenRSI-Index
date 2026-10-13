@@ -2747,6 +2747,20 @@ class HistoryGuardTests(unittest.TestCase):
         self.assertIn("::error::This PR's commits add 1 file(s)", result.stdout)
         self.assertIn("  removed path: rsi-tasks/demo/tests/assets/bright/q.parquet", result.stdout)
 
+    def test_long_list_of_added_paths_fails_with_status_1(self):
+        # Over 64 KB of paths, more than a pipe buffer, so piping the full
+        # list into `head` would kill the writer with SIGPIPE (status 141).
+        folder = "rsi-logs/" + "d" * 200
+        for number in range(400):
+            self.write(f"{folder}/{number:03d}.log", "x\n")
+        self.commit()
+        result = self.guard()
+        self.assertEqual(result.returncode, 1, result.stderr)
+        self.assertIn("::error::This PR's commits add 400 file(s)", result.stdout)
+        listed = [line for line in result.stdout.splitlines() if "removed path:" in line]
+        self.assertEqual(len(listed), 50)
+        self.assertEqual(listed[0], f"  removed path: {folder}/000.log")
+
     def test_files_arriving_through_a_merge_fail(self):
         self.git("checkout", "-qb", "old")
         self.write("rsi-logs/task/run.log", "x\n")
