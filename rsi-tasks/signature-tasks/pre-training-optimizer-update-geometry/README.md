@@ -72,5 +72,5 @@ manifest. Work and Judge have no network.
 
 Sanitized trajectories of the Claude Opus 5 (high) and Codex GPT-5.6 Sol
 (xhigh) runs under this environment are in
-[`signature-tasks/pre-training-optimizer-update-geometry/` in OpenRSI-Index-Logs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/signature-tasks/pre-training-optimizer-update-geometry),
+[`OpenRSI-Index-Logs/signature-tasks/pre-training-optimizer-update-geometry/`](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/signature-tasks/pre-training-optimizer-update-geometry),
 with file hashes in their `release-manifest.json`.
