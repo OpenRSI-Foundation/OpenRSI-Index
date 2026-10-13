@@ -7,6 +7,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+if __package__:
+    from .task_domain import GENERAL_PIPELINE, pipeline
+else:
+    from task_domain import GENERAL_PIPELINE, pipeline
+
 _SOURCE_REPOSITORY = "OpenRSI-Foundation/OpenRSI-Index"
 _DISCUSSION_ACTIONS = frozenset({"created", "edited"})
 _NODE_ID = re.compile(r"[A-Za-z0-9_-]+\Z")
@@ -31,6 +36,11 @@ def build_proposal_pass_payload(
     category = discussion.get("category")
     if not isinstance(category, dict) or category.get("name") != "Task Ideas":
         return None
+    # Science-pipeline hook: a Pass dispatches general task building only. A
+    # proposal recorded as AI4Sci without model training is never built here.
+    body = discussion.get("body")
+    if pipeline(body if isinstance(body, str) else None) != GENERAL_PIPELINE:
+        return None
 
     discussion_number = discussion.get("number")
     discussion_node_id = discussion.get("node_id")
@@ -46,6 +56,8 @@ def build_proposal_pass_payload(
         "triggering_comment_node_id": review_comment_node_id,
         "trigger_kind": "proposal_pass",
     }
+
+
 def _write_json_atomically(path: Path, value: object) -> None:
     path = path.absolute()
     descriptor, temporary_name = tempfile.mkstemp(

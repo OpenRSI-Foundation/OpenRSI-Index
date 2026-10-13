@@ -7,6 +7,11 @@ import sys
 import tempfile
 from pathlib import Path
 
+if __package__:
+    from .task_domain import GENERAL_PIPELINE, pipeline
+else:
+    from task_domain import GENERAL_PIPELINE, pipeline
+
 _SOURCE_REPOSITORY = "OpenRSI-Foundation/OpenRSI-Index"
 _TASK_PREFIX = "/task"
 _RESET_COMMAND = "/reset"
@@ -82,6 +87,14 @@ def build_dispatch_candidate(event: dict) -> dict | None:
         return None
     command = parse_dispatch_command(comment.get("body"))
     if command is None:
+        return None
+    # Science-pipeline hook: `/task` drives general task building only, so it
+    # is not dispatched for a proposal recorded as AI4Sci without model
+    # training. `/reset` only clears private State and stays available.
+    body = discussion.get("body")
+    if command == "task" and (
+        pipeline(body if isinstance(body, str) else None) != GENERAL_PIPELINE
+    ):
         return None
 
     return {

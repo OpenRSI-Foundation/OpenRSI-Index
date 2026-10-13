@@ -15,8 +15,12 @@ from checks.task_domain import (
     MANAGED_LABELS,
     SCIENCE,
     MissingLabelError,
+    GENERAL_PIPELINE,
+    SCIENCE_PIPELINE,
     domain_label,
     parse_domain,
+    parse_training,
+    pipeline,
     plan,
     sync,
 )
@@ -66,6 +70,80 @@ def test_row_does_not_span_lines_or_extra_cells():
 def test_first_domain_row_wins():
     body = TABLE.format(domain="AI4Sci") + "| Task Type | Domain | AI4AI |\n"
     assert domain_label(body) == SCIENCE
+
+
+INTAKE_ROWS = """| Section | Field | Proposal |
+| --- | --- | --- |
+| Task Type | Domain | {domain} |
+| Task Type | Involves model training | {training} |
+| Contributor | Full name | Ada |
+"""
+
+
+@pytest.mark.parametrize(
+    ("row", "answer"),
+    [
+        ("| Task Type | Involves model training | Yes |", "Yes"),
+        ("| Task Type | Involves model training | No |", "No"),
+        ("|task type|involves model training|no|", "no"),
+        ("  | TASK  TYPE | Involves   Model  Training |  **No**  |", "No"),
+        ("| Task Type | Involves model training |  |", None),
+        ("| Task Type | Involves training | No |", None),
+        ("| Task Type | Involves model training | No | extra |", None),
+        ("| Task Type | Domain | No |", None),
+    ],
+)
+def test_training_row_is_parsed_like_the_domain_row(row, answer):
+    assert parse_training(f"x\n{row}\ny") == answer
+
+
+@pytest.mark.parametrize(
+    ("domain", "training", "expected"),
+    [
+        ("AI4AI", "Yes", GENERAL_PIPELINE),
+        ("AI4AI", "No", GENERAL_PIPELINE),
+        ("AI4Sci", "Yes", GENERAL_PIPELINE),
+        ("AI4Sci", "No", SCIENCE_PIPELINE),
+        ("ai4sci", "no", SCIENCE_PIPELINE),
+        ("AI4Sci", "Maybe", GENERAL_PIPELINE),
+        ("Robotics", "No", GENERAL_PIPELINE),
+    ],
+)
+def test_training_answer_chooses_the_pipeline(domain, training, expected):
+    body = INTAKE_ROWS.format(domain=domain, training=training)
+    assert pipeline(body) == expected
+    # The training answer never changes the label.
+    assert domain_label(body) == domain_label(TABLE.format(domain=domain))
+
+
+def test_missing_training_row_keeps_the_general_pipeline():
+    assert pipeline(TABLE.format(domain="AI4Sci")) == GENERAL_PIPELINE
+    assert pipeline("| Task Type | Involves model training | No |") == GENERAL_PIPELINE
+    assert pipeline(None) == GENERAL_PIPELINE
+    assert pipeline("") == GENERAL_PIPELINE
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        (INTAKE_ROWS.format(domain="AI4Sci", training="No"), "science"),
+        (INTAKE_ROWS.format(domain="AI4Sci", training="Yes"), "general"),
+        (None, "general"),
+        (7, "general"),
+    ],
+)
+def test_pipeline_command_reads_the_event_and_writes_the_step_output(
+    tmp_path, monkeypatch, capsys, body, expected
+):
+    event = tmp_path / "event.json"
+    event.write_text(json.dumps({"discussion": {"body": body}}), encoding="utf-8")
+    output = tmp_path / "output"
+    monkeypatch.setenv("GITHUB_EVENT_PATH", str(event))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+
+    assert task_domain.main(["pipeline"]) == 0
+    assert capsys.readouterr().out == f"{expected}\n"
+    assert output.read_text(encoding="utf-8") == f"pipeline={expected}\n"
 
 
 def test_mapping_table_and_managed_labels():

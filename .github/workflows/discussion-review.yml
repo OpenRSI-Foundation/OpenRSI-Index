@@ -13,9 +13,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  review:
-    # Only review discussions in the "Task Ideas" category
+  route:
+    # Science-pipeline hook: the proposal's Task Type rows choose its review.
+    # AI4Sci without model training is left to the future science pipeline;
+    # every other proposal, including one without Task Type rows, is general.
     if: github.event.discussion.category.name == 'Task Ideas'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      pipeline: ${{ steps.pipeline.outputs.pipeline }}
+    steps:
+      - name: Checkout public pipeline helper
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Choose proposal pipeline
+        id: pipeline
+        run: python3 checks/task_domain.py pipeline
+
+  review:
+    # Only review discussions in the "Task Ideas" category, and only those on
+    # the general pipeline: this is the AI4AI rubric review. A science rubric
+    # review would be a separate job gated on the science pipeline.
+    needs: route
+    if: github.event.discussion.category.name == 'Task Ideas' && needs.route.outputs.pipeline == 'general'
     runs-on: ubuntu-latest
     outputs:
       task_dispatched: ${{ steps.task-dispatch.outcome == 'success' }}

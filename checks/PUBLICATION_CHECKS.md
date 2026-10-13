@@ -197,6 +197,35 @@ by a maintainer; the review workflow fails visibly if one is missing.
 `checks/backfill_discussion_domain_labels.py` (dry run unless `--apply`) labels
 existing Discussions.
 
+### Proposal pipelines and science-pipeline hook points
+
+Contributors start with the `task-intake` skill, which asks the domain and
+whether the task involves model training, then records both answers as the
+first two rows of the proposal table:
+
+```text
+| Task Type | Domain | AI4Sci |
+| Task Type | Involves model training | No |
+```
+
+The Domain row only chooses the label. The training row chooses the pipeline
+(`checks/task_domain.py pipeline`): AI4Sci without model training goes to the
+science pipeline; everything else, including a proposal without these rows,
+goes to the general pipeline. The science pipeline is not built yet, so those
+Discussions keep their `science task` label and receive no rubric review and no
+task building. A future science review and dispatch plugs in at these points:
+
+- **Rubric choice:** the `route` job in `discussion-review.yml` runs the AI4AI
+  rubric `review` job only for the general pipeline; a science rubric review
+  would be a sibling job gated on `science`.
+- **PASS gate:** `checks/proposal_pass_dispatch.py` builds a task-building
+  dispatch only for general-pipeline proposals.
+- **`/task` gate:** `checks/discussion_task_dispatch.py` does not dispatch
+  `/task` for science-pipeline proposals; `/reset` stays available.
+- **Worker skill choice:** the private RSI-Skills worker builds every dispatched
+  task with `harbor-task-agent`; a science dispatch would select its own task
+  skill there.
+
 Branch protection is unchanged. Before requiring `Task and log publication (CPU
 only)` as a merge gate, remove its path filter (an unrelated PR then passes with
 “not applicable”): a required check that never starts leaves the PR waiting.
