@@ -37,8 +37,10 @@ jobs:
     # Only review discussions in the "Task Ideas" category, and only those on
     # the general pipeline: this is the AI4AI rubric review. A science rubric
     # review would be a separate job gated on the science pipeline.
+    # A failed route falls back to this review (and its failure notice): only
+    # an explicit science choice skips it.
     needs: route
-    if: github.event.discussion.category.name == 'Task Ideas' && needs.route.outputs.pipeline == 'general'
+    if: ${{ !cancelled() && github.event.discussion.category.name == 'Task Ideas' && needs.route.outputs.pipeline != 'science' }}
     runs-on: ubuntu-24.04
     outputs:
       task_dispatched: ${{ steps.task-dispatch.outcome == 'success' }}
@@ -505,6 +507,37 @@ jobs:
               -f discussionId="$DISCUSSION_ID" \
               -f body="$BODY"
           fi
+
+  science-hold:
+    # Science-pipeline hook: no science review exists yet. An edit that moves a
+    # proposal here cancels any running general review, whose own cleanup is
+    # skipped on cancel, so retire its "running" comment instead.
+    needs: route
+    if: needs.route.outputs.pipeline == 'science'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout public retry helper
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Create comment Discussion App token
+        id: comment-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
+        with:
+          client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RSI_DISPATCH_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: ${{ github.event.repository.name }}
+          permission-discussions: write
+      - name: Retire running general review comments
+        env:
+          GH_TOKEN: ${{ steps.comment-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.comment-token.outputs.app-slug }}
+          DISCUSSION_ID: ${{ github.event.discussion.node_id }}
+        run: python3 checks/discussion_recovery.py supersede-running
 
   reaction-notice:
     if: github.event.discussion.category.name == 'Task Ideas'

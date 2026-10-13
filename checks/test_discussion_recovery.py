@@ -178,6 +178,51 @@ def test_queue_creation_reconciles_lost_response_and_preserves_history(recovery)
     assert "DC_trigger" in server.comments[1]["body"]
 
 
+def test_science_route_retires_only_our_running_review_comments(recovery, monkeypatch):
+    monkeypatch.setenv("GITHUB_RUN_ID", "456")
+    monkeypatch.delenv("TRIGGER_COMMENT_ID", raising=False)
+    running = "<!-- rubric-review-bot -->\n<!-- rubric-review-status:running -->\nrunning"
+    comments = {
+        "DC_ours": {"body": running, "author": {"login": "dispatcher[bot]"}},
+        "DC_done": {
+            "body": "<!-- rubric-review-bot -->\n<!-- rubric-review-status:completed -->",
+            "author": {"login": "dispatcher[bot]"},
+        },
+        "DC_foreign": {"body": running, "author": {"login": "someone[bot]"}},
+    }
+    updates = []
+
+    def server(args):
+        fields = dict(
+            args[index + 1].split("=", 1)
+            for index, value in enumerate(args)
+            if value in ("-f", "-F")
+        )
+        query = fields["query"]
+        if "comments(first:" in query:
+            nodes = [{"id": key, **value} for key, value in comments.items()]
+            return json.dumps({"data": {"node": {"id": "D_one", "comments": {
+                "nodes": nodes, "pageInfo": {"hasNextPage": False, "endCursor": None},
+            }}}})
+        if "updateDiscussionComment" in query:
+            updates.append(fields["commentId"])
+            comments[fields["commentId"]]["body"] = fields["body"]
+            return json.dumps({"data": {"updateDiscussionComment": {
+                "comment": {"id": fields["commentId"], "url": ""},
+            }}})
+        node = {"id": fields["id"], "url": "", **comments[fields["id"]]}
+        return json.dumps({"data": {"node": node}})
+
+    client = recovery.GitHubClient(call=server, sleep=Clock().sleep, clock=Clock().time)
+
+    assert recovery.supersede_running_reviews(client, "D_one", "dispatcher") == ["DC_ours"]
+    assert updates == ["DC_ours"]
+    assert comments["DC_ours"]["body"].startswith(recovery.SUPERSEDED_REVIEW_BODY)
+    assert "<!-- rubric-review-status:running -->" in comments["DC_foreign"]["body"]
+    # A second run finds nothing left running.
+    assert recovery.supersede_running_reviews(client, "D_one", "dispatcher") == []
+
+
 def test_recovery_notices_deduplicate_episode_and_keep_exhaustion_distinct(recovery):
     server = CommentServer(lose_response=True)
     clock = Clock()

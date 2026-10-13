@@ -214,11 +214,16 @@ The Domain row only chooses the label. The training row chooses the pipeline
 science pipeline; everything else, including a proposal without these rows,
 goes to the general pipeline. The science pipeline is not built yet, so those
 Discussions keep their `science task` label and receive no rubric review and no
-task building. A future science review and dispatch plugs in at these points:
+task building. If an edit moves a proposal there while a general review is
+running, that run is cancelled and the `science-hold` job marks its "running"
+comment as superseded; an earlier completed review stays as it was. A future
+science review and dispatch plugs in at these points:
 
-- **Rubric choice:** the `route` job in `discussion-review.yml` runs the AI4AI
-  rubric `review` job only for the general pipeline; a science rubric review
-  would be a sibling job gated on `science`.
+- **Rubric choice:** the `route` job in `discussion-review.yml` picks the
+  pipeline. The AI4AI rubric `review` job is skipped only when it picks
+  `science`; if the route job itself fails, the general review still runs, with
+  its usual failure notice. A science rubric review would replace
+  `science-hold` as a sibling job gated on `science`.
 - **PASS gate:** `checks/proposal_pass_dispatch.py` builds a task-building
   dispatch only for general-pipeline proposals.
 - **`/task` gate:** `checks/discussion_task_dispatch.py` does not dispatch

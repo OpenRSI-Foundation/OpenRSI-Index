@@ -459,12 +459,45 @@ def test_route_job_chooses_the_pipeline_before_the_ai4ai_review():
         "run": "python3 checks/task_domain.py pipeline",
     }
     assert review["needs"] == "route"
+    # A failed or skipped route falls back to the general review and its
+    # failure notice; only an explicit science choice skips it.
     assert review["if"] == (
+        "${{ !cancelled() && "
         "github.event.discussion.category.name == 'Task Ideas' && "
-        "needs.route.outputs.pipeline == 'general'"
+        "needs.route.outputs.pipeline != 'science' }}"
     )
     # Labelling never waits for, or depends on, the pipeline choice.
     assert "needs" not in jobs["reaction-notice"]
+
+
+def test_science_route_retires_a_general_review_left_running_by_the_cancelled_run():
+    jobs = parsed_workflow()["jobs"]
+    hold = jobs["science-hold"]
+
+    assert hold["needs"] == "route"
+    assert hold["if"] == "needs.route.outputs.pipeline == 'science'"
+    assert hold["runs-on"] == "ubuntu-24.04"
+    assert hold["permissions"] == {"contents": "read"}
+    checkout, token, retire = hold["steps"]
+    assert checkout["uses"] == f"actions/checkout@{CHECKOUT_SHA}"
+    assert checkout["with"] == {"persist-credentials": "false"}
+    assert token == step_named("Create comment Discussion App token")
+    assert retire == {
+        "name": "Retire running general review comments",
+        "env": {
+            "GH_TOKEN": "${{ steps.comment-token.outputs.token }}",
+            "BOT_LOGIN": "${{ steps.comment-token.outputs.app-slug }}",
+            "DISCUSSION_ID": "${{ github.event.discussion.node_id }}",
+        },
+        "run": "python3 checks/discussion_recovery.py supersede-running",
+    }
+    # Same superseded comment as the general review writes for its own runs.
+    from checks.discussion_recovery import SUPERSEDED_REVIEW_BODY
+
+    progress = step_named("Post or update running review comment")["run"]
+    superseded = progress.split("SUPERSEDED_BODY=$(cat <<'COMMENT_EOF'\n", 1)[1]
+    superseded = superseded.split("\nCOMMENT_EOF", 1)[0]
+    assert superseded == SUPERSEDED_REVIEW_BODY
 
 
 @pytest.mark.parametrize(
