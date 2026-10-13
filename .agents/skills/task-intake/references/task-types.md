@@ -68,6 +68,14 @@ rubric review and task building.
 
 To add a vertical, add one row to the Domains table and one row per training
 answer to the Routes table. A new domain may name its own Discussion label and
-its own next skill. The OpenRSI-Index domain-to-label mapping must list the same
-ID and label, and a maintainer must create the label, before proposals in the
-new domain are labelled; until then they are labelled `general task`.
+its own next skill. OpenRSI-Index then needs matching changes:
+
+- **Label:** its domain-to-label mapping must list the same ID and label, and a
+  maintainer must create the label, before proposals in the new domain are
+  labelled; until then they are labelled `general task`.
+- **Pipeline:** its pipeline routing sends every answer pair to the general
+  pipeline (AI4AI rubric review and automatic task building) unless listed
+  otherwise. Each new route whose next skill is not `proposal-agent` needs its
+  own entry there, or its proposals still get the general review. Its contract
+  test checks every route here against that routing; a route to a third
+  pipeline also needs that test and the review workflow extended.
