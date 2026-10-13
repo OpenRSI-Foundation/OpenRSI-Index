@@ -516,3 +516,10 @@ jobs:
             }' \
             -f id="$DISCUSSION_NODE_ID" \
             -f content="EYES"
+      # Labels only; the title and body (covered by the approval hash) are never edited.
+      - name: Apply Discussion domain label
+        if: ${{ !cancelled() && steps.reaction-token.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ steps.reaction-token.outputs.token }}
+          DISCUSSION_NODE_ID: ${{ github.event.discussion.node_id }}
+        run: python3 checks/task_domain.py apply
