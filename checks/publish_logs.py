@@ -16,8 +16,9 @@ normalized the same way the history was converted for the Hub:
 - each converted file gets a version-2 manifest
   ``<name-before-first-dot>.manifest.json`` that records the raw file and what
   it was converted from (the original manifest is kept inside it), and listing
-  manifests (``publication.json``, ``*manifest.json``) are updated to the raw
-  file;
+  manifests (``publication.json``, ``*manifest.json``) list the raw file in
+  place of what it replaced, followed by its version-2 manifest, byte for byte
+  as the history conversion wrote them (only the manifests' ``note`` differs);
 - any other compressed or archived file is refused: decompress it yourself.
 
 The staged tree is then committed to a temporary Git repository and checked with
@@ -70,6 +71,13 @@ HISTORY_NOTE = (
     "Restored from the gzip publication in OpenRSI-Index; "
     "the Hub stores large files natively."
 )
+# The top-level "compression" description a listing manifest gets when it named
+# a gzip or chunked file that was converted (the history conversion's wording).
+RAW_COMPRESSION = (
+    "Complete sanitized transcripts stored as raw files; the gzip and chunked-gzip "
+    "copies first published in OpenRSI-Index were restored byte-exactly and each "
+    "conversion is recorded in an adjacent .manifest.json; no truncation"
+)
 CHUNK = 1024**2
 REPO_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*")
 SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*(/[A-Za-z0-9][A-Za-z0-9._-]*)*")
@@ -98,8 +106,18 @@ def digest(path: Path):
     return h.hexdigest(), size, lines
 
 
-def write_json(path: Path, doc):
-    path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+def dump_json(doc, ascii_only=False) -> bytes:
+    """The history conversion's serialization: two-space indent, final newline."""
+    return (json.dumps(doc, indent=2, ensure_ascii=ascii_only) + "\n").encode("utf-8")
+
+
+def json_style(data: bytes, doc):
+    """The ensure_ascii setting that re-serializes ``data`` byte for byte, or
+    None when neither does (the file is then written in the default style)."""
+    for ascii_only in (False, True):
+        if dump_json(doc, ascii_only) == data:
+            return ascii_only
+    return None
 
 
 def run_git(repo: Path, *args: str, capture=False):
@@ -190,6 +208,7 @@ class Normalizer:
         # Raw file -> its digest; and the v2 manifests written.
         self.raw: dict[str, tuple[str, int, int]] = {}
         self.written: set[str] = set()
+        self.manifest_of: dict[str, str] = {}
         self.modified: set[str] = set()
         self.converted: list[str] = []
 
@@ -387,23 +406,26 @@ class Normalizer:
         if original is not None:
             source["original_manifest"] = original
         label = "chunked" if compression == "none" else compression
-        write_json(
-            target,
-            {
-                "version": 2,
-                "artifact": raw.name,
-                "size": size,
-                "sha256": sha,
-                "line_feeds": lines,
-                "converted_from": source,
-                "note": self.note
-                or f"Restored from a {label} upload; the Hub stores large files natively.",
-            },
+        target.write_bytes(
+            dump_json(
+                {
+                    "version": 2,
+                    "artifact": raw.name,
+                    "size": size,
+                    "sha256": sha,
+                    "line_feeds": lines,
+                    "converted_from": source,
+                    "note": self.note
+                    or f"Restored from a {label} upload; the Hub stores large files natively.",
+                }
+            )
         )
         self.written.add(target_rel)
+        self.manifest_of[self.rel(raw)] = target_rel
         self.converted.append(f"{old_name} -> {self.rel(raw)} ({size} bytes)")
 
     def listing(self, path: Path):
+        """(doc, ensure_ascii) of a listing manifest, or None."""
         if not (path.name == "publication.json" or path.name.endswith("manifest.json")):
             return None
         if self.rel(path) in self.written:
@@ -411,7 +433,7 @@ class Normalizer:
         doc = load_doc(path, self.rel(path))
         if not isinstance(doc, dict) or not isinstance(doc.get("files"), list):
             return None
-        return doc
+        return doc, json_style(path.read_bytes(), doc)
 
     def update_listings(self):
         """Point listing manifests at raw files; repeat while a rewritten
@@ -419,81 +441,134 @@ class Normalizer:
         for _ in range(10):
             changed = False
             for path in sorted(self.tree.rglob("*.json")):
-                doc = self.listing(path)
-                if doc is None:
+                loaded = self.listing(path)
+                if loaded is None:
                     continue
-                entries, seen, dirty = [], set(), False
-                for entry in doc["files"]:
-                    new = self.update_entry(path, entry)
-                    if new is not entry:
-                        dirty = True
-                    if new is None:
-                        continue
-                    key = new.get("path") if isinstance(new, dict) else None
-                    if key is not None and key in seen:
-                        dirty = True
-                        continue
-                    seen.add(key)
-                    entries.append(new)
-                if dirty:
-                    write_json(path, dict(doc, files=entries))
-                    self.modified.add(self.rel(path))
-                    changed = True
+                doc, ascii_only = loaded
+                files, converted = self.update_files(path, doc["files"])
+                if files is None:
+                    continue
+                doc = dict(doc, files=files)
+                described = doc.get("compression")
+                if converted and isinstance(described, str) and "gzip" in described:
+                    doc["compression"] = RAW_COMPRESSION
+                # The original style where it re-serializes byte for byte.
+                path.write_bytes(dump_json(doc, bool(ascii_only)))
+                self.modified.add(self.rel(path))
+                changed = True
             if not changed:
                 return
         raise PublishError("listing manifests reference each other in a cycle")
 
-    def update_entry(self, manifest: Path, entry):
+    def target(self, manifest: Path, entry):
+        """The tree path a listing entry names, or None."""
         if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
-            return entry
+            return None
         try:
             target = (manifest.parent / pub.safe_relative(entry["path"])).resolve()
-            rel = target.relative_to(self.tree.resolve()).as_posix()
+            return target.relative_to(self.tree.resolve()).as_posix()
         except (pub.CheckError, ValueError):
-            return entry
+            return None
+
+    def update_files(self, manifest: Path, files: list):
+        """A listing's new ``files`` (None if unchanged) and whether it named a
+        converted file. Exactly as the history conversion: a converted file is
+        listed once (a chunk directory's entries collapse into its first), by
+        the first entry's fields with the raw file's values, followed by its
+        version 2 manifest ({path, bytes, sha256}); an older manifest it
+        replaces is dropped where it was listed. When sibling entries record
+        uncompressed digests, the raw file's are recorded too."""
+        targets = [self.target(manifest, entry) for entry in files]
+        converted = {self.replaced_by[t] for t in targets if t in self.replaced_by}
+        relisted = {self.manifest_of[raw] for raw in converted}
+        backfill = any(isinstance(e, dict) and "uncompressed_sha256" in e for e in files)
+        entries, seen, done, dirty = [], set(), set(), False
+
+        def add(entry):
+            key = entry.get("path") if isinstance(entry, dict) else None
+            if key is not None and key in seen:
+                return True
+            seen.add(key)
+            entries.append(entry)
+            return False
+
+        for entry, rel in zip(files, targets):
+            if rel in relisted:
+                dirty = True
+                continue
+            if rel in self.replaced_by:
+                dirty = True
+                raw = self.check_replaced(manifest, entry, rel)
+                if raw in done:
+                    continue
+                done.add(raw)
+                add(self.raw_entry(manifest, entry, raw, backfill))
+                listed = self.tree / self.manifest_of[raw]
+                sha, size, _ = digest(listed)
+                add({"path": self.relative(manifest, listed), "bytes": size, "sha256": sha})
+                continue
+            new = self.refreshed(entry, rel)
+            dirty |= new is not entry
+            dirty |= add(new)
+        return (entries if dirty else None), bool(converted)
+
+    def relative(self, manifest: Path, path: Path) -> str:
+        return PurePosixPath(os.path.relpath(path, manifest.parent)).as_posix()
+
+    def check_replaced(self, manifest: Path, entry: dict, rel: str) -> str:
+        """Check a listed removed file against its entry; returns its raw file."""
         where = f"{self.rel(manifest)}: {entry['path']}"
-        if rel in self.replaced_by:
-            old_sha, old_size = self.removed[rel]
-            if entry.get("sha256", old_sha) != old_sha or entry.get("bytes", old_size) != old_size:
-                raise PublishError(f"{where}: listed SHA-256/size do not match the file")
-            raw = self.replaced_by[rel]
-            sha, size, lines = self.raw[raw]
-            if entry.get("compression") == "gzip":
-                for field, value in (
-                    ("uncompressed_sha256", sha),
-                    ("uncompressed_bytes", size),
-                    ("line_count", lines),
-                ):
-                    if field in entry and entry[field] != value:
-                        raise PublishError(f"{where}: listed {field} does not match the restored file")
-            new = dict(entry, path=PurePosixPath(os.path.relpath(self.tree / raw, manifest.parent)).as_posix())
-            new.update(bytes=size, sha256=sha)
+        old_sha, old_size = self.removed[rel]
+        if entry.get("sha256", old_sha) != old_sha or entry.get("bytes", old_size) != old_size:
+            raise PublishError(f"{where}: listed SHA-256/size do not match the file")
+        raw = self.replaced_by[rel]
+        sha, size, lines = self.raw[raw]
+        if entry.get("compression") == "gzip":
             for field, value in (
                 ("uncompressed_sha256", sha),
                 ("uncompressed_bytes", size),
                 ("line_count", lines),
             ):
-                if field in new:
-                    new[field] = value
-            if "compression" in new:
-                new["compression"] = None
-            return new
-        if rel in self.modified and "sha256" in entry:
-            sha, size, lines = digest(target)
-            if entry["sha256"] == sha and entry.get("bytes", size) == size:
-                return entry
-            new = dict(entry, sha256=sha)
-            if "bytes" in new:
-                new["bytes"] = size
-            for field, value in (
-                ("uncompressed_sha256", sha),
-                ("uncompressed_bytes", size),
-                ("line_count", lines),
-            ):
-                if field in new:
-                    new[field] = value
-            return new
-        return entry
+                if field in entry and entry[field] != value:
+                    raise PublishError(f"{where}: listed {field} does not match the restored file")
+        return raw
+
+    def raw_entry(self, manifest: Path, entry: dict, raw: str, backfill: bool) -> dict:
+        sha, size, lines = self.raw[raw]
+        values = {
+            "path": self.relative(manifest, self.tree / raw),
+            "bytes": size,
+            "sha256": sha,
+            "uncompressed_bytes": size,
+            "uncompressed_sha256": sha,
+            "line_count": lines,
+            "compression": None,
+        }
+        new = {key: values.get(key, value) for key, value in entry.items()}
+        if backfill and "uncompressed_sha256" not in new:
+            new.update(
+                uncompressed_bytes=size, uncompressed_sha256=sha, line_count=lines, compression=None
+            )
+        return new
+
+    def refreshed(self, entry, rel):
+        """An entry for a rewritten file, with its new digest."""
+        if rel not in self.modified or "sha256" not in entry:
+            return entry
+        sha, size, lines = digest(self.tree / rel)
+        if entry["sha256"] == sha and entry.get("bytes", size) == size:
+            return entry
+        new = dict(entry, sha256=sha)
+        if "bytes" in new:
+            new["bytes"] = size
+        for field, value in (
+            ("uncompressed_sha256", sha),
+            ("uncompressed_bytes", size),
+            ("line_count", lines),
+        ):
+            if field in new:
+                new[field] = value
+        return new
 
 
 def normalize(tree: Path, note: str | None = None) -> list[str]:

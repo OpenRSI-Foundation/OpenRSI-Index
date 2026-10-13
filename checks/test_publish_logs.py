@@ -20,6 +20,7 @@ import tempfile
 import types
 import unittest
 import zipfile
+import zlib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -71,6 +72,178 @@ def commit(repo: Path) -> str:
 
 
 RAW = b"".join(f"line {n}: tool output\n".encode() for n in range(2000))
+
+
+def stored_gzip(data: bytes) -> bytes:
+    """A gzip stream of stored (uncompressed) deflate blocks with mtime 0: the
+    same bytes under every zlib build, so frozen digests stay valid."""
+    out = bytearray(b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff")
+    blocks = [data[i : i + 65535] for i in range(0, len(data), 65535)] or [b""]
+    for number, block in enumerate(blocks, 1):
+        out.append(1 if number == len(blocks) else 0)
+        out += len(block).to_bytes(2, "little") + (0xFFFF ^ len(block)).to_bytes(2, "little")
+        out += block
+    out += zlib.crc32(data).to_bytes(4, "little") + (len(data) & 0xFFFFFFFF).to_bytes(4, "little")
+    return bytes(out)
+
+
+def transcript(label: str, lines: int) -> bytes:
+    return b"".join(f"[{label}] event {n}: tool call and output\n".encode() for n in range(lines))
+
+
+def dumps(doc) -> bytes:
+    return (json.dumps(doc, indent=2) + "\n").encode()
+
+
+SGLANG_RUNS = (
+    "d154-astra-xhigh-650175-20261001T230314",
+    "d154-rolling-astra-xhigh-655820-20261002T120036",
+    "omni-resume3-669485-20261004T141956Z-resume3",
+)
+
+
+def history_fixture(root: Path) -> dict[str, bytes]:
+    """Miniatures of the three log roots OpenRSI-Index published compressed
+    (rsi-logs/ at e00f0a9a): the same paths, manifest formats, key order,
+    listing order and field sets, with small transcripts. Returns path -> bytes."""
+    files: dict[str, bytes] = {}
+
+    def put(path, data):
+        files[path] = data if isinstance(data, bytes) else data.encode()
+
+    # ace-playbook-repair and kev-decision-architecture: a gzip transcript and
+    # its version 1 manifest, no listing manifest.
+    for task, lines in (("ace-playbook-repair", 3000), ("kev-decision-architecture", 1700)):
+        raw = transcript(task, lines)
+        packed = stored_gzip(raw)
+        run = f"{task}/codex-gpt-5.6-sol"
+        put(f"{task}/README.md", f"# {task} research logs\n")
+        put(f"{run}/README.md", "Codex run.\n")
+        put(f"{run}/agent_output.txt.gz", packed)
+        put(
+            f"{run}/agent_output.manifest.json",
+            dumps(
+                {
+                    "version": 1,
+                    "artifact": "agent_output.txt.gz",
+                    "encoding": "utf-8",
+                    "compression": "gzip",
+                    "gzip_mtime": 0,
+                    "restored_name": "agent_output.txt",
+                    "sanitized_uncompressed_size": len(raw),
+                    "sanitized_uncompressed_sha256": sha(raw),
+                    "sanitized_uncompressed_line_feeds": raw.count(b"\n"),
+                    "compressed_size": len(packed),
+                    "compressed_sha256": sha(packed),
+                }
+            ),
+        )
+        put(f"{run}/final_result.json", dumps({"best_score": 0.5}))
+        put(f"{task}/claude-code-claude-opus-5/agent_output.txt", transcript("claude", 40))
+
+    # sglang-omni-tts-runtime: two gzip transcripts and one chunked gzip, all
+    # named by publication.json, whose other entries record uncompressed digests.
+    task = "sglang-omni-tts-runtime"
+    entries = []
+
+    def plain(rel, data):
+        put(f"{task}/{rel}", data)
+        data = files[f"{task}/{rel}"]
+        entries.append(
+            {
+                "path": rel,
+                "bytes": len(data),
+                "sha256": sha(data),
+                "uncompressed_bytes": len(data),
+                "uncompressed_sha256": sha(data),
+                "line_count": data.count(b"\n"),
+                "compression": None,
+            }
+        )
+
+    for number, run_id in enumerate(SGLANG_RUNS):
+        run = f"codex-gpt-6-astra/runs/{run_id}"
+        inner = f"{run}/sglang-omni-tts-runtime"
+        raw = transcript(run_id, 900 + 700 * number)
+        packed = stored_gzip(raw)
+        if number < 2:
+            put(f"{task}/{inner}/agent_output.txt.gz", packed)
+            entries.append(
+                {
+                    "path": f"{inner}/agent_output.txt.gz",
+                    "bytes": len(packed),
+                    "sha256": sha(packed),
+                    "uncompressed_bytes": len(raw),
+                    "uncompressed_sha256": sha(raw),
+                    "line_count": raw.count(b"\n"),
+                    "compression": "gzip",
+                }
+            )
+        else:
+            plain(f"{run}/research-summary.json", dumps({"best_round": "agent-4"}))
+            half = 40000
+            parts = []
+            for index, block in enumerate((packed[:half], packed[half:]), 1):
+                name = f"part-{index:04d}.bin"
+                put(f"{task}/{inner}/agent_output.txt.gz.parts/{name}", block)
+                parts.append({"path": name, "bytes": len(block), "sha256": sha(block)})
+            chunk = dumps(
+                {
+                    "schema_version": 1,
+                    "source_name": "agent_output.txt.gz",
+                    "sha256": sha(packed),
+                    "bytes": len(packed),
+                    "uncompressed_sha256": sha(raw),
+                    "uncompressed_bytes": len(raw),
+                    "line_count": raw.count(b"\n"),
+                    "compression": "gzip",
+                    "parts": parts,
+                    "note": "Concatenate every part in manifest order to restore the "
+                    "complete gzip; no bytes were truncated.",
+                }
+            )
+            put(f"{task}/{inner}/agent_output.txt.gz.parts/manifest.json", chunk)
+            entries += [dict(part, path=f"{inner}/agent_output.txt.gz.parts/{part['path']}") for part in parts]
+            entries.append(
+                {
+                    "path": f"{inner}/agent_output.txt.gz.parts/manifest.json",
+                    "bytes": len(chunk),
+                    "sha256": sha(chunk),
+                }
+            )
+        plain(f"{inner}/agent_prompt.md", f"# Task prompt for {run_id}\n")
+        plain(f"{inner}/evolve_state.json", dumps({"rounds": number + 1}))
+        plain(f"{run}/source-publication.json", dumps({"phase": "final", "run_id": run_id, "version": 1}))
+    put(f"{task}/README.md", "# SGLang Omni TTS runtime research logs\n")
+    put(f"{task}/measurements.json", dumps({"measurements": []}))
+    put(
+        f"{task}/publication.json",
+        dumps(
+            {
+                "schema_version": 1,
+                "derived_evidence": [
+                    {"path": "measurements.json", "sha256": sha(files[f"{task}/measurements.json"]), "description": "Judge measurements"}
+                ],
+                "source_repository": "OpenRSI-Foundation/sglang-omni-tts-runtime-d154",
+                "source_commit": "c819dc10aaf7dab0c2d0ed5eea5499e449a6a9d5",
+                "agent": "codex",
+                "model": "gpt-6-astra",
+                "reasoning_effort": "xhigh",
+                "runs": [{"run_id": run_id, "best_score": None} for run_id in SGLANG_RUNS],
+                "files": entries,
+                "redaction_counts": {"provider-key": 0, "home": 67},
+                "compression": "Complete sanitized gzip streams; oversized streams are losslessly "
+                "chunked with reconstruction manifests; no truncation",
+                "secret_scan": "Gitleaks 8.30.1; full uncompressed logs; contextual false positives reviewed",
+                "source_file_hashes": {"logs/runs/x/.gitignore": {"bytes": 0, "sha256": sha(b"")}},
+            }
+        ),
+    )
+    for path, data in files.items():
+        target = root / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+    return files
 
 
 class Base(unittest.TestCase):
@@ -239,11 +412,13 @@ class NormalizeTests(Base):
         )
         self.stage()
         doc = json.loads(self.staged("publication.json").read_text())
+        v2_bytes = self.staged("run/agent_output.manifest.json").read_bytes()
         self.assertEqual(
             doc["files"],
             [
                 files[0],
                 {"path": "run/agent_output.txt", "bytes": len(RAW), "sha256": sha(RAW)},
+                {"path": "run/agent_output.manifest.json", "bytes": len(v2_bytes), "sha256": sha(v2_bytes)},
             ],
         )
         release = json.loads(self.staged("release-manifest.json").read_text())
@@ -268,7 +443,11 @@ class NormalizeTests(Base):
         }
         self.write("publication.json", json.dumps({"files": [entry]}))
         self.stage()
-        (new,) = json.loads(self.staged("publication.json").read_text())["files"]
+        new, listed = json.loads(self.staged("publication.json").read_text())["files"]
+        v2_bytes = self.staged("m/out.manifest.json").read_bytes()
+        self.assertEqual(
+            listed, {"path": "m/out.manifest.json", "bytes": len(v2_bytes), "sha256": sha(v2_bytes)}
+        )
         self.assertEqual(
             new,
             {
@@ -281,6 +460,46 @@ class NormalizeTests(Base):
                 "compression": None,
             },
         )
+
+    def test_replaced_manifest_is_listed_after_its_raw_file(self):
+        packed = gzip.compress(RAW, mtime=0)
+        self.write("m/agent_output.txt.gz", packed)
+        v1 = json.dumps(
+            {"version": 1, "artifact": "agent_output.txt.gz", "compressed_sha256": sha(packed)}
+        ).encode()
+        self.write("m/agent_output.manifest.json", v1)
+        self.write("m/notes.md", "notes\n")
+        listed = [
+            {"path": "agent_output.manifest.json", "bytes": len(v1), "sha256": sha(v1)},
+            {"path": "notes.md", "sha256": sha(b"notes\n")},
+            {"path": "agent_output.txt.gz", "sha256": sha(packed), "extra": "kept"},
+        ]
+        self.write("m/release-manifest.json", json.dumps({"compression": "gzip", "files": listed}, ensure_ascii=False))
+        self.stage()
+        v2 = self.staged("m/agent_output.manifest.json").read_bytes()
+        doc = json.loads(self.staged("m/release-manifest.json").read_text())
+        self.assertEqual(
+            doc["files"],
+            [
+                listed[1],
+                {"path": "agent_output.txt", "sha256": sha(RAW), "extra": "kept"},
+                {"path": "agent_output.manifest.json", "bytes": len(v2), "sha256": sha(v2)},
+            ],
+        )
+        self.assertEqual(doc["compression"], tool.RAW_COMPRESSION)
+
+    def test_listing_keeps_its_ascii_escaping(self):
+        packed = gzip.compress(RAW, mtime=0)
+        self.write("m/out.txt.gz", packed)
+        for ascii_only in (True, False):
+            with self.subTest(ascii_only=ascii_only):
+                shutil.rmtree(self.tree, ignore_errors=True)
+                doc = {"title": "Café run", "files": [{"path": "m/out.txt.gz", "sha256": sha(packed)}]}
+                self.write("publication.json", json.dumps(doc, indent=2, ensure_ascii=ascii_only) + "\n")
+                self.stage()
+                data = self.staged("publication.json").read_bytes()
+                self.assertEqual(b"\\u00e9" in data, ascii_only)
+                self.assertEqual(json.loads(data)["title"], "Café run")
 
     def test_listing_with_wrong_checksum_is_refused(self):
         packed = gzip.compress(RAW)
@@ -405,6 +624,114 @@ class NormalizeTests(Base):
         before = snapshot(self.src)
         self.stage()
         self.assertEqual(snapshot(self.src), before)
+
+
+# SHA-256 of every file the one-off conversion of OpenRSI-Index's rsi-logs/
+# history (the Logs repository's initial import) wrote for history_fixture().
+HISTORY_DIGESTS = {
+    "ace-playbook-repair/README.md":
+        "409ac9b78128af79676a5be263bdecd664acead498da02449e9b7b1f47024c2a",
+    "ace-playbook-repair/claude-code-claude-opus-5/agent_output.txt":
+        "480c91c9e8aa48f1d7b8b7330b55379f3420b9cc3a2de958c709d6d04ddbd2a7",
+    "ace-playbook-repair/codex-gpt-5.6-sol/README.md":
+        "a3bd9ffa50df22dfb79ade531a5c40b61a5ead73e5955e1fae6586cd496f04aa",
+    "ace-playbook-repair/codex-gpt-5.6-sol/agent_output.manifest.json":
+        "d171612735993b88776145e5259e46f19a5438f5972bfda942a25c7fe94a50bf",
+    "ace-playbook-repair/codex-gpt-5.6-sol/agent_output.txt":
+        "bc0a73f3c908b5765a68b6e479beae78c219a7427f88de05df0596704aaa80c4",
+    "ace-playbook-repair/codex-gpt-5.6-sol/final_result.json":
+        "1803ba26a6da37d0003ce0f9ca34cfd700a79a2d933915d57c219ddc12a1f476",
+    "kev-decision-architecture/README.md":
+        "d464befe41cfdf758a7113754277389da36e8f8780f5701d433c34460d3cfc6e",
+    "kev-decision-architecture/claude-code-claude-opus-5/agent_output.txt":
+        "480c91c9e8aa48f1d7b8b7330b55379f3420b9cc3a2de958c709d6d04ddbd2a7",
+    "kev-decision-architecture/codex-gpt-5.6-sol/README.md":
+        "a3bd9ffa50df22dfb79ade531a5c40b61a5ead73e5955e1fae6586cd496f04aa",
+    "kev-decision-architecture/codex-gpt-5.6-sol/agent_output.manifest.json":
+        "37049b47abdcc0792e99dd41cde68e009e4ed1559284fdcf4f3d9b0f9b627ae8",
+    "kev-decision-architecture/codex-gpt-5.6-sol/agent_output.txt":
+        "330a58959ee0e1fa3cb58ddc834d12ee6e4ad7608b7fbe8883852f8aff90cc20",
+    "kev-decision-architecture/codex-gpt-5.6-sol/final_result.json":
+        "1803ba26a6da37d0003ce0f9ca34cfd700a79a2d933915d57c219ddc12a1f476",
+    "sglang-omni-tts-runtime/README.md":
+        "3de2aaa33ac32d24d4a42d5ddea1816fe15664c92b91377c8920312dad1ad1c5",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/agent_output.manifest.json":
+        "f6f1f566a60c3c676eb35f301b039af50fd305cb86ddbffd95c9455ea2a201bd",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/agent_output.txt":
+        "6641cc7d72b1e2eb18d4babf620c75185d2c8d89737e2cc2a911255b42dcf7a8",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/agent_prompt.md":
+        "efb9e53ba9b3fdc578e997cdb0c789cf10a4b55ac001c39da207cece4e749b25",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/sglang-omni-tts-runtime/evolve_state.json":
+        "93b8aa3ce1c558b39119d7892821add59e1c3453534375fffa9ec70c12d51e93",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/d154-astra-xhigh-650175-20261001T230314/source-publication.json":
+        "a13af863e4c2766f1e18d398f39d1ed1ea3eb8106db57030bdb02165b1961f62",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/agent_output.manifest.json":
+        "75ee854e75a969fd7ab1dd9222aa89341587635cf06c4cf8623c5fc380f75df5",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/agent_output.txt":
+        "66641cf29573b3c52ebb64ac850e3dbe92c33070e772fe409ac971720e1da127",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/agent_prompt.md":
+        "c4b7d7119e61c7203df4afbdedd40b46409d0e4d4fc5dcbc8ed87ce651bd037f",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/sglang-omni-tts-runtime/evolve_state.json":
+        "2215106aa1551b9390beb49d328b526f563797aace7d7705034a6b0c62ea4757",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/d154-rolling-astra-xhigh-655820-20261002T120036/source-publication.json":
+        "ebad59f1dd972195d8377c4c38ac15bcd2980fff64685f6854a2049c180d769d",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/research-summary.json":
+        "1f9034a1a362ecaefa5e3d7275aa4e13b73acc93ff04ee67d0d9466d4a5f4527",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_output.manifest.json":
+        "8e62b99a69f287d163a8bc510a0ee7d5a670379e1238f5e9c6b602a8757849a7",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_output.txt":
+        "223e6530bab4d30d38468a62d61dead3cd81a98dde35b1c48355040ee963fde8",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/agent_prompt.md":
+        "ae779dd6b108a919e3c5bb7734abefafdd2a1367f5ef0fbb6ea3a8ab74539a67",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/sglang-omni-tts-runtime/evolve_state.json":
+        "d377939256b4cd8d0c31dd546f681fd149798d35bf0db619e6ea40e280bf1b46",
+    "sglang-omni-tts-runtime/codex-gpt-6-astra/runs/omni-resume3-669485-20261004T141956Z-resume3/source-publication.json":
+        "715dc8c6cd4c70311d4fb13cad66299d36efb147843abfed24af12afdcd02a8e",
+    "sglang-omni-tts-runtime/measurements.json":
+        "101f5a74238a91140b075b3895e4fbf5058f14f218b9398aefaef1d7e8b0175c",
+    "sglang-omni-tts-runtime/publication.json":
+        "b9110a5d10c63ace61107fc41ee167baeb3d719a184dc4ac7e5427d1d8e794ba",
+}
+
+
+class HistoryConversionTests(unittest.TestCase):
+    """Uploading a log root that was published compressed in OpenRSI-Index must
+    reproduce the Logs repository's converted history byte for byte, so a
+    re-upload never rewrites it."""
+
+    def test_normalizing_the_history_trees_matches_the_conversion(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            src = Path(tmp) / "src"
+            history_fixture(src)
+            got = {}
+            for task in sorted(p.name for p in src.iterdir()):
+                # Each log root is staged and normalized on its own, as uploaded.
+                tree = Path(tmp) / f"tree-{task}"
+                tool.copy_source(src / task, tree / task)
+                tool.normalize(tree, NOTE)
+                got.update({path: sha(data) for path, data in snapshot(tree).items()})
+            publication = (Path(tmp) / "tree-sglang-omni-tts-runtime/sglang-omni-tts-runtime/publication.json").read_bytes()
+        mismatched = sorted(p for p in set(got) | set(HISTORY_DIGESTS) if got.get(p) != HISTORY_DIGESTS.get(p))
+        self.assertEqual(mismatched, [], "files differing from the history conversion")
+        doc = json.loads(publication)
+        self.assertEqual(publication, dumps(doc))
+        self.assertEqual(doc["compression"], tool.RAW_COMPRESSION)
+        listed = [e for e in doc["files"] if "agent_output" in e["path"]]
+        resume3 = "codex-gpt-6-astra/runs/" + SGLANG_RUNS[2] + "/sglang-omni-tts-runtime/"
+        self.assertEqual(len(listed), 6)
+        for raw, manifest in zip(listed[::2], listed[1::2]):
+            # Each raw file is followed by its version 2 manifest and carries
+            # the uncompressed fields its sibling entries record.
+            self.assertTrue(raw["path"].endswith("/agent_output.txt"))
+            self.assertEqual(manifest["path"], raw["path"].removesuffix(".txt") + ".manifest.json")
+            self.assertEqual(list(manifest), ["path", "bytes", "sha256"])
+            self.assertEqual(
+                list(raw),
+                ["path", "bytes", "sha256", "uncompressed_bytes", "uncompressed_sha256", "line_count", "compression"],
+            )
+            self.assertEqual(raw["uncompressed_sha256"], raw["sha256"])
+            self.assertIsNone(raw["compression"])
+        self.assertEqual(listed[4]["path"], resume3 + "agent_output.txt")
 
 
 class DestinationTests(unittest.TestCase):

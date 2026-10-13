@@ -250,9 +250,20 @@ python3 -I checks/publish_logs.py --check-pr <N>
    decompressed to `<x>` and checked against any original manifest. Each
    converted file gets a version 2 manifest, keeping the replaced manifest as
    `original_manifest` (a chunked file that was not compressed records
-   `"compression": "none"`), and listing manifests (`publication.json`,
-   `*manifest.json` with `files`) are pointed at the raw file. Any other
-   compressed or archived file (`.xz`, `.bz2`, `.zst`, `.zip`, `.tar`, gzip
+   `"compression": "none"`). Listing manifests (`publication.json`,
+   `*manifest.json` with `files`) list the raw file in place of the entries it
+   replaces (a chunk directory's entries become one), with the same fields
+   holding the raw file's values, followed by its version 2 manifest
+   (`path`, `bytes`, `sha256`), so an entry for the manifest it replaced is
+   dropped where it stood. If other entries record `uncompressed_*` digests,
+   the raw file's entry gets them too (`"compression": null`), and a top-level
+   `compression` description mentioning gzip is replaced with one for raw
+   files. Rewritten listings use a two-space indent and keep the original's
+   ASCII escaping when it was already in that format. Normalizing a log root
+   as OpenRSI-Index published it reproduces the Logs repository's converted
+   files byte for byte, except the version 2 manifests' `note` (and so their
+   listed digests), which names an upload instead of the history import. Any
+   other compressed or archived file (`.xz`, `.bz2`, `.zst`, `.zip`, `.tar`, gzip
    content under another name, …) is refused: unpack it yourself. Raw input
    passes through unchanged, and normalizing a normalized tree changes nothing.
 3. **Check.** The staged tree is committed to a temporary Git repository and
@@ -338,8 +349,10 @@ it. Logs mode is described above. `--full` requests a whole-repository audit
 rather than an incremental PR check; a manual workflow run uses it. The checker
 tests also cover Logs mode and the Logs audit and history-guard workflows
 (running their shell steps against local fixture repositories);
-`test_publish_logs.py` covers the upload tool's normalization, checks and
-`--check-pr` with the upload mocked and no network. The scanner, compiler and
+`test_publish_logs.py` covers the upload tool's normalization (including a
+byte-for-byte reproduction of the converted history from miniatures of the log
+roots published compressed here), checks and `--check-pr` with the upload
+mocked and no network. The scanner, compiler and
 Git LFS integration tests skip without `PUBLICATION_GITLEAKS_BIN`, the Harness
 or `git-lfs` unless `PUBLICATION_REQUIRE_INTEGRATION=1`, which CI sets. The legacy shell scripts and
 planted fixtures in `checks/` are retained for historical reference, **not** used
