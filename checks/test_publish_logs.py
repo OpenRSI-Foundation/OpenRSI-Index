@@ -772,6 +772,10 @@ class MainTests(Base):
         self.write("m/agent_output.txt.gz", gzip.compress(RAW))
 
     def main(self, *args, remote=True, upload_url="https://example.invalid/pr/1"):
+        if "--dry-run" not in args and "--print-repo" not in args and "--gitleaks" not in args:
+            # Uploads must run the secret scan.
+            need(self, GITLEAKS, "set PUBLICATION_GITLEAKS_BIN for upload tests")
+            args = (*args, "--gitleaks", GITLEAKS)
         output = io.StringIO()
         with (
             patch.object(tool, "remote_has_file", return_value=remote) as remote_mock,
@@ -850,6 +854,25 @@ class MainTests(Base):
         code, out, _, _ = self.main(str(self.src), "--task", "demo-task", "--staging", str(staging))
         self.assertIn("--staging must be empty", out)
 
+    def test_uploads_and_pull_request_checks_require_the_secret_scan(self):
+        output = io.StringIO()
+        with (
+            patch.object(tool, "upload") as upload,
+            patch.object(tool, "check_pr") as check_pr,
+            contextlib.redirect_stdout(output),
+            patch.dict(os.environ, {"PUBLICATION_GITLEAKS_BIN": ""}),
+        ):
+            for argv in (
+                [str(self.src), "--task", "demo-task"],
+                [str(self.src), "--task", "demo-task", "--create-pr"],
+                ["--check-pr", "1"],
+                ["--check-pr", "1", "--dry-run"],
+            ):
+                self.assertEqual(tool.main([*argv, "--index", str(self.index)]), 1, argv)
+        self.assertEqual(output.getvalue().count("ERROR the secret scan needs gitleaks"), 4)
+        upload.assert_not_called()
+        check_pr.assert_not_called()
+
     def test_secret_scan_with_gitleaks(self):
         need(self, GITLEAKS, "set PUBLICATION_GITLEAKS_BIN for scanner tests")
         token = ("gh" + "p_") + ("a1b2c3d4e5f6g7h8i9j0" * 2)[:36]
@@ -903,6 +926,7 @@ class CheckPrTests(unittest.TestCase):
 
     def setUp(self):
         need(self, shutil.which("git-lfs"), "git-lfs is not installed")
+        need(self, GITLEAKS, "set PUBLICATION_GITLEAKS_BIN for --check-pr tests")
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         root = Path(self.tmp.name)
@@ -931,7 +955,9 @@ class CheckPrTests(unittest.TestCase):
             patch.object(tool, "hub_git_url", return_value=str(self.remote)),
             contextlib.redirect_stdout(output),
         ):
-            code = tool.main(["--check-pr", str(number), "--index", str(self.index)])
+            code = tool.main(
+                ["--check-pr", str(number), "--index", str(self.index), "--gitleaks", GITLEAKS]
+            )
         return code, output.getvalue()
 
     def test_pull_requests_are_checked_against_main(self):
@@ -961,7 +987,10 @@ class CheckPrTests(unittest.TestCase):
             contextlib.redirect_stdout(output),
         ):
             code = tool.main(
-                ["--check-pr", "3", "--index", str(self.index), "--staging", str(staging)]
+                [
+                    "--check-pr", "3", "--index", str(self.index), "--staging", str(staging),
+                    "--gitleaks", GITLEAKS,
+                ]
             )
         out = output.getvalue()
         self.assertEqual(code, 1, out)

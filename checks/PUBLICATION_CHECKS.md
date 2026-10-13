@@ -235,8 +235,8 @@ hf auth login                           # or set HF_TOKEN; the token is never pr
 python3 -I checks/publish_logs.py <run directory or log tree> \
   --task <task path under rsi-tasks/, e.g. signature-tasks/x> \
   [--dest <path in the dataset; default: the task's log root>] \
-  [--create-pr] [--dry-run] [--gitleaks <gitleaks>] [--staging <empty dir>]
-python3 -I checks/publish_logs.py --check-pr <N>
+  --gitleaks <gitleaks 8.30.1> [--create-pr] [--dry-run] [--staging <empty dir>]
+python3 -I checks/publish_logs.py --check-pr <N> --gitleaks <gitleaks 8.30.1>
 ```
 
 1. **Stage.** The source is copied (never modified) into a staging directory at
@@ -270,8 +270,10 @@ python3 -I checks/publish_logs.py --check-pr <N>
    checked in Logs mode with `--full`, tasks from `--task-ref` (default `HEAD`)
    of the OpenRSI-Index checkout the tool lives in (`--index` to choose another).
    This covers the uploaded files only; a new log root also needs a `README.md`,
-   staged or already on the Hub. Without `--gitleaks` (or
-   `PUBLICATION_GITLEAKS_BIN`) the secret scan is skipped locally.
+   staged or already on the Hub. Nothing scans a Hub upload or merge
+   automatically, so an upload and `--check-pr` refuse to run without
+   `--gitleaks` (or `PUBLICATION_GITLEAKS_BIN`); only a `--dry-run` upload
+   check may skip the secret scan.
 4. **Upload**, only if all of that passed: `huggingface_hub`'s `upload_folder`
    to `main` (maintainers) or, with `--create-pr`, as a Hub pull request.
    Large and binary files go through LFS/Xet automatically. `--dry-run` stops

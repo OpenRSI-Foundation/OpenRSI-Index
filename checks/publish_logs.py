@@ -1,7 +1,7 @@
 """Publish research logs to the OpenRSI-Index Logs dataset on the Hugging Face Hub.
 
-    publish_logs.py SOURCE --task TASK [--dest PATH] [--create-pr] [--dry-run]
-    publish_logs.py --check-pr N
+    publish_logs.py SOURCE --task TASK --gitleaks BIN [--dest PATH] [--create-pr] [--dry-run]
+    publish_logs.py --check-pr N --gitleaks BIN
 
 SOURCE is a local run directory or log tree; it is never modified. Its files are
 copied into a staging directory at ``--dest`` (default: the task's log root) and
@@ -791,6 +791,16 @@ def check_pr(args) -> int:
     return 0
 
 
+def require_secret_scan(args, optional: bool) -> None:
+    # Nothing scans a Hub upload or merge automatically, so an upload or a
+    # pre-merge check must run the secret scan; only a dry run may skip it.
+    if args.gitleaks is None and not optional:
+        raise PublishError(
+            "the secret scan needs gitleaks 8.30.1: pass --gitleaks or set "
+            "PUBLICATION_GITLEAKS_BIN (a --dry-run upload check may skip it)"
+        )
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
@@ -833,11 +843,13 @@ def main(argv=None) -> int:
                 raise PublishError("--check-pr takes no SOURCE, --task or --create-pr")
             if args.check_pr < 0:
                 raise PublishError("--check-pr needs a pull request number")
+            require_secret_scan(args, optional=False)
             return check_pr(args)
         if args.source is None or args.task is None:
             parser.error("SOURCE and --task are required (or use --check-pr N)")
-        if args.gitleaks is None:
-            print("NOTICE no --gitleaks: the secret scan is skipped here; the Hub audit runs it")
+        if args.gitleaks is None and args.dry_run:
+            print("NOTICE no --gitleaks: this dry run skips the secret scan")
+        require_secret_scan(args, optional=args.dry_run)
         return publish(args)
     except pub.CheckError as exc:
         print(f"FAIL {exc}")
