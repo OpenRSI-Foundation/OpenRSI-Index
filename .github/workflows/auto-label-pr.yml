@@ -1,0 +1,49 @@
+name: Auto-label PR areas
+
+# Keeps the path-based area labels in checks/auto_label.py in sync on every
+# push: a managed label is added while the PR touches its paths and removed once
+# it no longer does; other labels are never touched. `pull_request_target` gives
+# the token write access on fork PRs, so only the base revision is checked out
+# (for the rule module) and changed files are read through the GitHub API; PR
+# code is never checked out or executed. Retargeting a PR to another base
+# (`edited` with `changes.base`) changes its file list, so it relabels too;
+# other edits (title, body) are skipped and use their own concurrency group so
+# they never cancel a running sync.
+
+on:
+  pull_request_target: # zizmor: ignore[dangerous-triggers] -- base revision only; PR files via the API
+    types: [opened, synchronize, reopened, edited]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number to relabel, or 'open' to backfill every open PR"
+        required: true
+        default: open
+
+concurrency:
+  group: auto-label-pr-${{ (github.event.action != 'edited' || github.event.changes.base) && github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  label:
+    if: github.event.action != 'edited' || github.event.changes.base
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # No `ref`: pull_request_target checks out the base branch, never the PR.
+      - name: Checkout base revision rule module
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          sparse-checkout: checks
+      - name: Sync area labels
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          TARGET: ${{ github.event.pull_request.number || inputs.pr }}
+        run: python3 -I checks/auto_label.py --repo "$REPO" "$TARGET"
