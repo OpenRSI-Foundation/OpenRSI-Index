@@ -297,6 +297,9 @@ class _Apptainer:
         self.work_env = work_env
         self.judge_env: str | None = None
 
+    def renew_operator_login(self, _round_id):
+        pass
+
     def pause(self, _work):
         self.events.append("pause")
 
@@ -398,7 +401,9 @@ def test_busy_work_envs_make_the_submission_retryable_before_any_pause(
 
         monkeypatch.setattr(sandbox.lifecycle, "freeze_work", busy)
         apptainer = SimpleNamespace(
-            rounds=tmp_path, pause=lambda _w: events.append("pause")
+            rounds=tmp_path,
+            pause=lambda _w: events.append("pause"),
+            renew_operator_login=lambda _round_id: None,
         )
         request = SimpleNamespace(round_id="agent-1")
         with pytest.raises(RetryableSubmissionError):

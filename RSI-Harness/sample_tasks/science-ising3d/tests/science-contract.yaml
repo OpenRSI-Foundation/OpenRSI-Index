@@ -163,7 +163,7 @@ execution:
   environment: >-
     The Python 3.11 image pinned by digest (standard library only) with the starter; every Judge starts from the clean
     task image, recomputes the routes as unprivileged users and reviews with the run's own Agent, model and
-    reasoning effort through rsi-agent (Judge library science_judge version 2).
+    reasoning effort through rsi-agent (Judge library science_judge version 3).
   access: >-
     Work has public network access for literature and data. The Judge is offline except the pinned model
     endpoints; routes cannot open internet sockets and get no credentials; reviewers never execute

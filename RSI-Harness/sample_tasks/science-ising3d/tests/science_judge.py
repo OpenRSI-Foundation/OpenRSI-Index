@@ -56,7 +56,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Iterable, Literal, Mapping, Sequence, TextIO
 
-__version__ = "2"
+__version__ = "3"
 
 __all__ = [
     "__version__",
@@ -317,7 +317,11 @@ class Route:
     runs only when every ``requires`` file exists in the candidate; otherwise
     its diagnostic is ``{status: "not_provided", reason: missing_reason}``.
     ``outputs`` are files the route writes in its copy; the parent copies
-    them to ``<logs>/outputs/<route>/`` for checkers and reviewers.
+    them to ``<logs>/outputs/<route>/`` for checkers and reviewers. A
+    candidate file at a declared output path, or beneath one, is withheld
+    from the copy (and listed in the diagnostic's ``withheld``), so an output
+    exists only when this run wrote it; ``requires`` therefore never names
+    such a path.
     """
 
     name: str
@@ -424,6 +428,12 @@ class JudgeConfig:
             for value in (*route.requires, *route.outputs):
                 if not _safe_relative(value):
                     found.append(f"route {route.name}: {value!r} is not a safe relative path")
+            for value in route.requires:
+                if isinstance(value, str) and _withheld(value, route.outputs):
+                    found.append(
+                        f"route {route.name}: required file {value!r} is a declared output or lies beneath one; "
+                        "candidate files at output paths are withheld from the route's copy"
+                    )
             if not isinstance(route.missing_reason, str):
                 found.append(f"route {route.name}: missing_reason must be a string")
             route_outputs[route.name] = set(route.outputs)
@@ -544,6 +554,11 @@ def _limit_problems(name: str, limits: Any) -> list[str]:
         if not _positive_int(getattr(limits, key)):
             found.append(f"{name}: {key} must be a positive integer")
     return found
+
+
+def _withheld(relative: str, outputs: Iterable[str]) -> bool:
+    """Whether a candidate file sits at, or beneath, a declared route output."""
+    return any(isinstance(o, str) and (relative == o or relative.startswith(o + "/")) for o in outputs)
 
 
 def _safe_relative(value: Any) -> bool:
@@ -1813,7 +1828,10 @@ def recompute(
             capture = scratch / f"capture-{route.name}"
             _private_dir(root, uid)
             capture.mkdir(mode=0o700)
-            _copy_frozen(frozen, files, root, uid, config.max_bytes)
+            # A candidate file at a declared output path would otherwise be
+            # reported as this run's output even when the route wrote nothing.
+            withheld = sorted(name for name in files if _withheld(name, route.outputs))
+            _copy_frozen(frozen, (name for name in files if name not in withheld), root, uid, config.max_bytes)
             argv = [part.replace("{root}", str(root)) for part in route.argv]
             run = run_isolated(
                 argv,
@@ -1826,6 +1844,7 @@ def recompute(
             route_dir = extracted_root / route.name
             route_dir.mkdir(mode=0o755)
             run["outputs"] = _extract_outputs(root, route.outputs, route_dir, route.limits.file_size_bytes)
+            run["withheld"] = withheld
             if uid is not None:
                 sweep_uid_files(uid, sweep_roots)
             _force_rmtree(root)
@@ -2493,6 +2512,8 @@ def _print_bundle(stdout: TextIO, bundle: Mapping[str, Any]) -> None:
         for stream in ("stdout", "stderr"):
             if diag.get(stream):
                 _say(stdout, f"{stream}:\n{_clip(diag[stream])}\n")
+        for path in diag.get("withheld", []):
+            _say(stdout, f"withheld candidate file {path} (a declared output path)\n")
         for path, record in diag.get("outputs", {}).items():
             _say(stdout, f"output {path}: {json.dumps(record)}\n")
 

@@ -307,6 +307,14 @@ def test_verifier_gpu_count_rejects_explicit_null_metadata_tables(tmp_path, meta
             '[metadata.rsi_harness.verifier]\nmodel_access = "true"',
             "metadata.rsi_harness.verifier.model_access",
         ),
+        (
+            "[metadata.rsi_harness.verifier]\nclean_image = 1",
+            "metadata.rsi_harness.verifier.clean_image",
+        ),
+        (
+            '[metadata.rsi_harness.verifier]\nclean_image = "true"',
+            "metadata.rsi_harness.verifier.clean_image",
+        ),
     ],
 )
 def test_compile_rejects_malformed_verifier_gpu_metadata(tmp_path, metadata, message):
@@ -364,6 +372,91 @@ def test_compiles_verifier_model_access_only_when_declared(
     definition = HarborTaskCompiler().compile(task, CompileOptions())
 
     assert definition.verifier.model_access is expected
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ("", (None, None)),
+        ("\n[metadata.rsi_harness.verifier]\nmodel_access = true\n", (None, None)),
+        (
+            '\n[metadata.rsi_harness.verifier]\njudge_model = "gpt-judge"\n',
+            ("gpt-judge", "medium"),
+        ),
+        (
+            "\n[metadata.rsi_harness.verifier]\n"
+            'judge_model = "gpt-judge"\njudge_model_effort = "xhigh"\n',
+            ("gpt-judge", "xhigh"),
+        ),
+    ],
+)
+def test_compiles_judge_model_with_medium_default_effort(tmp_path, metadata, expected):
+    """The Judge LLM exists only when declared; its effort defaults to medium."""
+    task = write_harbor_task(tmp_path, task_toml=DEFAULT_TASK_TOML + metadata)
+
+    definition = HarborTaskCompiler().compile(task, CompileOptions())
+
+    verifier = definition.verifier
+    assert (verifier.judge_model, verifier.judge_model_effort) == expected
+    # Independent of the Agent's own model access.
+    assert verifier.model_access is ("model_access = true" in metadata)
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        ("judge_model = 1", "judge_model must be a model id"),
+        ('judge_model = ""', "judge_model must be a model id"),
+        ('judge_model = "gpt judge"', "judge_model must be a model id"),
+        ('judge_model = " gpt"', "judge_model must be a model id"),
+        ('judge_model_effort = "high"', "judge_model_effort requires judge_model"),
+        (
+            'judge_model = "gpt-judge"\njudge_model_effort = "extreme"',
+            "judge_model_effort must be one of high, low, max, medium, minimal",
+        ),
+        (
+            'judge_model = "gpt-judge"\njudge_model_effort = 3',
+            "judge_model_effort must be one of",
+        ),
+    ],
+)
+def test_compile_rejects_invalid_judge_model(tmp_path, metadata, message):
+    task = write_harbor_task(
+        tmp_path,
+        task_toml=DEFAULT_TASK_TOML
+        + "\n[metadata.rsi_harness.verifier]\n"
+        + metadata
+        + "\n",
+    )
+
+    with pytest.raises(UnsupportedTaskError, match=message):
+        HarborTaskCompiler().compile(task, CompileOptions())
+
+
+@pytest.mark.parametrize(
+    ("metadata", "expected"),
+    [
+        ("", True),
+        ('\n[metadata.rsi_harness.verifier]\nvisibility = "public"\n', True),
+        ("\n[metadata.rsi_harness.verifier]\nclean_image = true\n", True),
+        ("\n[metadata.rsi_harness.verifier]\nclean_image = false\n", False),
+        (
+            '\n[metadata.rsi_harness.verifier]\nvisibility = "public"\n'
+            "clean_image = false\n",
+            True,
+        ),
+    ],
+)
+def test_compiles_verifier_clean_image_explicitly(tmp_path, metadata, expected):
+    """A hidden Judge starts from the clean Work image unless the task opts out;
+    the plan records the setting even when the task leaves it out, and a
+    public Judge, which always starts from it, records True."""
+    task = write_harbor_task(tmp_path, task_toml=DEFAULT_TASK_TOML + metadata)
+
+    definition = HarborTaskCompiler().compile(task, CompileOptions())
+
+    assert definition.verifier.clean_image is expected
+    assert definition.model_dump(mode="json")["verifier"]["clean_image"] is expected
 
 
 def test_compile_defaults_undeclared_gpu_shared_memory_to_one_gibibyte(tmp_path):
@@ -843,3 +936,21 @@ def test_write_rsi_loop_metadata_is_generic_and_cache_only(tmp_path):
     assert not (task_dir / "task.json").exists()
     with pytest.raises(UnsupportedTaskError, match="source task"):
         compiler.write_rsi_loop_metadata(definition, task_dir)
+
+
+# The [environment] table, then the [verifier] table.
+@pytest.mark.parametrize(
+    "anchor", ['network_mode = "no-network"', "[verifier]\ntimeout_sec = 30"]
+)
+@pytest.mark.parametrize(
+    "name", ["RSI_JUDGE_ISOLATION_FALLBACK", "rsi_judge_isolation_fallback"]
+)
+def test_a_task_cannot_set_an_operator_judge_variable(tmp_path, anchor, name):
+    """RSI_JUDGE_* settings (the isolation fallback) are the operator's."""
+    task_toml = DEFAULT_TASK_TOML.replace(
+        anchor, f'{anchor}\nenv = {{ {name} = "same-user" }}'
+    )
+    task_dir = write_harbor_task(tmp_path, task_toml=task_toml)
+
+    with pytest.raises(UnsupportedTaskError, match="RSI_JUDGE_"):
+        HarborTaskCompiler().compile(task_dir, CompileOptions())

@@ -108,6 +108,12 @@ for name in OPENAI_API_KEY OPENAI_BASE_URL CODEX_API_KEY ANTHROPIC_AUTH_TOKEN \
         exit 0
     fi
 done
+# The image says same-user; the Harness's explicit "none" wins.
+if [ "${RSI_JUDGE_ISOLATION_FALLBACK:-unset}" != none ]; then
+    echo "isolation fallback is ${RSI_JUDGE_ISOLATION_FALLBACK:-unset}"
+    echo '{"reward": 0}' > /logs/verifier/reward.json
+    exit 0
+fi
 printf 'agent=%s model=%s\n' "$RSI_AGENT_NAME" "$RSI_AGENT_MODEL"
 mkdir -p /tmp/review/work
 printf 'Answer the question.\n' > /tmp/review/prompt.md
@@ -174,6 +180,10 @@ class _FakeModel(BaseHTTPRequestHandler):
     ("agent", "adapter", "cli"),
     [("codex", CodexAgent, "codex"), ("claude-code", ClaudeCodeAgent, "claude")],
 )
+# The default hidden Judge starts from the clean Work image; clean_image =
+# false starts it from a snapshot of Work. rsi-agent and the explicit
+# isolation fallback reach both the same way.
+@pytest.mark.parametrize("clean_image", [True, False], ids=["clean", "snapshot"])
 def test_real_judge_calls_the_agent_through_rsi_agent(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -181,6 +191,7 @@ def test_real_judge_calls_the_agent_through_rsi_agent(
     agent: str,
     adapter: type,
     cli: str,
+    clean_image: bool,
 ) -> None:
     """Full production run as the current user; only iptables is faked."""
     client = _docker(PYTHON_IMAGE)
@@ -199,10 +210,14 @@ def test_real_judge_calls_the_agent_through_rsi_agent(
     shutil.copytree(FIXTURE, task)
     (task / "environment" / "Dockerfile").write_text(
         f"FROM {PYTHON_IMAGE}\nRUN mkdir -p /workspace\nWORKDIR /workspace\n"
+        # A task's image cannot choose the operator's isolation fallback.
+        "ENV RSI_JUDGE_ISOLATION_FALLBACK=same-user\n"
     )
     config = task / "task.toml"
     config.write_text(
-        config.read_text() + "\n[metadata.rsi_harness.verifier]\nmodel_access = true\n"
+        config.read_text()
+        + "\n[metadata.rsi_harness.verifier]\nmodel_access = true\n"
+        + ("" if clean_image else "clean_image = false\n")
     )
     (task / "tests" / "test.sh").write_text(JUDGE_SCRIPT)
     data = tmp_path / "data"
@@ -258,6 +273,8 @@ def test_real_judge_calls_the_agent_through_rsi_agent(
     agent_output = (run_root / "agent_output.txt").read_text()
     assert result.status == RunStatus.COMPLETED, feedback + agent_output[-2000:]
     assert result.best_score == 1, feedback
+    plan = json.loads((run_root / "run-plan.json").read_text())
+    assert plan["task"]["verifier"]["clean_image"] is clean_image
     assert "NO-RSI-AGENT-IN-WORK" in agent_output
     assert "RSI-AGENT-PRESENT" not in agent_output
     assert len(_FakeModel.seen) == 1
@@ -295,6 +312,29 @@ if mode == "victim":
     open(out, "w").write(json.dumps({"verdict": "honest"}))
     time.sleep(float(prompt[1]))
     sys.exit(0)
+if mode == "probe":
+    # What this call's Agent can reach of the Judge's private places.
+    def attempt(action):
+        try:
+            action()
+            return "done"
+        except OSError as error:
+            return error.strerror
+    def touch(path):
+        open(path, "w").close()
+    found = {
+        "launch_spec": attempt(
+            lambda: open("/run/rsi-agent/private/launch.json").read()),
+        "login_store": attempt(
+            lambda: open("/home/agent/.codex/auth.json").read()),
+        "write_verifier": attempt(lambda: touch("/logs/verifier/agent-was-here")),
+        "list_jobs": attempt(lambda: os.listdir("/run/rsi-agent/jobs")),
+        "list_tests": attempt(lambda: os.listdir("/tests")),
+        "own_home": attempt(lambda: touch(os.path.join(home, "note"))),
+        "own_tmp": attempt(lambda: touch(os.path.join(os.environ["TMPDIR"], "n"))),
+    }
+    open(out, "w").write(json.dumps({"uid": os.getuid(), "found": found}))
+    sys.exit(0)
 if mode == "attacker":
     # Find a concurrent call's final message and try to forge or end it.
     tried = {}
@@ -321,7 +361,8 @@ if mode == "attacker":
             attempt("list_job", lambda: os.listdir(os.path.dirname(target)))
             attempt("environ", lambda: open("/proc/%s/environ" % pid).read())
             attempt("cwd", lambda: os.listdir("/proc/%s/cwd" % pid))
-            attempt("kill", lambda: os.kill(int(pid), signal.SIGKILL))
+            if "nokill" not in prompt:
+                attempt("kill", lambda: os.kill(int(pid), signal.SIGKILL))
         time.sleep(0.05)
     open(out, "w").write(json.dumps({"uid": os.getuid(), "tried": tried}))
     sys.exit(0)
@@ -362,6 +403,21 @@ ESCAPEES = (
 @pytest.fixture
 def isolated_judge(tmp_path: Path, request: pytest.FixtureRequest):
     """A root, read-only-rootfs Judge with rsi-agent and a local Codex login."""
+    return _rsi_agent_judge(tmp_path, request, user=None)
+
+
+# A Judge that is not root runs as the current user, so that only Landlock,
+# not file modes, keeps each call's Agent out of the Judge's files.
+NON_ROOT = f"{os.getuid()}:{os.getgid()}"
+
+
+@pytest.fixture
+def landlock_judge(tmp_path: Path, request: pytest.FixtureRequest):
+    """The same Judge as a non-root user: rsi-agent confines with Landlock."""
+    return _rsi_agent_judge(tmp_path, request, user=NON_ROOT)
+
+
+def _rsi_agent_judge(tmp_path: Path, request: pytest.FixtureRequest, *, user):
     client = _docker(PYTHON_IMAGE)
     task_source = tmp_path / "task-source"
     engine_root = tmp_path / "engine-root"
@@ -392,6 +448,9 @@ def isolated_judge(tmp_path: Path, request: pytest.FixtureRequest):
         RSILoopConfig(), AgentPlan(name="codex", network=NetworkPolicy())
     )
     launch = build_launch_spec(oneshot, material, {LOGIN_SECRET})
+    if user is not None:
+        # The Judge's own outputs: writable by its user, hidden by Landlock.
+        verifier.chmod(0o777)
     runtime = DockerContainerRuntime(
         client,
         run_id=f"rsi-agent-{uuid.uuid4().hex[:8]}",
@@ -406,6 +465,7 @@ def isolated_judge(tmp_path: Path, request: pytest.FixtureRequest):
         ContainerSpec(
             image=PYTHON_IMAGE,
             command=("sleep", "infinity"),
+            user=user,
             # A public Judge's shape: read-only rootfs, no-new-privileges.
             read_only_rootfs=True,
             tmpfs=(
@@ -442,15 +502,16 @@ def isolated_judge(tmp_path: Path, request: pytest.FixtureRequest):
     container = client.containers.get(judge.container_id)
     # Started without a network policy: the container has no network at all.
     container.start()
-    runtime.inject_agent_auth(judge, material, owner=None)
-    runtime.inject_judge_agent(judge, launch, owner=None)
+    runtime.inject_agent_auth(judge, material, owner=user)
+    runtime.inject_judge_agent(judge, launch, owner=user)
     encoded = base64.b64encode(FAKE_CODEX.encode()).decode()
     code, output = container.exec_run(
         (
             "sh",
             "-c",
             f"mkdir -p /opt/fake/bin /tmp/q && echo {encoded} | base64 -d > "
-            "/opt/fake/bin/codex && chmod 0755 /opt/fake/bin/codex",
+            "/opt/fake/bin/codex && chmod 0755 /opt/fake/bin/codex"
+            + ("" if user is None else f" && chown {user} /tmp/q"),
         ),
         user="root",
     )
@@ -621,6 +682,85 @@ def test_the_agent_log_never_holds_a_credential(isolated_judge) -> None:
     stdout, stderr = text.split("--- stderr ---")
     redacted = '{"access_token": "[REDACTED]"}'
     assert redacted in stdout and redacted in stderr, text
+
+
+def test_a_judge_that_is_not_root_isolates_with_landlock(landlock_judge) -> None:
+    container = landlock_judge
+
+    code, output = container.exec_run(("rsi-agent", "isolation"), user=NON_ROOT)
+
+    assert code == 0, output
+    report = json.loads(output)
+    assert report["mode"] == "landlock" and report["landlock_abi"] >= 1
+
+
+def test_a_confined_agent_reaches_only_its_own_call(landlock_judge) -> None:
+    container = landlock_judge
+
+    code, output = container.exec_run(
+        ("sh", "-c", _call("probe", "probe") + " && cat /tmp/q/probe.json"),
+        user=NON_ROOT,
+    )
+
+    assert code == 0, output
+    answer = json.loads(output.decode().strip().splitlines()[-1])
+    # The Judge's own uid: Landlock, not file modes, keeps it out.
+    assert answer["uid"] == os.getuid()
+    denied = "Permission denied"
+    assert answer["found"] == {
+        "launch_spec": denied,
+        "login_store": denied,
+        "write_verifier": denied,
+        "list_jobs": denied,
+        "list_tests": denied,
+        "own_home": "done",
+        "own_tmp": "done",
+    }
+    code, output = container.exec_run(("ls", "-A", "/logs/verifier"), user="root")
+    assert output.decode().strip() == ""
+    # The per-call job directory is gone.
+    code, output = container.exec_run(("ls", "-A", "/run/rsi-agent/jobs"), user="root")
+    assert code == 0 and output.decode().strip() == ""
+
+
+def test_a_confined_agent_cannot_read_or_forge_a_sibling_call(landlock_judge) -> None:
+    container = landlock_judge
+    script = " ".join(
+        [
+            f"({_call('victim', 'victim 6')}; echo victim=$?) &",
+            f"({_call('attacker', 'attacker 5 nokill')}; echo attacker=$?) &",
+            "wait; cat /tmp/q/victim.json; echo; cat /tmp/q/attacker.json; echo",
+        ]
+    )
+
+    code, output = container.exec_run(("sh", "-c", script), user=NON_ROOT)
+
+    text = output.decode()
+    assert "victim=0" in text and "attacker=0" in text, text
+    victim, attacker = (
+        json.loads(line) for line in text.splitlines() if line.startswith("{")
+    )
+    assert victim == {"verdict": "honest"}
+    # Same uid, yet every move on the sibling's files and memory failed.
+    assert set(attacker["tried"]) == {"forge", "list_job", "environ", "cwd"}, attacker
+    assert "done" not in attacker["tried"].values(), attacker
+
+
+def test_a_confined_agents_escaped_process_ends_with_its_call(landlock_judge) -> None:
+    container = landlock_judge
+
+    code, output = container.exec_run(
+        (
+            "sh",
+            "-c",
+            _call("stubborn", "stubborn", "--timeout", "1")
+            + f"; echo stubborn=$?; {ESCAPEES}",
+        ),
+        user=NON_ROOT,
+    )
+
+    text = output.decode()
+    assert "stubborn=124" in text and "escapees=0" in text, text
 
 
 def test_real_judge_credentials_belong_to_the_verifier_user_alone(

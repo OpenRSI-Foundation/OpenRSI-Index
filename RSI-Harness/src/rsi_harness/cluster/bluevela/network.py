@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import select
 import socket
+import struct
 import threading
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlsplit
@@ -15,8 +16,27 @@ from rsi_harness.runtime.network import PinnedEndpoint
 _MAX_PROXY_HEADER_BYTES = 16 * 1024
 
 
+def _peer_pid(connection: socket.socket) -> int:
+    """The connecting process, as the kernel recorded it at connect()."""
+    try:
+        credentials = connection.getsockopt(
+            socket.SOL_SOCKET, socket.SO_PEERCRED, struct.calcsize("3i")
+        )
+    except OSError:
+        return 0
+    return struct.unpack("3i", credentials)[0]
+
+
 class UnixConnectProxy:
-    """Expose only pinned HTTPS CONNECT targets on a private Unix socket."""
+    """Expose only pinned HTTPS CONNECT targets on a private Unix socket.
+
+    With ``pin_first_peer`` the first connection only registers its process
+    (the relay, which connects before it starts anything else) and is closed;
+    afterwards a connection from any other process is closed unanswered. A
+    Judge's routes share the relay's uid and, below Landlock ABI 7, can still
+    connect to a socket path they cannot read, so the path alone is no
+    boundary: the kernel-recorded peer pid is.
+    """
 
     def __init__(
         self,
@@ -24,6 +44,7 @@ class UnixConnectProxy:
         *,
         endpoints: tuple[PinnedEndpoint, ...],
         connect_timeout_seconds: float = 10.0,
+        pin_first_peer: bool = False,
     ) -> None:
         if not endpoints:
             raise SetupError("Agent provider proxy requires pinned endpoints")
@@ -40,6 +61,9 @@ class UnixConnectProxy:
         self._client_threads: list[threading.Thread] = []
         self._stopping = threading.Event()
         self._lock = threading.Lock()
+        self._pin_first_peer = pin_first_peer
+        self.owner_pid: int | None = None
+        self.refused_peers = 0
 
     def start(self) -> None:
         if self._listener is not None:
@@ -92,6 +116,9 @@ class UnixConnectProxy:
                 if self._stopping.is_set():
                     return
                 continue
+            if self._pin_first_peer and not self._admit(client):
+                client.close()
+                continue
             thread = threading.Thread(
                 target=self._serve,
                 args=(client,),
@@ -101,6 +128,19 @@ class UnixConnectProxy:
             with self._lock:
                 self._client_threads.append(thread)
             thread.start()
+
+    def _admit(self, client: socket.socket) -> bool:
+        """Pin the first peer (and close it); admit only that process after."""
+        pid = _peer_pid(client)
+        if self.owner_pid is None:
+            # Only the first peer registers. One the kernel cannot name
+            # (pid 0) pins nobody: every later connection is refused.
+            self.owner_pid = pid if pid > 0 else -1
+            return False
+        if pid <= 0 or pid != self.owner_pid:
+            self.refused_peers += 1
+            return False
+        return True
 
     def _serve(self, client: socket.socket) -> None:
         try:
@@ -367,4 +407,86 @@ class AgentNetworkBroker:
         )
 
 
-__all__ = ["AgentNetworkBroker", "UnixConnectProxy", "UnixTcpRelay"]
+class JudgeProviderBroker:
+    """One Judge round's provider proxy: the model endpoints pinned for Work.
+
+    A model-access Judge whose Agent has no network runs in its own network
+    namespace; the relay exposes this socket on loopback port
+    :data:`JUDGE_PROVIDER_PORT`, which rsi-agent's launch spec names as the
+    Agent's proxy. No submit relay: a Judge never submits. The relay
+    registers itself first and the proxy then serves only the relay's
+    process, so a route (same uid, no internet sockets) that finds the
+    socket still cannot use it.
+    """
+
+    _CONTAINER_ROOT = PurePosixPath("/run/rsi-harness/network")
+
+    def __init__(self, root: Path, *, endpoints: tuple[PinnedEndpoint, ...]) -> None:
+        self.root = Path(root)
+        self.provider_socket = self.root / "provider.sock"
+        self._provider = UnixConnectProxy(
+            self.provider_socket, endpoints=endpoints, pin_first_peer=True
+        )
+        self._started = False
+
+    def start(self) -> None:
+        if self._started:
+            raise RuntimeError("Judge provider broker is already started")
+        self.root.mkdir(parents=True, mode=0o700, exist_ok=False)
+        self._provider.start()
+        self._started = True
+
+    def stop(self) -> None:
+        self._provider.stop()
+        self._started = False
+
+    def wrap(
+        self, command: tuple[str, ...], *, relay_path: PurePosixPath
+    ) -> tuple[str, ...]:
+        if not self._started:
+            raise RuntimeError("Judge provider broker is not started")
+        return (
+            "/usr/bin/env",
+            "python3",
+            str(relay_path),
+            "--provider-socket",
+            str(self._CONTAINER_ROOT / self.provider_socket.name),
+            "--provider-port",
+            str(JUDGE_PROVIDER_PORT),
+            "--register",
+            "--",
+            *command,
+        )
+
+
+# Loopback port of a model-access Judge's provider proxy, fixed because
+# rsi-agent's launch spec names it before the Judge starts.
+JUDGE_PROVIDER_PORT = 3128
+
+
+def judge_proxy_environment() -> dict[str, str]:
+    """What the Agent's own environment needs to reach the Judge's proxy."""
+    url = f"http://127.0.0.1:{JUDGE_PROVIDER_PORT}"
+    environment = {
+        name: url
+        for name in (
+            "HTTP_PROXY",
+            "HTTPS_PROXY",
+            "ALL_PROXY",
+            "http_proxy",
+            "https_proxy",
+            "all_proxy",
+        )
+    }
+    environment.update(NO_PROXY="127.0.0.1,localhost", no_proxy="127.0.0.1,localhost")
+    return environment
+
+
+__all__ = [
+    "JUDGE_PROVIDER_PORT",
+    "AgentNetworkBroker",
+    "JudgeProviderBroker",
+    "UnixConnectProxy",
+    "UnixTcpRelay",
+    "judge_proxy_environment",
+]

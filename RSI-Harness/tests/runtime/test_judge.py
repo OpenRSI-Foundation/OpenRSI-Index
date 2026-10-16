@@ -138,8 +138,8 @@ def install_work_volume_reference(
     return resolved
 
 
-def make_harness(tmp_path: Path, *, event_callback=None):
-    plan = make_run_plan(tmp_path)
+def make_harness(tmp_path: Path, *, event_callback=None, clean_image=False):
+    plan = make_run_plan(tmp_path, clean_image=clean_image)
     source = plan.task.source_dir
     (source / "tests").mkdir(parents=True)
     (source / "tests" / "test.sh").write_text("#!/bin/bash\n")
@@ -188,6 +188,8 @@ def make_harness(tmp_path: Path, *, event_callback=None):
     )
     log_dir = plan.paths.logs / "verifier"
     runtime = FakeJudgeRuntime(tmp_path / "snapshots")
+    if clean_image:
+        runtime.snapshot_images[plan.images.work_digest] = {}
     snapshot = FakeJudgeSnapshotBackend(tmp_path / "snapshots", runtime)
     artifacts = FakeArtifactWriter()
     runner = JudgeRunner(
@@ -244,8 +246,11 @@ def test_judge_emits_exec_progress_and_redacted_output(tmp_path):
     assert events[1][1] == "tests running access_token=[REDACTED]\n"
 
 
-def test_successful_judge_lifecycle_and_fixed_security_spec(tmp_path):
-    runner, runtime, snapshot, artifacts, request = make_harness(tmp_path)
+@pytest.mark.parametrize("clean_image", (False, True))
+def test_successful_judge_lifecycle_and_fixed_security_spec(tmp_path, clean_image):
+    runner, runtime, snapshot, artifacts, request = make_harness(
+        tmp_path, clean_image=clean_image
+    )
     tests_dir = request[0].task.source_dir / "tests"
     nested = tests_dir / "nested"
     nested.mkdir()
@@ -282,7 +287,12 @@ def test_successful_judge_lifecycle_and_fixed_security_spec(tmp_path):
 
     spec = runtime.created_specs[0]
     plan, _, log_root = request
-    assert spec.image == snapshot.acquired[0].image_id
+    # The clean hidden Judge starts from the Work image with a writable,
+    # disposable layer; the per-round snapshot is still taken.
+    assert spec.image == (
+        plan.images.work_digest if clean_image else snapshot.acquired[0].image_id
+    )
+    assert spec.read_only_rootfs is False
     assert spec.workdir == PurePosixPath("/workspace")
     assert spec.user == "1001:1002"
     assert spec.environment == ()
@@ -291,12 +301,16 @@ def test_successful_judge_lifecycle_and_fixed_security_spec(tmp_path):
             "FIXED": "yes",
             "NVIDIA_VISIBLE_DEVICES": "GPU-c,GPU-d",
             VERIFIER_EXPECTED_GPU_UUIDS_ENV: "GPU-c,GPU-d",
+            # Always explicit: an ENV in the task's image never decides.
+            "RSI_JUDGE_ISOLATION_FALLBACK": "none",
         }
     ]
     assert spec.gpu_allocation.uuids == ("GPU-c", "GPU-d")
     assert [(mount.target, mount.read_only) for mount in spec.mounts] == [
         (PurePosixPath("/logs/verifier"), False),
         (PurePosixPath("/logs/agent"), True),
+        (PurePosixPath("/opt/rsi-isolate"), True),
+        (PurePosixPath("/usr/local/bin/rsi-isolate"), True),
     ]
     assert spec.mounts[1].source == (
         plan.paths.logs
@@ -335,11 +349,14 @@ def test_successful_judge_lifecycle_and_fixed_security_spec(tmp_path):
     )
 
 
+@pytest.mark.parametrize("clean_image", (False, True))
 def test_phase_gpu_judge_uses_exact_judge_allocation_and_expected_uuid_env(
-    tmp_path,
+    tmp_path, clean_image
 ) -> None:
     """Using the Work allocation here would expose the wrong physical devices."""
-    runner, runtime, _snapshot, _artifacts, request = make_harness(tmp_path)
+    runner, runtime, _snapshot, _artifacts, request = make_harness(
+        tmp_path, clean_image=clean_image
+    )
 
     report = evaluate(runner, request)
 
@@ -350,12 +367,15 @@ def test_phase_gpu_judge_uses_exact_judge_allocation_and_expected_uuid_env(
     )
 
 
+@pytest.mark.parametrize("clean_image", (False, True))
 @pytest.mark.parametrize("cpu_work", (False, True))
 def test_judge_gpu_freeze_only_omits_devices_and_expected_uuid_env(
-    tmp_path, cpu_work
+    tmp_path, cpu_work, clean_image
 ) -> None:
     """A zero-GPU Judge must not inherit Work devices through snapshot mode."""
-    runner, runtime, _snapshot, _artifacts, request = make_harness(tmp_path)
+    runner, runtime, _snapshot, _artifacts, request = make_harness(
+        tmp_path, clean_image=clean_image
+    )
     plan, work, log_dir = request
     plan = plan.model_copy(
         update={
@@ -954,6 +974,7 @@ def test_verifier_templates_resolve_from_runtime_only_source_before_create(
         "LITERAL": "visible",
         "NVIDIA_VISIBLE_DEVICES": "GPU-c,GPU-d",
         "RSI_HARNESS_EXPECTED_GPU_UUIDS": "GPU-c,GPU-d",
+        "RSI_JUDGE_ISOLATION_FALLBACK": "none",
         "TOKEN": "runtime-verifier-secret",
     }
     assert "runtime-verifier-secret" not in report.model_dump_json()
@@ -2715,8 +2736,13 @@ def _trajectory_reader(runtime, seen: list[dict[str, str]]):
     runtime.exec = exec_reading_trajectory
 
 
-def test_each_judge_round_reads_the_trajectory_frozen_at_its_submission(tmp_path):
-    runner, runtime, _snapshot, _artifacts, request = make_harness(tmp_path)
+@pytest.mark.parametrize("clean_image", (False, True))
+def test_each_judge_round_reads_the_trajectory_frozen_at_its_submission(
+    tmp_path, clean_image
+):
+    runner, runtime, _snapshot, _artifacts, request = make_harness(
+        tmp_path, clean_image=clean_image
+    )
     plan = request[0]
     run_root = plan.paths.logs / "runs" / "run-1" / plan.task.task_id
     (run_root / "agent_prompt.md").write_text("Solve it.\n")

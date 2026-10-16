@@ -47,7 +47,7 @@ until execution validation with a real Agent passes.
 - Resources: 4 CPUs, 8 GiB shared by Work and the Judge, no GPUs; Agent
   timeout 6 hours; Verifier timeout 3600 s (2 × 60 + 1200 + 1800 = 3120 s plus
   slack).
-- Judge library: `science_judge.__version__` `"2"`.
+- Judge library: `science_judge.__version__` `"3"`.
 
 Outputs per round in `/logs/verifier`: `bundle.json`, `integrity.json`,
 `review.json`, `reward.json` (`{"reward": <passes>}`), or `review-error.json`

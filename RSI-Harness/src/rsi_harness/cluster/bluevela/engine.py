@@ -20,6 +20,7 @@ from rsi_harness.cluster.bluevela.allocation import (
     parse_lsb_mcpu_hosts,
     probe_and_partition,
 )
+from rsi_harness.cluster.bluevela.judge_llm import ClusterJudgeLLM
 from rsi_harness.cluster.bluevela.resources import MultiNodeResources
 from rsi_harness.cluster.config import ClusterProfile, SlurmSchedulerProfile
 from rsi_harness.cluster.slurm.allocation import discover_slurm_inventory
@@ -53,6 +54,8 @@ class EnginePayload(PersistedModel):
     agent_binary: Path | None = None
     agent_launcher: str = Field(default="codex", pattern=r"[A-Za-z0-9][A-Za-z0-9._+-]*")
     agent_companions: tuple[Path, ...] = ()
+    # A judge_model task's Judge LLM, as the submit host checked it.
+    judge_llm: ClusterJudgeLLM | None = None
 
     @model_validator(mode="after")
     def _exactly_one_resource_branch(self) -> Self:

@@ -163,11 +163,11 @@ The runtime behavior is:
 - Judge cannot change Work files or the next Judge round.
 - Large files under the WORKDIR stay out of repeated rootfs image snapshots.
 
-Changes outside the WORKDIR are handled separately. RSI Harness captures the
-modified Work root filesystem so Judge still sees packages, system libraries,
-PATH commands, and other rootfs changes made by the Agent. Task-authored Docker
-volumes and external services are not part of that snapshot model and are
-therefore rejected.
+The Judge starts from the clean image Work started from, so changes the Agent
+made outside the WORKDIR do not reach it. A task that sets
+[`clean_image = false`](task-toml.md#clean_image) gets a snapshot of the whole
+Work root filesystem instead. Task-authored Docker volumes and external
+services are not part of either and are therefore rejected.
 
 The non-root WORKDIR must not overlap Engine-owned targets `/tests`,
 `/logs/verifier`, `/logs/agent`, or `/run/rsi-harness/staging`. It cannot be
@@ -336,8 +336,9 @@ Important details:
 - Do not bake runtime credentials into image layers.
 
 RSI Harness derives an Agent-capable Work image from this clean Base by adding
-the selected Agent tooling and submission client. Judge snapshots are derived
-from the task/Work state; there is no separately authored Judge Dockerfile.
+the selected Agent tooling and submission client. Judges start from this Work
+image or from a snapshot of Work; there is no separately authored Judge
+Dockerfile.
 
 ## Unsupported Compose fields
 

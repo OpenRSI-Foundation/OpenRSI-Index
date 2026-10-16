@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -22,9 +23,15 @@ from rsi_harness.judge_agent import (
     JUDGE_AGENT_LAUNCHER,
     JUDGE_AGENT_LAUNCHER_TARGET,
     JUDGE_AGENT_TMPFS,
+    JUDGE_CODEX_TARGET,
+    JUDGE_ISOLATE_CODE_TARGET,
+    JUDGE_ISOLATE_LAUNCHER,
+    JUDGE_ISOLATE_LAUNCHER_TARGET,
     install_judge_agent,
+    install_judge_isolate,
 )
 from rsi_harness.models import (
+    JUDGE_ISOLATION_FALLBACK_ENV,
     JUDGE_TRAJECTORY_ROOT,
     VERIFIER_OUTPUT_TRUNCATION_MARKER,
     AgentRunResult,
@@ -59,8 +66,17 @@ from rsi_harness.runtime.gpu import (
     NVIDIA_VISIBLE_DEVICES_ENV,
     nvidia_visible_devices_value,
 )
-from rsi_harness.runtime.judge_model_access import JudgeModelAccess
-from rsi_harness.runtime.local_auth import AgentAuthMaterial
+from rsi_harness.runtime.judge_llm import judge_codex_login
+from rsi_harness.runtime.judge_login_refresh import renew_operator_login
+from rsi_harness.runtime.judge_model_access import (
+    JudgeModelAccess,
+    judge_needs_rsi_agent,
+)
+from rsi_harness.runtime.local_auth import (
+    AgentAuthMaterial,
+    current_login,
+    login_kept_reason,
+)
 from rsi_harness.runtime.mount_topology import validate_split_workdir_target
 from rsi_harness.runtime.network import (
     NetworkPolicyEnforcer,
@@ -81,6 +97,9 @@ from rsi_harness.task.digest import require_tests_digest
 VERIFIER_COMMAND = ("/bin/bash", "/tests/test.sh")
 VERIFIER_EXPECTED_GPU_UUIDS_ENV = "RSI_HARNESS_EXPECTED_GPU_UUIDS"
 OUTPUT_TRUNCATION_MARKER = VERIFIER_OUTPUT_TRUNCATION_MARKER
+# From rsi-agent's launch spec reaching the Judge to its verifier's start
+# (the tests' injection): rsi-agent's round end is this much past the timeout.
+JUDGE_ROUND_END_SLACK_SECONDS = 60
 _ROOTFS_IMAGE_ID = re.compile(r"sha256:[0-9a-f]{64}\Z")
 _JUDGE_SNAPSHOT_REF = re.compile(r"rsi-harness-rootfs:judge-round-[0-9a-f]{64}\Z")
 
@@ -92,11 +111,22 @@ class _SubmissionRejected(Exception):
 def require_model_access(
     plan: RunPlan, model_access: JudgeModelAccess | None
 ) -> JudgeModelAccess | None:
-    """Model access exists exactly when the task declared it."""
-    if plan.task.verifier.model_access and model_access is None:
+    """Model access exists exactly when the task declared it.
+
+    That is ``model_access`` (rsi-agent exec), ``judge_model`` (rsi-agent
+    llm), or both.
+    """
+    declared = judge_needs_rsi_agent(plan.task.verifier)
+    if declared and model_access is None:
         raise SetupError("task declares Judge model access but none was resolved")
-    if model_access is not None and not plan.task.verifier.model_access:
+    if model_access is not None and not declared:
         raise SetupError("Judge model access was supplied for a task without it")
+    if (
+        model_access is not None
+        and model_access.needs_codex_cli
+        and model_access.codex_cli is None
+    ):
+        raise SetupError("the Judge LLM needs the Codex CLI, which was not prepared")
     return model_access
 
 
@@ -109,25 +139,40 @@ PUBLIC_JUDGE_TMP = ContainerTmpfs(
 )
 
 
-def public_judge_image(images: ImagePlan) -> str:
-    """The clean Work image a public Judge runs from, never Work's rootfs.
-
-    Work reads the public Judge procedure, so the Agent must not be able to
-    alter the programs that run it. The Judge therefore starts from the
-    immutable image Work started from (the task image plus the Agent CLI)
-    and reads only the Work WORKDIR snapshot, which requires a split WORKDIR.
-    """
+def clean_judge_unavailable(images: ImagePlan) -> str | None:
+    """Why no Judge can start from the clean Work image, or None if it can."""
     if images.rootfs_snapshot_mode is not RootfsSnapshotMode.SPLIT_WORKDIR:
-        raise SetupError(
-            "public visibility requires a task WORKDIR other than /: its Judge "
-            "runs from the clean task image and reads only the Work WORKDIR"
-        )
+        return "the task WORKDIR is /"
     image = images.work_digest
+    # Defensive: the Docker image builder always records the Work image ID.
     if image is None or _ROOTFS_IMAGE_ID.fullmatch(image) is None:
-        raise SetupError(
-            "public visibility requires an immutable Work image digest for its Judge"
-        )
-    return image
+        return "the Work image has no immutable digest"
+    return None
+
+
+def clean_judge_image(images: ImagePlan) -> str:
+    """The clean Work image a public or clean_image Judge runs from.
+
+    The Judge starts from the immutable image Work started from (the task
+    image plus the Agent CLI), never Work's rootfs, so the Agent cannot alter
+    the programs that judge it, and reads only the Work WORKDIR snapshot.
+    """
+    reason = clean_judge_unavailable(images)
+    if reason is not None:
+        raise SetupError(f"a clean-image Judge is unavailable: {reason}")
+    return str(images.work_digest)
+
+
+def judge_uses_clean_image(plan: RunPlan) -> bool:
+    """Whether this run's Judges start from the clean Work image.
+
+    A public Judge always does. A hidden one does when its plan says so: the
+    compiler records clean_image explicitly, the Docker run plan clears it
+    when the clean image is unavailable, and a plan persisted before the field
+    loads as False, the Work-snapshot Judge it started with.
+    """
+    verifier = plan.task.verifier
+    return verifier.visibility == "public" or verifier.clean_image
 
 
 def _auth_owner(user: str | None) -> str | None:
@@ -145,6 +190,10 @@ class WorkRuntime(Protocol):
     ) -> None: ...
 
     def inspect_quiescence(self, container: ContainerRef) -> WorkQuiescence | None: ...
+
+    def read_agent_auth(
+        self, container: ContainerRef, material: AgentAuthMaterial
+    ) -> Mapping[PurePosixPath, bytes]: ...
 
 
 class JudgeRoundRuntime(Protocol):
@@ -683,6 +732,13 @@ class JudgeRunner:
                     "RunPlan verifier command is not the fixed Harbor test command"
                 )
             model_access = require_model_access(plan, self._model_access)
+            if model_access is not None and model_access.work_login is not None:
+                # Before Work pauses: Docker cannot read a paused container.
+                model_access = self._renew_work_login(request, model_access)
+            if model_access is not None and model_access.operator_login is not None:
+                model_access = self._renew_operator_login(
+                    request, model_access, plan.task.verifier.timeout_seconds
+                )
             if model_access is not None:
                 # Judge output becomes Agent feedback and run logs: the
                 # credentials never appear in either.
@@ -731,6 +787,8 @@ class JudgeRunner:
             trajectory = capture_round_trajectory(
                 self._run_root(plan), request.round_id, owner=_sudo_invoking_owner()
             )
+            # A clean-image Judge does not start from this commit, but skipping
+            # it would change the snapshot lease and recovery protocol.
             planned_snapshot_ref = self._snapshot_backend.planned_ref(
                 run_id=self._run_id,
                 task_id=plan.task.task_id,
@@ -801,6 +859,10 @@ class JudgeRunner:
                     self._run_root(plan), owner=_sudo_invoking_owner()
                 )
             )
+            # Every Judge: rsi-isolate, for code it must not trust.
+            judge_isolate = install_judge_isolate(
+                self._run_root(plan), owner=_sudo_invoking_owner()
+            )
             judge_round = self._judge_runtime_factory(plan, request.round_id)
             judge_spec, verifier_environment = self._judge_spec(
                 request,
@@ -811,6 +873,7 @@ class JudgeRunner:
                 trajectory=trajectory,
                 model_access=model_access,
                 judge_agent=judge_agent,
+                judge_isolate=judge_isolate,
             )
             judge = judge_round.create(judge_spec)
             self._observe(
@@ -824,7 +887,15 @@ class JudgeRunner:
                 if model_access.auth is not None:
                     judge_round.inject_agent_auth(judge, model_access.auth, owner=owner)
                 # rsi-agent alone reads the Agent's credentials and launch spec.
-                judge_round.inject_judge_agent(judge, model_access.launch, owner=owner)
+                # The verifier's timeout starts just after this.
+                ends_at = (
+                    time.time()
+                    + plan.task.verifier.timeout_seconds
+                    + JUDGE_ROUND_END_SLACK_SECONDS
+                )
+                judge_round.inject_judge_agent(
+                    judge, model_access.round_launch(ends_at), owner=owner
+                )
             if plan.task.verifier.visibility == "public":
                 # Work saw these tests read-only: run exactly the same bytes.
                 require_tests_digest(
@@ -1286,6 +1357,82 @@ class JudgeRunner:
             )
         return errors
 
+    @property
+    def model_access(self) -> JudgeModelAccess | None:
+        """The model access the next round starts from (its login renewed)."""
+        return self._model_access
+
+    def _renew_work_login(
+        self, request: EvaluationRequest, access: JudgeModelAccess
+    ) -> JudgeModelAccess:
+        """This round's Judge gets the login Work's Agent keeps refreshing.
+
+        The Work Agent can write those files, so a missing, malformed or
+        foreign login is never used: the round keeps the last good copy
+        (it never refreshes, so it only stops working once it expires) and
+        a ``judge_login_kept`` event says why. A broken login is no reason to
+        withhold the Work Agent's submission from its Judge, whatever it
+        breaks: any failure keeps the last good copy.
+        """
+        assert access.work_login is not None
+        try:
+            files = self._work_runtime.read_agent_auth(
+                request.work_container, access.work_login
+            )
+            renewed = access.with_work_login(current_login(access.work_login, files))
+        except Exception as error:  # Agent-written data: never fatal
+            self._event_callback(
+                "judge_login_kept",
+                {
+                    "round_id": request.round_id,
+                    "reason": _redact_error_text(
+                        login_kept_reason(error), set(access.secret_values)
+                    ),
+                },
+            )
+            return access
+        self._model_access = renewed
+        return renewed
+
+    def _renew_operator_login(
+        self, request: EvaluationRequest, access: JudgeModelAccess, round_seconds
+    ) -> JudgeModelAccess:
+        """This round's Judge LLM gets the operator's current Codex login.
+
+        Refreshed on the host first, by the pinned Codex CLI, when its access
+        token would not outlive the round. Whatever fails, the round keeps
+        the Judge's current copy and a ``judge_login_refresh_failed`` event
+        says why: calls the copy would not outlive are refused (exit 3).
+        """
+        assert access.operator_login is not None
+        try:
+            renewal = renew_operator_login(
+                access.operator_login,
+                codex_cli=access.codex_cli,
+                round_seconds=float(round_seconds),
+            )
+            renewed = access
+            if (
+                renewal.content is not None
+                and judge_codex_login(renewal.content)
+                != json.loads(access.launch)["llm"]["auth_json"]
+            ):
+                renewed = access.with_operator_login(renewal.content)
+            warning = renewal.warning
+        except Exception as error:  # never fatal: the copy works until it expires
+            renewed = access
+            warning = f"the login could not be used ({type(error).__name__})"
+        if warning is not None:
+            self._event_callback(
+                "judge_login_refresh_failed",
+                {
+                    "round_id": request.round_id,
+                    "reason": _redact_error_text(warning, set(renewed.secret_values)),
+                },
+            )
+        self._model_access = renewed
+        return renewed
+
     def _observe(self, name: str, **values: object) -> None:
         if self._lifecycle_observer is not None:
             self._lifecycle_observer.resource_event(name, **values)
@@ -1341,6 +1488,7 @@ class JudgeRunner:
         trajectory: Path | None = None,
         model_access: JudgeModelAccess | None = None,
         judge_agent: Path | None = None,
+        judge_isolate: Path | None = None,
     ) -> tuple[ContainerSpec, dict[str, str]]:
         plan = request.run_plan
         try:
@@ -1396,6 +1544,30 @@ class JudgeRunner:
                     read_only=True,
                 ),
             )
+            if model_access.codex_cli is not None:
+                # The Judge LLM's Codex CLI: the Harness's pinned copy,
+                # read-only, never part of the Work image.
+                agent_mounts += (
+                    ContainerMount(
+                        source=model_access.codex_cli,
+                        target=JUDGE_CODEX_TARGET,
+                        read_only=True,
+                    ),
+                )
+        isolate_mounts: tuple[ContainerMount, ...] = ()
+        if judge_isolate is not None:
+            isolate_mounts = (
+                ContainerMount(
+                    source=judge_isolate,
+                    target=JUDGE_ISOLATE_CODE_TARGET,
+                    read_only=True,
+                ),
+                ContainerMount(
+                    source=judge_isolate / JUDGE_ISOLATE_LAUNCHER,
+                    target=JUDGE_ISOLATE_LAUNCHER_TARGET,
+                    read_only=True,
+                ),
+            )
         sandbox_mounts = ()
         if sandbox_endpoint is not None:
             environment.update(sandbox_endpoint.environment)
@@ -1403,6 +1575,9 @@ class JudgeRunner:
             if token:
                 error_secret_values.add(token)
             sandbox_mounts = (sandbox_endpoint.mount,)
+        # Docker has no operator fallback. Set it explicitly: an ENV in the
+        # task's image must not choose how a science Judge library isolates.
+        environment[JUDGE_ISOLATION_FALLBACK_ENV] = "none"
         trajectory_mounts = ()
         if trajectory is not None:
             trajectory_mounts = (
@@ -1426,14 +1601,16 @@ class JudgeRunner:
             else "0755"
         )
         image = lease.image_id
-        if public:
+        if judge_uses_clean_image(plan):
             try:
-                image = public_judge_image(plan.images)
+                image = clean_judge_image(plan.images)
             except SetupError as error:
                 raise InfrastructureError(str(error)) from None
         return (
             ContainerSpec(
                 image=image,
+                # Public only: Work read this procedure. A hidden clean Judge
+                # gets a writable container layer, discarded with it.
                 read_only_rootfs=public,
                 command=("/bin/sleep", "infinity"),
                 workdir=plan.workdir,
@@ -1466,6 +1643,7 @@ class JudgeRunner:
                 )
                 + trajectory_mounts
                 + agent_mounts
+                + isolate_mounts
                 + sandbox_mounts,
                 volume_mounts=(
                     (
@@ -1647,5 +1825,7 @@ __all__ = [
     "OUTPUT_TRUNCATION_MARKER",
     "VERIFIER_COMMAND",
     "VERIFIER_EXPECTED_GPU_UUIDS_ENV",
-    "public_judge_image",
+    "clean_judge_image",
+    "clean_judge_unavailable",
+    "judge_uses_clean_image",
 ]
