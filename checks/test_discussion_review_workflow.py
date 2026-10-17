@@ -15,7 +15,8 @@ SETUP_UV_SHA = "1c37ad07a6a961277cf70c0d37d6f313000f5884"
 AUTOMATIC_DISPATCH_GUARD = (
     "steps.review.outputs.decision == 'Pass' && "
     "steps.publish-review.outcome == 'success' && "
-    "steps.publish-review.outputs.review_comment_id != ''"
+    "steps.publish-review.outputs.review_comment_id != '' && "
+    "steps.publication.outputs.repository_url == ''"
 )
 
 
@@ -415,6 +416,7 @@ def test_review_reactions_and_comments_use_just_in_time_scoped_app_tokens():
         "${{ steps.comment-token.outputs.app-slug }}",
         "${{ steps.comment-token.outputs.app-slug }}",
         "${{ steps.comment-token.outputs.app-slug }}",
+        "${{ steps.comment-token.outputs.app-slug }}",
         "${{ steps.queue-token.outputs.app-slug }}",
         "${{ steps.failure-token.outputs.app-slug }}",
     ]
@@ -540,6 +542,49 @@ def test_pass_publication_starts_building_without_an_initial_task_instruction():
     )
     assert "Minor revisions may still be needed in some cases." in pass_copy
     assert "/task" not in pass_copy
+
+
+@pytest.mark.parametrize("decision,published", [("Pass", False), ("Pass", True), ("Reject", False)])
+def test_review_reply_selects_published_guidance_without_changing_review(
+    tmp_path, decision, published
+):
+    python = tmp_path / "python3"
+    python.write_text(
+        f"#!{sys.executable}\n"
+        "import json, pathlib, sys\n"
+        "body = next(arg[5:] for arg in sys.argv if arg.startswith('body='))\n"
+        "pathlib.Path('body.md').write_text(body)\n"
+        "print(json.dumps({'data': {'addDiscussionComment': {'comment': {'id': 'DC_review'}}}}))\n"
+    )
+    python.chmod(0o755)
+    (tmp_path / "review_text.md").write_text("Complete rubric feedback")
+    result = subprocess.run(
+        ["bash", "-e", "-c", step_named("Format and post or update comment")["run"]],
+        cwd=tmp_path, capture_output=True, text=True,
+        env={
+            **os.environ, "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+            "GITHUB_OUTPUT": str(tmp_path / "output"), "REUSED_REVIEW_ID": "",
+            "PROGRESS_COMMENT_ID": "", "DECISION": decision,
+            "DISCUSSION_ID": "D_one", "REVIEW_MARKER": "canonical-marker",
+            "PUBLISHED_NOTICE": "Make revisions there, or submit a new Discussion." if published else "",
+        },
+    )
+    assert result.returncode == 0, result.stderr
+    body = (tmp_path / "body.md").read_text()
+    assert "Complete rubric feedback" in body and "canonical-marker" in body
+    assert ("submit a new Discussion" in body) == published
+    assert ("Task building starts automatically" in body) == (decision == "Pass" and not published)
+    assert (tmp_path / "output").read_text() == "review_comment_id=DC_review\n"
+
+
+def test_publication_lookup_runs_after_review_before_reply_and_dispatch():
+    steps = parsed_steps()
+    lookup = step_named("Check for an already published task")
+    publish = step_named("Format and post or update comment")
+    assert steps.index(step_named("Run rubric review")) < steps.index(lookup) < steps.index(publish)
+    assert lookup["if"] == "steps.reuse.outputs.current == 'true' && steps.review.outputs.decision == 'Pass'"
+    assert lookup["env"]["REUSED_REVIEW_ID"] == "${{ steps.reuse.outputs.review_comment_id }}"
+    assert publish["env"]["PUBLISHED_NOTICE"] == "${{ steps.publication.outputs.notice }}"
 
 
 def test_pass_dispatch_uses_separate_conditional_private_write_token():

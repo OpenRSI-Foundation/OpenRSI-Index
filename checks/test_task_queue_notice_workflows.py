@@ -60,7 +60,8 @@ def test_queue_notice_precedes_dispatch_and_requires_an_authorized_task(
         authorization = (
             "steps.review.outputs.decision == 'Pass' && "
             "steps.publish-review.outcome == 'success' && "
-            "steps.publish-review.outputs.review_comment_id != ''"
+            "steps.publish-review.outputs.review_comment_id != '' && "
+            "steps.publication.outputs.repository_url == ''"
         )
         assert queue_token["if"] == notice["if"] == authorization
         dispatch_token = next(

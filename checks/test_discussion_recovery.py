@@ -35,10 +35,11 @@ class Clock:
 
 
 class CommentServer:
-    def __init__(self, *, lose_response=False):
+    def __init__(self, *, lose_response=False, bot_login="dispatcher[bot]"):
         self.comments = []
         self.creates = 0
         self.lose_response = lose_response
+        self.bot_login = bot_login
 
     def __call__(self, args):
         fields = dict(
@@ -53,7 +54,7 @@ class CommentServer:
                 "id": f"DC_{self.creates}",
                 "url": "https://github.com/discussion",
                 "body": fields["body"],
-                "author": {"login": "dispatcher[bot]"},
+                "author": {"login": self.bot_login, "__typename": "Bot"},
                 "createdAt": "2026-09-13T10:00:00Z",
                 "updatedAt": "2026-09-13T10:00:00Z",
             }
@@ -214,15 +215,16 @@ def test_foreign_bot_cannot_suppress_our_notice(recovery):
     assert server.creates == 2
 
 
+@pytest.mark.parametrize("bot_login", ["dispatcher", "dispatcher[bot]"])
 def test_completed_review_reuse_requires_current_hash_id_bot_and_completed_status(
-    recovery,
+    recovery, bot_login,
 ):
     marker = render_review_marker(
         "Pass", canonical_proposal_hash("Title", "Proposal"), "D_one"
     )
     comment = {
         "id": "DC_review",
-        "author": {"login": "dispatcher[bot]"},
+        "author": {"login": bot_login, "__typename": "Bot"},
         "body": "<!-- rubric-review-status:completed -->\n" + marker,
         "updatedAt": "2026-09-13T12:00:00Z",
         "createdAt": "2026-09-13T11:00:00Z",
@@ -292,6 +294,67 @@ def test_dispatch_observes_accepted_run_after_lost_response_without_reposting(re
     assert len(posts) == 1
     assert len(observations) == 3
     assert clock.waits == [1]
+
+
+@pytest.mark.parametrize(
+    "author,author_type,node,kind,owner,expected",
+    [
+        ("dispatcher[bot]", "Bot", "D_one", "publication", "OpenRSI-Foundation", True),
+        ("dispatcher", "Bot", "D_one", "publication", "RSI-Index", True),
+        ("dispatcher", "User", "D_one", "publication", "OpenRSI-Foundation", False),
+        ("contributor", "User", "D_one", "publication", "OpenRSI-Foundation", False),
+        ("dispatcher[bot]", "Bot", "D_other", "publication", "OpenRSI-Foundation", False),
+        ("dispatcher[bot]", "Bot", "D_one", "progress", "OpenRSI-Foundation", False),
+    ],
+)
+def test_published_repository_uses_bot_publication_for_this_discussion(
+    recovery, author, author_type, node, kind, owner, expected
+):
+    comment = {
+        "author": {"login": author, "__typename": author_type},
+        "body": f"The task repository is ready.\n\nhttps://github.com/{owner}/task-d182\n\n"
+        f"<!-- rsi-task-bot:discussion={node};kind={kind};version=1;trigger=DC_one -->",
+    }
+    assert recovery.find_published_repository(
+        [comment], "D_one", "dispatcher"
+    ) == ("https://github.com/OpenRSI-Foundation/task-d182" if expected else "")
+
+
+@pytest.mark.parametrize("published,reused", [(False, False), (True, False), (True, True)])
+@pytest.mark.parametrize("bot_login", ["dispatcher", "dispatcher[bot]"])
+def test_publication_lookup_preserves_history_and_only_notifies_reused_reviews(
+    recovery, tmp_path, monkeypatch, published, reused, bot_login
+):
+    server = CommentServer(bot_login=bot_login)
+    if published:
+        server.comments.append({
+            "id": "DC_publication", "author": {"login": "dispatcher[bot]"},
+            "body": "The task repository is ready.\n\n"
+            "https://github.com/OpenRSI-Foundation/task-d182\n\n"
+            "<!-- rsi-task-bot:discussion=D_one;kind=publication;version=1 -->",
+        })
+    original = list(server.comments)
+    client = recovery.GitHubClient(call=server)
+    output = tmp_path / "output"
+    for name, value in {
+        "DISCUSSION_ID": "D_one", "BOT_LOGIN": "dispatcher",
+        "REUSED_REVIEW_ID": "DC_review" if reused else "",
+        "GITHUB_RUN_ID": "123", "GITHUB_OUTPUT": str(output),
+    }.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(recovery, "GitHubClient", lambda: client)
+    # A retried lookup must not duplicate its notice or edit historical reviews.
+    for _ in range(2):
+        recovery.main(["published-task"])
+    assert server.comments[:len(original)] == original
+    assert server.creates == int(published and reused)
+    if published:
+        assert "repository_url=https://github.com/OpenRSI-Foundation/task-d182" in output.read_text()
+        assert "submit a new Discussion" in output.read_text()
+        if reused:
+            assert "submit a new Discussion" in server.comments[-1]["body"]
+    else:
+        assert output.read_text() == "repository_url=\nnotice=\n" * 2
 
 
 def test_ambiguous_dispatch_without_visible_run_yields_without_duplicate(recovery):
