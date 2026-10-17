@@ -220,6 +220,16 @@ jobs:
           marker=$(python3 checks/proposal_review_marker.py)
           printf 'marker=%s\n' "$marker" >> "$GITHUB_OUTPUT"
 
+      - name: Check for an already published task
+        id: publication
+        if: steps.reuse.outputs.current == 'true' && steps.review.outputs.decision == 'Pass'
+        env:
+          GH_TOKEN: ${{ steps.comment-token.outputs.token }}
+          BOT_LOGIN: ${{ steps.comment-token.outputs.app-slug }}
+          DISCUSSION_ID: ${{ github.event.discussion.node_id }}
+          REUSED_REVIEW_ID: ${{ steps.reuse.outputs.review_comment_id }}
+        run: python3 checks/discussion_recovery.py published-task
+
       - name: Format and post or update comment
         id: publish-review
         if: steps.reuse.outputs.current == 'true'
@@ -231,6 +241,7 @@ jobs:
           PROGRESS_COMMENT_ID: ${{ steps.progress.outputs.comment_id }}
           REVIEW_MARKER: ${{ steps.marker.outputs.marker }}
           DECISION: ${{ steps.review.outputs.decision }}
+          PUBLISHED_NOTICE: ${{ steps.publication.outputs.notice }}
         run: |
           set -euo pipefail
           if [ -n "$REUSED_REVIEW_ID" ]; then
@@ -252,7 +263,11 @@ jobs:
 
           case "$DECISION" in
             "Pass")
-              NEXT_STEP="> 🤖 **PASS — Initial check passed. Task building starts automatically. Minor revisions may still be needed in some cases.**"
+              if [ -n "$PUBLISHED_NOTICE" ]; then
+                NEXT_STEP="> 🤖 **PASS — Initial check passed.** $PUBLISHED_NOTICE"
+              else
+                NEXT_STEP="> 🤖 **PASS — Initial check passed. Task building starts automatically. Minor revisions may still be needed in some cases.**"
+              fi
               ;;
             *)
               NEXT_STEP="> 🤖 This automated recommendation is not eligible for task dispatch. Edit your proposal to trigger a fresh review. Judged against the private task proposal rubric; ask a maintainer if a point is unclear."
@@ -331,7 +346,7 @@ jobs:
       # its building progress before this acknowledgement.
       - name: Create queue Discussion App token
         id: queue-token
-        if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != ''
+        if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != '' && steps.publication.outputs.repository_url == ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
@@ -341,7 +356,7 @@ jobs:
           permission-discussions: write
 
       - name: Post task queue notice
-        if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != ''
+        if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != '' && steps.publication.outputs.repository_url == ''
         env:
           GH_TOKEN: ${{ steps.queue-token.outputs.token }}
           BOT_LOGIN: ${{ steps.queue-token.outputs.app-slug }}
@@ -359,7 +374,7 @@ jobs:
 
       - name: Create private Skills dispatch token
         id: dispatch-token
-        if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != ''
+        if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != '' && steps.publication.outputs.repository_url == ''
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
           client-id: ${{ vars.RSI_DISPATCH_APP_CLIENT_ID }}
@@ -371,7 +386,7 @@ jobs:
 
       - name: Dispatch passed proposal privately
         id: task-dispatch
-        if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != '' && steps.dispatch-token.outcome == 'success'
+        if: steps.review.outputs.decision == 'Pass' && steps.publish-review.outcome == 'success' && steps.publish-review.outputs.review_comment_id != '' && steps.publication.outputs.repository_url == '' && steps.dispatch-token.outcome == 'success'
         env:
           GH_TOKEN: ${{ steps.dispatch-token.outputs.token }}
           REVIEW_COMMENT_NODE_ID: ${{ steps.publish-review.outputs.review_comment_id }}

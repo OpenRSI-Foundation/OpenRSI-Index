@@ -42,7 +42,7 @@ _IDENTIFIER = re.compile(r"[A-Za-z0-9_.:-]{1,200}\Z")
 _OPERATION = re.compile(r"[a-z][a-z0-9_.-]{1,80}\Z")
 _COMMENTS_QUERY = """query($discussionId: ID!, $cursor: String) {
   node(id: $discussionId) { ... on Discussion { id comments(first: 100, after: $cursor) {
-    nodes { id url body author { login } createdAt updatedAt }
+    nodes { id url body author { login __typename } createdAt updatedAt }
     pageInfo { hasNextPage endCursor }
   } } }
 }"""
@@ -167,6 +167,14 @@ def _bot_login(login):
     return login if login.endswith("[bot]") else login + "[bot]"
 
 
+def _is_bot_author(comment, bot_login):
+    author = comment.get("author") or {}
+    login = author.get("login") or ""
+    return login == _bot_login(bot_login) or (
+        author.get("__typename") == "Bot" and _bot_login(login) == _bot_login(bot_login)
+    )
+
+
 def operation_marker(operation, run_id, episode_id):
     if not _OPERATION.fullmatch(operation) or not all(
         _IDENTIFIER.fullmatch(str(value)) for value in (run_id, episode_id)
@@ -191,9 +199,7 @@ def ensure_comment(
 
     def attempt():
         for comment in client.comments(discussion_id):
-            if (comment.get("author") or {}).get("login") == _bot_login(
-                bot_login
-            ) and comment.get("body", "").endswith(marker):
+            if _is_bot_author(comment, bot_login) and comment.get("body", "").endswith(marker):
                 return {"id": comment["id"], "url": comment.get("url", "")}
         return client.graphql(_ADD_COMMENT, discussionId=discussion_id, body=rendered)[
             "addDiscussionComment"
@@ -222,7 +228,7 @@ def owner_lookup(client, login):
 def find_completed_review(comments, title, body, discussion_id, bot_login):
     reviews = []
     for comment in comments:
-        if (comment.get("author") or {}).get("login") != _bot_login(bot_login):
+        if not _is_bot_author(comment, bot_login):
             continue
         text = comment.get("body", "")
         marker = parse_review_marker(text, expected_discussion_node_id=discussion_id)
@@ -245,6 +251,51 @@ def find_completed_review(comments, title, body, discussion_id, bot_login):
     if marker.proposal_sha256 != canonical_proposal_hash(title, body):
         return None
     return {"decision": marker.decision, "review_comment_id": comment_id}
+
+
+def find_published_repository(comments, discussion_id, bot_login):
+    marker = re.compile(
+        rf"<!-- rsi-task-bot:discussion={re.escape(discussion_id)};"
+        r"kind=publication;version=\d+(?:;trigger=[A-Za-z0-9_-]+)? -->\Z"
+    )
+    for comment in reversed(comments):
+        body = comment.get("body", "").strip()
+        if (
+            not _is_bot_author(comment, bot_login)
+            or body.count("<!-- rsi-task-bot:") != 1
+            or marker.search(body) is None
+        ):
+            continue
+        # Publication replies put the repository URL on its own line. Older
+        # replies retain the organization's previous name.
+        match = re.search(
+            r"^https://github\.com/(?:OpenRSI-Foundation|RSI-Index)/"
+            r"([A-Za-z0-9_.-]+)$", body, re.MULTILINE
+        )
+        if match:
+            return "https://github.com/OpenRSI-Foundation/" + match.group(1)
+    return ""
+
+
+def _published_task(client):
+    discussion_id = os.environ["DISCUSSION_ID"]
+    bot_login = os.environ["BOT_LOGIN"]
+    repository_url = find_published_repository(
+        client.comments(discussion_id), discussion_id, bot_login
+    )
+    notice = (
+        f"A task repository already exists for this Discussion: {repository_url}. "
+        "Make revisions there, or submit a new Discussion to start fresh task generation. "
+        "Editing this Discussion does not regenerate the existing task."
+    ) if repository_url else ""
+    if repository_url and os.environ.get("REUSED_REVIEW_ID"):
+        # Keep completed reviews as history; a rerun only adds current guidance.
+        ensure_comment(
+            client, discussion_id, notice, operation="task.published",
+            run_id=os.environ["GITHUB_RUN_ID"],
+            episode_id=os.environ["REUSED_REVIEW_ID"], bot_login=bot_login,
+        )
+    _outputs(repository_url=repository_url, notice=notice)
 
 
 def post_recovery_notice(
@@ -468,7 +519,9 @@ def mark_retryable(error):
 def main(argv=None):
     arguments = sys.argv[1:] if argv is None else argv
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("gh", "owner", "review-reuse", "notice"))
+    parser.add_argument(
+        "command", choices=("gh", "owner", "review-reuse", "published-task", "notice")
+    )
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args(arguments)
     client = GitHubClient()
@@ -482,6 +535,8 @@ def main(argv=None):
         )
     elif args.command == "review-reuse":
         _review_reuse(client)
+    elif args.command == "published-task":
+        _published_task(client)
     else:
         source_run = os.environ["SOURCE_RUN_ID"]
         number = os.environ["DISCUSSION_NUMBER"]
