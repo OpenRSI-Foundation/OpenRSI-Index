@@ -2,9 +2,11 @@
 
 `Task and log publication (CPU only)` runs on pull requests and pushes to
 `main` that touch `rsi-tasks/`, the publication checker, its tests and
-policies, the RSI-Harness sources and lockfile it compiles tasks with, or the
-workflow itself. Run logs are not stored here; they are in the Hugging Face
-dataset (see [Logs on Hugging Face](#logs-on-hugging-face)), where the log rules
+policies, or the workflow itself. A Harness change instead runs
+`harness-publication-checks.yml`, which compiles every published task and runs
+the checker's tests with the proposed Harness. Run logs are not stored here;
+they are in the Hugging Face dataset (see
+[Logs on Hugging Face](#logs-on-hugging-face)), where the log rules
 below apply with paths reported as `rsi-logs/<path>`. Only affected task
 packages are checked; a run with no package change passes with “not applicable”. A manual run
 (`workflow_dispatch`) audits every published package (`--full`), and so does a
@@ -182,6 +184,7 @@ Hub pull requests are not checked automatically. Before merging one, run
 
 `hf-logs-publication-checks.yml` audits the whole dataset whenever the checker,
 its policies, `publish_logs.py` or `rsi-tasks/` change, and can be run manually.
+A change only to `rsi-tasks/` that adds, removes or renames no task skips it.
 It uses the checker's Logs mode (`--mount rsi-logs --task-repo <Index checkout>
 --task-ref <ref>`), which differs from the checks here in three ways:
 compressed files and chunk parts are rejected, a file left as an undownloaded

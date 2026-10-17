@@ -143,6 +143,15 @@ def tracked_files(repo: Path, ref: str) -> set[str]:
     ) - {""}
 
 
+def task_roots(paths) -> set[str]:
+    """Task packages: every directory under rsi-tasks/ that holds a task.toml."""
+    return {
+        str(PurePosixPath(p).parent)
+        for p in paths
+        if p.startswith("rsi-tasks/") and p.endswith("/task.toml")
+    }
+
+
 def task_root(path: str, roots: set[str]) -> str | None:
     return next(
         (r for r in sorted(roots, key=len, reverse=True) if path.startswith(r + "/")),
@@ -1100,11 +1109,7 @@ def check(
         )
     else:
         task_files, infrastructure = files | old_files, set()
-    roots = {
-        str(PurePosixPath(p).parent)
-        for p in task_files
-        if p.startswith("rsi-tasks/") and p.endswith("/task.toml")
-    }
+    roots = task_roots(task_files)
     tasks = {r for p in changed if (r := task_root(p, roots))}
     logs = {r for p in changed if (r := log_root(p))}
     docs = set()
