@@ -217,7 +217,9 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
   leaving ambiguous or evaluator/environment failures as infrastructure.
 - The contributor must give a reasonable explanation for why useful improvement
   or discovery space exists and why a meaningful gain should be distinguishable
-  from ordinary metric noise.
+  from ordinary metric noise. For a bounded metric, the proposal records the
+  expected baseline, which must leave at least 20% of the metric's ceiling as
+  headroom.
 - At proposal stage, a technically plausible contributor justification is
   sufficient. Do not demand measured variance, repeated baseline runs,
   confidence intervals, p-values, fixed repeat counts, or a finalized minimum
@@ -247,8 +249,8 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
 - The proposal must declare its evaluation mode. Prefer direct evaluation when
   a fixed evaluator can answer the scientific question by scoring the submitted
   model, checkpoint, or other artifact.
-- The reward must not depend on the run's Agent or the LLM driving it; the
-  Judge never calls the Agent.
+- The Judge never calls the run's Agent or its model endpoint; a fixed scoring
+  service declared in the Fixed evaluation protocol is allowed.
 - Follow the contributor's scientifically coherent choice of evaluation-time
   retraining under a fixed protocol when the contributor explains why direct
   evaluation cannot answer the scientific question. In that mode, require a
