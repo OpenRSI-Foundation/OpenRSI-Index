@@ -5,9 +5,10 @@ name: Logs repository audit
 # root must belong to a task, manifests must match, uploads must be raw files.
 # It runs when something that can change that result changes here: the checker,
 # its policies, the upload tool, the task list (a removed or renamed task leaves
-# orphaned logs) or this workflow. Logs uploads themselves are checked by
-# checks/publish_logs.py before upload and, for Hub pull requests, by
-# `publish_logs.py --check-pr N`.
+# orphaned logs) or this workflow. A push or pull request that changes only
+# task files and keeps the task list skips the audit (checks/logs_audit_scope.py).
+# Logs uploads themselves are checked by checks/publish_logs.py before upload
+# and, for Hub pull requests, by `publish_logs.py --check-pr N`.
 on:
   push:
     branches: [main]
@@ -15,6 +16,7 @@ on:
       - checks/check_publication.py
       - checks/publication-*.toml
       - checks/publish_logs.py
+      - checks/logs_audit_scope.py
       - rsi-tasks/**
       - .github/workflows/hf-logs-publication-checks.yml
   pull_request:
@@ -22,6 +24,7 @@ on:
       - checks/check_publication.py
       - checks/publication-*.toml
       - checks/publish_logs.py
+      - checks/logs_audit_scope.py
       - rsi-tasks/**
       - .github/workflows/hf-logs-publication-checks.yml
   workflow_dispatch:
@@ -59,7 +62,9 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           path: index
           # Only trees are read (git ls-tree rsi-tasks); no task files are needed.
+          # History locates the base whose task list the head is compared with.
           filter: blob:none
+          fetch-depth: 0
           sparse-checkout: checks
           persist-credentials: false
       - name: Checkout trusted checker and policies
@@ -69,7 +74,26 @@ jobs:
           path: trusted
           sparse-checkout: checks
           persist-credentials: false
+      - name: Skip the audit when the task list cannot change
+        id: scope
+        env:
+          BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          scope="$GITHUB_WORKSPACE/trusted/checks/logs_audit_scope.py"
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "audit=true" >> "$GITHUB_OUTPUT"
+          elif [ ! -f "$scope" ]; then
+            echo "::notice::The trusted revision has no checks/logs_audit_scope.py; running the audit."
+            echo "audit=true" >> "$GITHUB_OUTPUT"
+          elif ! python3 -I "$scope" --repo "$GITHUB_WORKSPACE/index" \
+            --base "$BASE_REF" --head "$HEAD_REF" --github-output "$GITHUB_OUTPUT"; then
+            echo "::notice::Could not compare task lists; running the audit."
+            echo "audit=true" >> "$GITHUB_OUTPUT"
+          fi
       - name: Install checksum-pinned secret scanner
+        if: steps.scope.outputs.audit == 'true'
         env:
           SCANNER_DIR: ${{ runner.temp }}/publication-gitleaks
         run: |
@@ -84,6 +108,7 @@ jobs:
           tar -xzf "$SCANNER_DIR/gitleaks.tar.gz" -C "$SCANNER_DIR" gitleaks
       - name: Locate the Logs repository
         id: locate
+        if: steps.scope.outputs.audit == 'true'
         env:
           REVISION: ${{ inputs.revision || 'main' }}
         run: |

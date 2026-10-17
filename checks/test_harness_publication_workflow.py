@@ -13,8 +13,8 @@ def test_publication_check_runs_on_harness_changes_without_private_secrets():
     text = WORKFLOW.read_text()
     workflow = yaml.load(text, Loader=yaml.BaseLoader)
 
-    # Every PR and every push to main that can change its result: the Harness,
-    # this workflow or its test.
+    # Every PR and every push to main that changes the Harness, this workflow
+    # or its test. Task and checker changes have their own workflow.
     watched = [
         "RSI-Harness/**",
         ".github/workflows/harness-publication-checks.yml",
@@ -27,7 +27,10 @@ def test_publication_check_runs_on_harness_changes_without_private_secrets():
     assert workflow["permissions"] == {"contents": "read"}
     assert "secrets." not in text
     assert "RSI-Skills" not in text
-    assert workflow["jobs"]["publication-compatibility"]["runs-on"] == "ubuntu-24.04"
+    for job in workflow["jobs"].values():
+        assert job["runs-on"] == "ubuntu-24.04"
+    assert "persist-credentials: true" not in text
+    assert text.count("persist-credentials: false") == 2
     automation = yaml.load(
         (WORKFLOW.parent / "discussion-automation-checks.yml").read_text(),
         Loader=yaml.BaseLoader,
@@ -100,3 +103,44 @@ def test_real_archive_step_rejects_missing_publication_files(tmp_path, missing):
         assert result.returncode != 0
         assert f"Harness publication requires {missing}" in result.stdout
         assert not (tmp_path / "output").exists()
+
+
+def test_every_published_task_compiles_with_the_proposed_harness():
+    workflow = yaml.load(WORKFLOW.read_text(), Loader=yaml.BaseLoader)
+    job = workflow["jobs"]["published-tasks"]
+    named = {step["name"]: step for step in job["steps"] if "name" in step}
+    install = named["Install Harness compiler dependencies (no task dependencies)"]
+    compile_step = named["Compile every published task without running it"]
+    tests = named["Test publication checker without Docker, GPUs or models"]
+    task_log = yaml.load(
+        (WORKFLOW.parent / "task-log-publication-checks.yml").read_text(), Loader=yaml.BaseLoader
+    )
+    task_log_steps = {
+        step["name"]: step for step in task_log["jobs"]["checker-tests"]["steps"] if "name" in step
+    }
+
+    assert job["timeout-minutes"] == "20"
+    assert job["env"]["CUDA_VISIBLE_DEVICES"] == ""
+    # The checked-out (proposed) Harness, not the base revision's.
+    assert not any("ref" in step.get("with", {}) for step in job["steps"])
+    assert install["working-directory"] == compile_step["working-directory"] == "RSI-Harness"
+    assert install["run"] == "uv sync --frozen --no-dev --python 3.12"
+    run = compile_step["run"]
+    assert run.startswith("set -euo pipefail\n")
+    assert "uv run --frozen --no-dev python -I ../checks/check_publication.py" in run
+    assert '--repo "$GITHUB_WORKSPACE" --full --compile' in run
+    # Compatibility only: no secret scan, no Docker.
+    for forbidden in ("--gitleaks", "docker", "harbor run"):
+        assert forbidden not in run
+    # The publication checker's own tests run against the proposed compiler,
+    # exactly as the task workflow runs them against an unchanged one.
+    for name in (
+        "Install checksum-pinned secret scanner",
+        "Test publication checker without Docker, GPUs or models",
+    ):
+        assert named[name] == task_log_steps[name]
+    assert "test_publication.py" in tests["run"]
+    assert "test_publish_logs.py" in tests["run"]
+    assert tests["env"]["PUBLICATION_REQUIRE_INTEGRATION"] == "1"
+    steps = job["steps"]
+    assert steps.index(install) < steps.index(compile_step) < steps.index(tests)

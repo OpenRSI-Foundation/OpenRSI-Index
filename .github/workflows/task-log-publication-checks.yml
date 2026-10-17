@@ -2,10 +2,12 @@ name: Task and log publication checks
 
 on:
   # Only changes that can affect the result: task content, the checker, its
-  # tests and policies, the Harness it compiles tasks with and runs its tests
-  # in, and this workflow; plus the Logs upload tool, the Logs audit workflow and
-  # the history guard, whose tests run here. Run logs live in the Hugging Face
-  # Logs dataset, and the history guard rejects any PR that adds rsi-logs/.
+  # tests and policies, and this workflow; plus the Logs upload tool, the Logs
+  # audit workflow and the history guard, whose tests run here. A Harness change
+  # leaves this result as is (the base Harness compiles changed tasks), so
+  # harness-publication-checks.yml compiles every task and runs the checker
+  # tests with it instead. Run logs live in the Hugging Face Logs dataset, and
+  # the history guard rejects any PR that adds rsi-logs/.
   # Main has no required status checks, so a path-filtered check never leaves a
   # merge waiting on it.
   pull_request:
@@ -14,9 +16,6 @@ on:
       - checks/check_publication.py
       - checks/test_publication.py
       - checks/publication-*.toml
-      - RSI-Harness/pyproject.toml
-      - RSI-Harness/uv.lock
-      - RSI-Harness/src/**
       - .github/workflows/task-log-publication-checks.yml
       - .github/workflows/hf-logs-publication-checks.yml
       - .github/workflows/history-guard.yml
@@ -29,9 +28,6 @@ on:
       - checks/check_publication.py
       - checks/test_publication.py
       - checks/publication-*.toml
-      - RSI-Harness/pyproject.toml
-      - RSI-Harness/uv.lock
-      - RSI-Harness/src/**
       - .github/workflows/task-log-publication-checks.yml
       - .github/workflows/hf-logs-publication-checks.yml
       - .github/workflows/history-guard.yml

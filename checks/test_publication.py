@@ -2173,14 +2173,13 @@ class WorkflowTests(unittest.TestCase):
 
     def test_triggers_cover_exactly_what_can_change_the_result(self):
         on = self.workflow()[True]
+        # Not the Harness: enforcement compiles with the base Harness, and
+        # harness-publication-checks.yml compiles every task with a new one.
         watched = [
             "rsi-tasks/**",
             "checks/check_publication.py",
             "checks/test_publication.py",
             "checks/publication-*.toml",
-            "RSI-Harness/pyproject.toml",
-            "RSI-Harness/uv.lock",
-            "RSI-Harness/src/**",
             ".github/workflows/task-log-publication-checks.yml",
             ".github/workflows/hf-logs-publication-checks.yml",
             ".github/workflows/history-guard.yml",
@@ -2364,6 +2363,7 @@ class HfLogsAuditWorkflowTests(unittest.TestCase):
         "checks/check_publication.py",
         "checks/publication-*.toml",
         "checks/publish_logs.py",
+        "checks/logs_audit_scope.py",
         "rsi-tasks/**",
         ".github/workflows/hf-logs-publication-checks.yml",
     ]
@@ -2440,7 +2440,10 @@ class HfLogsAuditWorkflowTests(unittest.TestCase):
     def test_scanner_install_matches_the_task_workflow(self):
         task_log = load_workflow(self, WORKFLOW)
         name = "Install checksum-pinned secret scanner"
-        self.assertEqual(self.step(name), named_step(task_log["jobs"]["publication"], name))
+        step = dict(self.step(name))
+        # Skipped with the rest of the audit when the task list cannot change.
+        self.assertEqual(step.pop("if"), "steps.scope.outputs.audit == 'true'")
+        self.assertEqual(step, named_step(task_log["jobs"]["publication"], name))
         self.assertEqual(
             {s["uses"] for s in self.job["steps"] if "uses" in s},
             {named_step(task_log["jobs"]["publication"], "Checkout submitted publication data")["uses"]},
