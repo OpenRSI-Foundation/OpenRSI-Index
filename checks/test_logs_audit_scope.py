@@ -190,6 +190,7 @@ def test_the_gate_runs_the_trusted_script_and_gates_the_audit():
     assert gate["env"] == {
         "BASE_REF": "${{ github.event.pull_request.base.sha || github.event.before }}",
         "HEAD_REF": "${{ github.event.pull_request.head.sha || github.sha }}",
+        "FORCED": "${{ github.event.forced || false }}",
     }
     assert 'scope="$GITHUB_WORKSPACE/trusted/checks/logs_audit_scope.py"' in gate["run"]
     assert '--repo "$GITHUB_WORKSPACE/index"' in gate["run"]
@@ -207,7 +208,7 @@ def test_the_gate_runs_the_trusted_script_and_gates_the_audit():
     assert ".github/workflows/hf-logs-publication-checks.yml" in automation["on"]["pull_request"]["paths"]
 
 
-def run_gate(workspace, event, base, head):
+def run_gate(workspace, event, base, head, forced="false"):
     output = workspace / "output"
     output.write_text("")
     result = subprocess.run(
@@ -215,7 +216,8 @@ def run_gate(workspace, event, base, head):
          _step("Skip the audit when the task list cannot change")["run"]],
         cwd=workspace,
         env={**ENV, "GITHUB_WORKSPACE": str(workspace), "GITHUB_OUTPUT": str(output),
-             "GITHUB_EVENT_NAME": event, "BASE_REF": base, "HEAD_REF": head},
+             "GITHUB_EVENT_NAME": event, "BASE_REF": base, "HEAD_REF": head,
+             "FORCED": forced},
         capture_output=True, text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -247,3 +249,25 @@ def test_the_gate_step(repo):
     stdout, decision = run_gate(workspace, "pull_request", base, readme)
     assert decision == "audit=true"
     assert "Could not compare task lists" in stdout
+
+
+def test_a_force_push_audits(repo):
+    workspace = repo.parent
+    trusted = workspace / "trusted/checks"
+    trusted.mkdir(parents=True)
+    for name in ("logs_audit_scope.py", "check_publication.py"):
+        shutil.copy(HERE / name, trusted / name)
+    fork = git(repo, "rev-parse", "HEAD")
+    # The old tip changed the checker; the force push drops it and edits a README.
+    write(repo, "checks/check_publication.py", "changed\n")
+    old_tip = commit(repo)
+    git(repo, "branch", "kept")
+    git(repo, "reset", "-q", "--hard", fork)
+    write(repo, "rsi-tasks/alpha/README.md", "new\n")
+    new_tip = commit(repo)
+    # The merge-base diff cannot see the dropped change ...
+    assert scope.decide(repo, old_tip, new_tip) == (False, "the task list is unchanged")
+    # ... so the gate audits every force push.
+    stdout, decision = run_gate(workspace, "push", old_tip, new_tip, forced="true")
+    assert decision == "audit=true"
+    assert "Force push" in stdout

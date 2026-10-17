@@ -79,10 +79,15 @@ jobs:
         env:
           BASE_REF: ${{ github.event.pull_request.base.sha || github.event.before }}
           HEAD_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+          FORCED: ${{ github.event.forced || false }}
         run: |
           set -euo pipefail
           scope="$GITHUB_WORKSPACE/trusted/checks/logs_audit_scope.py"
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            echo "audit=true" >> "$GITHUB_OUTPUT"
+          elif [ "$FORCED" = "true" ]; then
+            # A force push may drop checker or policy changes the diff cannot show.
+            echo "::notice::Force push; running the audit."
             echo "audit=true" >> "$GITHUB_OUTPUT"
           elif [ ! -f "$scope" ]; then
             echo "::notice::The trusted revision has no checks/logs_audit_scope.py; running the audit."
