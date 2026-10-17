@@ -10,6 +10,7 @@ import uuid
 from collections.abc import Callable, Iterator, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from rsi_harness.errors import InfrastructureError, SetupError, StateTransitionError
@@ -509,6 +510,8 @@ class _RoundEvaluator:
         self._update_work = update_work
         self._update_judge = update_judge
         self.reports: list[SubmissionReport] = []
+        # Monotonic start of the first round that returned a report.
+        self.first_round_started: float | None = None
         self.recovery_required = False
         self.recovery_error: str | None = None
         self.submission_closed = False
@@ -518,6 +521,7 @@ class _RoundEvaluator:
             raise InfrastructureError(
                 "submissions are closed after a required runtime write failed"
             )
+        round_started = time.monotonic()
         try:
             report = self._backend.evaluate_submission(request, lifecycle_observer=self)
         except StateTransitionError:
@@ -550,6 +554,8 @@ class _RoundEvaluator:
             raise
         if not isinstance(report, SubmissionReport):
             raise TypeError("submission evaluator must return SubmissionReport")
+        if self.first_round_started is None:
+            self.first_round_started = round_started
         self.reports.append(report)
         self.recovery_required = bool(
             report.status == SubmissionStatus.INFRASTRUCTURE_ERROR
@@ -854,6 +860,8 @@ class RunCoordinator:
         retained_work: RootfsSnapshotLease | None = None
         retained_work_rollback: RootfsSnapshotLease | None = None
         agent_result: AgentRunResult | None = None
+        agent_started_at: float | None = None
+        agent_runtime_seconds: float | None = None
         drained = False
         drain_failed = False
         work_removed = False
@@ -1508,8 +1516,12 @@ class RunCoordinator:
                     )
                     transition(RunStatus.AGENT_RUNNING)
                     resources.callback(emergency_cleanup)
+                    agent_started_at = time.monotonic()
                     agent_result = self._backend.run_agent(
                         prepared, work, plan.task.agent.timeout_seconds
+                    )
+                    agent_runtime_seconds = max(
+                        0.0, time.monotonic() - agent_started_at
                     )
                 except (KeyboardInterrupt, _RunCancelled) as error:
                     cancelled = True
@@ -1555,11 +1567,23 @@ class RunCoordinator:
                         except BaseException as error:
                             cleanup_errors.append(self._error(error))
                             terminal = RunStatus.FAILED
+                    first_round = (
+                        None if evaluator is None else evaluator.first_round_started
+                    )
                     try:
                         artifacts.finalize(
                             status=terminal,
                             runtime_seconds=max(0.0, time.monotonic() - started_at),
                             timed_out=bool(agent_result and agent_result.timed_out),
+                            agent_exit_code=(
+                                None if agent_result is None else agent_result.exit_code
+                            ),
+                            agent_runtime_seconds=agent_runtime_seconds,
+                            first_submission_seconds=(
+                                None
+                                if first_round is None or agent_started_at is None
+                                else max(0.0, first_round - agent_started_at)
+                            ),
                         )
                     except BaseException as error:
                         cleanup_errors.append(self._error(error))
@@ -1595,6 +1619,17 @@ class RunCoordinator:
                         "maximize" if plan is None else plan.task.score_direction
                     ),
                     terminal=state.status,
+                ).model_copy(
+                    update={
+                        "agent_exit_code": (
+                            None if agent_result is None else agent_result.exit_code
+                        ),
+                        "artifacts_dir": (
+                            artifacts.root
+                            if isinstance(getattr(artifacts, "root", None), Path)
+                            else None
+                        ),
+                    }
                 )
                 if engine_bug:
                     assert isinstance(captured, StateTransitionError)

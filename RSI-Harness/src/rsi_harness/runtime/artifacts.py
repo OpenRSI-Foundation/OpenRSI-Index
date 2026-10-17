@@ -130,7 +130,17 @@ class RunArtifactWriter:
         status: RunStatus = RunStatus.COMPLETED,
         runtime_seconds: float = 0.0,
         timed_out: bool = False,
+        agent_exit_code: int | None = None,
+        agent_runtime_seconds: float | None = None,
+        first_submission_seconds: float | None = None,
     ) -> None:
+        """Write ``final_result.json``.
+
+        ``agent_runtime_seconds`` is the Agent's exec, and
+        ``first_submission_seconds`` the time from its start to the start of
+        the first Judge round that returned a report; both are None when
+        there was none.
+        """
         best = self._best_report()
         payload = {
             "best_score": None if best is None else best.score,
@@ -143,6 +153,9 @@ class RunArtifactWriter:
             "timed_out": timed_out,
             "runtime_seconds": runtime_seconds,
             "status": status.value,
+            "agent_exit_code": agent_exit_code,
+            "agent_runtime_seconds": agent_runtime_seconds,
+            "first_submission_seconds": first_submission_seconds,
         }
         self._atomic_write_json(self.root / "final_result.json", payload)
 

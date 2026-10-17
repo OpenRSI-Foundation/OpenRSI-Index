@@ -27,9 +27,11 @@ from rsi_harness.models import (
     RunRequest,
     RunResult,
     RunStatus,
+    SubmissionStatus,
 )
 from rsi_harness.runtime.redaction import redact_text
 from rsi_harness.runtime.sandbox_policy import load_sandbox_policy
+from rsi_loop.harness.agent import get_agent_class
 
 if TYPE_CHECKING:
     # The ledger imports the docker SDK: loaded only by prune-images.
@@ -317,6 +319,34 @@ def _fail(error: BaseException, *, verbose: bool) -> None:
     raise typer.Exit(1)
 
 
+def _runs_task_solution(agent: str) -> bool:
+    try:
+        return bool(getattr(get_agent_class(agent), "runs_task_solution", False))
+    except ValueError:
+        return False
+
+
+def _oracle_failures(result: RunResult, submissions: int) -> list[str]:
+    """Why an oracle run does not show a working Judge; empty when it does."""
+    failures = []
+    if result.agent_exit_code is None:
+        failures.append("solve.sh returned no exit code")
+    elif result.agent_exit_code != 0:
+        failures.append(f"solve.sh exited {result.agent_exit_code}")
+    if result.status is not RunStatus.COMPLETED:
+        failures.append(f"run status is {result.status.value}")
+    if result.total_rounds != submissions:
+        failures.append(
+            f"{result.total_rounds} Judge round(s) ran, expected {submissions}"
+        )
+    failures.extend(
+        f"{report.round_id} is {report.status.value}"
+        for report in result.reports
+        if report.status is not SubmissionStatus.COMPLETED
+    )
+    return failures
+
+
 @app.command("run")
 def run_command(
     task_dir: Annotated[Path, typer.Argument()],
@@ -471,6 +501,14 @@ def run_command(
             raise typer.Exit(2)
     if dry_run and cluster is None:
         typer.echo("Error: --dry-run requires --cluster", err=True)
+        raise typer.Exit(2)
+    oracle = _runs_task_solution(agent)
+    if oracle and cluster is not None:
+        typer.echo(
+            f"Error: --agent {agent} runs locally only and cannot be used with "
+            "--cluster",
+            err=True,
+        )
         raise typer.Exit(2)
     judge_llm = None
     judge_llm_options = (
@@ -634,12 +672,32 @@ def run_command(
     typer.echo(_field("Best round:", result.best_round or "-"))
     typer.echo(_field("Workspace:", roots.data / result.run_id / "workspace"))
     typer.echo(_field("Logs:", roots.logs / "runs" / result.run_id))
+    if result.artifacts_dir is not None:
+        typer.echo(_field("Artifacts:", result.artifacts_dir))
+    if result.agent_exit_code is not None:
+        typer.echo(_field("Agent exit code:", result.agent_exit_code))
     if result.reports:
         typer.echo()
         typer.echo("Judge rounds:")
         for report in result.reports:
             score = "-" if report.score is None else report.score
-            typer.echo(f"  {report.round_id}: {report.status.value} score={score}")
+            exit_code = "-" if report.exit_code is None else report.exit_code
+            runtime = (
+                "-"
+                if report.duration_seconds is None
+                else f"{report.duration_seconds:.1f}s"
+            )
+            typer.echo(
+                f"  {report.round_id}: {report.status.value} score={score} "
+                f"exit_code={exit_code} runtime={runtime}"
+            )
+    if oracle:
+        failures = _oracle_failures(result, max_submissions or 1)
+        if failures:
+            typer.echo(f"\nOracle check failed: {'; '.join(failures)}", err=True)
+            raise typer.Exit(1)
+        typer.echo("\nOracle check passed")
+        return
     if result.status in {RunStatus.FAILED, RunStatus.CANCELLED}:
         raise typer.Exit(1)
 

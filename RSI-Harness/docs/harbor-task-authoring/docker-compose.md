@@ -336,9 +336,10 @@ Important details:
 - Do not bake runtime credentials into image layers.
 
 RSI Harness derives an Agent-capable Work image from this clean Base by adding
-the selected Agent tooling and submission client. Judges start from this Work
-image or from a snapshot of Work; there is no separately authored Judge
-Dockerfile.
+the selected Agent tooling and submission client. Judges start from the clean
+Work image (a hidden Judge unless `clean_image = false` or the WORKDIR is `/`,
+and every public Judge) or from a snapshot of Work; there is no separately
+authored Judge Dockerfile.
 
 ## Unsupported Compose fields
 

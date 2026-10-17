@@ -704,3 +704,7 @@ class RunResult(PersistedModel):
     best_round: str | None = None
     best_rewards: FrozenRewardMap = Field(default_factory=FrozenRewardMap)
     reports: tuple[SubmissionReport, ...] = ()
+    # The Agent's exit code (None when it did not run or return one), and
+    # the directory holding final_result.json and the rounds' reports.
+    agent_exit_code: int | None = None
+    artifacts_dir: Path | None = None

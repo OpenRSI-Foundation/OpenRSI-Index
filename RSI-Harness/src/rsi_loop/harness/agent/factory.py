@@ -23,6 +23,7 @@ from rsi_loop.harness.agent.claude_code import ClaudeCodeAgent
 from rsi_loop.harness.agent.codex import CodexAgent
 from rsi_loop.harness.agent.kimi_code import KimiCodeAgent
 from rsi_loop.harness.agent.opencode import OpenCodeAgent
+from rsi_loop.harness.agent.oracle import OracleAgent
 from rsi_loop.harness.agent.pi import PiAgent
 from rsi_loop.harness.agent.qwen_code import QwenCodeAgent
 from rsi_loop.harness.agent.zcode import ZCodeAgent
@@ -36,6 +37,7 @@ _REGISTRY: dict[str, type[Agent]] = {
     "codex": CodexAgent,
     "kimi-code": KimiCodeAgent,
     "opencode": OpenCodeAgent,
+    "oracle": OracleAgent,
     "pi": PiAgent,
     "qwen-code": QwenCodeAgent,
     "zcode": ZCodeAgent,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 from importlib import resources
 from pathlib import Path, PurePosixPath
@@ -9,6 +10,7 @@ from uuid import uuid4
 import pytest
 
 from rsi_harness.errors import SetupError
+from rsi_harness.integrations.rsi_loop import AGENT_SHELL
 from rsi_harness.models import (
     AgentPlan,
     GPUAllocation,
@@ -906,6 +908,109 @@ def test_without_model_access_no_rsi_agent_preflight_runs(tmp_path) -> None:
     assert len(client.containers.runs) == 2
 
 
+def test_work_image_finds_agent_launchers_on_the_path_the_agent_gets(
+    tmp_path: Path,
+) -> None:
+    """The launcher quarantine and the installed launcher check resolve it
+    outside a login shell, like the Agent's exec: a login profile that
+    resets PATH would miss a task copy that shadows the pinned CLI."""
+    client = FakeDockerClient()
+
+    DockerImageBuilder(client).prepare(
+        task_definition(tmp_path), agent=create_agent("codex", RSILoopConfig())
+    )
+
+    lines = client.images.built[-1]["context_files"]["Dockerfile"].splitlines()
+    steps = [
+        json.loads(line.removeprefix("RUN "))
+        for line in lines
+        if line.startswith("RUN [") and "launcher=" in line
+    ]
+    assert len(steps) == 3
+    assert "original-launchers" in steps[0][2]
+    assert steps[1][2] == images_module._pin_node_launcher_script("codex")
+    assert "command -v codex" in steps[2][2]
+    assert [step[:2] for step in steps] == [list(AGENT_SHELL)] * 3
+    # The npm launcher is pinned to node after the install and before the check.
+    install = next(i for i, line in enumerate(lines) if "npm install -g" in line)
+    pin, check = (lines.index("RUN " + json.dumps(step)) for step in steps[1:])
+    assert install < pin < check
+
+
+def _run_pin_script(tmp_path: Path, launcher: str) -> subprocess.CompletedProcess:
+    """Run the pin step against tmp_path/bin, with a fake pinned node."""
+    node = tmp_path / "pinned-node"
+    node.write_text('#!/bin/bash\necho "pinned-node $*"\n')
+    node.chmod(0o755)
+    script = images_module._pin_node_launcher_script(launcher).replace(
+        images_module.NODE_BIN, str(node)
+    )
+    return subprocess.run(
+        [*AGENT_SHELL, script],
+        env={"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_npm_launcher_is_pinned_to_the_installed_node(tmp_path: Path) -> None:
+    """A `#!/usr/bin/env node` launcher would run on a task image's node
+    ahead of /usr/local/bin; its script's shebang names the pinned one."""
+    package = tmp_path / "lib" / "node_modules" / "@scope" / "cli"
+    package.mkdir(parents=True)
+    script = package / "cli.js"
+    script.write_text("#!/usr/bin/env node\nconsole.log(1)\n")
+    script.chmod(0o755)
+    (tmp_path / "bin").mkdir()
+    launcher = tmp_path / "bin" / "tool"
+    launcher.symlink_to(script)
+
+    result = _run_pin_script(tmp_path, "tool")
+
+    assert result.returncode == 0, result.stderr
+    # Still a symlink to the script, which `node <launcher>` can load.
+    assert launcher.resolve() == script
+    node = tmp_path / "pinned-node"
+    assert script.read_text() == f"#!{node}\nconsole.log(1)\n"
+    ran = subprocess.run(
+        [str(launcher), "a b", "c"], capture_output=True, text=True, check=True
+    )
+    assert ran.stdout == f"pinned-node {launcher} a b c\n"
+    # A second launcher of the same script finds it already pinned.
+    assert _run_pin_script(tmp_path, "tool").returncode == 0
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"#!/bin/sh\nexec /usr/local/bin/node /opt/x.mjs\n", b"\x7fELF\x00node\n"],
+)
+def test_pin_step_leaves_shell_and_native_launchers_alone(
+    tmp_path: Path, content: bytes
+) -> None:
+    (tmp_path / "bin").mkdir()
+    launcher = tmp_path / "bin" / "tool"
+    launcher.write_bytes(content)
+    launcher.chmod(0o755)
+
+    result = _run_pin_script(tmp_path, "tool")
+
+    assert result.returncode == 0, result.stderr
+    assert launcher.read_bytes() == content
+
+
+def test_pin_step_refuses_a_node_shebang_it_cannot_wrap(tmp_path: Path) -> None:
+    (tmp_path / "bin").mkdir()
+    launcher = tmp_path / "bin" / "tool"
+    launcher.write_text("#!/usr/bin/env -S node --no-warnings\n")
+    launcher.chmod(0o755)
+
+    result = _run_pin_script(tmp_path, "tool")
+
+    assert result.returncode == 86
+    assert "unexpected node launcher shebang" in result.stderr
+
+
 def _driver_resource(name: str) -> str:
     return (
         resources.files("rsi_loop")
@@ -950,8 +1055,12 @@ def test_driven_work_image_bakes_driver_files_before_install_commands(
         i for i, line in enumerate(lines) if f"node-v{versions.NODE_VERSION}" in line
     )
     cli = next(i for i, line in enumerate(lines) if "fake-cli@1.2.3" in line)
-    checks = [i for i, line in enumerate(lines) if "command -v" in line and i > cli]
-    assert quarantine < copies[0] < chmod < node < cli < checks[0]
+    pins = [i for i, line in enumerate(lines) if "readlink -f" in line]
+    checks = [i for i, line in enumerate(lines) if 'test -x \\"$launcher\\"' in line]
+    assert quarantine < copies[0] < chmod < node < cli < pins[0]
+    assert pins[-1] < checks[0]
+    assert "command -v rsi-agent-driver" in lines[pins[0]]
+    assert "command -v fake-cli" in lines[pins[1]]
     # The CLI the driver starts is moved aside and checked like the driver.
     assert ["launcher=rsi-agent-driver" in lines[i] for i in quarantines] == [
         True,
@@ -1322,3 +1431,43 @@ def test_judge_model_preflights_python_and_a_free_agent_uid(tmp_path) -> None:
     assert any(
         "rsi-agent-preflight" in run["command"] for run in client.containers.runs
     )
+
+
+def test_oracle_work_image_adds_only_its_launcher(tmp_path: Path) -> None:
+    """No CLI or node: the task image, the Work layer and rsi-oracle."""
+    task = task_definition(tmp_path)
+    task = task.model_copy(
+        update={"agent": task.agent.model_copy(update={"name": "oracle"})}
+    )
+    oracle = create_agent("oracle", RSILoopConfig())
+    client = FakeDockerClient()
+
+    DockerImageBuilder(client).prepare(task, agent=oracle)
+
+    work = client.images.built[-1]
+    dockerfile = work["context_files"]["Dockerfile"]
+    launcher = resources.files("rsi_loop").joinpath("harness/agent/oracle/rsi-oracle")
+    staged = [
+        content
+        for name, content in work["context_files"].items()
+        if name.startswith("agent-files/")
+    ]
+    assert staged == [launcher.read_text()]
+    assert "/usr/local/bin/rsi-oracle" in dockerfile
+    assert "chmod 0755 /usr/local/bin/rsi-oracle" in dockerfile
+    assert "command -v rsi-oracle" in dockerfile
+    assert "npm install" not in dockerfile
+    assert "node-v" not in dockerfile
+    assert work["tag"].startswith("rsi-harness-work:environment-digest-abcdef-oracle-")
+    # The tag is stable and the other Agents' tags do not move.
+    again = FakeDockerClient()
+    DockerImageBuilder(again).prepare(task, agent=oracle)
+    assert again.images.built[-1]["tag"] == work["tag"]
+    codex_task = task.model_copy(
+        update={"agent": task.agent.model_copy(update={"name": "codex"})}
+    )
+    codex = FakeDockerClient()
+    DockerImageBuilder(codex).prepare(
+        codex_task, agent=create_agent("codex", RSILoopConfig())
+    )
+    assert "rsi-oracle" not in codex.images.built[-1]["context_files"]["Dockerfile"]

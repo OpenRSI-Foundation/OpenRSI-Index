@@ -23,6 +23,7 @@ from rsi_harness.integrations.rsi_loop import (
     RSILoopAgentAdapter,
     rsi_loop_agent_environment,
     rsi_loop_runtime_secret_values,
+    task_solution_script,
     validate_agent_config,
     validate_agent_reasoning_effort,
 )
@@ -215,6 +216,10 @@ def _agent_endpoints(
     """Resolve provider/proxy authority before any runtime mutation."""
 
     selected = create_agent(definition.agent.name, config)
+    if getattr(selected, "runs_task_solution", False):
+        # No model, so no provider to pin: a no-network Work stays closed
+        # apart from the control endpoint.
+        return ()
     model = definition.agent.model or config.agent_model or selected.default_model
     environment = rsi_loop_agent_environment(config, selected, model)
     default_provider = (
@@ -2002,11 +2007,23 @@ class ProductionRuntimeServices:
             definition = definition.model_copy(
                 update={"agent": definition.agent.model_copy(update=agent_updates)}
             )
-        validate_agent_config(
+        selected_agent = validate_agent_config(
             self.rsi_loop_config,
             definition.agent.name,
             model=definition.agent.model,
         )
+        if getattr(selected_agent, "runs_task_solution", False):
+            task_solution_script(definition.source_dir)
+            if request.agent_auth is not None:
+                raise SetupError(
+                    f"the {selected_agent.name} Agent uses no credential; "
+                    "drop --agent-auth"
+                )
+            if definition.verifier.model_access:
+                raise SetupError(
+                    "the task's Judge has model_access and calls the run's "
+                    f"Agent; the {selected_agent.name} Agent has none"
+                )
         needs_gpus = (
             definition.gpu_requirement.count != 0 or definition.verifier.gpu_count != 0
         )

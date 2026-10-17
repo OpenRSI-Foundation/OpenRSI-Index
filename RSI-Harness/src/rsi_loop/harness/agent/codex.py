@@ -141,6 +141,11 @@ fi''',
             "codex exec", "codex exec -c features.shell_snapshot=false", 1,
         )
 
+        # Codex runs the model's commands in a login shell by default, whose
+        # profile may reset PATH (Debian's does): the commands would lose the
+        # image's ENV PATH and the sandbox client directory the Agent has.
+        cmd = cmd.replace("codex exec", "codex exec -c allow_login_shell=false", 1)
+
         if not internet:
             cmd = cmd.replace(
                 "codex exec", 'codex exec -c web_search="disabled"', 1,

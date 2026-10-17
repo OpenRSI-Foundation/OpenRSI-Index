@@ -1,9 +1,10 @@
 name: Harness Agent tests
 
 # Each Agent's real, pinned CLI runs a full Harness run in Docker against a
-# local fake model, plus the Judge's one-shot call. Versions are pinned, so
-# nothing upstream can break an Agent until a change here does: run on the
-# changes that can.
+# local fake model, plus the Judge's one-shot call. The oracle, which has no
+# CLI or model, runs its own Docker tests with a fake Agent's launch-path
+# test. Versions are pinned, so nothing upstream can break an Agent until a
+# change here does: run on the changes that can.
 on:
   pull_request:
     paths:
@@ -18,6 +19,8 @@ on:
       - RSI-Harness/tests/integration/test_driven_agents_docker.py
       - RSI-Harness/tests/integration/test_agent_one_shot_docker.py
       - RSI-Harness/tests/integration/test_judge_model_access_docker.py
+      - RSI-Harness/tests/integration/test_oracle_docker.py
+      - RSI-Harness/tests/integration/test_agent_path_docker.py
       - RSI-Harness/uv.lock
       - .github/workflows/harness-agent-tests.yml
       - checks/harness_agent_selection.py
@@ -38,6 +41,7 @@ jobs:
     outputs:
       agents: ${{ steps.select.outputs.agents }}
       model_access: ${{ steps.select.outputs.model_access }}
+      oracle: ${{ steps.select.outputs.oracle }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -50,7 +54,7 @@ jobs:
       - name: Select the Agents this change can affect
         id: select
         # One Agent's own files or version line test that Agent; shared code
-        # tests every Agent. A manual run tests every Agent.
+        # tests every Agent and the oracle. A manual run tests them all.
         env:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
@@ -87,6 +91,7 @@ jobs:
       - name: Pull the test base images
         run: |
           docker pull ubuntu:24.04
+          docker pull python:3.12-slim-bookworm
           docker pull python@sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b
       - name: Run the Agent's Docker tests
         # A case that cannot run fails instead of skipping.
@@ -128,4 +133,39 @@ jobs:
           set -o pipefail
           uv run --frozen --group test python -m pytest -m integration -q -rs \
             tests/integration/test_judge_model_access_docker.py | tee "$RUNNER_TEMP/pytest.log"
+          ! grep -Eq '[0-9]+ skipped' "$RUNNER_TEMP/pytest.log"
+
+  oracle:
+    name: Oracle and Agent PATH
+    needs: plan
+    if: needs.plan.outputs.oracle == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    defaults:
+      run:
+        working-directory: RSI-Harness
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884
+        with:
+          version: "0.6.5"
+          enable-cache: false
+      - name: Install the test environment
+        run: uv sync --frozen --group test --python 3.12
+      - name: Pull the test base images
+        run: |
+          docker pull ubuntu:24.04
+          docker pull python:3.12-slim-bookworm
+      - name: Run the oracle and Agent PATH Docker tests
+        # Non-root with the test firewall; a sandbox case that cannot get its
+        # authority fails instead of skipping.
+        env:
+          RSI_REQUIRE_SANDBOX_INTEGRATION: "1"
+        run: |
+          set -o pipefail
+          uv run --frozen --group test python -m pytest -m integration -q -rs \
+            tests/integration/test_oracle_docker.py \
+            tests/integration/test_agent_path_docker.py | tee "$RUNNER_TEMP/pytest.log"
           ! grep -Eq '[0-9]+ skipped' "$RUNNER_TEMP/pytest.log"

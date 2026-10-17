@@ -25,7 +25,7 @@ import json
 import shlex
 
 from rsi_loop.harness.agent import versions
-from rsi_loop.harness.agent.base import NODE_INSTALL_CMD, OneShotCommand
+from rsi_loop.harness.agent.base import NODE_BIN, NODE_INSTALL_CMD, OneShotCommand
 from rsi_loop.harness.agent.driven import STDIN_PROMPT_JS, DrivenAgent
 
 _PROVIDER = "rsi"
@@ -194,7 +194,7 @@ class KimiCodeAgent(DrivenAgent):
         profile = '"$KIMI_CODE_HOME/oneshot-agent.md"'
         argv = " ".join(
             [
-                "node -e",
+                f"{NODE_BIN} -e",
                 shlex.quote(STDIN_PROMPT_JS),
                 '-- "$kimi" --output-format stream-json',
                 f"--agent-file {profile}",

@@ -16,7 +16,10 @@ from rsi_loop.harness.agent.base import NODE_INSTALL_CMD
 from rsi_loop.harness.config import RSILoopConfig
 
 ROOT = Path(__file__).resolve().parents[2]
-AGENT_NAMES = sorted(cls.name for cls in list_agent_classes())
+# The model CLIs; the oracle installs nothing and pins no version.
+AGENT_NAMES = sorted(
+    cls.name for cls in list_agent_classes() if not cls.runs_task_solution
+)
 
 
 def _load_script() -> ModuleType:

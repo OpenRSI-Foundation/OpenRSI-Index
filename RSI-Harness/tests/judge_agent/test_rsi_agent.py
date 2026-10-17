@@ -34,6 +34,7 @@ from rsi_harness.judge_agent import (
 )
 from rsi_harness.models import AgentPlan, NetworkPolicy
 from rsi_harness.runtime.judge_model_access import build_launch_spec
+from rsi_loop.harness.agent.base import NODE_BIN
 from rsi_loop.harness.config import RSILoopConfig
 
 PROGRAM = Path(__file__).parents[2] / "src/rsi_harness/judge_agent/rsi_agent.py"
@@ -314,6 +315,9 @@ class Judge:
         )
         oneshot = rsi_loop_oneshot(config, plan)
         spec = json.loads(build_launch_spec(oneshot, None, {API_KEY}))
+        if NODE is not None:
+            # The pinned node an Agent image installs is this host's node.
+            spec["command"] = spec["command"].replace(NODE_BIN, NODE)
         spec["environment"].update(extra)
         if credentials:
             login = self.store / ".codex" / "auth.json"

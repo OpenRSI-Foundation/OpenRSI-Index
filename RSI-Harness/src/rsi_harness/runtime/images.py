@@ -19,6 +19,7 @@ from docker.errors import APIError, BuildError, ImageNotFound
 
 from rsi_harness.errors import SetupError
 from rsi_harness.integrations.rsi_loop import (
+    AGENT_SHELL,
     RSILoopBackendBridge,
     RSILoopContainerHandle,
 )
@@ -37,6 +38,7 @@ from rsi_harness.runtime.gpu import (
 )
 from rsi_loop import __version__ as rsi_loop_version
 from rsi_loop.harness.agent import Agent, create_agent
+from rsi_loop.harness.agent.base import NODE_BIN
 from rsi_loop.harness.config import RSILoopConfig
 
 DEFAULT_RSI_LOOP_VERSION = rsi_loop_version
@@ -60,6 +62,16 @@ def _sha256_file(path: Path) -> str:
 
 def _bash_run_instruction(command: str) -> str:
     return "RUN " + json.dumps(["/bin/bash", "-lc", command])
+
+
+def _agent_shell_run_instruction(command: str) -> str:
+    """A build step that sees the image's PATH as the Agent will.
+
+    The Agent starts in AGENT_SHELL, not a login shell, so finding its
+    launcher in a login shell, whose profile may reset PATH, could miss a
+    task image's copy that shadows the installed one at run time.
+    """
+    return "RUN " + json.dumps([*AGENT_SHELL, command])
 
 
 def _registered_agent_launcher(agent: Agent) -> str:
@@ -88,6 +100,36 @@ if [[ -n "$existing" ]]; then
     install -d -m 0755 {_ORIGINAL_LAUNCHER_DIR}
     mv -f -- "$existing" {_ORIGINAL_LAUNCHER_DIR}/{shlex.quote(launcher)}
 fi
+"""
+
+
+def _pin_node_launcher_script(launcher: str) -> str:
+    # An npm launcher is a symlink to a `#!/usr/bin/env node` script, which
+    # would run the CLI on the first node on the Agent's PATH: a task image's
+    # own node (nvm, conda, a venv) ahead of /usr/local/bin. Point the script's
+    # shebang at the pinned node instead. The launcher stays a symlink to the
+    # script, which `node <launcher>` still loads, and the Agent's own commands
+    # still see the task's node. Native binaries and shell launchers are left
+    # alone.
+    return f"""set -euo pipefail
+launcher=$(command -v {shlex.quote(launcher)})
+target=$(readlink -f "$launcher")
+shebang=$(head -c 256 "$target" | head -n 1 | LC_ALL=C tr -d '\\000')
+case "$shebang" in
+    '#!/usr/bin/env node')
+        if [[ ! -x {NODE_BIN} ]]; then
+            echo 'pinned node is missing: {NODE_BIN}' >&2
+            exit 86
+        fi
+        sed -i '1s|^#!/usr/bin/env node$|#!{NODE_BIN}|' "$target"
+        test "$(head -n 1 "$target")" = '#!{NODE_BIN}'
+        ;;
+    '#!{NODE_BIN}') ;;
+    '#!'*node*)
+        echo "unexpected node launcher shebang: $shebang" >&2
+        exit 86
+        ;;
+esac
 """
 
 
@@ -448,7 +490,9 @@ class DockerImageBuilder:
             "RUN chmod 0755 /usr/local/bin/rsi-submit",
         ]
         for launcher in launchers:
-            lines.append(_bash_run_instruction(_quarantine_launcher_script(launcher)))
+            lines.append(
+                _agent_shell_run_instruction(_quarantine_launcher_script(launcher))
+            )
         # After the quarantine, which would otherwise move a baked-in
         # launcher aside, and before install_cmds, which may use the files.
         image_files = _agent_image_files(agent)
@@ -472,7 +516,11 @@ class DockerImageBuilder:
             lines.append(_bash_run_instruction(build_command))
         for launcher in launchers:
             lines.append(
-                _bash_run_instruction(
+                _agent_shell_run_instruction(_pin_node_launcher_script(launcher))
+            )
+        for launcher in launchers:
+            lines.append(
+                _agent_shell_run_instruction(
                     f"launcher=$(command -v {shlex.quote(launcher)}) && "
                     'test -n "$launcher" && test -x "$launcher"'
                 )

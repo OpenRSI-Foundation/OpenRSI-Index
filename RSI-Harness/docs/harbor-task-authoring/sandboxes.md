@@ -537,7 +537,12 @@ one is invisible to every other.
 
 ### Running Harbor
 
-Install `harbor==0.21.0` in the Work image (Judge derives from Work), then:
+Install `harbor==0.21.0` in the task image (`environment/Dockerfile`). Work
+adds only the Agent CLI to it, and each hidden Judge starts from that clean
+Work image (task image + Agent CLI), reading Work's WORKDIR, so a Harbor the
+Agent installs in Work never reaches the Judge; with
+[`clean_image = false`](task-toml.md#clean_image) or a WORKDIR of `/` it runs
+from a snapshot of Work instead. Then:
 
 ```bash
 PYTHONPATH=$RSI_SANDBOX_PYTHONPATH harbor run \

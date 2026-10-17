@@ -322,7 +322,7 @@ class ZCodeAgent(DrivenAgent):
                 f"rsi_secret_dir={secret_dir}",
                 "export ZCODE_PERSONAL_PROVIDER_CONFIG_FILE="
                 '"$rsi_secret_dir/provider_config.json"',
-                "node -e "
+                f"{_ZCODE_NODE} -e "
                 + shlex.join(
                     [
                         _WRITE_PROVIDER_CONFIG,
