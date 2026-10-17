@@ -72,6 +72,9 @@ class _Runtime:
         self.reward_file = reward_file
         self.reward_content = reward_content
 
+    def renew_operator_login(self, _round_id: str) -> None:
+        pass
+
     def pause(self, _work: ContainerRef) -> None:
         self.events.append("pause")
 
@@ -733,6 +736,18 @@ def test_judge_gets_fresh_writable_tmp_without_mutating_preserved_assets(
         assert (trajectory, PurePosixPath("/logs/agent"), True) in options[
             "extra_binds"
         ]
+        # Every Judge: rsi-isolate, read-only.
+        isolate = runtime.control / "judge-isolate"
+        assert (isolate, PurePosixPath("/opt/rsi-isolate"), True) in options[
+            "extra_binds"
+        ]
+        assert (
+            isolate / "rsi-isolate",
+            PurePosixPath("/usr/local/bin/rsi-isolate"),
+            True,
+        ) in options["extra_binds"]
+        assert (isolate / "rsi_isolate.py").is_file()
+        assert (isolate / "judge_isolation.py").is_file()
         return AgentRunResult(exit_code=0, output="passed\n")
 
     monkeypatch.setattr(runtime, "_run", fake_run)
@@ -821,7 +836,18 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
         assert binds[(snapshot, plan.workdir)] is True
         assert binds[(plan.task.source_dir / "tests", PurePosixPath("/tests"))] is True
         assert binds[(trajectory, PurePosixPath("/logs/agent"))] is True
+        isolate = runtime.control / "judge-isolate"
+        assert binds[(isolate, PurePosixPath("/opt/rsi-isolate"))] is True
+        assert (
+            binds[
+                (isolate / "rsi-isolate", PurePosixPath("/usr/local/bin/rsi-isolate"))
+            ]
+            is True
+        )
         assert any("paloma" in str(source) for source, _target in binds)
+        # Every Judge node gets the operator's isolation fallback, explicitly.
+        assert control.worker.environment["RSI_JUDGE_ISOLATION_FALLBACK"] == "none"
+        assert control.environment["RSI_JUDGE_ISOLATION_FALLBACK"] == "none"
         torchrun_sources = tuple(
             item.source
             for item in control.worker.binds

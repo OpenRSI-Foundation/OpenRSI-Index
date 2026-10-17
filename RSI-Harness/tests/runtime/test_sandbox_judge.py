@@ -107,8 +107,12 @@ class RecordingObserver:
         self.events.append((name, values))
 
 
-def sandbox_harness(tmp_path, *, monotonic=None, event_callback=None):
-    _old, runtime, snapshot, artifacts, request = make_harness(tmp_path)
+def sandbox_harness(
+    tmp_path, *, monotonic=None, event_callback=None, clean_image=False
+):
+    _old, runtime, snapshot, artifacts, request = make_harness(
+        tmp_path, clean_image=clean_image
+    )
     lifecycle = RecordingSandboxLifecycle(tmp_path, runtime.events)
     observer = RecordingObserver(runtime.events)
     options = {} if monotonic is None else {"monotonic": monotonic}
@@ -151,22 +155,25 @@ def test_family_freeze_and_cleanup_bracket_parent_judge_lifecycle(tmp_path):
     assert not runtime.work_paused
 
 
-def test_sandbox_endpoint_mount_and_credentials_are_exec_only(tmp_path):
+@pytest.mark.parametrize("clean_image", (False, True))
+def test_sandbox_endpoint_mount_and_credentials_are_exec_only(tmp_path, clean_image):
     """Container metadata must not retain the per-round capability token."""
     runner, lifecycle, runtime, _snapshot, artifacts, request = sandbox_harness(
-        tmp_path
+        tmp_path, clean_image=clean_image
     )
 
     report = evaluate(runner, request)
 
     assert report.status == SubmissionStatus.COMPLETED
     spec = runtime.created_specs[0]
+    assert (spec.image == request[0].images.work_digest) is clean_image
     assert lifecycle.endpoint.mount in spec.mounts
     assert spec.environment == ()
     assert runtime.exec_environments[0] == {
         "FIXED": "yes",
         "NVIDIA_VISIBLE_DEVICES": "GPU-c,GPU-d",
         "RSI_HARNESS_EXPECTED_GPU_UUIDS": "GPU-c,GPU-d",
+        "RSI_JUDGE_ISOLATION_FALLBACK": "none",
         **lifecycle.endpoint.environment,
     }
     token = lifecycle.endpoint.environment["RSI_SANDBOX_TOKEN"]
@@ -776,6 +783,8 @@ def test_disabled_judge_does_not_pass_deadline_or_sandbox_mount(tmp_path):
     assert [str(mount.target) for mount in runtime.created_specs[0].mounts] == [
         "/logs/verifier",
         "/logs/agent",
+        "/opt/rsi-isolate",
+        "/usr/local/bin/rsi-isolate",
     ]
     assert "RSI_SANDBOX_TOKEN" not in runtime.exec_environments[0]
 

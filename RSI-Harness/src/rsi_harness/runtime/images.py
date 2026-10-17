@@ -5,8 +5,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import shlex
+import tarfile
 import tempfile
 from dataclasses import dataclass
 from importlib import resources
@@ -44,6 +46,16 @@ _SAFE_IMAGE_FILE_PATH = re.compile(r"[A-Za-z0-9._+/-]+")
 _SAFE_BUILD_ARG = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _ORIGINAL_LAUNCHER_DIR = "/opt/rsi-harness/original-launchers"
 _AGENT_FILES_CONTEXT_DIR = "agent-files"
+# Docker's image architecture -> the machine the Codex releases are named for.
+_CODEX_ARCHITECTURES = {"amd64": "x86_64", "arm64": "aarch64"}
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as stream:
+        while chunk := stream.read(1 << 20):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def _bash_run_instruction(command: str) -> str:
@@ -514,11 +526,176 @@ class DockerImageBuilder:
             raise SetupError(
                 f"image user/WORKDIR dynamic preflight failed: {error}"
             ) from error
-        if task.verifier.model_access:
+        if task.verifier.model_access or task.verifier.judge_model is not None:
             self._preflight_judge_agent(task, work_ref=work_ref)
 
+    def prepare_judge_codex(
+        self,
+        task: TaskDefinition,
+        *,
+        images: ImagePlan,
+        work_agent: Agent,
+        cache_root: Path,
+    ) -> Path:
+        """The pinned Codex CLI for a Judge LLM, as a host directory to mount.
+
+        The native binary comes from the Codex Work image the Harness builds
+        for this task with its usual install commands (the pinned version,
+        for the image's architecture): the run's own Work image when the Agent
+        is Codex, otherwise that image built alongside, never used for Work.
+        Those images start from the task's, so the bytes are trusted only when
+        their SHA-256 is the release's, pinned in versions.py: checked before
+        caching below ``cache_root`` and again on every later use.
+        """
+        from rsi_loop.harness.agent import versions
+
+        try:
+            architecture = self._client.images.get(images.base_ref).attrs.get(
+                "Architecture"
+            )
+        except (APIError, ImageNotFound) as error:
+            raise SetupError(f"cannot inspect the task image: {error}") from error
+        machine = _CODEX_ARCHITECTURES.get(str(architecture))
+        if machine is None:
+            raise SetupError(
+                f"the Judge LLM's Codex CLI has no release for {architecture}"
+            )
+        expected = getattr(versions, f"CODEX_SHA256_{machine.upper()}")
+        directory = cache_root / f"codex-{versions.CODEX}-{machine}"
+        binary = directory / "codex"
+        if (
+            not directory.is_symlink()
+            and binary.is_file()
+            and not binary.is_symlink()
+            and binary.stat().st_mode & 0o777 == 0o755
+            and _sha256_file(binary) == expected
+        ):
+            return directory
+        source = images.work_ref
+        if work_agent.name != "codex":
+            source = self._codex_work_image(task, images)
+        cache_root.mkdir(mode=0o755, parents=True, exist_ok=True)
+        directory.mkdir(mode=0o755, exist_ok=True)
+        os.chmod(directory, 0o755)
+        path = self._find_codex_binary(source, task, versions.CODEX)
+        container = self._client.containers.create(
+            source,
+            ["/bin/true"],
+            network_mode="none",
+            labels=self._labels(task, "judge"),
+        )
+        descriptor, raw_temporary = tempfile.mkstemp(prefix=".codex-", dir=directory)
+        temporary = Path(raw_temporary)
+        try:
+            stream, _ = container.get_archive(path)
+            with tempfile.TemporaryFile(dir=directory) as archive:
+                for chunk in stream:
+                    archive.write(chunk)
+                archive.seek(0)
+                with tarfile.open(fileobj=archive) as bundle:
+                    members = [item for item in bundle.getmembers() if item.isfile()]
+                    if len(members) != 1:
+                        raise SetupError("the Codex CLI archive is not one file")
+                    extracted = bundle.extractfile(members[0])
+                    if extracted is None:
+                        raise SetupError("the Codex CLI archive is unreadable")
+                    digest = hashlib.sha256()
+                    with os.fdopen(descriptor, "wb") as target:
+                        descriptor = -1
+                        while chunk := extracted.read(1 << 20):
+                            digest.update(chunk)
+                            target.write(chunk)
+            if digest.hexdigest() != expected:
+                raise SetupError(
+                    f"the Codex CLI in {source} is not the pinned {versions.CODEX} "
+                    f"release for {machine} (sha256 {digest.hexdigest()}, "
+                    f"expected {expected})"
+                )
+            os.chmod(temporary, 0o755)
+            # Concurrent runs may race here; each rename installs the same bytes.
+            os.replace(temporary, binary)
+        except (APIError, OSError, tarfile.TarError) as error:
+            raise SetupError(f"cannot copy the Codex CLI: {error}") from error
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+            temporary.unlink(missing_ok=True)
+            container.remove(force=True)
+        return directory
+
+    def _codex_work_image(self, task: TaskDefinition, images: ImagePlan) -> str:
+        """The Codex Work image for this task: tagged, built and cached as one."""
+        codex = create_agent("codex", self._rsi_loop_config)
+        submit_client = generate_submit_client()
+        dockerfile = self._work_dockerfile(
+            agent=codex,
+            base_ref=images.base_ref,
+            workdir=images.workdir,
+            final_user=images.work_user,
+        )
+        tag = self._work_tag(
+            task,
+            codex,
+            base_digest=str(images.base_digest),
+            effective_user=images.work_user,
+            workdir=images.workdir,
+            dockerfile=dockerfile,
+            submit_client=submit_client,
+        )
+        try:
+            image = self._client.images.get(tag)
+        except ImageNotFound:
+            image = self._build_work(
+                task,
+                agent=codex,
+                work_tag=tag,
+                dockerfile=dockerfile,
+                submit_client=submit_client,
+            )
+        except APIError as error:
+            raise SetupError(f"failed to inspect Codex image {tag}: {error}") from error
+        return self._immutable_ref(image)
+
+    def _find_codex_binary(self, image: str, task: TaskDefinition, version: str) -> str:
+        """The path of the pinned native Codex binary npm installed in ``image``."""
+        script = (
+            "set -eu\n"
+            "root=$(npm root -g)\n"
+            'found=$(find "$root/@openai" -type f -path '
+            "'*/vendor/*-unknown-linux-musl/bin/codex' 2>/dev/null || true)\n"
+            'count=$(printf "%s" "$found" | grep -c . || true)\n'
+            'if [ "$count" != 1 ]; then\n'
+            '  echo "expected one Codex binary, found $count" >&2; exit 1\n'
+            "fi\n"
+            'reported=$("$found" --version)\n'
+            f'if [ "$reported" != "codex-cli {version}" ]; then\n'
+            '  echo "unexpected Codex version: $reported" >&2; exit 1\n'
+            "fi\n"
+            'printf "%s" "$found"\n'
+        )
+        try:
+            output = self._client.containers.run(
+                image,
+                ["/bin/sh", "-c", script],
+                user="0",
+                environment={
+                    "HOME": "/tmp",
+                    "PATH": "/usr/local/bin:/usr/bin:/bin",
+                    NVIDIA_VISIBLE_DEVICES_ENV: NVIDIA_VISIBLE_DEVICES_VOID,
+                },
+                network_mode="none",
+                labels=self._labels(task, "judge"),
+                remove=True,
+            )
+        except Exception as error:
+            raise SetupError(f"cannot find the pinned Codex CLI: {error}") from error
+        path = output.decode("utf-8", errors="replace").strip()
+        if not path.startswith("/") or "\n" in path:
+            raise SetupError("cannot find the pinned Codex CLI")
+        return path
+
     def _preflight_judge_agent(self, task: TaskDefinition, *, work_ref: str) -> None:
-        """A model-access Judge runs rsi-agent: Python 3.8+ and free uids/gids."""
+        """A Judge with rsi-agent needs Python 3.8+ and free uids/gids."""
         first, last = JUDGE_AGENT_UIDS[0], JUDGE_AGENT_UIDS[-1]
         check = (
             "import ctypes, fcntl, grp, pwd, sys\n"
@@ -551,8 +728,8 @@ class DockerImageBuilder:
             )
         except Exception as error:
             raise SetupError(
-                "model_access needs python3 3.8 or later in the task image for "
-                f"rsi-agent: {error}"
+                "model_access and judge_model need python3 3.8 or later in the "
+                f"task image for rsi-agent: {error}"
             ) from error
 
     def _preflight_hooks(

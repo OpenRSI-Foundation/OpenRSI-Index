@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import shutil
 import socket
 import subprocess
 import sys
 import threading
 from pathlib import Path, PurePosixPath
+
+import pytest
 
 from rsi_harness.runtime.network import PinnedEndpoint
 
@@ -257,3 +260,191 @@ def test_agent_network_broker_wraps_one_isolated_agent_lifecycle(
         broker.stop()
     assert not broker.provider_socket.exists()
     assert not broker.submit_socket.exists()
+
+
+_PROVIDER_CHILD = r"""
+import json, os, socket, subprocess, sys
+from urllib.parse import urlsplit
+
+provider_socket, port, agent = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+request = f"CONNECT provider.test:{port} HTTP/1.1\r\n\r\n".encode()
+
+
+def headers(client):
+    content = b""
+    while b"\r\n\r\n" not in content:
+        try:
+            chunk = client.recv(4096)
+        except ConnectionResetError:
+            break
+        if not chunk:
+            break
+        content += chunk
+    return content
+
+
+report = {}
+# What rsi-agent's Agent does: the relay's loopback proxy.
+proxy = urlsplit(os.environ["HTTPS_PROXY"])
+with socket.create_connection((proxy.hostname, proxy.port), timeout=5) as client:
+    client.sendall(request)
+    report["relay"] = headers(client).split(b"\r\n", 1)[0].decode()
+    client.sendall(b"ping")
+    report["echo"] = client.recv(4).decode()
+# Any other process of the Judge (this one included) is turned away.
+with socket.socket(socket.AF_UNIX) as client:
+    client.settimeout(5)
+    client.connect(provider_socket)
+    client.sendall(request)
+    report["direct"] = headers(client).decode() or "closed"
+sys.path.insert(0, agent)
+import rsi_agent
+
+libc = rsi_agent._load_libc()
+if rsi_agent.landlock_abi(libc)[0] >= 1:
+    # A same-uid process confined by Landlock that cannot read the socket's
+    # directory: below ABI 7 it can still connect to the path, but the proxy
+    # serves only the relay.
+    probe = (
+        "import ctypes, json, os, socket, sys\n"
+        "sys.path.insert(0, sys.argv[3])\n"
+        "import rsi_agent as ra\n"
+        "libc = ra._load_libc()\n"
+        "directory = os.path.dirname(sys.argv[1])\n"
+        "ruleset = ra.Ruleset(libc, ra.landlock_abi(libc)[0])\n"
+        "for path in ra.readable_paths([directory]):\n"
+        "    ruleset.allow(path, ra.FS_READ)\n"
+        "assert libc.prctl(ra.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0\n"
+        "ruleset.restrict()\n"
+        "out = {}\n"
+        "try:\n"
+        "    os.listdir(directory); out['list'] = 'ok'\n"
+        "except OSError as error:\n"
+        "    out['list'] = error.errno\n"
+        "with socket.socket(socket.AF_UNIX) as client:\n"
+        "    client.settimeout(5)\n"
+        "    client.connect(sys.argv[1])\n"
+        "    client.sendall(sys.argv[2].encode())\n"
+        "    try:\n"
+        "        out['unix'] = client.recv(64).decode() or 'closed'\n"
+        "    except ConnectionResetError:\n"
+        "        out['unix'] = 'closed'\n"
+        "print(json.dumps(out))\n"
+    )
+    run = subprocess.run(
+        [sys.executable, "-I", "-B", "-c", probe, provider_socket, request.decode(),
+         agent],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    report["confined"] = json.loads(run.stdout or "null") or run.stderr
+print(json.dumps(report))
+"""
+
+
+def test_the_judge_provider_proxy_serves_only_the_registered_relay(
+    tmp_path: Path,
+) -> None:
+    import errno
+    import json
+    import tempfile
+
+    from rsi_harness.cluster.bluevela.network import JudgeProviderBroker
+
+    source = Path(__file__).resolve().parents[3] / "src/rsi_harness"
+    upstream = socket.socket()
+    upstream.bind(("127.0.0.1", 0))
+    upstream.listen()
+    upstream.settimeout(0.2)
+    upstream_port = int(upstream.getsockname()[1])
+    stopping = threading.Event()
+
+    def echo() -> None:
+        while not stopping.is_set():
+            try:
+                connection, _address = upstream.accept()
+            except OSError:
+                continue
+            with connection:
+                connection.sendall(connection.recv(4))
+
+    echo_thread = threading.Thread(target=echo, daemon=True)
+    echo_thread.start()
+    # Short: a Unix socket path has a 108-byte limit.
+    root = Path(tempfile.mkdtemp(prefix="rsi-pp-", dir="/tmp"))
+    broker = JudgeProviderBroker(
+        root / "network",
+        endpoints=(
+            PinnedEndpoint(
+                hostname="provider.test",
+                port=upstream_port,
+                addresses=(ipaddress.ip_address("127.0.0.1"),),
+            ),
+        ),
+    )
+    broker.start()
+    try:
+        relay = subprocess.Popen(
+            (
+                sys.executable,
+                str(source / "cluster/bluevela/netns_relay.py"),
+                "--provider-socket",
+                str(broker.provider_socket),
+                "--provider-port",
+                "0",
+                "--register",
+                "--",
+                sys.executable,
+                "-c",
+                _PROVIDER_CHILD,
+                str(broker.provider_socket),
+                str(upstream_port),
+                str(source / "judge_agent"),
+            ),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        stdout, stderr = relay.communicate(timeout=120)
+        assert relay.returncode == 0, stderr
+        report = json.loads(stdout)
+        assert broker._provider.owner_pid == relay.pid
+    finally:
+        broker.stop()
+        stopping.set()
+        echo_thread.join(timeout=2)
+        upstream.close()
+        shutil.rmtree(root)
+    assert report["relay"].startswith("HTTP/1.1 200 ")
+    assert report["echo"] == "ping"
+    assert report["direct"] == "closed"
+    if "confined" in report:
+        assert report["confined"] == {"list": errno.EACCES, "unix": "closed"}
+    assert broker._provider.refused_peers == 1 + ("confined" in report)
+
+
+def test_a_judge_provider_proxy_whose_first_peer_has_no_pid_serves_nobody(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from rsi_harness.cluster.bluevela import network
+
+    proxy = network.UnixConnectProxy(
+        tmp_path / "provider.sock",
+        endpoints=(
+            PinnedEndpoint(
+                hostname="provider.test",
+                port=443,
+                addresses=(ipaddress.ip_address("127.0.0.1"),),
+            ),
+        ),
+        pin_first_peer=True,
+    )
+    pids = iter((0, 4242, 4242, 0))
+    monkeypatch.setattr(network, "_peer_pid", lambda _client: next(pids))
+
+    # The registration the kernel could not name pins nobody, so a later
+    # peer (a route, say) never takes the relay's place.
+    assert [proxy._admit(None) for _ in range(4)] == [False] * 4
+    assert proxy.owner_pid == -1
+    assert proxy.refused_peers == 3

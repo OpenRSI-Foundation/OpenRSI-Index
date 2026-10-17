@@ -31,10 +31,14 @@ policy, and timeouts in a run plan. It then follows this lifecycle:
 2. **Submit:** When the Agent runs `rsi-submit`, the client sends a token-scoped
    control request. RSI Harness pauses Work and snapshots its filesystem state;
    the client does not package or upload the workspace.
-3. **Judge:** RSI Harness starts a fresh, isolated Judge container from that
-   snapshot, injects the private tests, runs `/tests/test.sh`, records the test
-   output and reward, and removes the Judge container. The Judge can also read
-   the Agent's trajectory up to this submission, read-only, at `/logs/agent`
+3. **Judge:** RSI Harness starts a fresh, isolated Judge container from the
+   clean image Work started from, with the snapshot of Work's `WORKDIR`
+   mounted read-only (or, for a `WORKDIR` of `/` or
+   [`clean_image = false`](docs/harbor-task-authoring/task-toml.md#clean_image),
+   from the whole Work snapshot), injects the private tests, runs
+   `/tests/test.sh`, records the test output and reward, and removes the Judge
+   container. The Judge can also read the Agent's trajectory up to this
+   submission, read-only, at `/logs/agent`
    ([details](docs/harbor-task-authoring/task-toml.md#agent-trajectory-in-the-judge)).
 4. **Iterate or finish:** RSI Harness resumes the same Work container and returns
    the Judge feedback to the Agent. The cycle repeats until the submission limit
@@ -57,24 +61,40 @@ visibility = "public"
 Work then also sees the same `tests/` directory read-only at `/tests`. The run
 plan records its digest, and RSI Harness checks it before Work starts and
 before every Judge round, so the Agent reads exactly what the Judge runs. A
-public Judge also starts from the clean image Work started from, read-only,
-and reads only Work's `WORKDIR`, so the Agent cannot alter the programs that
-judge it. The default, `"hidden"`, keeps the tests private. See
-[`task-toml.md`](docs/harbor-task-authoring/task-toml.md#visibility).
+public Judge is also stricter than a hidden one: it has a read-only root
+filesystem and a small `noexec` `/tmp`. The default, `"hidden"`, keeps the
+tests private. See [`task-toml.md`](docs/harbor-task-authoring/task-toml.md#visibility).
 
 A Judge can also call the run's own Agent, for example to review a
 submission, when the task declares `model_access = true` in the same table.
 `rsi-agent exec --prompt-file FILE --output FILE [--schema FILE]` is then the
 only supported way for the Judge to call a model: it runs the run's Agent,
-with Work's credentials and settings, on one prompt, as its own unprivileged
-user, and the Judge procedure never sees the credentials. The Judge reaches
-only the Agent's pinned model endpoints, never general egress; local Docker
-runs only. See
+with Work's credentials and settings, on one prompt, isolated (its own
+unprivileged user in a root Judge, Landlock otherwise), and the Judge
+procedure never sees the credentials. Locally the Judge reaches only the
+Agent's pinned model endpoints; on a cluster it uses the network the Work
+Agent uses for its model. See
 [`task-toml.md`](docs/harbor-task-authoring/task-toml.md#model_access).
+
+A task can instead, or also, name a Judge model with `judge_model = "<id>"`:
+`rsi-agent llm` then makes one plain call to that model, independent of the
+Agent, with a credential the operator gives through `--judge-llm-auth` (see
+[Common `run` options](#common-run-options)). See
+[`task-toml.md`](docs/harbor-task-authoring/task-toml.md#judge_model).
+
+Every Judge also has `rsi-isolate`, which runs one command, such as a
+candidate's code, as an isolated unprivileged identity: its own uid in a
+root Judge (local Docker), Landlock otherwise (clusters), with only the
+paths, network and environment it is granted. A Judge therefore never
+switches users itself. See
+[`task-toml.md`](docs/harbor-task-authoring/task-toml.md#rsi-isolate).
 
 [`sample_tasks/science-ising3d`](sample_tasks/science-ising3d) combines these
 for open-ended science: a public rubric, a Judge started from the clean task
-image, and a trajectory audit and per-rubric review by the Agent model.
+image, and a trajectory audit and per-rubric review by the Agent model. Its
+copy of the science Judge library is an older version that needs a root
+Judge (local Docker); a task meant for a cluster copies the current library
+from OpenRSI-X's `science-task-agent` skill.
 
 ![RSI Harness workflow: one-time Harbor task preparation starts an agent in a persistent Work container. Each rsi-submit pauses and snapshots Work for a fresh, isolated Judge, which runs private tests and returns feedback. Work resumes for further iterations until the submission or time limit; the best valid submission is selected by its primary reward.](../assets/figures/rsi-harness.png)
 
@@ -147,16 +167,20 @@ nonstandard names, list the variable names in `RSI_AGENT_SECRET_ENV_NAMES`
 | `claude-code` | Claude Code | `RSI_AGENT_API_KEY` or `--agent-auth local` | None; the base URL defaults to the provider's public API | Yes |
 | `qwen-code` | Qwen Code | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | No |
 | `kimi-code` | Kimi Code | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
-| `opencode` | OpenCode (linux-x64) | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
-| `zcode` | ZCode (linux-x64) | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
+| `opencode` | OpenCode | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
+| `zcode` | ZCode | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
 | `pi` | pi | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `minimal`, `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
 
 Each Agent CLI is installed at an exact pinned version, over HTTPS, into the
 Work image when the image is built, together with the node it runs on. All of
 these versions live in one table,
 [`src/rsi_loop/harness/agent/versions.py`](src/rsi_loop/harness/agent/versions.py).
+Native downloads (node, the OpenCode binary, its ripgrep and the ZCode
+package) follow the image's architecture as `uname -m` reports it during the
+build: `x86_64` gets the x64 release and `aarch64` the arm64 one; on any other
+architecture the Work image build fails with a message naming it.
 To fetch the ZCode package from a mirror with the same
-`<version>/linux-x64/<file>` layout, set `RSI_ZCODE_MIRROR_URL` where
+`<version>/linux-<x64|arm64>/<file>` layout, set `RSI_ZCODE_MIRROR_URL` where
 `rsi-harness run` runs; the Work image build receives it as a build argument.
 
 To upgrade an Agent, or node for all of them:
@@ -165,7 +189,8 @@ To upgrade an Agent, or node for all of them:
 uv run python scripts/bump_agent.py codex 0.160.0   # or scripts/bump-agent.sh
 ```
 
-The script checks that the version is published, rewrites that one entry in
+The script checks that the version is published (for node, OpenCode, ZCode
+and ripgrep, both the x64 and the arm64 release), rewrites that one entry in
 the table, prints the diff and runs the Agent's Docker tests (every Agent's
 for `node`), exiting non-zero if they fail or cannot run. `--no-test` only
 edits, and `--no-check` skips the published check (offline, or without npm).
@@ -382,6 +407,32 @@ phases continue using their private `/tmp/.cache/huggingface` cache. Common
 `apptainer.environment` values are combined with phase environment overrides;
 use `RSI_SHARED_DATA_ROOT = "/rsi-data"` for the sample mappings.
 
+Every cluster Judge starts from the task image with a copy of the workspace,
+as a clean-image Judge does locally: nothing the Agent changed outside the
+workspace reaches it, `clean_image = false` has no effect there, and the run
+plan records `clean_image: true`.
+
+Cluster Judges run as the invoking user, so `rsi-agent` and `rsi-isolate`
+confine what they run with Landlock instead of a separate uid, and so can a
+science Judge library a task carries for the routes it runs. On a kernel
+without Landlock such a call fails, unless the profile sets
+`apptainer.judge_isolation_fallback = "same-user"`, which runs it as the
+Judge's user without filesystem confinement. Every Judge gets that choice as
+`RSI_JUDGE_ISOLATION_FALLBACK`, set explicitly (`"none"` by default, and
+always `"none"` locally), so neither a task's settings nor its image can set
+it. A model-access Judge reaches the model the way the Work Agent does:
+through a private proxy to the pinned endpoints for a `"no-network"` Agent
+(the proxy serves only the Judge's relay process), or over the site network
+for a `"public"` Agent, whose egress the site governs, not the Harness. Model
+access on a multi-node Judge is not supported yet.
+
+A `judge_model` task runs on a cluster too, with the same `--judge-llm-*`
+options, on a single-node Judge with a `"public"` or `"no-network"` Verifier.
+An operator's Codex login works only when the compute nodes see and can
+write the submit host's `auth.json` in place (a shared home); see
+[`task-toml.md`](docs/harbor-task-authoring/task-toml.md#judge_model) for the
+network, credential and Codex CLI details.
+
 Cluster mode preserves the native RSI-Harness run and log format. Harbor only
 compiles the task format; the adapter never invokes `harbor run`.
 
@@ -450,6 +501,11 @@ above.
 | `--model NAME` | Override the model used by the selected Agent. | `RSI_AGENT_MODEL`, then the Agent's default |
 | `--reasoning-effort LEVEL` | Set an Agent-supported reasoning effort: `minimal`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra` for Codex; `low`, `medium`, `high`, `xhigh` or `max` for Claude Code; `low`, `medium` or `high` for Kimi Code, OpenCode and ZCode; `minimal`, `low`, `medium` or `high` for pi. Other Agents refuse the option. | Agent default |
 | `--agent-auth local` | Reuse credentials from the local Codex or Claude Code login. | Not set; use `RSI_AGENT_API_KEY` when provided |
+| `--judge-llm-auth api\|codex-login` | Credential for a task's `judge_model`: an OpenAI API key, or a Codex login made with a ChatGPT plan (the Judge gets its access token only; before a Judge round that would outlive it, the Harness runs its pinned Codex CLI as you to refresh the login in place; never a login a Work Agent holds a copy of, which that refresh logs out; on a cluster, only a login the compute nodes see in place). Ignored, with a warning, for a task without `judge_model`. | Not set; a Codex Agent with a ChatGPT login or an OpenAI API key on OpenAI's own API lends its own (whatever its model; a login is renewed from Work before each Judge round), otherwise a `judge_model` task fails before the Agent starts |
+| `--judge-llm-api-key-env NAME` / `--judge-llm-api-key-file PATH` | Where the `api` key is read from. | `RSI_JUDGE_LLM_API_KEY` |
+| `--judge-llm-base-url URL` | API base URL for `api`; `/v1/responses` is appended (once). | `https://api.openai.com` |
+| `--judge-llm-proxy URL` | HTTP(S) proxy the Judge uses to reach the Judge model. | The run's proxy settings (`RSI_HTTPS_PROXY`, `HTTPS_PROXY`, ...) |
+| `--judge-llm-codex-home DIR` | Codex home holding `auth.json` for `codex-login`. | `$CODEX_HOME`, then `~/.codex` |
 | `--timeout SECONDS` | Override the Agent time limit. | Task `agent.timeout_sec`, or 60 seconds if unset |
 | `--max-submissions N` | Limit how many Judge submissions the Agent may make. | Unlimited |
 | `--cooldown SECONDS` | Require a minimum delay between submissions. | `0.0` |

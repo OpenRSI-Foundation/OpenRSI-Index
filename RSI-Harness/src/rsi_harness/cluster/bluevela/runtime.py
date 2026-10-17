@@ -7,6 +7,7 @@ allocation and implements only the Work/Judge ports consumed by RunCoordinator.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import secrets
 import shlex
@@ -16,7 +17,7 @@ import subprocess
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -24,13 +25,26 @@ from typing import Any, Literal
 
 from rsi_harness.cluster.bluevela.allocation import AllocatedPools
 from rsi_harness.cluster.bluevela.judge_controller import JudgeControllerControl
+from rsi_harness.cluster.bluevela.judge_llm import (
+    JUDGE_CODEX_SCRATCH,
+    cluster_judge_egress,
+    cluster_login_refresh,
+    install_pinned_codex,
+    node_codex_source,
+    resolve_cluster_judge_llm,
+    unresolved_endpoints,
+)
 from rsi_harness.cluster.bluevela.multinode import (
     MultiNodeBroker,
     RemoteWorkerTemplate,
     WorkerBind,
     stop_command,
 )
-from rsi_harness.cluster.bluevela.network import AgentNetworkBroker
+from rsi_harness.cluster.bluevela.network import (
+    AgentNetworkBroker,
+    JudgeProviderBroker,
+    judge_proxy_environment,
+)
 from rsi_harness.cluster.bluevela.sandbox import ClusterSandbox
 from rsi_harness.errors import (
     InfrastructureError,
@@ -43,7 +57,20 @@ from rsi_harness.integrations.rsi_loop import (
     rsi_loop_runtime_secret_values,
 )
 from rsi_harness.integrations.submit_client import generate_submit_client
+from rsi_harness.judge_agent import (
+    JUDGE_AGENT_CODE_TARGET,
+    JUDGE_AGENT_LAUNCHER,
+    JUDGE_AGENT_LAUNCHER_TARGET,
+    JUDGE_AGENT_STATE_ROOT,
+    JUDGE_CODEX_TARGET,
+    JUDGE_ISOLATE_CODE_TARGET,
+    JUDGE_ISOLATE_LAUNCHER,
+    JUDGE_ISOLATE_LAUNCHER_TARGET,
+    install_judge_agent,
+    install_judge_isolate,
+)
 from rsi_harness.models import (
+    JUDGE_ISOLATION_FALLBACK_ENV,
     JUDGE_TRAJECTORY_ROOT,
     AgentHookRequest,
     AgentPrepareRequest,
@@ -77,7 +104,21 @@ from rsi_harness.runtime.gpu import (
     assert_gpu_processes_quiescent,
     resolve_allocation,
 )
-from rsi_harness.runtime.local_auth import AgentAuthMaterial, resolve_agent_auth
+from rsi_harness.runtime.judge import JUDGE_ROUND_END_SLACK_SECONDS
+from rsi_harness.runtime.judge_llm import judge_codex_login
+from rsi_harness.runtime.judge_login_refresh import renew_operator_login
+from rsi_harness.runtime.judge_model_access import (
+    JudgeModelAccess,
+    judge_needs_rsi_agent,
+    resolve_judge_model_access,
+)
+from rsi_harness.runtime.local_auth import (
+    AgentAuthMaterial,
+    current_login,
+    login_kept_reason,
+    read_login_store,
+    resolve_agent_auth,
+)
 from rsi_harness.runtime.network import NetworkPolicyEnforcer
 from rsi_harness.runtime.recovery import LeaseStore
 from rsi_harness.runtime.redaction import redact_exact_values, redact_text
@@ -170,6 +211,11 @@ class ApptainerAgentRuntime:
             plan.paths.logs / "runs" / payload.run_id / plan.task.task_id / "feedback"
         )
         self._copies: dict[PurePosixPath, Path] = {}
+        # The Agent CLI and its companions, also bound into a model-access Judge.
+        self._agent_cli_targets: list[PurePosixPath] = []
+        self.auth_material: AgentAuthMaterial | None = None
+        # Set by the composition once the Agent's login is known.
+        self.judge_model_access: JudgeModelAccess | None = None
         self._agent_auth_binds: list[tuple[Path, PurePosixPath, bool]] = []
         self._agent_auth_roots: dict[PurePosixPath, Path] = {}
         self.auth_secret_values: set[str] = set()
@@ -264,8 +310,10 @@ class ApptainerAgentRuntime:
             )
 
     def initialize(self) -> None:
-        # Apptainer Judges run with no network and no Agent relay.
-        require_no_judge_model_access(self.plan.task)
+        # The adapter refused these before submitting; check again in the job.
+        require_cluster_judge_model_access(
+            self.plan.task, multi_node=self.allocated_pools is not None
+        )
         # Public tests are read-only in Work: prove them before Work starts.
         self._require_public_tests_digest()
         if self.profile.apptainer.mount_policy == "scoped" and "public" in (
@@ -293,12 +341,16 @@ class ApptainerAgentRuntime:
         self._copies[PurePosixPath("/usr/local/bin") / launcher] = (
             self.payload.agent_binary
         )
+        self._agent_cli_targets = [PurePosixPath("/usr/local/bin") / launcher]
         for companion in self.payload.agent_companions:
             if not companion.is_file():
                 raise SetupError(
                     f"cluster Agent companion is unavailable: {companion.name}"
                 )
             self._copies[PurePosixPath("/usr/local/bin") / companion.name] = companion
+            self._agent_cli_targets.append(
+                PurePosixPath("/usr/local/bin") / companion.name
+            )
         relay = Path(__file__).with_name("netns_relay.py")
         if not relay.is_file():
             raise SetupError("cluster Agent network relay is unavailable")
@@ -350,6 +402,8 @@ class ApptainerAgentRuntime:
             raise InfrastructureError(
                 f"cannot preserve task image assets: {assets.output}"
             )
+        if judge_needs_rsi_agent(self.plan.task.verifier):
+            self._require_judge_python()
         self._install_auth()
         try:
             self._start_work_broker()
@@ -357,6 +411,110 @@ class ApptainerAgentRuntime:
         except BaseException:
             self.close_multinode()
             raise
+
+    def _require_judge_python(self) -> None:
+        """rsi-agent runs under the image's own python3, 3.8 or later."""
+        check = "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 3)"
+        result = self._run(
+            ("/bin/sh", "-c", f"exec python3 -c {shlex.quote(check)}"),
+            devices=(),
+            network_mode="no-network",
+            mount_workspace=False,
+            mount_agent_home=False,
+            timeout_seconds=120,
+        )
+        if result.exit_code != 0:
+            raise SetupError(
+                "model_access and judge_model need python3 3.8 or later in the "
+                f"task image for rsi-agent: {result.output.strip()[-500:]}"
+            )
+
+    def configure_judge_model_access(self, access: JudgeModelAccess | None) -> None:
+        if judge_needs_rsi_agent(self.plan.task.verifier) != (access is not None):
+            raise SetupError("Judge model access differs from the task declaration")
+        if access is not None and access.needs_codex_cli and access.codex_cli is None:
+            raise SetupError(
+                "the Judge LLM needs the Codex CLI, which was not prepared"
+            )
+        if (
+            access is not None
+            and access.egress == "pinned"
+            and self.plan.task.verifier.network.mode != "no-network"
+        ):
+            raise SetupError(
+                "Judge model access through pinned endpoints needs "
+                '[verifier] network_mode = "no-network" on clusters'
+            )
+        self.judge_model_access = access
+
+    def _judge_isolate_binds(self) -> list[tuple[Path, PurePosixPath, bool]]:
+        """rsi-isolate, read-only, for every Judge."""
+        self.control.mkdir(parents=True, mode=0o700, exist_ok=True)
+        isolate = install_judge_isolate(self.control)
+        return [
+            (isolate, JUDGE_ISOLATE_CODE_TARGET, True),
+            (isolate / JUDGE_ISOLATE_LAUNCHER, JUDGE_ISOLATE_LAUNCHER_TARGET, True),
+        ]
+
+    def _judge_agent_binds(
+        self, root: Path, access: JudgeModelAccess, *, ends_at: float
+    ) -> list[tuple[Path, PurePosixPath, bool]]:
+        """One round's rsi-agent state and login copies, plus rsi-agent, the
+        Agent CLI (model access) and the pinned Codex CLI (a Judge LLM with a
+        Codex login), read-only; the credentials never reach the procedure.
+
+        ``ends_at`` is when the Harness stops the round: rsi-agent checks a
+        login's lifetime against a call's ``--timeout`` only up to then."""
+        state = root / "state"
+        private = state / "private"
+        private.mkdir(parents=True, mode=0o700)
+        state.chmod(0o711)
+        private.chmod(0o700)
+        descriptor = os.open(
+            private / "launch.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(access.round_launch(ends_at))
+        binds: list[tuple[Path, PurePosixPath, bool]] = [
+            (state, JUDGE_AGENT_STATE_ROOT, False)
+        ]
+        if access.auth is not None:
+            # Copies from the login held in memory, never Work's live files.
+            for index, mount in enumerate(access.auth.mounts):
+                source = root / "auth" / str(index)
+                source.mkdir(parents=True, mode=0o700)
+                for entry in mount.files:
+                    destination = source / entry.path
+                    destination.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+                    destination.write_bytes(entry.content)
+                    destination.chmod(entry.mode)
+                binds.append((source, mount.tmpfs.target, True))
+        self.control.mkdir(parents=True, mode=0o700, exist_ok=True)
+        agent = install_judge_agent(self.control)
+        binds.append((agent, JUDGE_AGENT_CODE_TARGET, True))
+        binds.append((agent / JUDGE_AGENT_LAUNCHER, JUDGE_AGENT_LAUNCHER_TARGET, True))
+        if self.plan.task.verifier.model_access:
+            binds.extend(
+                (self._copies[target], target, True)
+                for target in self._agent_cli_targets
+            )
+        if access.codex_cli is not None:
+            # The verified node-local copy, never part of the task image.
+            binds.append((access.codex_cli, JUDGE_CODEX_TARGET, True))
+        return binds
+
+    def prepare_judge_codex(self, sources: Mapping[str, Path]) -> Path:
+        """The pinned Codex CLI for a Judge LLM, as a node-local directory.
+
+        ``sources`` are the binaries the submit host found on shared storage,
+        by architecture; this node's is copied here only when its SHA-256 is
+        the release pinned for this compute node's architecture.
+        """
+        if not sources:
+            raise SetupError("the Judge LLM's Codex CLI was not found on submit")
+        return install_pinned_codex(
+            node_codex_source(sources), self.node_tmp / JUDGE_CODEX_SCRATCH
+        )
 
     def _start_work_broker(self) -> None:
         pools = self.allocated_pools
@@ -515,6 +673,7 @@ class ApptainerAgentRuntime:
         )
         if material is None:
             raise SetupError("cluster local Agent authentication is unavailable")
+        self.auth_material = material
         self.auth_secret_values.update(material.secret_values)
         auth_root = self.node_tmp / "agent-auth"
         auth_root.mkdir(mode=0o700)
@@ -683,12 +842,62 @@ class ApptainerAgentRuntime:
             redact = (sandbox_endpoint.environment["RSI_SANDBOX_TOKEN"],)
         round_digest = hashlib.sha256(request.round_id.encode()).hexdigest()[:16]
         judge_tmp = self.judge_tmp_root / f"round-{round_digest}"
+        access = self.judge_model_access
+        if judge_needs_rsi_agent(request.run_plan.task.verifier) and access is None:
+            raise InfrastructureError("Judge model access was not resolved")
+        if access is not None and access.work_login is not None:
+            access = self._renew_work_login(access, request.round_id)
+        command = tuple(request.run_plan.task.verifier.command)
+        network_mode = request.run_plan.task.verifier.network.mode
+        environment = {**environment, **self._judge_isolation_environment()}
+        agent_binds: list[tuple[Path, PurePosixPath, bool]] = []
+        agent_root: Path | None = None
+        provider: JudgeProviderBroker | None = None
         shutil.copytree(self.task_assets, judge_tmp, symlinks=True)
         try:
+            if access is not None:
+                agent_root = self.judge_tmp_root / f"round-{round_digest}-agent"
+                agent_root.mkdir(mode=0o700)
+                timeout = request.run_plan.task.verifier.timeout_seconds
+                agent_binds = self._judge_agent_binds(
+                    agent_root,
+                    access,
+                    ends_at=time.time() + timeout + JUDGE_ROUND_END_SLACK_SECONDS,
+                )
+                # Only the Agent's name, model and effort reach the procedure;
+                # the task's own variables cannot override these.
+                environment = {**environment, **dict(access.environment)}
+                redact = (*redact, *sorted(access.secret_values))
+                if access.egress == "site":
+                    # The network the Work Agent already uses for its model,
+                    # governed by the site rather than by the Harness.
+                    network_mode = "public"
+                    print(
+                        f"[rsi-engine] judge_model_egress: site ({request.round_id})",
+                        flush=True,
+                    )
+                else:
+                    network_mode = "no-network"
+                    # Short: a Unix socket path is limited to 108 bytes.
+                    provider = JudgeProviderBroker(
+                        self.node_tmp / f"jnet-{round_digest}",
+                        endpoints=access.endpoints,
+                    )
+                    provider.start()
+                    relay = PurePosixPath("/usr/local/bin/rsi-netns-relay")
+                    agent_binds += [
+                        (
+                            provider.root,
+                            PurePosixPath("/run/rsi-harness/network"),
+                            True,
+                        ),
+                        (self._copies[relay], relay, True),
+                    ]
+                    command = provider.wrap(command, relay_path=relay)
             return self._run(
-                request.run_plan.task.verifier.command,
+                command,
                 devices=request.run_plan.gpu_plan.judge.uuids,
-                network_mode=request.run_plan.task.verifier.network.mode,
+                network_mode=network_mode,
                 environment=environment,
                 output_path=request.verifier_output,
                 extra_binds=(
@@ -706,15 +915,98 @@ class ApptainerAgentRuntime:
                     (judge_tmp, PurePosixPath("/tmp"), False),
                     *trajectory_binds,
                     *sandbox_binds,
+                    *agent_binds,
+                    *self._judge_isolate_binds(),
                 ),
                 mount_workspace=False,
                 mount_agent_home=False,
                 phase="judge",
+                declared_network_mode=request.run_plan.task.verifier.network.mode,
                 output_redact_values=redact,
                 timeout_seconds=request.run_plan.task.verifier.timeout_seconds,
             )
         finally:
-            shutil.rmtree(judge_tmp)
+            try:
+                if provider is not None:
+                    provider.stop()
+                    shutil.rmtree(provider.root, ignore_errors=True)
+            finally:
+                if agent_root is not None:
+                    shutil.rmtree(agent_root, ignore_errors=True)
+                shutil.rmtree(judge_tmp)
+
+    def _renew_work_login(
+        self, access: JudgeModelAccess, round_id: str
+    ) -> JudgeModelAccess:
+        """The login Work's Agent keeps refreshing, read while Work is stopped.
+
+        As on Docker (JudgeRunner._renew_work_login): a missing, malformed or
+        foreign login, or any other failure on it, keeps the last good copy,
+        with a warning.
+        """
+        assert access.work_login is not None
+        try:
+            files = read_login_store(access.work_login, self._agent_auth_roots)
+            renewed = access.with_work_login(current_login(access.work_login, files))
+        except Exception as error:  # Agent-written data: never fatal
+            reason = _safe_output(login_kept_reason(error), set(access.secret_values))
+            print(f"[rsi-engine] judge_login_kept: {round_id}: {reason}", flush=True)
+            return access
+        self.judge_model_access = renewed
+        self.auth_secret_values.update(renewed.secret_values)
+        return renewed
+
+    def renew_operator_login(self, round_id: str) -> None:
+        """This round's Judge LLM gets the operator's current Codex login.
+
+        As on Docker (JudgeRunner._renew_operator_login), here in the Engine
+        on the compute node, before Work pauses: the pinned Codex CLI
+        refreshes the login in place when its access token would not outlive
+        the round, if this node can save it, one job at a time
+        (judge_llm.cluster_login_refresh). Whatever fails, the round keeps the
+        Judge's current copy and ``judge_login_refresh_failed`` says why.
+        """
+        access = self.judge_model_access
+        if access is None or access.operator_login is None:
+            return
+        try:
+            renewal = renew_operator_login(
+                access.operator_login,
+                codex_cli=access.codex_cli,
+                round_seconds=float(self.plan.task.verifier.timeout_seconds),
+                refresh=cluster_login_refresh,
+            )
+            renewed = access
+            if (
+                renewal.content is not None
+                and judge_codex_login(renewal.content)
+                != json.loads(access.launch)["llm"]["auth_json"]
+            ):
+                renewed = access.with_operator_login(renewal.content)
+            warning = renewal.warning
+        except Exception as error:  # never fatal: the copy works until it expires
+            renewed = access
+            warning = f"the login could not be used ({type(error).__name__})"
+        if warning is not None:
+            reason = _safe_output(warning, set(renewed.secret_values))
+            print(
+                f"[rsi-engine] judge_login_refresh_failed: {round_id}: {reason}",
+                flush=True,
+            )
+        self.judge_model_access = renewed
+        self.auth_secret_values.update(renewed.secret_values)
+
+    def _judge_isolation_environment(self) -> dict[str, str]:
+        """The operator's isolation fallback, for a science Judge library.
+
+        Always set ("none" or "same-user") so an ``ENV`` in the task's
+        image, which Apptainer keeps even with ``--cleanenv``, never decides.
+        """
+        return {
+            JUDGE_ISOLATION_FALLBACK_ENV: (
+                self.profile.apptainer.judge_isolation_fallback
+            )
+        }
 
     def _worker_template(
         self,
@@ -743,6 +1035,7 @@ class ApptainerAgentRuntime:
                     else self.profile.apptainer.judge_environment
                 ),
                 **self._worker_huggingface_environment(network_mode),
+                **(self._judge_isolation_environment() if phase == "judge" else {}),
             },
         )
 
@@ -863,6 +1156,10 @@ class ApptainerAgentRuntime:
             WorkerBind(source=path, target=PurePosixPath(str(path)))
             for path in self.profile.apptainer.rdma_binds
         )
+        binds.extend(
+            WorkerBind(source=source, target=target, read_only=read_only)
+            for source, target, read_only in self._judge_isolate_binds()
+        )
         worker = self._worker_template(
             network_mode=network_mode,
             binds=tuple(binds),
@@ -893,7 +1190,7 @@ class ApptainerAgentRuntime:
             worker=worker,
             broker_root=broker.root,
             command=request.run_plan.task.verifier.command,
-            environment=environment,
+            environment={**environment, **self._judge_isolation_environment()},
             local_world_size=pools.gpus_per_node,
         )
         control_path = round_root / "controller.json"
@@ -1057,7 +1354,13 @@ class ApptainerAgentRuntime:
         containall: bool,
         network_mode: Literal["public", "no-network", "allowlist"],
         phase: Literal["work", "judge"] = "work",
+        declared_network_mode: Literal["public", "no-network", "allowlist"]
+        | None = None,
     ) -> tuple[str, ...]:
+        # The phase's declared mode chooses its binds, caches and HF
+        # environment; network_mode only its network (a site-egress Judge
+        # gets the site network without Work's public binds and caches).
+        declared = declared_network_mode or network_mode
         command = [
             str(self.profile.apptainer.binary),
             "exec",
@@ -1126,7 +1429,7 @@ class ApptainerAgentRuntime:
                 )
         multi_node = self.allocated_pools is not None
         scoped = self.profile.apptainer.mount_policy == "scoped"
-        if network_mode == "public" and not multi_node and not scoped:
+        if declared == "public" and not multi_node and not scoped:
             binds.extend(
                 (path, PurePosixPath(str(path)), False)
                 for path in self.profile.apptainer.extra_binds
@@ -1141,7 +1444,7 @@ class ApptainerAgentRuntime:
                 (binding.source, binding.target, binding.read_only)
                 for binding in phase_binds
             )
-        binds.extend(self._cache_binds(network_mode))
+        binds.extend(self._cache_binds(declared))
         if multi_node and phase == "judge":
             authority = self._judge_authority_bind()
             if authority is not None:
@@ -1163,7 +1466,7 @@ class ApptainerAgentRuntime:
             )
         values = {
             **profile_environment,
-            **self._worker_huggingface_environment(network_mode),
+            **self._worker_huggingface_environment(declared),
             "TMPDIR": "/tmp",
             "TEMP": "/tmp",
             "TMP": "/tmp",
@@ -1225,6 +1528,8 @@ class ApptainerAgentRuntime:
         mount_agent_home: bool = True,
         containall: bool = True,
         phase: Literal["work", "judge"] = "work",
+        declared_network_mode: Literal["public", "no-network", "allowlist"]
+        | None = None,
         timeout_seconds: float | None,
         track_work: bool = False,
     ) -> AgentRunResult:
@@ -1243,6 +1548,7 @@ class ApptainerAgentRuntime:
                 containall=containall,
                 network_mode=network_mode,
                 phase=phase,
+                declared_network_mode=declared_network_mode,
             )
             + isolated_command
         )
@@ -1321,12 +1627,31 @@ class ApptainerAgentRuntime:
         )
 
 
-def require_no_judge_model_access(task: Any) -> None:
-    """Cluster Judges cannot reach a model: refuse a task that needs one."""
-    if task.verifier.model_access:
+def require_cluster_judge_model_access(task: Any, *, multi_node: bool) -> None:
+    """Refuse a Judge with rsi-agent that a cluster run cannot serve.
+
+    The adapter calls this before it submits anything; the runtime repeats
+    the checks inside the job. ``model_access`` needs a single-node Judge
+    and a public or no-network Agent, and a no-network Agent's pinned
+    endpoints a no-network Verifier. A Judge LLM (``judge_model``) alone
+    needs a single-node Judge and a public or no-network Verifier
+    (judge_llm.cluster_judge_egress).
+    """
+    verifier = task.verifier
+    if not judge_needs_rsi_agent(verifier):
+        return
+    if multi_node:
+        what = "Judge model access" if verifier.model_access else "A Judge LLM"
+        raise SetupError(f"{what} on a multi-node Judge is not supported yet")
+    egress = cluster_judge_egress(task)
+    if (
+        verifier.model_access
+        and egress == "pinned"
+        and verifier.network.mode != "no-network"
+    ):
         raise SetupError(
-            "Judge model access (metadata.rsi_harness.verifier.model_access) "
-            "is not supported on cluster runs; use the local Docker backend"
+            "Judge model access through pinned endpoints needs "
+            '[verifier] network_mode = "no-network" on clusters'
         )
 
 
@@ -1349,6 +1674,8 @@ class NativeJudgeEvaluator:
     def evaluate(self, request: EvaluationRequest, observer: Any) -> SubmissionReport:
         started = time.monotonic()
         snapshot = self.runtime.rounds / request.round_id / "workspace"
+        # Before Work pauses, as on Docker: a refresh may take a while.
+        self.runtime.renew_operator_login(request.round_id)
         # Busy Work envs make the submission retryable before any pause.
         self.sandbox.freeze_work()
         frozen = self.sandbox.enabled
@@ -1506,6 +1833,7 @@ class NativeEngineComposition:
         )
         self.artifacts: RunArtifactWriter | None = None
         config = load_config()
+        self.rsi_loop_config = config
         self.agent = RSILoopAgentAdapter(config, runtime=self.runtime)
         self.provider_urls = (
             _agent_provider_urls(payload, plan, config)
@@ -1645,7 +1973,79 @@ class NativeEngineComposition:
     def create_work(self, *_args: Any) -> ContainerRef:
         self.runtime.initialize()
         self.secrets.update(self.runtime.auth_secret_values)
+        access = self.judge_model_access()
+        self.runtime.configure_judge_model_access(access)
+        if access is not None:
+            self.secrets.update(access.secret_values)
         return self.runtime.work_ref
+
+    def judge_model_access(self) -> JudgeModelAccess | None:
+        """The run's Agent and the task's Judge LLM, as the Judge reaches them.
+
+        A no-network Agent reaches its model through endpoints the Harness
+        pins; so does the Judge (``pinned``), through its own proxy. A public
+        Agent reaches it over the site network; so does the Judge (``site``),
+        whose egress the site, not the Harness firewall, then governs. A
+        Judge with only a Judge LLM follows its Verifier's network instead
+        (judge_llm.cluster_judge_egress). The Judge LLM's credential is
+        resolved here again, as the submit host checked it.
+        """
+        task = self.plan.task
+        if not judge_needs_rsi_agent(task.verifier):
+            return None
+        egress = cluster_judge_egress(task)
+        enforcer = NetworkPolicyEnforcer(run_id=self.payload.run_id)
+        endpoints: tuple[Any, ...] = ()
+        extra = None
+        if egress == "pinned" and task.verifier.model_access:
+            endpoints = enforcer.pin_endpoints(self.provider_urls)
+            extra = judge_proxy_environment()
+        judge_llm = resolve_cluster_judge_llm(
+            task,
+            getattr(self.payload, "judge_llm", None),
+            agent_auth=self.runtime.auth_material,
+            config=self.rsi_loop_config,
+            egress=egress,
+            # Site egress resolves names in the Judge, as Work does.
+            pin=enforcer.pin_endpoints if egress == "pinned" else unresolved_endpoints,
+        )
+        access = resolve_judge_model_access(
+            task,
+            self.rsi_loop_config,
+            self.runtime.auth_material,
+            endpoints,
+            judge_llm,
+            egress=egress,
+            isolation_fallback=self.payload.profile.apptainer.judge_isolation_fallback,
+            extra_agent_environment=extra,
+        )
+        assert access is not None
+        # One pinned endpoint per name: the Agent and the Judge LLM may share
+        # a host, resolved twice.
+        unique: dict[tuple[str, int], Any] = {}
+        for endpoint in access.endpoints:
+            unique.setdefault((endpoint.hostname.lower(), endpoint.port), endpoint)
+        access = replace(access, endpoints=tuple(unique.values()))
+        if access.needs_codex_cli:
+            prepared = getattr(self.payload, "judge_llm", None)
+            access = replace(
+                access,
+                codex_cli=self.runtime.prepare_judge_codex(
+                    {} if prepared is None else prepared.codex
+                ),
+            )
+        if judge_llm is not None:
+            self._event(
+                "judge_llm",
+                {
+                    "model": judge_llm.model,
+                    "effort": judge_llm.effort,
+                    "credential": judge_llm.kind.value,
+                    "reused": judge_llm.reused,
+                    "egress": egress,
+                },
+            )
+        return access
 
     def install_hooks(
         self, plan: RunPlan, work: ContainerRef, submit_url: str, token: str
@@ -1733,7 +2133,13 @@ class NativeEngineComposition:
         if self.evaluator is None:
             raise RuntimeError("native Judge evaluator is unavailable")
         self._event("judge_started", {"round_id": request.round_id})
-        report = self.evaluator.evaluate(request, observer)
+        try:
+            report = self.evaluator.evaluate(request, observer)
+        finally:
+            # A renewed Work login: its tokens may show in the Agent's output.
+            access = self.runtime.judge_model_access
+            if access is not None:
+                self.secrets.update(access.secret_values)
         self._event(
             "judge_finished",
             {

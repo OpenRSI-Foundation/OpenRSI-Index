@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import time
 from pathlib import Path, PurePosixPath
 
 import pytest
 
-from rsi_harness.cluster.bluevela.runtime import require_no_judge_model_access
 from rsi_harness.errors import SetupError
 from rsi_harness.integrations.rsi_loop import rsi_loop_agent_environment
 from rsi_harness.models import (
@@ -20,6 +20,7 @@ from rsi_harness.models import (
     SubmissionStatus,
 )
 from rsi_harness.runtime.judge import (
+    JUDGE_ROUND_END_SLACK_SECONDS,
     DockerJudgeRuntimeFactory,
     JudgeRunner,
     _auth_owner,
@@ -38,6 +39,7 @@ from rsi_harness.runtime.network import (
     NetworkPolicyEnforcer,
     PinnedEndpoint,
 )
+from rsi_harness.task.digest import hash_tree
 from rsi_loop.harness.agent import create_agent
 from rsi_loop.harness.config import RSILoopConfig
 from tests.factories import make_run_plan
@@ -84,6 +86,14 @@ def auth_material() -> AgentAuthMaterial:
 
 
 LAUNCH = json.dumps({"version": 1, "redact": [API_KEY]}).encode()
+
+
+def launched(runtime) -> list:
+    """The launch specs injected, each without its round's end."""
+    return [
+        ({k: v for k, v in json.loads(launch).items() if k != "round_ends_at"}, owner)
+        for launch, owner in runtime.injected_judge_agent
+    ]
 
 
 def model_access(*, auth: AgentAuthMaterial | None = None) -> JudgeModelAccess:
@@ -205,7 +215,9 @@ def test_resolve_reuses_the_work_agent_environment_and_credentials(tmp_path):
     assert set(spec["redact"]) == {API_KEY, LOGIN_SECRET}
     assert spec["uid"] == spec["gid"] == 61000
     assert spec["slots"] == 16
-    assert access.auth is auth
+    # The Judge's copy (no refresh token here to withhold); Work's is kept to
+    # check the next round's read against.
+    assert access.auth == auth and access.work_login is auth
     assert access.endpoints == (ENDPOINT,)
     assert access.extra_hosts == (("model.test", "198.51.100.8"),)
     assert {API_KEY, LOGIN_SECRET} <= access.secret_values
@@ -279,7 +291,15 @@ def test_judge_receives_agent_credentials_and_redacts_them(tmp_path):
     )
     # The verifier user alone reads the credentials it was handed.
     assert runtime.injected_auth == [(auth, "1001:1002")]
-    assert runtime.injected_judge_agent == [(LAUNCH, "1001:1002")]
+    assert launched(runtime) == [(json.loads(LAUNCH), "1001:1002")]
+    # rsi-agent checks the login against a call only up to the round's end.
+    [(launch, _owner)] = runtime.injected_judge_agent
+    timeout = request[0].task.verifier.timeout_seconds
+    assert (
+        time.time()
+        < json.loads(launch)["round_ends_at"]
+        <= (time.time() + timeout + JUDGE_ROUND_END_SLACK_SECONDS)
+    )
     names = [name for name, _ in runtime.events]
     assert (
         names.index("judge_start")
@@ -304,7 +324,7 @@ def test_api_key_access_needs_no_credential_files(tmp_path):
 
     assert report.status is SubmissionStatus.COMPLETED
     assert runtime.injected_auth == []
-    assert runtime.injected_judge_agent == [(LAUNCH, "1001:1002")]
+    assert launched(runtime) == [(json.loads(LAUNCH), "1001:1002")]
     spec = runtime.created_specs[0]
     assert [str(tmpfs.target) for tmpfs in spec.tmpfs] == [
         "/tests",
@@ -338,30 +358,112 @@ def test_hidden_default_judge_gets_no_model_access(tmp_path):
     assert "output_redact_values" not in runtime.exec_options[0]
 
 
+@pytest.mark.parametrize("clean_image", [False, True])
 @pytest.mark.parametrize(
     ("judge_user", "mode"), [("0", "0700"), (None, "0700"), ("1001:1002", "0755")]
 )
-def test_a_root_hidden_judge_keeps_its_tests_from_the_agent(tmp_path, judge_user, mode):
+def test_a_root_hidden_judge_keeps_its_tests_from_the_agent(
+    tmp_path, judge_user, mode, clean_image
+):
     runner, runtime, request = model_access_harness(tmp_path, model_access())
     run_plan, work, log_dir = request
     images = run_plan.images.model_copy(update={"judge_user": judge_user})
+    verifier = {"user": None, "clean_image": clean_image}
     task = run_plan.task.model_copy(
         update={
-            "verifier": run_plan.task.verifier.model_copy(update={"user": None}),
+            "verifier": run_plan.task.verifier.model_copy(update=verifier),
             "service": run_plan.task.service.model_copy(update={"user": None}),
         }
     )
     run_plan = run_plan.model_copy(update={"images": images, "task": task})
+    runtime.snapshot_images[images.work_digest] = {}
 
     report = evaluate(runner, (run_plan, work, log_dir))
 
     assert report.status is SubmissionStatus.COMPLETED, report.error
+    assert (runtime.created_specs[0].image == images.work_digest) is clean_image
     [tests] = [
         tmpfs
         for tmpfs in runtime.created_specs[0].tmpfs
         if str(tmpfs.target) == "/tests"
     ]
     assert tests.options == f"rw,exec,nosuid,nodev,mode={mode}"
+
+
+@pytest.mark.parametrize(
+    ("visibility", "clean_image"),
+    [("hidden", True), ("hidden", False), ("public", True)],
+)
+@pytest.mark.parametrize("access", [True, False], ids=["model", "no-model"])
+def test_every_judge_image_gets_the_same_rsi_agent_and_isolation_fallback(
+    tmp_path, visibility, clean_image, access
+):
+    """rsi-agent, rsi-isolate and RSI_JUDGE_ISOLATION_FALLBACK come from the
+    Harness, not the image: a clean hidden Judge, a Work-snapshot hidden
+    Judge and a read-only public Judge all get the same mounts, tmpfs and
+    value; rsi-isolate also without model access."""
+    runner, runtime, (plan, work, log_dir) = model_access_harness(
+        tmp_path, model_access() if access else None, declared=access
+    )
+    verifier = {"visibility": visibility, "clean_image": clean_image}
+    task = plan.task.model_copy(
+        update={
+            "verifier": plan.task.verifier.model_copy(update=verifier),
+            "tests_digest": hash_tree(plan.task.source_dir / "tests"),
+        }
+    )
+    plan = plan.model_copy(update={"task": task})
+    runtime.snapshot_images[plan.images.work_digest] = {}
+
+    report = evaluate(runner, (plan, work, log_dir))
+
+    assert report.status is SubmissionStatus.COMPLETED, report.error
+    spec = runtime.created_specs[0]
+    assert (spec.image == plan.images.work_digest) is clean_image
+    assert spec.read_only_rootfs is (visibility == "public")
+    mounts = {str(mount.target): mount for mount in spec.mounts}
+    isolate = mounts["/opt/rsi-isolate"]
+    assert isolate.read_only and isolate.source.name == "judge-isolate"
+    assert (isolate.source / "rsi_isolate.py").is_file()
+    assert (isolate.source / "judge_isolation.py").is_file()
+    launcher = mounts["/usr/local/bin/rsi-isolate"]
+    assert launcher.read_only and launcher.source == isolate.source / "rsi-isolate"
+    assert runtime.exec_environments[0]["RSI_JUDGE_ISOLATION_FALLBACK"] == "none"
+    if not access:
+        assert "/opt/rsi-agent" not in mounts
+        return
+    assert mounts["/opt/rsi-agent"].read_only
+    assert mounts["/usr/local/bin/rsi-agent"].read_only
+    assert {"/run/rsi-agent", "/run/rsi-agent/private"} <= {
+        str(tmpfs.target) for tmpfs in spec.tmpfs
+    }
+    assert launched(runtime) == [(json.loads(LAUNCH), "1001:1002")]
+
+
+@pytest.mark.parametrize("clean_image", [True, False])
+@pytest.mark.parametrize("visibility", ["hidden", "public"])
+def test_launch_spec_hides_tests_by_visibility_not_by_judge_image(
+    tmp_path, visibility, clean_image
+):
+    definition = declare_model_access(make_run_plan(tmp_path)).task
+    definition = definition.model_copy(
+        update={
+            "verifier": definition.verifier.model_copy(
+                update={"visibility": visibility, "clean_image": clean_image}
+            )
+        }
+    )
+
+    access = resolve_judge_model_access(
+        definition, RSILoopConfig(agent_api_key=API_KEY), None, (ENDPOINT,)
+    )
+
+    assert access is not None
+    spec = json.loads(access.launch)
+    # Docker has no operator fallback, whichever image the Judge starts from.
+    assert spec["isolation_fallback"] == "none"
+    assert ("/tests" in spec["hidden"]) is (visibility == "hidden")
+    assert {"/logs/verifier", "/run/rsi-agent"} <= set(spec["hidden"])
 
 
 @pytest.mark.parametrize(
@@ -548,14 +650,6 @@ def test_docker_model_access_flag_is_judge_only(tmp_path):
         work.inject_agent_auth(ref, auth_material(), owner="1001")
 
 
-def test_cluster_runs_refuse_judge_model_access(tmp_path):
-    plan = make_run_plan(tmp_path)
-    require_no_judge_model_access(plan.task)
-
-    with pytest.raises(SetupError, match="not supported on cluster runs"):
-        require_no_judge_model_access(declare_model_access(plan).task)
-
-
 def test_container_ref_roles_cannot_borrow_judge_credentials(tmp_path):
     client = FakeDockerClient()
     runtime, _ = _judge_with_auth_tmpfs(client, tmp_path, judge_model_access=True)
@@ -634,6 +728,7 @@ def test_production_hands_declared_model_access_to_every_judge_round(
     class Runner:
         def __init__(self, **kwargs):
             seen["runner"] = kwargs["model_access"]
+            self.model_access = kwargs["model_access"]
 
         def evaluate(self, request):
             raise Stop
@@ -651,6 +746,52 @@ def test_production_hands_declared_model_access_to_every_judge_round(
     with pytest.raises(Stop):
         composition.evaluate(request, observer=None)
     assert seen == {"factory": access, "runner": access}
+
+
+def test_production_carries_a_renewed_login_to_the_next_round(tmp_path, monkeypatch):
+    """Production builds a JudgeRunner per round: the access a round renewed
+    is what the next round starts from, and its tokens are redacted from
+    Work's later Agent output."""
+    from dataclasses import replace
+
+    from rsi_harness.runtime import production
+
+    composition = _production_composition(tmp_path, declared=True)
+    access = composition.judge_model_access
+    renewed = replace(access, secret_values=access.secret_values | {"RENEWED-TOKEN"})
+    built = []
+
+    class Stop(Exception):
+        pass
+
+    class Factory:
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class Runner:
+        def __init__(self, **kwargs):
+            built.append(kwargs["model_access"])
+            self.model_access = kwargs["model_access"]
+
+        def evaluate(self, request):
+            # As JudgeRunner._renew_work_login does, before the round fails.
+            self.model_access = renewed
+            raise Stop
+
+    monkeypatch.setattr(production, "DockerJudgeRuntimeFactory", Factory)
+    monkeypatch.setattr(production, "JudgeRunner", Runner)
+    composition.work_runtime = object()
+    composition.enforcer = object()
+    composition.artifacts = object()
+    request = type("Request", (), {"round_id": "agent-1", "work_container": None})
+
+    for _round in range(2):
+        with pytest.raises(Stop):
+            composition.evaluate(request, observer=None)
+
+    assert built == [access, renewed]
+    assert composition.judge_model_access is renewed
+    assert "RENEWED-TOKEN" in composition.agent_output_secrets
 
 
 def test_production_without_opt_in_grants_the_judge_nothing(tmp_path):
@@ -683,18 +824,105 @@ def _agent_mounts(tmp_path: Path, **overrides) -> tuple[ContainerMount, ...]:
     return ContainerMount(**code), ContainerMount(**launcher)
 
 
-def test_install_judge_agent_is_idempotent_and_repairs_a_changed_copy(tmp_path):
-    from rsi_harness.judge_agent import install_judge_agent, judge_agent_source
+@pytest.mark.parametrize(
+    ("install", "program", "launcher"),
+    [
+        ("install_judge_agent", "rsi_agent.py", "rsi-agent"),
+        ("install_judge_isolate", "rsi_isolate.py", "rsi-isolate"),
+    ],
+)
+def test_install_is_idempotent_and_repairs_a_changed_copy(
+    tmp_path, install, program, launcher
+):
+    from rsi_harness import judge_agent
 
-    directory = install_judge_agent(tmp_path)
-    program = directory / "rsi_agent.py"
-    assert program.read_bytes() == judge_agent_source("rsi_agent.py")
-    assert (directory / "rsi-agent").stat().st_mode & 0o777 == 0o755
-    assert program.stat().st_mode & 0o777 == 0o644
-    program.write_text("changed")
+    install = getattr(judge_agent, install)
+    source = judge_agent.judge_agent_source
+    directory = install(tmp_path)
+    files = {
+        directory / program: 0o644,
+        directory / "judge_isolation.py": 0o644,
+        directory / launcher: 0o755,
+    }
+    for path, mode in files.items():
+        assert path.read_bytes() == source(path.name)
+        assert path.stat().st_mode & 0o777 == mode
+    (directory / program).write_text("changed")
+    shared = directory / "judge_isolation.py"
+    shared.unlink()
+    shared.symlink_to(directory / program)
+    (directory / launcher).chmod(0o777)
 
-    assert install_judge_agent(tmp_path) == directory
-    assert program.read_bytes() == judge_agent_source("rsi_agent.py")
+    assert install(tmp_path) == directory
+    for path, mode in files.items():
+        assert not path.is_symlink()
+        assert path.read_bytes() == source(path.name)
+        assert path.stat().st_mode & 0o777 == mode
+
+
+def _isolate_mounts(tmp_path: Path, **overrides) -> tuple[ContainerMount, ...]:
+    from rsi_harness.judge_agent import install_judge_isolate
+
+    run_root = tmp_path / "engine-root" / "run"
+    run_root.mkdir(parents=True, exist_ok=True)
+    directory = install_judge_isolate(run_root)
+    code = {
+        "source": directory,
+        "target": PurePosixPath("/opt/rsi-isolate"),
+        "read_only": True,
+    }
+    launcher = {
+        "source": directory / "rsi-isolate",
+        "target": PurePosixPath("/usr/local/bin/rsi-isolate"),
+        "read_only": True,
+    }
+    code.update(overrides.get("code", {}))
+    launcher.update(overrides.get("launcher", {}))
+    return ContainerMount(**code), ContainerMount(**launcher)
+
+
+@pytest.mark.parametrize("model", [True, False])
+def test_docker_mounts_rsi_isolate_into_every_judge_only(tmp_path, model):
+    judge = make_runtime(
+        FakeDockerClient(), tmp_path, role="judge", judge_model_access=model
+    )
+    assert judge.create(
+        ContainerSpec(image="judge-image", mounts=_isolate_mounts(tmp_path))
+    )
+    work = make_runtime(FakeDockerClient(), tmp_path, role="work")
+    with pytest.raises(SetupError, match="rsi-isolate mounts"):
+        work.create(ContainerSpec(image="image", mounts=_isolate_mounts(tmp_path)))
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"code": {"read_only": False}},
+        {"launcher": {"read_only": False}},
+        {"launcher": {"target": PurePosixPath("/opt/rsi-isolate")}},
+        {"code": {"source": "elsewhere"}},
+        {"code": {"source": "symlink"}},
+    ],
+)
+def test_docker_refuses_an_inexact_rsi_isolate_mount(tmp_path, overrides):
+    judge = make_runtime(FakeDockerClient(), tmp_path, role="judge")
+    source = overrides.get("code", {}).get("source")
+    if source in ("elsewhere", "symlink"):
+        elsewhere = tmp_path / "engine-root" / "elsewhere"
+        elsewhere.mkdir(parents=True)
+        path = elsewhere
+        if source == "symlink":
+            # A link named like the copy, to a directory that is not it.
+            path = tmp_path / "engine-root" / "judge-isolate"
+            path.symlink_to(elsewhere)
+        overrides = {"code": {"source": path}}
+
+    with pytest.raises(SetupError, match="rsi-isolate mounts"):
+        judge.create(
+            ContainerSpec(
+                image="judge-image", mounts=_isolate_mounts(tmp_path, **overrides)
+            )
+        )
 
 
 def test_docker_mounts_rsi_agent_only_into_a_model_access_judge(tmp_path):

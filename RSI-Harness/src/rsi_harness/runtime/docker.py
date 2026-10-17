@@ -35,6 +35,12 @@ from rsi_harness.judge_agent import (
     JUDGE_AGENT_PRIVATE,
     JUDGE_AGENT_STATE_ROOT,
     JUDGE_AGENT_TMPFS,
+    JUDGE_CODEX_CACHE,
+    JUDGE_CODEX_TARGET,
+    JUDGE_ISOLATE_CODE_TARGET,
+    JUDGE_ISOLATE_DIRECTORY,
+    JUDGE_ISOLATE_LAUNCHER,
+    JUDGE_ISOLATE_LAUNCHER_TARGET,
 )
 from rsi_harness.models import (
     JUDGE_TRAJECTORY_ROOT,
@@ -52,7 +58,11 @@ from rsi_harness.runtime.gpu import (
     NVIDIA_VISIBLE_DEVICES_VOID,
     nvidia_visible_devices_value,
 )
-from rsi_harness.runtime.local_auth import AgentAuthMaterial
+from rsi_harness.runtime.local_auth import (
+    MAX_AUTH_BYTES,
+    AgentAuthMaterial,
+    login_paths,
+)
 from rsi_harness.runtime.mount_topology import (
     SANDBOX_MOUNT_TARGET,
     validate_split_workdir_target,
@@ -371,6 +381,25 @@ def _close_docker_stream(stream: object) -> None:
                 response_close()
         except Exception:
             pass
+
+
+def _receive_exactly(
+    raw_socket: Any, size: int, deadline: float, *, allow_eof: bool = False
+) -> bytes | None:
+    """``size`` bytes before ``deadline``; None at a clean EOF if allowed."""
+    data = bytearray()
+    while len(data) < size:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            raise OSError("the read timed out")
+        raw_socket.settimeout(left)
+        chunk = raw_socket.recv(min(65536, size - len(data)))
+        if not chunk:
+            if allow_eof and not data:
+                return None
+            raise OSError("the stream ended early")
+        data.extend(chunk)
+    return bytes(data)
 
 
 class DockerContainerRuntime:
@@ -1464,6 +1493,94 @@ class DockerContainerRuntime:
                     f"{label} Agent authentication tmpfs permissions differ"
                 )
 
+    def read_agent_auth(
+        self,
+        container: ContainerRef,
+        material: AgentAuthMaterial,
+        *,
+        timeout_seconds: float = 10.0,
+    ) -> dict[PurePosixPath, bytes]:
+        """Read Work's current login files, the copies its Agent refreshes.
+
+        Only while Work runs: Docker can neither exec in nor copy from a
+        paused container, and a tmpfs is never in its archive. Each file must
+        be a regular file, not a symlink, of at most the login size limit;
+        a file that is not is left out, for the caller to refuse. The bytes
+        are the Work Agent's, so the caller checks them.
+        """
+
+        if self._role != "work" or container.role != "work":
+            raise SetupError("only Work's Agent login can be read")
+        files: dict[PurePosixPath, bytes] = {}
+        for path in login_paths(material):
+            content = self._read_work_file(
+                container, path, limit=MAX_AUTH_BYTES, timeout_seconds=timeout_seconds
+            )
+            if content is not None:
+                files[path] = content
+        return files
+
+    def _read_work_file(
+        self,
+        container: ContainerRef,
+        path: PurePosixPath,
+        *,
+        limit: int,
+        timeout_seconds: float,
+    ) -> bytes | None:
+        """One file's bytes from stdout alone, bounded in size and time."""
+
+        command = (
+            "/bin/sh",
+            "-c",
+            '[ -f "$1" ] && [ ! -L "$1" ] && exec /bin/cat -- "$1"',
+            "rsi-agent-auth-read",
+            str(path),
+        )
+        stream: Any | None = None
+        deadline = time.monotonic() + timeout_seconds
+        try:
+            created = self._client.api.exec_create(
+                container.container_id,
+                command,
+                stdout=True,
+                stderr=False,
+                stdin=False,
+                tty=False,
+                privileged=False,
+                user="root",
+            )
+            exec_id = created["Id"]
+            stream = self._client.api.exec_start(
+                exec_id, detach=False, tty=False, socket=True
+            )
+            raw_socket = getattr(stream, "_sock", None)
+            if raw_socket is None:
+                raise TypeError("Docker did not return an owned exec socket")
+            content = bytearray()
+            # Multiplexed frames: an 8-byte header (stream, size), then data.
+            while True:
+                header = _receive_exactly(raw_socket, 8, deadline, allow_eof=True)
+                if header is None:
+                    break
+                size = int.from_bytes(header[4:8], "big")
+                if len(content) + size > limit:
+                    return None
+                data = _receive_exactly(raw_socket, size, deadline) or b""
+                if header[0] == 1:
+                    content.extend(data)
+            inspection = self._client.api.exec_inspect(exec_id)
+        except (APIError, KeyError, OSError, TypeError) as error:
+            raise InfrastructureError(
+                f"failed to read the Work Agent's login file {path}"
+            ) from error
+        finally:
+            if stream is not None:
+                _close_docker_stream(stream)
+        if inspection.get("Running") is True or inspection.get("ExitCode") != 0:
+            return None
+        return bytes(content)
+
     def inject_judge_agent(
         self,
         container: ContainerRef,
@@ -2314,6 +2431,47 @@ class DockerContainerRuntime:
                 )
             )
         )
+        # rsi-isolate: the Engine's read-only copy for this run, every Judge.
+        exact_judge_isolate = (
+            self._role == "judge"
+            and mount.read_only
+            and (
+                (
+                    mount.target == JUDGE_ISOLATE_CODE_TARGET
+                    and source.name == JUDGE_ISOLATE_DIRECTORY
+                    and source.is_dir()
+                )
+                or (
+                    mount.target == JUDGE_ISOLATE_LAUNCHER_TARGET
+                    and source.name == JUDGE_ISOLATE_LAUNCHER
+                    and source.parent.name == JUDGE_ISOLATE_DIRECTORY
+                    and source.is_file()
+                )
+            )
+        )
+        if (
+            mount.target in (JUDGE_ISOLATE_CODE_TARGET, JUDGE_ISOLATE_LAUNCHER_TARGET)
+            and not exact_judge_isolate
+        ):
+            raise SetupError(
+                "rsi-isolate mounts are limited to a Judge's exact read-only copy"
+            )
+        # The Judge LLM's Codex CLI: the Engine's read-only cached copy.
+        exact_judge_codex = (
+            self._role == "judge"
+            and self._judge_model_access
+            and mount.read_only
+            and mount.target == JUDGE_CODEX_TARGET
+            and source.parent.name == JUDGE_CODEX_CACHE
+            and source.name.startswith("codex-")
+            and source.is_dir()
+            and (source / "codex").is_file()
+        )
+        if mount.target == JUDGE_CODEX_TARGET and not exact_judge_codex:
+            raise SetupError(
+                "the Codex CLI mount is limited to a model-access Judge's exact "
+                "read-only cached copy"
+            )
         if (
             mount.target in (JUDGE_AGENT_CODE_TARGET, JUDGE_AGENT_LAUNCHER_TARGET)
             and not exact_judge_agent
@@ -2339,7 +2497,7 @@ class DockerContainerRuntime:
             allowed_targets.add(WORK_FEEDBACK_ROOT)
         if exact_judge_trajectory:
             allowed_targets.add(JUDGE_TRAJECTORY_ROOT)
-        if exact_judge_agent:
+        if exact_judge_agent or exact_judge_codex or exact_judge_isolate:
             allowed_targets.add(mount.target)
         if exact_work_tests:
             allowed_targets.add(PurePosixPath("/tests"))

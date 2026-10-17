@@ -9,10 +9,11 @@ statuses and users, the trajectory manifest, the paths), and whole Judge
 rounds of the sample through the real ``rsi-agent`` program.
 
 Everything here runs without Docker, a GPU, network, root or an Agent login:
-routes run as the current user, ``rsi-agent`` runs unisolated (as it does for
-a non-root Judge) with a fake Codex CLI, and the trajectory comes from the
-Harness's own capture. Root, the uid drop and the Judge container run in the
-opt-in Docker test (tests/integration/test_science_in_judge_sample.py).
+routes run as the current user, ``rsi-agent`` confines its fake Codex CLI
+with Landlock (as it does for a Judge that is not root), and the trajectory
+comes from the Harness's own capture. Root, the uid drop and the Judge
+container run in the opt-in Docker test
+(tests/integration/test_science_in_judge_sample.py).
 """
 
 from __future__ import annotations
@@ -58,8 +59,8 @@ SAMPLE = REPO / "sample_tasks" / "science-ising3d"
 TESTS = SAMPLE / "tests"
 STARTER = SAMPLE / "environment" / "starter"
 RSI_AGENT_PROGRAM = REPO / "src" / "rsi_harness" / "judge_agent" / "rsi_agent.py"
-# sha256 of OpenRSI-X science-task-agent assets/science_judge.py, version 2.
-LIBRARY_SHA256 = "1872ebe27dad111403777ce8e3764c9fa871f7c201ade24e76837dca72486ada"
+# sha256 of OpenRSI-X science-task-agent assets/science_judge.py, version 3.
+LIBRARY_SHA256 = "48850c287f88bbe75ee104d6141e724d23b1999f290f37128a331bbba5dcd359"
 API_KEY = "sk-synthetic-science-sample-key-4b7a"
 
 
@@ -111,7 +112,7 @@ def test_the_sample_declares_every_public_judge_capability():
 def test_the_judge_is_the_unchanged_library_with_this_tasks_config():
     library = (TESTS / "science_judge.py").read_bytes()
     assert hashlib.sha256(library).hexdigest() == LIBRARY_SHA256
-    assert SJ.__version__ == "2"
+    assert SJ.__version__ == "3"
     assert CONFIG.problems() == []
     assert SJ.validate_rules(TESTS) == []
     assert [(route.name, route.timeout_sec) for route in CONFIG.routes] == [
@@ -319,7 +320,13 @@ class Round:
                 network=NetworkPolicy(mode="public"),
             ),
         )
-        launch = json.loads(build_launch_spec(oneshot, None, {API_KEY}))
+        launch = json.loads(
+            build_launch_spec(oneshot, None, {API_KEY}, visibility="public")
+        )
+        # The fake CLI's record: the only file outside its job a confined
+        # call may write (the Harness grants none).
+        self.record.touch()
+        launch["writable"] = [str(self.record)]
         (state / "private" / "launch.json").write_text(json.dumps(launch))
         self.bin = tmp_path / "bin"
         self.bin.mkdir()
@@ -351,7 +358,7 @@ class Round:
 
     def run(self, plan=None, environ=None, **changes):
         self.plan.write_text(json.dumps(plan or {}))
-        self.record.unlink(missing_ok=True)
+        self.record.write_text("")
         self.rounds += 1
         self.trajectory = capture_round_trajectory(
             self.run_root, f"agent-{self.rounds}"
@@ -514,3 +521,42 @@ def test_work_can_preview_the_judge_recompute(tmp_path):
     assert "[candidate_reproduction] exit 0" in output
     assert "[public_pressure_probes] exit 0" in output
     assert "Preview only: no audit, no review, no reward." in output
+
+
+@pytest.mark.parametrize(
+    ("name", "script"),
+    [
+        ("writes_nothing", "pass\n"),
+        ("fails", "raise SystemExit(3)\n"),
+    ],
+)
+def test_a_candidate_file_never_stands_in_for_a_route_output(tmp_path, name, script):
+    # Library version 3: a file the candidate ships at a declared output path
+    # is withheld from the route's copy, so a route that writes nothing, or
+    # fails, has no output instead of the candidate's stale file.
+    candidate = tmp_path / "candidate"
+    candidate.mkdir()
+    (candidate / "run.py").write_text(script)
+    (candidate / "out.json").write_text('{"stale": true}\n')
+    route = SJ.Route(
+        name=name,
+        argv=(sys.executable, "-I", "-B", "{root}/run.py"),
+        timeout_sec=30,
+        requires=("run.py",),
+        outputs=("out.json",),
+    )
+    config = dataclasses.replace(
+        CONFIG, routes=(route,), checkers=(), tmp_dir=str(tmp_path)
+    )
+    files = SJ.candidate_map(
+        candidate, max_files=config.max_files, max_bytes=config.max_bytes
+    )
+
+    bundle = SJ.recompute(
+        config, candidate, files, isolation_mode="preview", outputs_dir=None
+    )
+
+    diagnostic = bundle["diagnostics"][name]
+    assert diagnostic["withheld"] == ["out.json"]
+    assert diagnostic["outputs"]["out.json"]["status"] == "missing"
+    assert "out.json" in bundle["files"]
