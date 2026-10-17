@@ -1,6 +1,6 @@
 # FrontierRSI AutoResearch Contributor Orientation
 
-Deliver the orientation below once at the start of a new proposal. Use the contributor's language while preserving its meaning and requirements.
+Deliver the orientation below once at the start of a new proposal, after the two task-intake answers are settled. Use the contributor's language while preserving its meaning and requirements.
 
 Present all onboarding information below before beginning the Round 0 questions; do not omit any section. Do not disclose the full Round 0 question list at once.
 

@@ -458,6 +458,50 @@ def proxy_gh(client, args):
     return client.read(args)
 
 
+SUPERSEDED_REVIEW_BODY = (
+    "<!-- rubric-review-bot -->\n"
+    "<!-- rubric-review-status:superseded -->\n"
+    "## 📋 Task Proposal Rubric Review\n\n"
+    "↪️ Proposal review was superseded by a newer proposal edit."
+)
+_UPDATE_COMMENT = """mutation($commentId: ID!, $body: String!) {
+  updateDiscussionComment(input: {commentId: $commentId, body: $body}) {
+    comment { id url }
+  }
+}"""
+
+
+def supersede_running_reviews(client, discussion_id, bot_login):
+    """Retire this bot's review progress comments that a cancelled run left running.
+
+    The general review does this itself before posting; a proposal routed away
+    from it (science pipeline) needs it done here instead.
+    """
+    bot, retired = _bot_login(bot_login), []
+    for comment in client.comments(discussion_id):
+        body = comment.get("body") or ""
+        if (
+            (comment.get("author") or {}).get("login") == bot
+            and "<!-- rubric-review-bot -->" in body
+            and "<!-- rubric-review-status:running -->" in body
+        ):
+            proxy_gh(
+                client,
+                [
+                    "api",
+                    "graphql",
+                    "-f",
+                    "query=" + _UPDATE_COMMENT,
+                    "-f",
+                    "commentId=" + comment["id"],
+                    "-f",
+                    "body=" + SUPERSEDED_REVIEW_BODY,
+                ],
+            )
+            retired.append(comment["id"])
+    return retired
+
+
 def mark_retryable(error):
     emit_retry_diagnostic(error)
     if os.environ.get("GITHUB_ENV"):
@@ -468,7 +512,7 @@ def mark_retryable(error):
 def main(argv=None):
     arguments = sys.argv[1:] if argv is None else argv
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("gh", "owner", "review-reuse", "notice"))
+    parser.add_argument("command", choices=("gh", "owner", "review-reuse", "supersede-running", "notice"))
     parser.add_argument("arguments", nargs=argparse.REMAINDER)
     args = parser.parse_args(arguments)
     client = GitHubClient()
@@ -482,6 +526,10 @@ def main(argv=None):
         )
     elif args.command == "review-reuse":
         _review_reuse(client)
+    elif args.command == "supersede-running":
+        supersede_running_reviews(
+            client, os.environ["DISCUSSION_ID"], os.environ["BOT_LOGIN"]
+        )
     else:
         source_run = os.environ["SOURCE_RUN_ID"]
         number = os.environ["DISCUSSION_NUMBER"]

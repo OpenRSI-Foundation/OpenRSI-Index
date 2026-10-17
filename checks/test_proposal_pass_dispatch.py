@@ -84,6 +84,24 @@ def test_rejects_wrong_incomplete_or_malformed_discussion_event(dispatch, mutate
     assert dispatch.build_proposal_pass_payload(event, "DC_pass") is None
 
 
+SCIENCE_ROWS = "| Task Type | Domain | AI4Sci |\n| Task Type | Involves model training | {} |\n"
+
+
+def test_science_pipeline_proposal_is_never_dispatched_for_task_building(dispatch):
+    event = proposal_event()
+    event["discussion"]["body"] = SCIENCE_ROWS.format("No")
+
+    assert dispatch.build_proposal_pass_payload(event, "DC_pass") is None
+
+
+@pytest.mark.parametrize("body", [SCIENCE_ROWS.format("Yes"), "", None, 7])
+def test_general_pipeline_proposal_is_dispatched(dispatch, body):
+    event = proposal_event()
+    event["discussion"]["body"] = body
+
+    assert dispatch.build_proposal_pass_payload(event, "DC_pass") is not None
+
+
 @pytest.mark.parametrize("comment_id", [None, 1, True, [], {}, "", "DC bad", "DC/pass"])
 def test_rejects_non_string_or_malformed_review_comment_node_id(dispatch, comment_id):
     assert dispatch.build_proposal_pass_payload(proposal_event(), comment_id) is None

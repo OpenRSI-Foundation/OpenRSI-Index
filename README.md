@@ -26,7 +26,7 @@ cd OpenRSI-Index
 Open Codex or Claude Code (app or CLI), start a fresh session, and paste:
 
 ```text
-Use the proposal-agent skill at .agents/skills/proposal-agent/SKILL.md in my local OpenRSI-Index repository. Locate the repository if needed, then follow the skill to complete setup and guide me step by step through creating and submitting an RSI proposal.
+Use the task-intake skill at .agents/skills/task-intake/SKILL.md in my local OpenRSI-Index repository. Locate the repository if needed, then follow the skill to complete setup and guide me step by step through creating and submitting an RSI proposal.
 ```
 
 **Any questions?** Contact us at [yuetaili@uw.edu](mailto:yuetaili@uw.edu), [zhuofengli12345@gmail.com](mailto:zhuofengli12345@gmail.com), or [yfeng42@uw.edu](mailto:yfeng42@uw.edu).

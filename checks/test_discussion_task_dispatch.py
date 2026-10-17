@@ -136,6 +136,36 @@ def test_reset_requires_the_exact_lowercase_command_and_builds_a_reset_candidate
     }
 
 
+SCIENCE_ROWS = "| Task Type | Domain | AI4Sci |\n| Task Type | Involves model training | {} |\n"
+
+
+def test_task_command_is_not_dispatched_for_a_science_pipeline_proposal():
+    event = accepted_event()
+    event["discussion"]["body"] = SCIENCE_ROWS.format("No")
+
+    assert build_dispatch_candidate(event) is None
+
+
+def test_reset_stays_available_for_a_science_pipeline_proposal():
+    event = accepted_event()
+    event["discussion"]["body"] = SCIENCE_ROWS.format("No")
+    event["comment"]["body"] = "/reset"
+
+    candidate = build_dispatch_candidate(event)
+
+    assert candidate is not None and candidate["command"] == "reset"
+
+
+@pytest.mark.parametrize("body", [SCIENCE_ROWS.format("Yes"), "", None, 7])
+def test_task_command_is_dispatched_for_a_general_pipeline_proposal(body):
+    event = accepted_event()
+    event["discussion"]["body"] = body
+
+    candidate = build_dispatch_candidate(event)
+
+    assert candidate is not None and candidate["command"] == "task"
+
+
 @pytest.mark.parametrize("body", ["/Reset", "/resets", "/reset now", "prefix /reset"])
 def test_reset_rejects_ambiguous_or_extended_forms(body):
     event = accepted_event()
