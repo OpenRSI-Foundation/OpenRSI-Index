@@ -73,9 +73,12 @@ them to select a decision tier.
   physical node with at most 8 GPUs at peak. CPU-only tasks are eligible under
   the same research and evaluation standards. Multi-node lanes and lanes using
   more than 8 GPUs are outside the currently admitted task class.
-- **Current execution model:** the current RSI-Harness uses a shared
-  Base/Work/Judge environment. Judge evaluates the Work snapshot, and task-owned
-  tests are injected Judge-only; this is not an independent clean-Base verifier.
+- **Current execution model:** by default, each submission is evaluated in a
+  fresh hidden Judge started from the clean task image, not from Work. Judge
+  reads Work's WORKDIR (the task workspace) read-only, and task-owned tests are
+  injected Judge-only. Image files outside WORKDIR are evaluator authority: the
+  Agent can read them but its changes there never reach Judge. Everything in
+  WORKDIR is candidate-controlled.
 - **Rolling six-month window:** the six calendar months ending on the supplied
   UTC review date.
 - **Directly related work:** a distinct paper or public preprint whose central
@@ -127,8 +130,11 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
   concrete existing delivery/access interface usable by the current task
   workflow. A vague statement that an operator will pre-provision something
   later is insufficient.
-- Required Work and Judge execution must fit the current Harness. An essential
-  dependency on a host Docker socket, privileged Docker-in-Docker, sidecars, or
+- Required Work and Judge execution must fit the current Harness. A workload
+  that needs its own containers, such as an agent benchmark or a multi-service
+  system under test, is admissible when it fits a managed-sandbox grant:
+  CPU-only child containers on local Docker. An essential dependency on a host
+  Docker socket, privileged Docker-in-Docker, sidecars outside such a grant, or
   task-added capabilities/devices fails this gate when no faithful supported
   route is established. An outer task Dockerfile or a native single-container
   adaptation preserving the scientific contract is not a rejection reason.
@@ -140,12 +146,13 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
   inherently requires multi-node execution or more than 8 GPUs fails this gate
   unless the proposal already selects a faithful, repository-supported eligible
   lane.
-- A remote sandbox executing candidate code or container workloads is part of
-  the task's execution lane: include its placement and resources in the node
-  and peak-resource check. API access does not exempt that compute. This does
-  not prohibit bounded fixed inference/scoring APIs with an existing access
-  interface; their runtime credentials and live validation may be supplied
-  later. A promised future execution backend is not an existing service.
+- Managed-sandbox children, and any remote sandbox executing candidate code or
+  container workloads, are part of the task's execution lane: include their
+  placement and resources in the node and peak-resource check. API access does
+  not exempt that compute. This does not prohibit bounded fixed
+  inference/scoring APIs with an existing access interface; their runtime
+  credentials and live validation may be supplied later. A promised future
+  execution backend is not an existing service.
 
 ### 3. Model-Development AutoResearch Scope
 
@@ -210,7 +217,9 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
   leaving ambiguous or evaluator/environment failures as infrastructure.
 - The contributor must give a reasonable explanation for why useful improvement
   or discovery space exists and why a meaningful gain should be distinguishable
-  from ordinary metric noise.
+  from ordinary metric noise. For a bounded metric, the proposal records the
+  expected baseline, which must leave at least 20% of the metric's ceiling as
+  headroom.
 - At proposal stage, a technically plausible contributor justification is
   sufficient. Do not demand measured variance, repeated baseline runs,
   confidence intervals, p-values, fixed repeat counts, or a finalized minimum
@@ -240,6 +249,8 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
 - The proposal must declare its evaluation mode. Prefer direct evaluation when
   a fixed evaluator can answer the scientific question by scoring the submitted
   model, checkpoint, or other artifact.
+- The Judge never calls the run's Agent or its model endpoint; a fixed scoring
+  service declared in the Fixed evaluation protocol is allowed.
 - Follow the contributor's scientifically coherent choice of evaluation-time
   retraining under a fixed protocol when the contributor explains why direct
   evaluation cannot answer the scientific question. In that mode, require a
@@ -270,14 +281,9 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
 - Safeguards must be realistic for the intended task. Do not claim protections
   that the proposal and evidence do not establish; record material residual
   limitations instead.
-- Assess safeguards against the current shared Base/Work/Judge environment:
-  Judge uses the Work snapshot and task-owned tests are Judge-only. A safeguard
-  that depends on a future or unsupported Harness capability, separate verifier
-  image, or clean-Base Judge does not count. If such a capability is essential
-  to the evaluation boundary, this gate fails.
-- Treat shared Work/Judge snapshots and Work-root control of the inherited
-  interpreter or libraries as platform-wide residual limitations. Do not reject
-  a proposal solely for those properties or require arbitrary-root isolation.
+- Assess safeguards against the current execution model. A safeguard that
+  depends on a future or unsupported Harness capability does not count. If
+  such a capability is essential to the evaluation boundary, this gate fails.
 - Still fail for concrete task-specific paths to evaluation leakage, evaluator
   or score tampering, or fabricated results, and for materially undefined
   exposure or safeguards.
@@ -303,11 +309,12 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
   boundary, network boundary, or compute contract.
 - Existing proposal fields must establish that candidate-producing compute runs
   in Work by default, with CPU and RAM needs declared where applicable, and GPU
-  needs declared for each phase (explicitly zero GPUs when unused); Judge reloads and evaluates the complete
-  materialized candidate snapshot; normal evaluation is candidate-only; Solution
-  materializes the traceable baseline without training or evaluation;
-  candidate-invalid results are unscored unless a finite scalar was selected;
-  and Work/Judge follow the current shared snapshot model.
+  needs declared for each phase (explicitly zero GPUs when unused); the
+  deliverable and everything it needs live in WORKDIR unless the proposal
+  states why Judge needs Work changes outside it; normal evaluation is
+  candidate-only; Solution materializes the traceable baseline without training
+  or evaluation; and candidate-invalid results are unscored unless a finite
+  scalar was selected.
 - Web search, each external service, and additional-data access must be bounded
   separately. Every required artifact or service must have a real public source
   or concrete existing delivery/access interface.

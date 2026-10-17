@@ -85,11 +85,10 @@ def test_existing_template_rows_close_the_default_task_generation_contract():
 
     generation_defaults = (
         "candidate-producing compute runs in work",
-        "judge reloads and evaluates the complete materialized candidate snapshot",
+        "the deliverable and everything it needs live in workdir",
         "candidate-only evaluation",
         "solution materializes the traceable baseline without training or evaluation",
         "candidate-invalid artifacts are unscored",
-        "shared base/work/judge snapshot model",
     )
     for required_default in generation_defaults:
         assert required_default in skill
