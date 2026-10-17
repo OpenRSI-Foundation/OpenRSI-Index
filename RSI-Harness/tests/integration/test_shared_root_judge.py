@@ -329,12 +329,16 @@ def _assert_judge_spec(
     assert host_config["Tmpfs"] == {"/tests": "rw,exec,nosuid,nodev,mode=0755"}
     if not firewall_available:
         assert host_config["NetworkMode"] == "none"
+    isolate = expected_trajectory_dir.parents[1] / "judge-isolate"
     assert [
         (mount["Type"], mount["Source"], mount["Destination"], mount["RW"])
         for mount in mounts
     ] == [
         ("bind", str(expected_log_dir), "/logs/verifier", True),
         ("bind", str(expected_trajectory_dir), "/logs/agent", False),
+        # rsi-isolate, beside the round's directories in the run's artifacts.
+        ("bind", str(isolate), "/opt/rsi-isolate", False),
+        ("bind", str(isolate / "rsi-isolate"), "/usr/local/bin/rsi-isolate", False),
     ]
 
 

@@ -39,7 +39,7 @@ import json
 import shlex
 
 from rsi_loop.harness.agent import versions
-from rsi_loop.harness.agent.base import NODE_INSTALL_CMD, OneShotCommand
+from rsi_loop.harness.agent.base import NODE_INSTALL_CMD, OneShotCommand, select_arch
 from rsi_loop.harness.agent.driven import STDIN_PROMPT_JS, DrivenAgent, in_scratch_dir
 
 ZCODE_DIR = "/opt/zcode"
@@ -47,13 +47,14 @@ ZCODE_LAUNCHER = "/usr/local/bin/zcode"
 # What the launcher runs: the bundle under the node the install pins.
 _ZCODE_BUNDLE = f"{ZCODE_DIR}/zcode.cjs"
 _ZCODE_NODE = "/usr/local/bin/node"
-# The official Linux package. Only its headless Node bundle and the built-in
-# provider catalog the bundle expects next to it are installed; the desktop
-# app is not. A mirror must serve the same <version>/linux-x64/<file> layout.
-_DEB = f"ZCode-{versions.ZCODE}-linux-x64.deb"
+# The official Linux package for the image's architecture (linux-x64 or
+# linux-arm64). Only its headless Node bundle and the built-in provider
+# catalog the bundle expects next to it are installed; the desktop app is
+# not. A mirror must serve the same <version>/linux-<x64|arm64>/<file> layout.
+_DEB = f"ZCode-{versions.ZCODE}-linux-${{arch}}.deb"
 _DEB_URL = (
     "${RSI_ZCODE_MIRROR_URL:-https://cdn-zcode.z.ai/zcode/electron/releases}"
-    f"/{versions.ZCODE}/linux-x64/{_DEB}"
+    f"/{versions.ZCODE}/linux-${{arch}}/{_DEB}"
 )
 _RESOURCES = "./opt/ZCode/resources"
 _PROVIDER = "rsi"
@@ -164,6 +165,7 @@ class ZCodeAgent(DrivenAgent):
     install_cmds = [
         NODE_INSTALL_CMD,
         in_scratch_dir(
+            select_arch("zcode", x86_64="x64", aarch64="arm64"),
             # Debian-based images have dpkg-deb; others need ar for the .deb.
             "if ! command -v dpkg-deb >/dev/null && ! command -v ar >/dev/null; "
             "then if command -v apk >/dev/null; then apk add --no-cache binutils; "
@@ -320,7 +322,7 @@ class ZCodeAgent(DrivenAgent):
                 f"rsi_secret_dir={secret_dir}",
                 "export ZCODE_PERSONAL_PROVIDER_CONFIG_FILE="
                 '"$rsi_secret_dir/provider_config.json"',
-                "node -e "
+                f"{_ZCODE_NODE} -e "
                 + shlex.join(
                     [
                         _WRITE_PROVIDER_CONFIG,

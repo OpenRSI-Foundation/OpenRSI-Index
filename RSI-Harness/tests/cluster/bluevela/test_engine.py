@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -10,6 +11,7 @@ from rsi_harness.cluster.bluevela.engine import (
     EnginePayload,
     bind_lsf_devices,
     bind_multinode_devices,
+    load_engine_payload,
     render_engine_driver,
     run_engine_payload,
 )
@@ -269,6 +271,25 @@ def test_engine_payload_keeps_native_submission_controls(tmp_path: Path) -> None
     assert payload.run_plan.paths.logs.is_absolute()
     assert payload.run_plan.task.verifier.command == ("/bin/bash", "/tests/test.sh")
     assert payload.agent_launcher == "codex"
+
+
+@pytest.mark.parametrize("clean_image", [True, False, None])
+def test_engine_payload_loads_with_or_without_the_clean_image_field(
+    tmp_path: Path, clean_image: bool | None
+) -> None:
+    # The cluster Judge always starts from the task SIF and ignores the field.
+    payload = _payload(tmp_path).model_dump(mode="json")
+    verifier = payload["run_plan"]["task"]["verifier"]
+    if clean_image is None:
+        del verifier["clean_image"]
+    else:
+        verifier["clean_image"] = clean_image
+    path = tmp_path / "payload.json"
+    path.write_text(json.dumps(payload))
+
+    loaded = load_engine_payload(path)
+
+    assert loaded.run_plan.task.verifier.clean_image is bool(clean_image)
 
 
 def _multi_payload(tmp_path: Path) -> EnginePayload:

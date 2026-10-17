@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Expose two private Unix sockets on loopback inside an isolated netns."""
+"""Expose private Unix sockets on loopback inside an isolated netns.
+
+Work gets the provider proxy (on a free port) and the submit relay; a Judge
+with model access gets only the provider proxy, on a fixed ``--provider-port``
+that rsi-agent's launch spec already names. With ``--register`` the relay
+connects to the provider socket once before it starts the command, so the
+Judge's proxy pins this process as the only one it serves.
+"""
 
 from __future__ import annotations
 
@@ -88,8 +95,10 @@ class _TcpToUnixRelay:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--provider-socket", required=True, type=Path)
-    parser.add_argument("--submit-socket", required=True, type=Path)
-    parser.add_argument("--submit-port", required=True, type=int)
+    parser.add_argument("--provider-port", default=0, type=int)
+    parser.add_argument("--submit-socket", type=Path)
+    parser.add_argument("--submit-port", type=int)
+    parser.add_argument("--register", action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     return parser
 
@@ -101,13 +110,26 @@ def main(argv: list[str] | None = None) -> int:
         command = command[1:]
     if not command:
         raise SystemExit("isolated relay requires a child command")
-    if not 1 <= args.submit_port <= 65535:
+    if (args.submit_socket is None) != (args.submit_port is None):
+        raise SystemExit("isolated relay takes a submit socket and port together")
+    if args.submit_port is not None and not 1 <= args.submit_port <= 65535:
         raise SystemExit("isolated relay requires a valid submit port")
-    provider = _TcpToUnixRelay(args.provider_socket, 0)
-    submit = _TcpToUnixRelay(args.submit_socket, args.submit_port)
+    if not 0 <= args.provider_port <= 65535:
+        raise SystemExit("isolated relay requires a valid provider port")
+    if args.register:
+        # Before anything else runs: the proxy pins the first peer it sees.
+        with socket.socket(socket.AF_UNIX) as registration:
+            registration.connect(str(args.provider_socket))
+    provider = _TcpToUnixRelay(args.provider_socket, args.provider_port)
+    submit = (
+        None
+        if args.submit_socket is None
+        else _TcpToUnixRelay(args.submit_socket, args.submit_port)
+    )
     provider.start()
     try:
-        submit.start()
+        if submit is not None:
+            submit.start()
     except BaseException:
         provider.stop()
         raise
@@ -128,7 +150,8 @@ def main(argv: list[str] | None = None) -> int:
         process = subprocess.Popen(command, env=environment)
         return process.wait()
     finally:
-        submit.stop()
+        if submit is not None:
+            submit.stop()
         provider.stop()
 
 

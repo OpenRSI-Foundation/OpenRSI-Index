@@ -27,6 +27,14 @@ integrity of what it installs against the registry.
 NODE_VERSION = "22.23.3"
 
 CODEX = "0.162.1"
+# SHA-256 of that release's native Linux binary (the npm package's
+# vendor/<machine>-unknown-linux-musl/bin/codex), per machine. A Judge LLM
+# runs the Codex CLI only when its bytes match; bump_agent.py rewrites these
+# with CODEX, one line each.
+# fmt: off
+CODEX_SHA256_X86_64 = "628e35487d888a28f0427fc37501da529dd3d81fcbad7a2c3421c1e8670d92e1"
+CODEX_SHA256_AARCH64 = "071cbe8d821cf1b02b6d8ba6c8b7991b228fcb8519dcb68a37d31222bb8cabe5"
+# fmt: on
 CLAUDE_CODE = "2.1.296"
 QWEN_CODE = "0.25.1"
 KIMI_CODE = "2.1.1"

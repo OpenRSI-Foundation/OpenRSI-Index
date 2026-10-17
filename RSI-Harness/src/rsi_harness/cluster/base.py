@@ -10,6 +10,7 @@ from pydantic import Field
 from rsi_harness.models import (
     AgentAuthSource,
     CompileOptions,
+    JudgeLLMRequest,
     PersistedModel,
     RunStatus,
 )
@@ -24,6 +25,8 @@ class ClusterRunRequest(PersistedModel):
     model: str | None = None
     reasoning_effort: str | None = None
     agent_auth: AgentAuthSource | None = None
+    # Where a judge_model task's credential comes from; never the credential.
+    judge_llm: JudgeLLMRequest | None = None
     dry_run: bool = False
     # Only an E2B env policy ([environments.host] backend = "e2b").
     sandbox_policy: SandboxPolicy | None = None

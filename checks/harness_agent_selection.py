@@ -5,11 +5,12 @@ tests that Agent only. Anything else the Harness Agent tests watch (the
 driver, the shared Agent code, rsi-agent, the tests themselves, node's
 version) can break every Agent, so it tests all of them. Codex's and Claude
 Code's Judge one-shot calls are covered by the model-access job, which runs
-when either is selected.
+when either is selected. The oracle has no CLI or model: it gets its own
+Docker job instead of a place in the model Agents' matrix.
 
 Usage: harness_agent_selection.py BASE HEAD | --all
-Writes ``agents=<JSON list>`` and ``model_access=true|false`` to
-$GITHUB_OUTPUT (or stdout).
+Writes ``agents=<JSON list of model Agents>``, ``model_access=true|false``
+and ``oracle=true|false`` to $GITHUB_OUTPUT (or stdout).
 """
 
 from __future__ import annotations
@@ -38,8 +39,10 @@ AGENT_FILES = {
     "opencode": ("opencode.py",),
     "zcode": ("zcode.py", "zcode/"),
     "pi": ("pi.py", "pi/"),
+    "oracle": ("oracle.py", "oracle/"),
 }
 AGENTS = tuple(AGENT_FILES)
+ORACLE = "oracle"
 # Version-table constants that belong to one Agent; any other change to the
 # table (node's version included) tests every Agent.
 VERSION_OWNERS = {
@@ -122,8 +125,9 @@ def main(argv: list[str]) -> int:
         print(__doc__, file=sys.stderr)
         return 2
     lines = [
-        f"agents={json.dumps(agents)}",
+        f"agents={json.dumps([agent for agent in agents if agent != ORACLE])}",
         f"model_access={'true' if MODEL_ACCESS_AGENTS & set(agents) else 'false'}",
+        f"oracle={'true' if ORACLE in agents else 'false'}",
     ]
     output = os.environ.get("GITHUB_OUTPUT")
     if output:

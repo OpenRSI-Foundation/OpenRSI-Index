@@ -1,0 +1,64 @@
+#!/bin/bash
+# Installed as /usr/local/bin/rsi-oracle in the oracle Agent's Work image.
+#
+#   rsi-oracle WORKDIR SOLUTION_DIR
+#
+# Runs SOLUTION_DIR/solve.sh in WORKDIR with the Agent's exec user (as
+# Harbor's oracle does: directly, by its shebang, with
+# DEBIAN_FRONTEND=noninteractive), removes (or, without write access to its
+# parent, empties) SOLUTION_DIR so no Judge snapshot carries it, then submits
+# $RSI_ORACLE_SUBMISSIONS times (default 1) through rsi-submit. It submits
+# even when solve.sh fails, so the Judge output is there to read, and exits
+# with solve.sh's status.
+set -u
+
+if [ "$#" -ne 2 ]; then
+    echo "usage: rsi-oracle WORKDIR SOLUTION_DIR" >&2
+    exit 2
+fi
+workdir=$1
+solution=$2
+submissions=${RSI_ORACLE_SUBMISSIONS:-1}
+case "$submissions" in
+    '' | *[!0-9]* | 0*)
+        echo "rsi-oracle: RSI_ORACLE_SUBMISSIONS must be a positive integer" >&2
+        exit 2
+        ;;
+esac
+cd -- "$workdir" || exit 2
+
+echo "rsi-oracle: running solve.sh"
+started=$SECONDS
+if [ -f "$solution/solve.sh" ]; then
+    DEBIAN_FRONTEND=noninteractive "$solution/solve.sh"
+    status=$?
+else
+    echo "rsi-oracle: $solution/solve.sh does not exist" >&2
+    status=127
+fi
+echo "rsi-oracle: solve.sh exited $status after $((SECONDS - started))s"
+
+# The Work user owns SOLUTION_DIR's contents. Unless it runs as root it
+# cannot unlink /solution itself from the root-owned /, so an emptied
+# directory is enough: it carries nothing into a Judge snapshot.
+if ! removal=$(rm -rf -- "$solution" 2>&1); then
+    if [ -d "$solution" ] && [ ! -L "$solution" ] \
+        && [ -z "$(ls -A -- "$solution" 2>/dev/null)" ]; then
+        echo "rsi-oracle: emptied $solution (its parent is not writable)"
+    else
+        echo "rsi-oracle: could not remove $solution: $removal" >&2
+        [ "$status" -ne 0 ] || status=1
+    fi
+fi
+
+i=1
+while [ "$i" -le "$submissions" ]; do
+    echo "rsi-oracle: submission $i/$submissions"
+    rsi-submit
+    submitted=$?
+    if [ "$submitted" -ne 0 ]; then
+        echo "rsi-oracle: rsi-submit exited $submitted" >&2
+    fi
+    i=$((i + 1))
+done
+exit "$status"

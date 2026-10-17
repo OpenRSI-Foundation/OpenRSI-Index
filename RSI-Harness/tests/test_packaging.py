@@ -61,15 +61,23 @@ def test_rsi_harness_distribution_owns_complete_rsi_loop_package() -> None:
     driver = package.joinpath("harness", "agent", "driver")
     assert driver.joinpath("rsi-agent-driver.mjs").is_file()
     assert driver.joinpath("rsi-agent-driver.sh").is_file()
+    oracle = package.joinpath("harness", "agent", "oracle")
+    assert oracle.joinpath("rsi-oracle").is_file()
 
     for adapter in ("bluevela", "slurm"):
         cluster_package = resources.files(f"rsi_harness.cluster.{adapter}")
         assert cluster_package.joinpath("profile.toml").is_file()
 
-    # rsi-agent ships as package data: mounted into model-access Judges.
+    # rsi-agent and rsi-isolate ship as package data, mounted into Judges.
     judge_agent = resources.files("rsi_harness.judge_agent")
-    assert judge_agent.joinpath("rsi_agent.py").is_file()
-    assert judge_agent.joinpath("rsi-agent").is_file()
+    for name in (
+        "rsi_agent.py",
+        "rsi-agent",
+        "rsi_isolate.py",
+        "rsi-isolate",
+        "judge_isolation.py",
+    ):
+        assert judge_agent.joinpath(name).is_file(), name
 
     integrations = resources.files("rsi_harness.integrations")
     assert integrations.joinpath("sandbox_client.py").is_file()

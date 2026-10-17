@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import subprocess
 from importlib import resources
 from pathlib import Path, PurePosixPath
@@ -9,6 +10,7 @@ from uuid import uuid4
 import pytest
 
 from rsi_harness.errors import SetupError
+from rsi_harness.integrations.rsi_loop import AGENT_SHELL
 from rsi_harness.models import (
     AgentPlan,
     GPUAllocation,
@@ -153,7 +155,8 @@ def test_agent_images_pin_cli_and_compatible_node_versions(agent_name, package):
 
     assert f"npm install -g {package}" in dockerfile
     node = versions.NODE_VERSION
-    assert f"/v{node}/node-v{node}-linux-x64.tar.xz" in dockerfile
+    assert f"/v{node}/node-v{node}-linux-${{arch}}.tar.xz" in dockerfile
+    assert "x86_64) arch=x64 ;; aarch64|arm64) arch=arm64 ;;" in dockerfile
     assert "node-v20." not in dockerfile
 
 
@@ -905,6 +908,109 @@ def test_without_model_access_no_rsi_agent_preflight_runs(tmp_path) -> None:
     assert len(client.containers.runs) == 2
 
 
+def test_work_image_finds_agent_launchers_on_the_path_the_agent_gets(
+    tmp_path: Path,
+) -> None:
+    """The launcher quarantine and the installed launcher check resolve it
+    outside a login shell, like the Agent's exec: a login profile that
+    resets PATH would miss a task copy that shadows the pinned CLI."""
+    client = FakeDockerClient()
+
+    DockerImageBuilder(client).prepare(
+        task_definition(tmp_path), agent=create_agent("codex", RSILoopConfig())
+    )
+
+    lines = client.images.built[-1]["context_files"]["Dockerfile"].splitlines()
+    steps = [
+        json.loads(line.removeprefix("RUN "))
+        for line in lines
+        if line.startswith("RUN [") and "launcher=" in line
+    ]
+    assert len(steps) == 3
+    assert "original-launchers" in steps[0][2]
+    assert steps[1][2] == images_module._pin_node_launcher_script("codex")
+    assert "command -v codex" in steps[2][2]
+    assert [step[:2] for step in steps] == [list(AGENT_SHELL)] * 3
+    # The npm launcher is pinned to node after the install and before the check.
+    install = next(i for i, line in enumerate(lines) if "npm install -g" in line)
+    pin, check = (lines.index("RUN " + json.dumps(step)) for step in steps[1:])
+    assert install < pin < check
+
+
+def _run_pin_script(tmp_path: Path, launcher: str) -> subprocess.CompletedProcess:
+    """Run the pin step against tmp_path/bin, with a fake pinned node."""
+    node = tmp_path / "pinned-node"
+    node.write_text('#!/bin/bash\necho "pinned-node $*"\n')
+    node.chmod(0o755)
+    script = images_module._pin_node_launcher_script(launcher).replace(
+        images_module.NODE_BIN, str(node)
+    )
+    return subprocess.run(
+        [*AGENT_SHELL, script],
+        env={"PATH": f"{tmp_path / 'bin'}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_npm_launcher_is_pinned_to_the_installed_node(tmp_path: Path) -> None:
+    """A `#!/usr/bin/env node` launcher would run on a task image's node
+    ahead of /usr/local/bin; its script's shebang names the pinned one."""
+    package = tmp_path / "lib" / "node_modules" / "@scope" / "cli"
+    package.mkdir(parents=True)
+    script = package / "cli.js"
+    script.write_text("#!/usr/bin/env node\nconsole.log(1)\n")
+    script.chmod(0o755)
+    (tmp_path / "bin").mkdir()
+    launcher = tmp_path / "bin" / "tool"
+    launcher.symlink_to(script)
+
+    result = _run_pin_script(tmp_path, "tool")
+
+    assert result.returncode == 0, result.stderr
+    # Still a symlink to the script, which `node <launcher>` can load.
+    assert launcher.resolve() == script
+    node = tmp_path / "pinned-node"
+    assert script.read_text() == f"#!{node}\nconsole.log(1)\n"
+    ran = subprocess.run(
+        [str(launcher), "a b", "c"], capture_output=True, text=True, check=True
+    )
+    assert ran.stdout == f"pinned-node {launcher} a b c\n"
+    # A second launcher of the same script finds it already pinned.
+    assert _run_pin_script(tmp_path, "tool").returncode == 0
+
+
+@pytest.mark.parametrize(
+    "content",
+    [b"#!/bin/sh\nexec /usr/local/bin/node /opt/x.mjs\n", b"\x7fELF\x00node\n"],
+)
+def test_pin_step_leaves_shell_and_native_launchers_alone(
+    tmp_path: Path, content: bytes
+) -> None:
+    (tmp_path / "bin").mkdir()
+    launcher = tmp_path / "bin" / "tool"
+    launcher.write_bytes(content)
+    launcher.chmod(0o755)
+
+    result = _run_pin_script(tmp_path, "tool")
+
+    assert result.returncode == 0, result.stderr
+    assert launcher.read_bytes() == content
+
+
+def test_pin_step_refuses_a_node_shebang_it_cannot_wrap(tmp_path: Path) -> None:
+    (tmp_path / "bin").mkdir()
+    launcher = tmp_path / "bin" / "tool"
+    launcher.write_text("#!/usr/bin/env -S node --no-warnings\n")
+    launcher.chmod(0o755)
+
+    result = _run_pin_script(tmp_path, "tool")
+
+    assert result.returncode == 86
+    assert "unexpected node launcher shebang" in result.stderr
+
+
 def _driver_resource(name: str) -> str:
     return (
         resources.files("rsi_loop")
@@ -949,8 +1055,12 @@ def test_driven_work_image_bakes_driver_files_before_install_commands(
         i for i, line in enumerate(lines) if f"node-v{versions.NODE_VERSION}" in line
     )
     cli = next(i for i, line in enumerate(lines) if "fake-cli@1.2.3" in line)
-    checks = [i for i, line in enumerate(lines) if "command -v" in line and i > cli]
-    assert quarantine < copies[0] < chmod < node < cli < checks[0]
+    pins = [i for i, line in enumerate(lines) if "readlink -f" in line]
+    checks = [i for i, line in enumerate(lines) if 'test -x \\"$launcher\\"' in line]
+    assert quarantine < copies[0] < chmod < node < cli < pins[0]
+    assert pins[-1] < checks[0]
+    assert "command -v rsi-agent-driver" in lines[pins[0]]
+    assert "command -v fake-cli" in lines[pins[1]]
     # The CLI the driver starts is moved aside and checked like the driver.
     assert ["launcher=rsi-agent-driver" in lines[i] for i in quarantines] == [
         True,
@@ -1107,3 +1217,257 @@ def test_unsafe_or_missing_image_files_are_refused(image_files, message) -> None
             workdir=PurePosixPath("/workspace"),
             final_user="1001",
         )
+
+
+# -- the Judge LLM's Codex CLI ------------------------------------------------
+
+CODEX_PATH = (
+    "/usr/local/lib/node_modules/@openai/codex/node_modules/@openai/codex-linux-x64"
+    "/vendor/x86_64-unknown-linux-musl/bin/codex"
+)
+
+
+@pytest.fixture(autouse=True)
+def _pinned_codex(monkeypatch):
+    """Pin the fake binaries below, as versions.py pins the real release."""
+    import hashlib
+
+    monkeypatch.setattr(
+        versions,
+        "CODEX_SHA256_X86_64",
+        hashlib.sha256(b"\x7fELF-native-codex").hexdigest(),
+    )
+    monkeypatch.setattr(
+        versions, "CODEX_SHA256_AARCH64", hashlib.sha256(b"native").hexdigest()
+    )
+
+
+def _codex_archive(*members: tuple[str, bytes]) -> bytes:
+    import io
+    import tarfile
+
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w") as bundle:
+        for name, content in members:
+            info = tarfile.TarInfo(name)
+            info.size = len(content)
+            bundle.addfile(info, io.BytesIO(content))
+    return buffer.getvalue()
+
+
+def _codex_client(archive: bytes, architecture: str = "amd64"):
+    client = FakeDockerClient()
+    archived = []
+
+    def run_hook(image, command, **kwargs):
+        if "npm root -g" in command[2]:
+            assert kwargs["network_mode"] == "none" and kwargs["user"] == "0"
+            return CODEX_PATH.encode()
+        return b""
+
+    client.containers.run_hook = run_hook
+    create = client.containers.create
+
+    def create_with_archive(image, command, **kwargs):
+        container = create(image, command, **kwargs)
+
+        def get_archive(path):
+            archived.append((image, path))
+            return iter((archive[:100], archive[100:])), {}
+
+        container.get_archive = get_archive
+        return container
+
+    client.containers.create = create_with_archive
+    return client, archived, architecture
+
+
+def _prepare_codex(tmp_path, client, architecture, agent_name="codex"):
+    task = task_definition(tmp_path)
+    task = task.model_copy(
+        update={"agent": task.agent.model_copy(update={"name": agent_name})}
+    )
+    agent = create_agent(agent_name, RSILoopConfig())
+    builder = DockerImageBuilder(client)
+    plan = builder.prepare(task, agent=agent)
+    base = next(
+        image for image in client.images.by_ref.values() if image.id == plan.base_ref
+    )
+    base.attrs["Architecture"] = architecture
+    client.images.by_ref[plan.base_ref] = base
+    cache = tmp_path / "data" / "judge-codex"
+    return builder, task, plan, agent, cache
+
+
+def test_judge_codex_cli_is_copied_from_the_codex_work_image(tmp_path) -> None:
+    client, archived, architecture = _codex_client(
+        _codex_archive(("codex", b"\x7fELF-native-codex"))
+    )
+    builder, task, plan, agent, cache = _prepare_codex(tmp_path, client, architecture)
+
+    directory = builder.prepare_judge_codex(
+        task, images=plan, work_agent=agent, cache_root=cache
+    )
+
+    assert directory == cache / f"codex-{versions.CODEX}-x86_64"
+    binary = directory / "codex"
+    assert binary.read_bytes() == b"\x7fELF-native-codex"
+    assert binary.stat().st_mode & 0o777 == 0o755
+    assert sorted(path.name for path in directory.iterdir()) == ["codex"]
+    # The run's own Codex Work image; the pinned version, checked in it.
+    assert archived == [(plan.work_ref, CODEX_PATH)]
+    finder = client.containers.runs[-1]
+    assert finder["image"] == plan.work_ref
+    assert f'"codex-cli {versions.CODEX}"' in finder["command"][2]
+    assert len(client.images.built) == 2
+    copier = client.containers.created[-1]
+    assert copier["command"] == ["/bin/true"] and copier["network_mode"] == "none"
+    last = list(client.containers.by_id.values())[-1]
+    assert last.removed_kwargs == {"force": True}
+
+    runs = len(client.containers.runs)
+    assert (
+        builder.prepare_judge_codex(
+            task, images=plan, work_agent=agent, cache_root=cache
+        )
+        == directory
+    )
+    assert len(client.containers.runs) == runs
+
+
+def test_judge_codex_cli_for_another_agent_builds_the_codex_image(tmp_path) -> None:
+    client, archived, architecture = _codex_client(
+        _codex_archive(("codex", b"native")), "arm64"
+    )
+    builder, task, plan, agent, cache = _prepare_codex(
+        tmp_path, client, architecture, agent_name="claude-code"
+    )
+
+    directory = builder.prepare_judge_codex(
+        task, images=plan, work_agent=agent, cache_root=cache
+    )
+
+    assert directory.name == f"codex-{versions.CODEX}-aarch64"
+    # A third build: the task's Codex Work image, never the run's Work image.
+    assert len(client.images.built) == 3
+    dockerfile = client.images.built[-1]["context_files"]["Dockerfile"]
+    assert f"npm install -g @openai/codex@{versions.CODEX}" in dockerfile
+    assert f"FROM {plan.base_ref}" in dockerfile
+    assert archived[0][0] != plan.work_ref
+
+
+def test_judge_codex_cli_bytes_must_be_the_pinned_release(tmp_path) -> None:
+    # A task's image may hold any binary that prints the right version.
+    client, _, architecture = _codex_client(
+        _codex_archive(("codex", b"\x7fELF-planted-by-a-task"))
+    )
+    builder, task, plan, agent, cache = _prepare_codex(tmp_path, client, architecture)
+
+    with pytest.raises(SetupError, match="not the pinned"):
+        builder.prepare_judge_codex(
+            task, images=plan, work_agent=agent, cache_root=cache
+        )
+    assert not (cache / f"codex-{versions.CODEX}-x86_64" / "codex").exists()
+
+
+def test_judge_codex_cli_cache_is_checked_on_every_use(tmp_path) -> None:
+    client, archived, architecture = _codex_client(
+        _codex_archive(("codex", b"\x7fELF-native-codex"))
+    )
+    builder, task, plan, agent, cache = _prepare_codex(tmp_path, client, architecture)
+    # An earlier run's cache, changed since (or planted): never trusted.
+    planted = cache / f"codex-{versions.CODEX}-x86_64" / "codex"
+    planted.parent.mkdir(parents=True)
+    planted.write_bytes(b"\x7fELF-planted")
+    planted.chmod(0o755)
+
+    directory = builder.prepare_judge_codex(
+        task, images=plan, work_agent=agent, cache_root=cache
+    )
+
+    assert (directory / "codex").read_bytes() == b"\x7fELF-native-codex"
+    assert len(archived) == 1
+
+
+@pytest.mark.parametrize(
+    ("archive", "architecture", "message"),
+    [
+        (_codex_archive(("codex", b"x")), "s390x", "no release for s390x"),
+        (
+            _codex_archive(("codex", b"x"), ("other", b"y")),
+            "amd64",
+            "not one file",
+        ),
+    ],
+)
+def test_judge_codex_cli_failures_are_setup_errors(
+    tmp_path, archive, architecture, message
+) -> None:
+    client, _, architecture = _codex_client(archive, architecture)
+    builder, task, plan, agent, cache = _prepare_codex(tmp_path, client, architecture)
+
+    with pytest.raises(SetupError, match=message):
+        builder.prepare_judge_codex(
+            task, images=plan, work_agent=agent, cache_root=cache
+        )
+    assert not (cache / f"codex-{versions.CODEX}-x86_64" / "codex").exists()
+
+
+def test_judge_model_preflights_python_and_a_free_agent_uid(tmp_path) -> None:
+    client = FakeDockerClient()
+    task = task_definition(tmp_path)
+    task = task.model_copy(
+        update={
+            "verifier": task.verifier.model_copy(
+                update={"judge_model": "gpt-judge", "judge_model_effort": "medium"}
+            )
+        }
+    )
+
+    DockerImageBuilder(client).prepare(
+        task, agent=create_agent("codex", RSILoopConfig())
+    )
+
+    assert any(
+        "rsi-agent-preflight" in run["command"] for run in client.containers.runs
+    )
+
+
+def test_oracle_work_image_adds_only_its_launcher(tmp_path: Path) -> None:
+    """No CLI or node: the task image, the Work layer and rsi-oracle."""
+    task = task_definition(tmp_path)
+    task = task.model_copy(
+        update={"agent": task.agent.model_copy(update={"name": "oracle"})}
+    )
+    oracle = create_agent("oracle", RSILoopConfig())
+    client = FakeDockerClient()
+
+    DockerImageBuilder(client).prepare(task, agent=oracle)
+
+    work = client.images.built[-1]
+    dockerfile = work["context_files"]["Dockerfile"]
+    launcher = resources.files("rsi_loop").joinpath("harness/agent/oracle/rsi-oracle")
+    staged = [
+        content
+        for name, content in work["context_files"].items()
+        if name.startswith("agent-files/")
+    ]
+    assert staged == [launcher.read_text()]
+    assert "/usr/local/bin/rsi-oracle" in dockerfile
+    assert "chmod 0755 /usr/local/bin/rsi-oracle" in dockerfile
+    assert "command -v rsi-oracle" in dockerfile
+    assert "npm install" not in dockerfile
+    assert "node-v" not in dockerfile
+    assert work["tag"].startswith("rsi-harness-work:environment-digest-abcdef-oracle-")
+    # The tag is stable and the other Agents' tags do not move.
+    again = FakeDockerClient()
+    DockerImageBuilder(again).prepare(task, agent=oracle)
+    assert again.images.built[-1]["tag"] == work["tag"]
+    codex_task = task.model_copy(
+        update={"agent": task.agent.model_copy(update={"name": "codex"})}
+    )
+    codex = FakeDockerClient()
+    DockerImageBuilder(codex).prepare(
+        codex_task, agent=create_agent("codex", RSILoopConfig())
+    )
+    assert "rsi-oracle" not in codex.images.built[-1]["context_files"]["Dockerfile"]

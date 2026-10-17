@@ -118,6 +118,8 @@ class FakeJudgeRuntime:
         self.exec_options: list[dict[str, Any]] = []
         self.injected_auth: list[tuple[Any, str | None]] = []
         self.injected_judge_agent: list[tuple[bytes, str | None]] = []
+        # Work's current login files; None: as they were injected.
+        self.work_login_files: dict[Any, bytes] | None = None
         self.round_ids: list[str] = []
         self.closed_rounds = 0
         self.work_paused = False
@@ -193,6 +195,17 @@ class FakeJudgeRuntime:
         shutil.copytree(source, private_tests, symlinks=True)
         self._private_tests = private_tests
         self._raise("inject")
+
+    def read_agent_auth(self, container: ContainerRef, material: Any) -> dict:
+        self.events.append(("auth_read", container.container_id))
+        self._raise("auth_read")
+        if self.work_login_files is not None:
+            return dict(self.work_login_files)
+        return {
+            mount.tmpfs.target / entry.path: entry.content
+            for mount in material.mounts
+            for entry in mount.files
+        }
 
     def inject_agent_auth(
         self, container: ContainerRef, material: Any, *, owner: str | None

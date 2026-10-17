@@ -12,6 +12,7 @@ import harness_agent_selection as selection
 AGENT_DIR = selection.AGENT_DIR
 WATCHED = selection.watched_paths()
 ALL = list(selection.AGENTS)
+MODEL_AGENTS = [agent for agent in ALL if agent != selection.ORACLE]
 
 
 def _bump(*constants):
@@ -48,6 +49,8 @@ def test_selection_knows_every_registered_agent_and_version():
         ([selection.VERSIONS], _bump("CODEX"), ["codex"]),
         ([selection.VERSIONS], _bump("CODEX", "CLAUDE_CODE"), ["codex", "claude-code"]),
         ([selection.VERSIONS], _bump("RIPGREP"), ["opencode"]),
+        ([AGENT_DIR + "oracle.py", AGENT_DIR + "oracle/rsi-oracle"], "", ["oracle"]),
+        ([AGENT_DIR + "codex.py", AGENT_DIR + "oracle.py"], "", ["codex", "oracle"]),
         ([selection.VERSIONS], _bump("NODE_VERSION"), ALL),
         ([AGENT_DIR + "driven.py"], "", ALL),
         ([AGENT_DIR + "driver/rsi-agent-driver.mjs"], "", ALL),
@@ -78,8 +81,11 @@ def test_the_command_writes_the_job_outputs(tmp_path):
     )
     assert result.returncode == 0
     lines = output.read_text().splitlines()
-    assert lines[0] == f"agents={selection.json.dumps(ALL)}"
-    assert lines[1] == "model_access=true"
+    assert lines == [
+        f"agents={selection.json.dumps(MODEL_AGENTS)}",
+        "model_access=true",
+        "oracle=true",
+    ]
 
 
 def test_the_command_selects_from_a_real_git_diff(tmp_path, monkeypatch):
@@ -111,4 +117,8 @@ def test_the_command_selects_from_a_real_git_diff(tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_OUTPUT", str(output))
 
     assert selection.main(["selection", base, head]) == 0
-    assert output.read_text().splitlines() == ['agents=["pi"]', "model_access=false"]
+    assert output.read_text().splitlines() == [
+        'agents=["pi"]',
+        "model_access=false",
+        "oracle=false",
+    ]

@@ -3,10 +3,10 @@ schema_version = "1.4"
 [task]
 name = "rsi/vllm-in-judge"
 
-# Work and the Judge share this image (the Judge is derived from Work): vLLM,
-# Harbor 0.21.0 and the Hub CLI. Work needs no GPU; it places a checkpoint in
-# the WORKDIR, the Judge's read-only snapshot of which vLLM serves on the
-# Judge's own GPU.
+# The task image; Work adds the Agent CLI and each Judge starts from that
+# clean Work image, so vLLM, Harbor 0.21.0 and the Hub CLI installed there
+# are in both. Work needs no GPU; it places a checkpoint in the WORKDIR, the
+# Judge's read-only snapshot of which vLLM serves on the Judge's own GPU.
 [environment]
 os = "linux"
 workdir = "/workspace"

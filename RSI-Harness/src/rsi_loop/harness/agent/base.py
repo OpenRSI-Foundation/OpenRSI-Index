@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import abc
 import logging
+import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -31,13 +32,42 @@ from rsi_loop.harness.config import RSILoopConfig
 STOP_HOOK_REASON = "Do not stop. Continue working on the implementation."
 CONTEXT_WINDOW_ENV = "RSI_AGENT_CONTEXT_WINDOW"
 MAX_OUTPUT_TOKENS_ENV = "RSI_AGENT_MAX_OUTPUT_TOKENS"
+
+
+def select_arch(what: str, *, x86_64: str, aarch64: str) -> str:
+    """Return a bash step that sets ``arch`` to the image's release name.
+
+    Install commands download native releases for the architecture the image
+    runs on: ``uname -m`` inside the build. ``x86_64`` and ``aarch64`` (``arm64``
+    on some systems) map to the names *what*'s upstream publishes them under; any
+    other machine fails the build with a clear message instead of installing
+    a binary that cannot run.
+    """
+    return (
+        'case "$(uname -m)" in'
+        f" x86_64) arch={x86_64} ;;"
+        f" aarch64|arm64) arch={aarch64} ;;"
+        f' *) echo "{what}: no release for architecture $(uname -m);'
+        ' x86_64 and aarch64 are supported" >&2; exit 1 ;;'
+        " esac"
+    )
+
+
+# Where NODE_INSTALL_CMD puts the pinned node. Agents run node by this path,
+# never by name: a task image may put its own node first on PATH.
+NODE_BIN = "/usr/local/bin/node"
+
 # The pinned node every Agent image installs into /usr/local; the driver, its
-# launcher wrapper and the ZCode launcher rely on it being there.
-NODE_INSTALL_CMD = (
-    "sudo -E bash -c 'NODE_MIRROR=${RSI_NODEJS_MIRROR_URL:-https://nodejs.org/dist}"
-    f" && curl -fsSL $NODE_MIRROR/v{versions.NODE_VERSION}"
-    f"/node-v{versions.NODE_VERSION}-linux-x64.tar.xz"
-    " | tar -xJ -C /usr/local --strip-components=1'"
+# launcher wrapper and the ZCode launcher rely on it being there. A mirror
+# must serve the same v<version>/node-v<version>-linux-<x64|arm64>.tar.xz
+# layout as nodejs.org.
+NODE_INSTALL_CMD = "sudo -E bash -c " + shlex.quote(
+    "set -euo pipefail"
+    f" && {select_arch('node', x86_64='x64', aarch64='arm64')}"
+    " && NODE_MIRROR=${RSI_NODEJS_MIRROR_URL:-https://nodejs.org/dist}"
+    f' && curl -fsSL "$NODE_MIRROR/v{versions.NODE_VERSION}'
+    f'/node-v{versions.NODE_VERSION}-linux-${{arch}}.tar.xz"'
+    " | tar -xJ -C /usr/local --strip-components=1"
 )
 
 
@@ -114,6 +144,10 @@ class Agent(abc.ABC):
     # and the Agent starts. The Work image moves a task image's copy aside
     # and checks the installed one, as it does for the launcher.
     extra_launchers: tuple[str, ...] = ()
+    # Not a model Agent: it runs the task's own solution/solve.sh in Work.
+    # The Harness stages the solution for it and passes it no credential,
+    # model or provider endpoint.
+    runs_task_solution: bool = False
 
     def __init__(self, config: RSILoopConfig) -> None:
         self._config = config

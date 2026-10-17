@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Literal, Protocol
 
 import typer
+from pydantic import ValidationError
 
 from rsi_harness.cluster.base import ClusterRunRequest
 from rsi_harness.cluster.bluevela.adapter import build_cluster_adapter
@@ -19,14 +20,18 @@ from rsi_harness.errors import HarnessError, SetupError
 from rsi_harness.models import (
     AgentAuthSource,
     CompileOptions,
+    JudgeLLMAuth,
+    JudgeLLMRequest,
     RunGPUPlan,
     RunPaths,
     RunRequest,
     RunResult,
     RunStatus,
+    SubmissionStatus,
 )
 from rsi_harness.runtime.redaction import redact_text
 from rsi_harness.runtime.sandbox_policy import load_sandbox_policy
+from rsi_loop.harness.agent import get_agent_class
 
 if TYPE_CHECKING:
     # The ledger imports the docker SDK: loaded only by prune-images.
@@ -130,6 +135,47 @@ class _RunConsole:
             typer.echo(
                 f"Sandbox envelope: {value['cpus']} CPUs, {value['memory_mb']} MiB "
                 "(parents + children + broker)"
+            )
+        elif name == "judge_clean_image_unavailable":
+            typer.echo(
+                f"Warning: {value}, so every Judge runs from a snapshot of Work, "
+                "with all the Agent's changes, instead of the clean Work image "
+                "(set clean_image = false to accept this)."
+            )
+        elif name == "judge_llm" and isinstance(value, Mapping):
+            source = (
+                "the Work Agent's credential"
+                if value.get("reused")
+                else f"--judge-llm-auth {value.get('credential')}"
+            )
+            expires = value.get("expires_at")
+            until = (
+                ""
+                if not isinstance(expires, (int, float))
+                else "; its login's access token expires "
+                + time.strftime("%Y-%m-%d %H:%M %Z", time.localtime(expires))
+                + " and is refreshed in place before a Judge round would outlive it"
+            )
+            typer.echo(
+                f"Judge LLM: {value.get('model')} (effort {value.get('effort')}) "
+                f"via {source}{until}"
+            )
+        elif name == "judge_login_kept" and isinstance(value, Mapping):
+            typer.echo(
+                f"Warning: Judge {value.get('round_id')}: the Work Agent's current "
+                f"login was not used ({value.get('reason')}); the Judge keeps its "
+                "last good copy, which stops working when its access token expires."
+            )
+        elif name == "judge_login_refresh_failed" and isinstance(value, Mapping):
+            typer.echo(
+                f"Warning: Judge {value.get('round_id')}: the Judge LLM's Codex "
+                f"login was not kept fresh ({value.get('reason')}); the Judge "
+                "refuses calls its access token would not outlive."
+            )
+        elif name == "judge_llm_ignored":
+            typer.echo(
+                "Warning: the task declares no judge_model; the --judge-llm-* "
+                "options are ignored."
             )
         elif name == "images_ready":
             typer.echo("Task images ready; preparing Work container...")
@@ -250,6 +296,8 @@ class _ClusterConsole:
                             f"{item.get('phase')}:{item.get('path')}",
                         )
                     )
+        elif name in ("judge_llm", "judge_llm_ignored"):
+            _RunConsole()(name, value)
         elif name == "job_submitted":
             typer.echo(f"Submitted {details.get('stage')} job: {details.get('job_id')}")
         elif name == "job_state":
@@ -269,6 +317,34 @@ def _fail(error: BaseException, *, verbose: bool) -> None:
         detail = "run failed; use --verbose for diagnostic detail"
     typer.echo(f"Error: {detail}", err=True)
     raise typer.Exit(1)
+
+
+def _runs_task_solution(agent: str) -> bool:
+    try:
+        return bool(getattr(get_agent_class(agent), "runs_task_solution", False))
+    except ValueError:
+        return False
+
+
+def _oracle_failures(result: RunResult, submissions: int) -> list[str]:
+    """Why an oracle run does not show a working Judge; empty when it does."""
+    failures = []
+    if result.agent_exit_code is None:
+        failures.append("solve.sh returned no exit code")
+    elif result.agent_exit_code != 0:
+        failures.append(f"solve.sh exited {result.agent_exit_code}")
+    if result.status is not RunStatus.COMPLETED:
+        failures.append(f"run status is {result.status.value}")
+    if result.total_rounds != submissions:
+        failures.append(
+            f"{result.total_rounds} Judge round(s) ran, expected {submissions}"
+        )
+    failures.extend(
+        f"{report.round_id} is {report.status.value}"
+        for report in result.reports
+        if report.status is not SubmissionStatus.COMPLETED
+    )
+    return failures
 
 
 @app.command("run")
@@ -313,6 +389,50 @@ def run_command(
     agent_auth: Annotated[
         AgentAuthSource | None,
         typer.Option("--agent-auth", help="Explicit Agent credential source"),
+    ] = None,
+    judge_llm_auth: Annotated[
+        JudgeLLMAuth | None,
+        typer.Option(
+            "--judge-llm-auth",
+            help=(
+                "Credential for a task's judge_model (rsi-agent llm): an OpenAI "
+                "API key (api) or a Codex ChatGPT login (codex-login)"
+            ),
+        ),
+    ] = None,
+    judge_llm_api_key_env: Annotated[
+        str | None,
+        typer.Option(
+            "--judge-llm-api-key-env",
+            help="Variable with the Judge LLM API key (default RSI_JUDGE_LLM_API_KEY)",
+        ),
+    ] = None,
+    judge_llm_api_key_file: Annotated[
+        Path | None,
+        typer.Option(
+            "--judge-llm-api-key-file", help="File holding the Judge LLM API key"
+        ),
+    ] = None,
+    judge_llm_base_url: Annotated[
+        str | None,
+        typer.Option(
+            "--judge-llm-base-url",
+            help="Judge LLM API base URL (default https://api.openai.com)",
+        ),
+    ] = None,
+    judge_llm_proxy: Annotated[
+        str | None,
+        typer.Option(
+            "--judge-llm-proxy",
+            help="HTTP(S) proxy for the Judge LLM (default: the run's proxy settings)",
+        ),
+    ] = None,
+    judge_llm_codex_home: Annotated[
+        Path | None,
+        typer.Option(
+            "--judge-llm-codex-home",
+            help="Codex home holding auth.json (default $CODEX_HOME, then ~/.codex)",
+        ),
     ] = None,
     disable_stop_hook: Annotated[
         bool,
@@ -382,6 +502,47 @@ def run_command(
     if dry_run and cluster is None:
         typer.echo("Error: --dry-run requires --cluster", err=True)
         raise typer.Exit(2)
+    oracle = _runs_task_solution(agent)
+    if oracle and cluster is not None:
+        typer.echo(
+            f"Error: --agent {agent} runs locally only and cannot be used with "
+            "--cluster",
+            err=True,
+        )
+        raise typer.Exit(2)
+    judge_llm = None
+    judge_llm_options = (
+        judge_llm_api_key_env,
+        judge_llm_api_key_file,
+        judge_llm_base_url,
+        judge_llm_proxy,
+        judge_llm_codex_home,
+    )
+    if judge_llm_auth is None and any(item is not None for item in judge_llm_options):
+        typer.echo("Error: the --judge-llm-* options need --judge-llm-auth", err=True)
+        raise typer.Exit(2)
+    if judge_llm_auth is not None:
+        try:
+            judge_llm = JudgeLLMRequest(
+                auth=judge_llm_auth,
+                api_key_env=judge_llm_api_key_env,
+                api_key_file=(
+                    None
+                    if judge_llm_api_key_file is None
+                    else judge_llm_api_key_file.expanduser().resolve()
+                ),
+                base_url=judge_llm_base_url,
+                proxy=judge_llm_proxy,
+                codex_home=(
+                    None
+                    if judge_llm_codex_home is None
+                    else judge_llm_codex_home.expanduser().resolve()
+                ),
+            )
+        except ValidationError as error:
+            detail = error.errors()[0].get("msg", "invalid Judge LLM options")
+            typer.echo(f"Error: {detail.removeprefix('Value error, ')}", err=True)
+            raise typer.Exit(2) from None
 
     options = CompileOptions(
         agent_name=agent,
@@ -401,6 +562,7 @@ def run_command(
             model=model,
             reasoning_effort=reasoning_effort,
             agent_auth=agent_auth,
+            judge_llm=judge_llm,
             dry_run=dry_run,
             sandbox_policy=cluster_policy,
         )
@@ -466,6 +628,7 @@ def run_command(
         model=model,
         reasoning_effort=reasoning_effort,
         agent_auth=agent_auth,
+        judge_llm=judge_llm,
     )
     typer.echo(f"Running Agent {agent!r} on task: {task.name}")
     typer.echo(_field("Task dir:", task))
@@ -485,6 +648,8 @@ def run_command(
         typer.echo(_field("Stop hook:", "disabled"))
     if agent_auth is not None:
         typer.echo(_field("Agent auth:", agent_auth.value))
+    if judge_llm is not None:
+        typer.echo(_field("Judge LLM auth:", judge_llm.auth.value))
     typer.echo(_field("Data root:", roots.data))
     typer.echo(_field("Logs root:", roots.logs))
     typer.echo()
@@ -507,12 +672,32 @@ def run_command(
     typer.echo(_field("Best round:", result.best_round or "-"))
     typer.echo(_field("Workspace:", roots.data / result.run_id / "workspace"))
     typer.echo(_field("Logs:", roots.logs / "runs" / result.run_id))
+    if result.artifacts_dir is not None:
+        typer.echo(_field("Artifacts:", result.artifacts_dir))
+    if result.agent_exit_code is not None:
+        typer.echo(_field("Agent exit code:", result.agent_exit_code))
     if result.reports:
         typer.echo()
         typer.echo("Judge rounds:")
         for report in result.reports:
             score = "-" if report.score is None else report.score
-            typer.echo(f"  {report.round_id}: {report.status.value} score={score}")
+            exit_code = "-" if report.exit_code is None else report.exit_code
+            runtime = (
+                "-"
+                if report.duration_seconds is None
+                else f"{report.duration_seconds:.1f}s"
+            )
+            typer.echo(
+                f"  {report.round_id}: {report.status.value} score={score} "
+                f"exit_code={exit_code} runtime={runtime}"
+            )
+    if oracle:
+        failures = _oracle_failures(result, max_submissions or 1)
+        if failures:
+            typer.echo(f"\nOracle check failed: {'; '.join(failures)}", err=True)
+            raise typer.Exit(1)
+        typer.echo("\nOracle check passed")
+        return
     if result.status in {RunStatus.FAILED, RunStatus.CANCELLED}:
         raise typer.Exit(1)
 

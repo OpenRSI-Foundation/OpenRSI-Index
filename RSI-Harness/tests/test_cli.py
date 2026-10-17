@@ -16,10 +16,14 @@ from rsi_harness.models import (
     GPUAllocation,
     GPUDevice,
     JudgeGPUMode,
+    JudgeLLMAuth,
+    JudgeLLMRequest,
     RunGPUPlan,
     RunRequest,
     RunResult,
     RunStatus,
+    SubmissionReport,
+    SubmissionStatus,
 )
 from rsi_harness.runtime.sandbox_ledger import PruneRow
 
@@ -230,6 +234,69 @@ def test_cluster_run_routes_without_constructing_local_docker_services(
     assert local_services.requests == []
     assert "cluster-123" in result.output
     assert "701" in result.output
+
+
+def test_cluster_run_passes_judge_llm_options_and_prints_the_judge_llm(
+    cli, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--judge-llm-* reach the cluster adapter (where, never the credential),
+    and its Judge LLM events print as on a local run."""
+    cli_module, local_services = cli
+    task = tmp_path / "task"
+    task.mkdir()
+    requests = []
+
+    class ClusterAdapter:
+        def __init__(self, event_callback):
+            self.event_callback = event_callback
+
+        def run(self, request):
+            requests.append(request)
+            self.event_callback(
+                "judge_llm",
+                {
+                    "model": "gpt-judge",
+                    "effort": "high",
+                    "credential": "api",
+                    "reused": False,
+                    "expires_at": None,
+                },
+            )
+            return ClusterRunResult(
+                run_id="cluster-123",
+                status=RunStatus.COMPLETED,
+                log_dir=(tmp_path / "cluster-logs").resolve(),
+                job_ids=("701",),
+            )
+
+    monkeypatch.setattr(
+        cli_module,
+        "build_cluster_adapter",
+        lambda name, event_callback=None: ClusterAdapter(event_callback),
+    )
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        [
+            "run",
+            str(task),
+            "--cluster",
+            "bluevela",
+            "--judge-llm-auth",
+            "api",
+            "--judge-llm-api-key-env",
+            "MY_JUDGE_KEY",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert requests[0].judge_llm == JudgeLLMRequest(
+        auth=JudgeLLMAuth.API, api_key_env="MY_JUDGE_KEY"
+    )
+    assert local_services.requests == []
+    assert "Judge LLM: gpt-judge (effort high) via --judge-llm-auth api" in (
+        result.output
+    )
 
 
 def test_cluster_run_rejects_local_gpu_selectors_before_adapter_creation(
@@ -935,3 +1002,309 @@ def test_visualize_runs_stock_rsi_loop_app_with_generated_task_metadata(
         ),
         (stock_app, None, "0.0.0.0", 8123),
     ]
+
+
+def test_run_passes_judge_llm_options_without_the_credential(
+    cli, tmp_path: Path
+) -> None:
+    cli_module, services = cli
+    task = tmp_path / "task"
+    task.mkdir()
+    home = tmp_path / "codex-home"
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        [
+            "run",
+            str(task),
+            "--judge-llm-auth",
+            "codex-login",
+            "--judge-llm-codex-home",
+            str(home),
+            "--judge-llm-proxy",
+            "http://proxy.example:3128",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    request = services.requests[0].judge_llm
+    assert request.auth is JudgeLLMAuth.CODEX_LOGIN
+    assert request.codex_home == home.resolve()
+    assert request.proxy == "http://proxy.example:3128"
+    assert "Judge LLM auth:" in result.output and "codex-login" in result.output
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        [
+            "run",
+            str(task),
+            "--judge-llm-auth",
+            "api",
+            "--judge-llm-api-key-env",
+            "MY_JUDGE_KEY",
+            "--judge-llm-base-url",
+            "https://models.example/v1",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    request = services.requests[1].judge_llm
+    assert request.auth is JudgeLLMAuth.API
+    assert (request.api_key_env, request.base_url) == (
+        "MY_JUDGE_KEY",
+        "https://models.example/v1",
+    )
+    # Only where the key comes from is part of the request, never the key.
+    assert "key" not in request.model_dump_json().replace("api_key", "")
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["--judge-llm-proxy", "http://p:1"], "need --judge-llm-auth"),
+        (
+            ["--judge-llm-auth", "api", "--judge-llm-codex-home", "/tmp"],
+            "only to a codex-login",
+        ),
+        (
+            ["--judge-llm-auth", "codex-login", "--judge-llm-api-key-env", "K"],
+            "only to an api",
+        ),
+    ],
+)
+def test_run_rejects_inconsistent_judge_llm_options(
+    cli, tmp_path: Path, arguments, message
+) -> None:
+    cli_module, services = cli
+    task = tmp_path / "task"
+    task.mkdir()
+
+    result = CliRunner().invoke(cli_module.app, ["run", str(task), *arguments])
+
+    assert result.exit_code == 2
+    assert message in result.output
+    assert services.requests == []
+
+
+def test_run_console_names_the_judge_llm_source(capsys) -> None:
+    from rsi_harness.cli import _RunConsole
+
+    console = _RunConsole()
+    console(
+        "judge_llm",
+        {
+            "model": "gpt-judge",
+            "effort": "medium",
+            "credential": "api",
+            "reused": False,
+        },
+    )
+    console(
+        "judge_llm",
+        {"model": "gpt-test", "effort": "high", "credential": "api", "reused": True},
+    )
+
+    output = capsys.readouterr().out
+    assert "Judge LLM: gpt-judge (effort medium) via --judge-llm-auth api" in output
+    assert "Judge LLM: gpt-test (effort high) via the Work Agent's credential" in output
+
+
+def test_run_console_warns_when_a_judge_keeps_its_last_login(capsys) -> None:
+    from rsi_harness.cli import _RunConsole
+
+    _RunConsole()(
+        "judge_login_kept",
+        {
+            "round_id": "agent-2",
+            "reason": "the Work Agent's login file /home/agent/.codex/auth.json "
+            "is missing",
+        },
+    )
+
+    output = capsys.readouterr().out
+    assert (
+        "Warning: Judge agent-2: the Work Agent's current login was not used "
+        "(the Work Agent's login file /home/agent/.codex/auth.json is missing); "
+        "the Judge keeps its last good copy, which stops working when its access "
+        "token expires."
+    ) in output
+
+
+def test_run_console_warns_when_the_operators_login_was_not_refreshed(
+    capsys,
+) -> None:
+    from rsi_harness.cli import _RunConsole
+
+    _RunConsole()(
+        "judge_login_refresh_failed",
+        {"round_id": "agent-3", "reason": "Codex could not refresh it: timed out"},
+    )
+
+    output = capsys.readouterr().out
+    assert (
+        "Warning: Judge agent-3: the Judge LLM's Codex login was not kept fresh "
+        "(Codex could not refresh it: timed out); the Judge refuses calls its "
+        "access token would not outlive."
+    ) in output
+
+
+def test_run_console_reports_login_expiry_and_unused_judge_llm_options(
+    capsys,
+) -> None:
+    from rsi_harness.cli import _RunConsole
+
+    console = _RunConsole()
+    console(
+        "judge_llm",
+        {
+            "model": "gpt-judge",
+            "effort": "low",
+            "credential": "codex-login",
+            "reused": False,
+            "expires_at": 4102444800.0,
+        },
+    )
+    console("judge_llm_ignored", None)
+
+    output = capsys.readouterr().out
+    assert (
+        "via --judge-llm-auth codex-login; its login's access token expires 2"
+    ) in output
+    assert "refreshed in place before a Judge round would outlive it" in output
+    assert "task declares no judge_model; the --judge-llm-* options are ignored" in (
+        output
+    )
+
+
+def _round(round_id: str, status: SubmissionStatus = SubmissionStatus.COMPLETED):
+    return SubmissionReport(
+        round_id=round_id,
+        status=status,
+        rewards={"reward": 1.0},
+        score=1.0,
+        exit_code=0 if status is SubmissionStatus.COMPLETED else 1,
+        duration_seconds=12.25,
+    )
+
+
+def _oracle_result(**updates) -> RunResult:
+    values = {
+        "run_id": "oracle-run",
+        "status": RunStatus.COMPLETED,
+        "total_rounds": 1,
+        "best_score": 1.0,
+        "best_round": "agent-1",
+        "reports": (_round("agent-1"),),
+        "agent_exit_code": 0,
+        "artifacts_dir": Path("/logs/runs/oracle-run/task"),
+    }
+    values.update(updates)
+    return RunResult(**values)
+
+
+def _run_oracle(cli, tmp_path: Path, result: RunResult, *extra: str):
+    cli_module, services = cli
+    services.agents = ("codex", "oracle")
+    task = tmp_path / "task"
+    task.mkdir(exist_ok=True)
+    services.run = lambda _request: result  # type: ignore[method-assign]
+    return CliRunner().invoke(
+        cli_module.app, ["run", str(task), "--agent", "oracle", *extra]
+    )
+
+
+def test_oracle_run_passes_and_prints_where_to_read_it(cli, tmp_path: Path) -> None:
+    result = _run_oracle(cli, tmp_path, _oracle_result())
+
+    assert result.exit_code == 0, result.output
+    assert "Artifacts:" in result.output
+    assert "/logs/runs/oracle-run/task" in result.output
+    assert "Agent exit code:  0" in result.output
+    assert "agent-1: completed score=1.0 exit_code=0 runtime=12.2s" in result.output
+    assert "Oracle check passed" in result.output
+
+
+@pytest.mark.parametrize(
+    ("updates", "extra", "reason"),
+    [
+        ({"agent_exit_code": 2}, (), "solve.sh exited 2"),
+        ({"agent_exit_code": None}, (), "solve.sh returned no exit code"),
+        (
+            {
+                "status": RunStatus.NO_VALID_SUBMISSION,
+                "reports": (_round("agent-1", SubmissionStatus.VERIFIER_ERROR),),
+            },
+            (),
+            "run status is no_valid_submission; agent-1 is verifier_error",
+        ),
+        (
+            {},
+            ("--max-submissions", "2"),
+            "1 Judge round(s) ran, expected 2",
+        ),
+        (
+            {
+                "total_rounds": 2,
+                "reports": (
+                    _round("agent-1"),
+                    _round("agent-2", SubmissionStatus.INFRASTRUCTURE_ERROR),
+                ),
+            },
+            ("--max-submissions", "2"),
+            "agent-2 is infrastructure_error",
+        ),
+    ],
+)
+def test_oracle_run_fails_unless_every_round_completed(
+    cli, tmp_path: Path, updates, extra, reason
+) -> None:
+    result = _run_oracle(cli, tmp_path, _oracle_result(**updates), *extra)
+
+    assert result.exit_code == 1, result.output
+    assert f"Oracle check failed: {reason}" in result.output
+
+
+def test_oracle_run_with_n_completed_rounds_passes(cli, tmp_path: Path) -> None:
+    result = _run_oracle(
+        cli,
+        tmp_path,
+        _oracle_result(total_rounds=2, reports=(_round("agent-1"), _round("agent-2"))),
+        "--max-submissions",
+        "2",
+    )
+
+    assert result.exit_code == 0, result.output
+
+
+def test_model_agent_exit_code_ignores_its_own_exit_code(cli, tmp_path: Path) -> None:
+    cli_module, services = cli
+    task = tmp_path / "task"
+    task.mkdir()
+    services.run = lambda _request: _oracle_result(  # type: ignore[method-assign]
+        agent_exit_code=137, status=RunStatus.NO_VALID_SUBMISSION
+    )
+
+    result = CliRunner().invoke(cli_module.app, ["run", str(task), "--agent", "codex"])
+
+    assert result.exit_code == 0, result.output
+    assert "Oracle check" not in result.output
+
+
+def test_oracle_is_refused_on_a_cluster(cli, tmp_path: Path, monkeypatch) -> None:
+    cli_module, services = cli
+    task = tmp_path / "task"
+    task.mkdir()
+    monkeypatch.setattr(
+        cli_module,
+        "build_cluster_adapter",
+        lambda *_a, **_k: pytest.fail("cluster adapter built"),
+    )
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        ["run", str(task), "--agent", "oracle", "--cluster", "bluevela"],
+    )
+
+    assert result.exit_code == 2
+    assert "--agent oracle runs locally only" in result.output
+    assert services.requests == []

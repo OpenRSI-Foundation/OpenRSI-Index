@@ -27,7 +27,7 @@ from rsi_harness.models import AgentAuthSource, AgentPrepareRequest
 from rsi_harness.runtime.images import DockerImageBuilder
 from rsi_harness.runtime.local_auth import resolve_agent_auth
 from rsi_loop.harness.agent import create_agent, versions, zcode
-from rsi_loop.harness.agent.base import STOP_HOOK_REASON
+from rsi_loop.harness.agent.base import NODE_BIN, STOP_HOOK_REASON
 from rsi_loop.harness.agent.zcode import ZCODE_DIR, ZCodeAgent
 from rsi_loop.harness.config import RSILoopConfig, load_config
 from tests.factories import make_run_plan
@@ -93,7 +93,9 @@ def _run_prelude(
         [
             "/bin/bash",
             "-c",
-            f'{prelude}\nprintf %s "$ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"',
+            # The pinned node an Agent image installs is this host's node.
+            f"{prelude.replace(NODE_BIN, str(NODE))}\n"
+            'printf %s "$ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"',
         ],
         env={
             **environment,
@@ -292,14 +294,54 @@ def test_work_image_installs_the_pinned_bundle_with_its_launcher() -> None:
 
     assert (
         "${RSI_ZCODE_MIRROR_URL:-https://cdn-zcode.z.ai/zcode/electron/releases}"
-        f"/{versions.ZCODE}/linux-x64/ZCode-{versions.ZCODE}-linux-x64.deb"
+        f"/{versions.ZCODE}/linux-${{arch}}/ZCode-{versions.ZCODE}-linux-${{arch}}.deb"
     ) in dockerfile
+    assert "x86_64) arch=x64 ;; aarch64|arm64) arch=arm64 ;;" in dockerfile
     assert "rm zcode.deb" in dockerfile
     assert "sudo -E" not in dockerfile
     assert "/opt/rsi-harness/agent-driver.mjs" in dockerfile
     assert '"/usr/local/bin/zcode"' in dockerfile
     for launcher in ("rsi-agent-driver", "zcode"):
         assert f"command -v {launcher}" in dockerfile
+
+
+@pytest.mark.parametrize(
+    ("machine", "arch"),
+    [("x86_64", "x64"), ("aarch64", "arm64"), ("arm64", "arm64"), ("riscv64", None)],
+)
+def test_package_download_matches_the_image_architecture(
+    tmp_path: Path, machine: str, arch: str | None
+) -> None:
+    stub_bin = tmp_path / "bin"
+    stub_bin.mkdir()
+    fetched = tmp_path / "fetched"
+    # The download is all this checks: curl records its arguments and fails.
+    for name, script in (
+        ("uname", f"echo {machine}"),
+        ("curl", f'echo "$@" > {fetched}; exit 22'),
+        ("dpkg-deb", "exit 1"),
+    ):
+        (stub_bin / name).write_text(f"#!/bin/sh\n{script}\n")
+        (stub_bin / name).chmod(0o755)
+    [install] = [c for c in _agent().install_cmds if "zcode.deb" in c]
+
+    completed = subprocess.run(
+        ["/bin/bash", "-c", install.removeprefix("sudo -E ")],
+        env={"PATH": f"{stub_bin}:/usr/bin:/bin"},
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    if arch is None:
+        assert "no release for architecture riscv64" in completed.stderr
+        assert not fetched.exists()
+    else:
+        assert (
+            "https://cdn-zcode.z.ai/zcode/electron/releases"
+            f"/{versions.ZCODE}/linux-{arch}/ZCode-{versions.ZCODE}-linux-{arch}.deb"
+        ) in fetched.read_text().split()
 
 
 def test_mirror_reaches_the_package_download_as_a_build_argument(
@@ -400,6 +442,7 @@ def _install(
 # What the install command runs, besides curl and the .deb extractor.
 _TOOLS = [
     "bash",
+    "uname",
     "mktemp",
     "tar",
     "xz",

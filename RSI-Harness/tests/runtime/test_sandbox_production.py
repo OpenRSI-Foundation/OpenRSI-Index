@@ -160,6 +160,64 @@ def test_work_secret_is_exec_only_and_deadline_callback_is_wired(composed):
     assert ports.sandbox_lifecycle.can_resume
 
 
+def test_oracle_stages_before_exec_and_starts_the_work_deadline_at_exec(composed):
+    """The oracle reaches the sandbox exactly as a model Agent does."""
+    from rsi_harness.integrations.rsi_loop import RSILoopAgentAdapter
+    from rsi_harness.models import ContainerRef
+
+    ports, plan, definition, _, mutate, _ = composed
+    definition = definition.model_copy(
+        update={"agent": definition.agent.model_copy(update={"name": "oracle"})}
+    )
+    ports.definition = definition
+    solution = definition.source_dir / "solution"
+    solution.mkdir(parents=True)
+    (solution / "solve.sh").write_text("#!/bin/sh\ntrue\n")
+    ports.bind_sandbox_lease(mutate)
+    final = ports.prepare_plan(
+        definition,
+        plan.images,
+        plan.gpu_plan,
+        RunRequest(task_dir=definition.source_dir),
+        "run-1",
+    )
+    work = ContainerRef(container_id="work-1", role="work")
+    calls = []
+
+    class Runtime:
+        def copy_to(self, container, source, target):
+            calls.append(("copy", str(target), None))
+
+        def exec(self, container, command, **options):
+            calls.append(("exec", command, options))
+            if options.get("on_exec_start") is not None:
+                options["on_exec_start"](ports.sandbox_lifecycle.broker.clock() + 30)
+            return AgentRunResult(exit_code=0)
+
+    ports.agent = RSILoopAgentAdapter(RSILoopConfig(), runtime=Runtime())
+    ports.work_runtime = SimpleNamespace()
+    ports.artifacts = SimpleNamespace(root=final.paths.root)
+    final.paths.root.mkdir(parents=True, exist_ok=True)
+
+    ports.install_hooks(final, work, "http://control", "token")
+    assert not ports.sandbox_lifecycle.can_resume
+    prepared = ports.prepare_agent(final, 2)
+    env = dict(prepared.environment)
+    assert env["RSI_SANDBOX_TOKEN"]
+    assert env["RSI_ORACLE_SUBMISSIONS"] == "2"
+    ports.run_agent(prepared, work, 30)
+
+    kinds = [(kind, target) for kind, target, _ in calls]
+    assert kinds[0] == ("copy", "/tmp/rsi-oracle-solution.tar")
+    assert kinds[1][0] == "exec" and kinds[1][1][:2] == ("/bin/sh", "-c")
+    assert calls[1][2] == {"user": "root"}
+    agent_exec = calls[-1]
+    assert agent_exec[1] == ("/bin/bash", "-c", "rsi-oracle /workspace /solution")
+    assert agent_exec[2]["timeout_seconds"] == 30
+    assert agent_exec[2]["on_exec_start"] is not None
+    assert ports.sandbox_lifecycle.can_resume
+
+
 ENV_TASK = """
 [metadata.rsi_harness.sandbox]
 version = 2

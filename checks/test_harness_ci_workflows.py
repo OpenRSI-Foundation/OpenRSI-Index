@@ -68,6 +68,21 @@ def test_every_selected_agent_gets_its_own_docker_job():
     assert '-k "[${{ matrix.agent }}]"' in run
 
 
+def test_the_oracle_gets_its_own_docker_job():
+    workflow = _load(AGENT_TESTS)
+    job = workflow["jobs"]["oracle"]
+    paths = workflow["on"]["pull_request"]["paths"]
+    run = next(step["run"] for step in job["steps"] if "pytest" in step.get("run", ""))
+
+    assert job["needs"] == "plan"
+    assert job["if"] == "needs.plan.outputs.oracle == 'true'"
+    assert workflow["jobs"]["plan"]["outputs"]["oracle"] == "${{ steps.select.outputs.oracle }}"
+    for test in ("test_oracle_docker.py", "test_agent_path_docker.py"):
+        assert f"tests/integration/{test}" in run
+        assert f"RSI-Harness/tests/integration/{test}" in paths
+    assert "sudo" not in run
+
+
 def test_root_checks_use_the_real_firewall_as_root():
     steps = _load(ROOT_CHECKS)["jobs"]["root"]["steps"]
     run = next(step["run"] for step in steps if "pytest" in step.get("run", ""))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -12,6 +13,7 @@ import pytest
 
 from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.integrations.rsi_loop import (
+    AGENT_SHELL,
     RSILoopAgentAdapter,
     validate_agent_config,
 )
@@ -27,7 +29,7 @@ from rsi_harness.models import (
     RunGPUPlan,
 )
 from rsi_loop.harness.agent import create_agent, list_agent_classes
-from rsi_loop.harness.agent.base import STOP_HOOK_REASON
+from rsi_loop.harness.agent.base import NODE_BIN, STOP_HOOK_REASON
 from rsi_loop.harness.config import RSILoopConfig, load_config
 from tests.factories import make_run_plan
 from tests.fakes import register_fake_driven_agent
@@ -107,7 +109,7 @@ def test_prepare_writes_archive_free_workdir_prompt_and_resolves_agent_env(
     assert "package" not in prompt.lower()
     assert "upload" not in prompt.lower()
     assert "runtime-secret" not in prompt
-    assert prepared.command[:2] == ("/bin/bash", "-lc")
+    assert prepared.command[:2] == ("/bin/bash", "-c")
     assert "/tmp/rsi-agent-prompt.md" in prepared.command[2]
     assert "gpt-test" in prepared.command[2]
     assert dict(prepared.environment) == {
@@ -277,10 +279,11 @@ def test_prepare_maps_generic_reasoning_effort_to_codex_cli_override(
 
     assert prepared.command == (
         "/bin/bash",
-        "-lc",
+        "-c",
         f"codex exec -c 'model_reasoning_effort=\"{effort}\"' "
-        '-c web_search="disabled" -c features.shell_snapshot=false '
-        "--model gpt-test --dangerously-bypass-approvals-and-sandbox "
+        '-c web_search="disabled" -c allow_login_shell=false '
+        "-c features.shell_snapshot=false --model gpt-test "
+        "--dangerously-bypass-approvals-and-sandbox "
         '"$(cat /tmp/rsi-agent-prompt.md)"',
     )
 
@@ -320,6 +323,7 @@ def test_codex_command_names_the_configured_endpoint_as_its_provider(
     ).stdout.splitlines()
     overrides = [value for flag, value in zip(argv, argv[1:]) if flag == "-c"]
     assert sorted(overrides) == [
+        "allow_login_shell=false",
         "features.shell_snapshot=false",
         "model_provider=rsi_proxy",
         f'model_providers.rsi_proxy.base_url="{url}"',
@@ -365,7 +369,7 @@ def test_prepare_maps_generic_reasoning_effort_to_claude_cli_flag(
         )
     )
 
-    assert prepared.command[:2] == ("/bin/bash", "-lc")
+    assert prepared.command[:2] == ("/bin/bash", "-c")
     assert prepared.command[2].startswith(expected_prefix)
     assert "--model claude-opus-5" in prepared.command[2]
     assert "--reasoning-effort" not in prepared.command[2]
@@ -1332,8 +1336,8 @@ def test_codex_one_shot_command_matches_work_launch_flags() -> None:
     offline = _oneshot("codex")
     assert offline["command"] == (
         "codex exec -c 'model_reasoning_effort=\"high\"' "
-        '-c web_search="disabled" -c features.shell_snapshot=false --model m '
-        + CODEX_ONESHOT
+        '-c web_search="disabled" -c allow_login_shell=false '
+        "-c features.shell_snapshot=false --model m " + CODEX_ONESHOT
     )
     assert offline["schema_option"] == "--output-schema {schema_file}"
     assert offline["output"] == {"mode": "file", "fields": [], "error_field": None}
@@ -1342,7 +1346,8 @@ def test_codex_one_shot_command_matches_work_launch_flags() -> None:
 
     online = _oneshot("codex", internet=True, effort=None, model=None)
     assert online["command"] == (
-        "codex exec -c features.shell_snapshot=false " + CODEX_ONESHOT
+        "codex exec -c allow_login_shell=false -c features.shell_snapshot=false "
+        + CODEX_ONESHOT
     )
 
 
@@ -1477,7 +1482,7 @@ def test_kimi_one_shot_command_uses_print_mode_with_work_config() -> None:
     # the last assistant line leaves the pipe.
     launch, keep = lines[-1].split(" | ")
     argv = shlex.split(launch)
-    assert argv[:2] == ["node", "-e"]
+    assert argv[:2] == [NODE_BIN, "-e"]
     assert "readFileSync(0" in argv[2] and '"--prompt=" + prompt' in argv[2]
     assert argv[3:] == [
         "--",
@@ -1819,7 +1824,11 @@ def test_every_registered_agent_has_a_one_shot_command() -> None:
         agent.check_config()
         for internet in (False, True):
             oneshot = agent.format_oneshot_cmd(model="m", internet=internet)
-            assert isinstance(oneshot, OneShotCommand), agent_class.name
+            if agent_class.runs_task_solution:
+                # The oracle has no model to call.
+                assert oneshot is None, agent_class.name
+            else:
+                assert isinstance(oneshot, OneShotCommand), agent_class.name
 
 
 def test_one_shot_commands_reject_an_incomplete_contract() -> None:
@@ -1855,6 +1864,88 @@ def _driven_plan(tmp_path: Path, *, install_stop_hook: bool = True):
 _LIMITS = {"agent_context_window": "128000", "agent_max_output_tokens": "8192"}
 
 
+@pytest.mark.parametrize("resume", [False, True])
+@pytest.mark.parametrize("name", sorted(c.name for c in list_agent_classes()))
+def test_every_agent_starts_outside_a_login_shell(
+    tmp_path: Path, name: str, resume: bool
+) -> None:
+    """A login profile may reset PATH (Debian's and Alpine's do), dropping the
+    image's ENV PATH and the sandbox client directory the exec prepends. No
+    Agent start, resume or driver goes through one."""
+    agent_class = next(c for c in list_agent_classes() if c.name == name)
+    plan = make_run_plan(tmp_path)
+    plan = plan.model_copy(
+        update={
+            "task": plan.task.model_copy(
+                update={
+                    "agent": plan.task.agent.model_copy(
+                        update={
+                            "name": name,
+                            "model": None if agent_class.runs_task_solution else "m",
+                        }
+                    )
+                }
+            )
+        }
+    )
+    config = RSILoopConfig(
+        agent_api_key="sk-test",
+        agent_api_base_url="http://203.0.113.7:8000/v1",
+        **_LIMITS,
+    )
+
+    prepared = RSILoopAgentAdapter(config).prepare(
+        AgentPrepareRequest(
+            run_plan=plan,
+            prompt_path=(tmp_path / "prompt.md").resolve(),
+            resume=resume,
+        )
+    )
+
+    assert AGENT_SHELL == ("/bin/bash", "-c")
+    assert prepared.command[:2] == AGENT_SHELL
+    assert len(prepared.command) == 3
+    assert _BARE_NODE.search(prepared.command[2]) is None, prepared.command[2]
+
+
+# `node` run by name: the first node on PATH, which may be a task image's.
+_BARE_NODE = re.compile(r"(?:^|[\s;&|(])node\s")
+
+
+@pytest.mark.parametrize("name", sorted(c.name for c in list_agent_classes()))
+def test_every_agent_one_shot_runs_node_by_its_pinned_path(name: str) -> None:
+    """A task image may put its own node ahead of /usr/local/bin."""
+    config = RSILoopConfig(
+        agent_api_key="sk-test",
+        agent_api_base_url="http://203.0.113.7:8000/v1",
+        **_LIMITS,
+    )
+    oneshot = create_agent(name, config).format_oneshot_cmd(model="m")
+    if oneshot is None:
+        pytest.skip(f"{name} has no one-shot command")
+
+    assert _BARE_NODE.search(oneshot.command) is None, oneshot.command
+    if name == "kimi-code":
+        assert f"{NODE_BIN} -e" in oneshot.command
+
+
+def test_codex_runs_the_models_commands_outside_a_login_shell() -> None:
+    """Codex starts each command in a login shell unless told not to; on
+    Debian that would drop the PATH its own process has."""
+    agent = create_agent("codex", RSILoopConfig())
+    oneshot = agent.format_oneshot_cmd(model="m")
+    assert oneshot is not None
+    commands = (
+        agent.format_run_cmd("/tmp/prompt.md", model="m"),
+        agent.format_run_cmd("/tmp/prompt.md", model="m", resume=True),
+        oneshot.command,
+    )
+
+    for command in commands:
+        assert command.startswith("codex exec ")
+        assert command.count("-c allow_login_shell=false") == 1, command
+
+
 @pytest.mark.parametrize("install_stop_hook", [True, False])
 def test_prepare_passes_the_continuation_only_with_the_stop_hook(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, install_stop_hook: bool
@@ -1869,7 +1960,7 @@ def test_prepare_passes_the_continuation_only_with_the_stop_hook(
     )
 
     command = prepared.command[2]
-    assert prepared.command[:2] == ("/bin/bash", "-lc")
+    assert prepared.command[:2] == ("/bin/bash", "-c")
     assert "exec rsi-agent-driver --protocol acp" in command
     assert "--prompt-file /tmp/rsi-agent-prompt.md" in command
     expected = f"--continuation-reason {shlex.quote(STOP_HOOK_REASON)}"

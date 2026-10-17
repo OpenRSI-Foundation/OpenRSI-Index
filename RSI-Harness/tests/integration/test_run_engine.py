@@ -2353,6 +2353,8 @@ def test_production_wires_verifier_runtime_source_to_judge_runner(
             )
 
     class Runner:
+        model_access = None
+
         def __init__(self, **kwargs) -> None:
             runner_kwargs.append(kwargs)
 
@@ -3196,17 +3198,17 @@ def test_real_docker_split_workdir_fake_agent_submits_two_fresh_judges(
                 entry["role"] == "work",
             )
         ]
-    work_container_id = work_entries[0]["container_id"]
-    judge_image_ids = []
-    for round_id, entry in zip(("agent-1", "agent-2"), judge_entries, strict=True):
-        labels = entry["image_labels"]
-        assert labels["rsi-harness.run-id"] == result.run_id
-        assert labels["rsi-harness.task-id"] == "minimal-gpu"
-        assert labels["rsi-harness.round-id"] == round_id
-        assert labels["rsi-harness.role"] == "rootfs-snapshot"
-        assert labels["rsi-harness.source-container-id"] == work_container_id
-        judge_image_ids.append(entry["image_id"])
-    assert len(set(judge_image_ids)) == 2
+    # The hidden Judge starts from the clean image Work started from, in
+    # every round, never from a snapshot of Work's rootfs.
+    run_plan = json.loads(
+        (
+            tmp_path / "logs" / "runs" / result.run_id / "minimal-gpu" / "run-plan.json"
+        ).read_text()
+    )
+    assert run_plan["task"]["verifier"]["clean_image"] is True
+    work_image_id = run_plan["images"]["work_digest"]
+    assert work_entries[0]["image_id"] == work_image_id
+    assert [entry["image_id"] for entry in judge_entries] == [work_image_id] * 2
     assert durable.work.retained_image_id is not None
     retained = client.images.get(durable.work.retained_image_id)
     assert retained.attrs["Config"]["Labels"]["rsi-harness.role"] == (

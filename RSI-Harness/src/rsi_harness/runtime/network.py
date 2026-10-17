@@ -8,7 +8,7 @@ import re
 import shlex
 import socket
 import subprocess
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 from urllib.parse import urlsplit
@@ -557,6 +557,41 @@ class DockerIptablesFirewallBackend:
         return firewall_rule_chains(rule_id)
 
 
+def provider_bypasses_proxy(provider: str, environment: Mapping[str, str]) -> bool:
+    """Whether ``no_proxy`` in ``environment`` sends ``provider`` around the proxy."""
+    hostname = urlsplit(provider).hostname
+    if hostname is None:
+        return False
+    normalized = hostname.rstrip(".").lower()
+    try:
+        provider_address = ipaddress.ip_address(normalized)
+    except ValueError:
+        provider_address = None
+    entries = tuple(
+        value for key in ("no_proxy", "NO_PROXY") if (value := environment.get(key))
+    )
+    for entry in entries:
+        for raw_token in entry.split(","):
+            token = raw_token.strip().lower()
+            if not token:
+                continue
+            if token == "*":
+                return True
+            token = token.rsplit(":", 1)[0] if token.count(":") == 1 else token
+            try:
+                network = ipaddress.ip_network(token, strict=False)
+            except ValueError:
+                network = None
+            if provider_address is not None and network is not None:
+                if provider_address in network:
+                    return True
+                continue
+            token = token.removeprefix("*.").lstrip(".")
+            if normalized == token or normalized.endswith(f".{token}"):
+                return True
+    return False
+
+
 def judge_requires_internal_bridge(
     role: str, mode: str, has_api_endpoints: bool
 ) -> bool:
@@ -932,4 +967,5 @@ __all__ = [
     "FirewallRuleNotFound",
     "DockerIptablesFirewallBackend",
     "managed_bridge_interface",
+    "provider_bypasses_proxy",
 ]
