@@ -2672,6 +2672,10 @@ def test_concrete_production_composition_runs_two_rounds_with_real_endpoint(
     )
     assert final_result["total_rounds"] == 2
     assert final_result["best_round"] == "agent-2"
+    assert final_result["agent_exit_code"] == 0
+    assert final_result["first_submission_seconds"] is not None
+    assert result.agent_exit_code == 0
+    assert result.artifacts_dir == ports.plan.paths.logs / "runs/run-1/minimal-gpu"
     endpoint = next(value for name, value in ports.events if name == "server_start")
     assert str(endpoint).startswith("http://127.0.0.1:")
 
@@ -2859,3 +2863,109 @@ def test_policy_mismatch_cleanup_failure_retains_planned_and_actual_ids(
     assert retained.error is not None
     assert "installed Work policy identity differs from plan" in retained.error
     assert "mismatched policy cleanup failure" in retained.error
+
+
+def test_final_result_records_the_agent_exit_code_and_timings(tmp_path) -> None:
+    backend = ScriptedBackend(tmp_path)
+    backend.agent_result = AgentRunResult(exit_code=3)
+    coordinator = RunCoordinator(
+        backend=backend,
+        lease_store=LeaseStore(tmp_path / "leases"),
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    )
+
+    result = coordinator.run(RunRequest(task_dir=tmp_path))
+
+    finalized = backend.artifacts.finalized
+    assert finalized["agent_exit_code"] == 3
+    assert 0.0 <= finalized["first_submission_seconds"]
+    assert finalized["first_submission_seconds"] <= finalized["agent_runtime_seconds"]
+    assert finalized["agent_runtime_seconds"] <= finalized["runtime_seconds"]
+    assert result.agent_exit_code == 3
+    # The scripted artifacts have no root directory to report.
+    assert result.artifacts_dir is None
+
+
+def test_final_result_has_no_first_submission_without_a_round(tmp_path) -> None:
+    class Silent(ScriptedBackend):
+        def run_agent(self, prepared, work, timeout):
+            del prepared, timeout
+            self.events.append(("agent_start", work.container_id))
+            return self.agent_result
+
+    backend = Silent(tmp_path)
+    result = RunCoordinator(
+        backend=backend,
+        lease_store=LeaseStore(tmp_path / "leases"),
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    ).run(RunRequest(task_dir=tmp_path))
+
+    assert result.status is RunStatus.NO_VALID_SUBMISSION
+    finalized = backend.artifacts.finalized
+    assert finalized["agent_exit_code"] == 0
+    assert finalized["agent_runtime_seconds"] >= 0.0
+    assert finalized["first_submission_seconds"] is None
+
+
+def test_final_result_has_no_agent_timing_when_the_agent_never_ran(tmp_path) -> None:
+    backend = ScriptedBackend(tmp_path)
+    backend.fail_at = "prepare_agent"
+    result = RunCoordinator(
+        backend=backend,
+        lease_store=LeaseStore(tmp_path / "leases"),
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    ).run(RunRequest(task_dir=tmp_path))
+
+    assert result.status is RunStatus.FAILED
+    assert result.agent_exit_code is None
+    finalized = backend.artifacts.finalized
+    assert finalized["agent_exit_code"] is None
+    assert finalized["agent_runtime_seconds"] is None
+    assert finalized["first_submission_seconds"] is None
+
+
+def test_first_submission_seconds_is_measured_to_the_first_round(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Work time W: the Agent's start to the first round, not to a later one."""
+    import time as real_time
+    from types import SimpleNamespace
+
+    from rsi_harness.runtime import coordinator as coordinator_module
+
+    now = [100.0]
+    monkeypatch.setattr(
+        coordinator_module,
+        "time",
+        SimpleNamespace(monotonic=lambda: now[0], time=real_time.time),
+    )
+
+    class Timed(ScriptedBackend):
+        def run_agent(self, prepared, work, timeout):
+            now[0] += 5.0  # Work before the first rsi-submit.
+            return super().run_agent(prepared, work, timeout)
+
+        def evaluate_submission(self, request, *, lifecycle_observer):
+            report = super().evaluate_submission(
+                request, lifecycle_observer=lifecycle_observer
+            )
+            now[0] += 20.0  # Each Judge round.
+            return report
+
+    backend = Timed(tmp_path)
+    coordinator = RunCoordinator(
+        backend=backend,
+        lease_store=LeaseStore(tmp_path / "leases"),
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    )
+
+    result = coordinator.run(RunRequest(task_dir=tmp_path))
+
+    assert len(result.reports) == 2
+    finalized = backend.artifacts.finalized
+    assert finalized["first_submission_seconds"] == 5.0
+    assert finalized["agent_runtime_seconds"] == 45.0

@@ -485,6 +485,55 @@ def test_apptainer_mounts_each_phase_endpoint_and_starts_the_work_deadline(
     assert judge["output_redact_values"] == ("judge-token",)
 
 
+def test_apptainer_puts_the_endpoint_rsi_sandbox_first_on_path(tmp_path, monkeypatch):
+    """As on Docker: whichever phase gets an endpoint finds rsi-sandbox on
+    PATH, after the image's environment (Apptainer's PREPEND_PATH)."""
+    node_tmp = tmp_path / "node-tmp"
+    node_tmp.mkdir()
+    monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
+    apptainer = ApptainerAgentRuntime(
+        SimpleNamespace(
+            profile=load_cluster_profile("bluevela"),
+            run_id="native-run",
+            sif_path=tmp_path / "task.sif",
+        ),
+        make_run_plan(tmp_path),
+    )
+    apptainer.work_sandbox = tmp_path / "endpoint"
+    endpoint = {"RSI_SANDBOX_SOCKET": SANDBOX_TARGET + "/s", "RSI_SANDBOX_TOKEN": "t"}
+
+    def environment(phase, values, *, broker=False):
+        apptainer.work_broker = (
+            SimpleNamespace(root=tmp_path / "torchrun", local_world_size=2)
+            if broker
+            else None
+        )
+        command = apptainer._base_command(
+            devices=(),
+            environment=values,
+            extra_binds=(),
+            mount_workspace=phase == "work",
+            mount_agent_home=phase == "work",
+            containall=True,
+            network_mode="no-network",
+            phase=phase,
+        )
+        return dict(
+            value.split("=", 1)
+            for option, value in zip(command, command[1:], strict=False)
+            if option == "--env"
+        )
+
+    assert environment("work", endpoint)["PREPEND_PATH"] == SANDBOX_TARGET
+    assert environment("judge", endpoint)["PREPEND_PATH"] == SANDBOX_TARGET
+    assert environment("work", endpoint, broker=True)["PREPEND_PATH"] == (
+        SANDBOX_TARGET + ":/usr/local/bin"
+    )
+    # Without an endpoint the PATH stays the image's own.
+    assert "PREPEND_PATH" not in environment("work", {"A": "1"})
+    assert "PREPEND_PATH" not in environment("judge", None)
+
+
 # -- recovery -------------------------------------------------------------------
 
 

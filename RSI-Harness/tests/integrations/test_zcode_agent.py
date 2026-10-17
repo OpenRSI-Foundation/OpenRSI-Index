@@ -27,7 +27,7 @@ from rsi_harness.models import AgentAuthSource, AgentPrepareRequest
 from rsi_harness.runtime.images import DockerImageBuilder
 from rsi_harness.runtime.local_auth import resolve_agent_auth
 from rsi_loop.harness.agent import create_agent, versions, zcode
-from rsi_loop.harness.agent.base import STOP_HOOK_REASON
+from rsi_loop.harness.agent.base import NODE_BIN, STOP_HOOK_REASON
 from rsi_loop.harness.agent.zcode import ZCODE_DIR, ZCodeAgent
 from rsi_loop.harness.config import RSILoopConfig, load_config
 from tests.factories import make_run_plan
@@ -93,7 +93,9 @@ def _run_prelude(
         [
             "/bin/bash",
             "-c",
-            f'{prelude}\nprintf %s "$ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"',
+            # The pinned node an Agent image installs is this host's node.
+            f"{prelude.replace(NODE_BIN, str(NODE))}\n"
+            'printf %s "$ZCODE_PERSONAL_PROVIDER_CONFIG_FILE"',
         ],
         env={
             **environment,

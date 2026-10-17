@@ -24,7 +24,7 @@ from rsi_harness.integrations.rsi_loop import (
 )
 from rsi_harness.runtime.images import _registered_agent_launcher
 from rsi_loop.harness.agent import create_agent, list_agent_classes, zcode
-from rsi_loop.harness.agent.base import STOP_HOOK_REASON
+from rsi_loop.harness.agent.base import NODE_BIN, STOP_HOOK_REASON
 from rsi_loop.harness.agent.claude_code import _generate_stop_hook
 from rsi_loop.harness.agent.codex import _generate_codex_stop_hook
 from rsi_loop.harness.agent.driven import DrivenAgent
@@ -210,11 +210,14 @@ def test_driven_agent_command_runs_with_a_hostile_model_name(
     command = agent.format_run_cmd(
         "/tmp/rsi-agent-prompt.md", model=model, cwd="/w", continuation=STOP_HOOK_REASON
     )
-    # Some preludes run node; keep the one on PATH, wherever it is installed.
+    # Some preludes run the pinned node; use this host's, wherever it is.
     node = shutil.which("node")
     if node is None and "node " in command:
         pytest.skip("node is not installed")
     node_dir = f"{Path(node).parent}:" if node else ""
+    if node:
+        # The pinned node an Agent image installs is this host's node.
+        command = command.replace(NODE_BIN, node)
     completed = subprocess.run(
         ["/bin/bash", "-c", command],
         # The Agent's real environment, key included: a prelude that wrote the

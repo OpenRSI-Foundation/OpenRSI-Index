@@ -1479,17 +1479,27 @@ class ApptainerAgentRuntime:
             "CODEX_HOME": "/home/agent/.codex",
             "CLAUDE_CONFIG_DIR": "/home/agent/.claude",
         }
+        prepend: list[str] = []
+        if values.get("RSI_SANDBOX_SOCKET") == SANDBOX_TARGET + "/s":
+            # As on Docker (DockerRuntime._sandbox_exec_environment): the
+            # endpoint directory, with rsi-sandbox, first on PATH.
+            prepend.append(SANDBOX_TARGET)
         if mount_agent_home and self.work_broker is not None:
+            # Apptainer applies PREPEND_PATH after the image's own
+            # environment, so ordinary `torchrun` resolves to the
+            # Harness-owned transparent launcher mounted above.
+            prepend.append("/usr/local/bin")
             values.update(
                 {
-                    # Apptainer applies PREPEND_PATH after the image's own
-                    # environment, so ordinary `torchrun` resolves to the
-                    # Harness-owned transparent launcher mounted above.
-                    "PREPEND_PATH": "/usr/local/bin",
                     "RSI_MULTINODE_ROOT": "/run/rsi-harness/torchrun",
                     "RSI_LOCAL_WORLD_SIZE": str(self.work_broker.local_world_size),
                 }
             )
+        if prepend:
+            # Ahead of a PREPEND_PATH the cluster profile may set.
+            if values.get("PREPEND_PATH"):
+                prepend.append(values["PREPEND_PATH"])
+            values["PREPEND_PATH"] = ":".join(prepend)
         for key, value in values.items():
             command.extend(("--env", f"{key}={value}"))
         command.append(str(self.payload.sif_path))

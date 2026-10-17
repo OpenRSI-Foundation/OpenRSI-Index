@@ -20,13 +20,18 @@ my-task/
 ├── environment/
 │   ├── Dockerfile
 │   └── docker-compose.yaml
+├── solution/
+│   └── solve.sh
 └── tests/
     └── test.sh
 ```
 
 The Dockerfile or Compose file may be omitted when another supported image
 source is present, but `task.toml`, `instruction.md`, and the platform test
-script are required.
+script are required. `solution/` is optional and never reaches a model
+Agent's Work; `--agent oracle` runs its `solve.sh` (as Harbor's oracle does)
+in Work and submits, to validate the Judge on the real run path (see the
+[README](../../README.md#validate-a-tasks-judge-with-the-oracle)).
 
 ## Complete example
 
@@ -437,6 +442,18 @@ allowed_hosts = ["api.openai.com"]
 `[agent]` has no supported `env` table. Put shared values under
 `[environment.env]`; Agent provider credentials are supplied to RSI Harness at
 runtime.
+
+### Shell and `PATH`
+
+The Agent starts in `/bin/bash -c`, not a login shell, and the commands its
+CLI runs keep its `PATH`: the image's `ENV PATH`, with the sandbox client
+directory (`rsi-sandbox`) first when the task has a sandbox.
+`/etc/profile`, `/etc/profile.d` and `~/.profile` do not run, so put the
+tools the Agent needs on the image's `ENV PATH`, not in a profile script. The
+Agent CLI, its node and `rsi-submit` are in `/usr/local/bin`, which that
+`PATH` must include. The CLI runs on that pinned node even when the image puts
+its own `node` earlier on `PATH`; the commands the Agent runs see the image's
+`node`.
 
 ## `[verifier]`
 

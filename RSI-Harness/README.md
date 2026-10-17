@@ -170,6 +170,7 @@ nonstandard names, list the variable names in `RSI_AGENT_SECRET_ENV_NAMES`
 | `opencode` | OpenCode | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
 | `zcode` | ZCode | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
 | `pi` | pi | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `minimal`, `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
+| `oracle` | Oracle: the task's own `solution/solve.sh`, no model ([Validate a task's Judge with the oracle](#validate-a-tasks-judge-with-the-oracle)) | None; no credential reaches Work | `solution/solve.sh` in the task | No |
 
 Each Agent CLI is installed at an exact pinned version, over HTTPS, into the
 Work image when the image is built, together with the node it runs on. All of
@@ -321,6 +322,93 @@ Task authors start with
 operators with [docs/sandbox-operator-guide.md](docs/sandbox-operator-guide.md)
 (every grant field, the refusals, the BuildKit builder exception, the root
 checks and the acceptance). Examples are in [sample_tasks](sample_tasks).
+
+## Validate a task's Judge with the oracle
+
+`--agent oracle` runs the task's reference solution instead of a model, on the
+production path, so a task author or validator can check that the Judge
+scores the baseline before any Agent experiment. Only the Agent differs: the
+Work image, the Judge (the clean Work image, or a snapshot of Work for
+`clean_image = false` or a WORKDIR of `/`), the firewall, the GPU plan, a
+managed sandbox grant (`--sandbox-policy`), `rsi-isolate`, the trajectory,
+the reward and `final_result.json` are those of every run.
+
+```bash
+sudo -E "$(command -v rsi-harness)" run /absolute/path/to/task --agent oracle \
+  --gpus 0 --sandbox-policy /absolute/path/to/sandbox-policy.toml \
+  --data-root /scratch/.rsi-harness --logs-root /scratch/evidence/logs
+```
+
+Omit `--gpus` for a CPU task and `--sandbox-policy` for a task without
+sandboxes. Run it as root (`sudo -E`) like every run: the firewall needs it,
+and without root the command stops at the firewall probe. (A Harness that
+runs as non-root with a test firewall also cannot read a `reward.json` that
+`test.sh` wrote as root with mode `0600`, and reports a false
+`verifier_error`.) With `--max-submissions N`, pass `--timeout` of at least
+the solve time plus N times the verifier's `timeout_sec`: the Agent timeout
+is wall-clock and includes the Judge rounds, so a shorter one ends the oracle
+before its last submission. The sandbox samples
+([harbor-in-judge](sample_tasks/harbor-in-judge),
+[swebench-in-judge](sample_tasks/swebench-in-judge)) ship a trivial
+`solution/solve.sh` for this command. The run:
+
+1. Stages the task's `solution/` at `/solution` in Work before the oracle
+   starts (as root, then owned by the Work user).
+2. Runs `rsi-oracle`, the oracle's launcher in its Work image (the task image
+   with the standard Work layer; there is no Agent CLI or node). It runs
+   `/solution/solve.sh` in WORKDIR by its shebang, with
+   `DEBIAN_FRONTEND=noninteractive` and the Agent's exec environment (not a
+   login shell, as for every Agent, so the image's `PATH` and the injected
+   `rsi-sandbox` stay),
+   then deletes `/solution` (or empties it, when the exec user cannot unlink
+   it from `/`) so no Judge snapshot carries it.
+3. Calls `rsi-submit` once, or N times with `--max-submissions N` (for
+   timing). It submits even when `solve.sh` failed, so the Judge's output is
+   there to read, and exits with `solve.sh`'s status.
+
+No API key, base URL, model, `RSI_AGENT_EXTRA_ENV` value or provider endpoint
+reaches Work; the proxy settings do, and a no-network Work reaches only the
+submission endpoint. `solve.sh` must not read `/tests`: a hidden Judge's tests
+are never in Work, and a public Judge's are mounted there read-only as for
+every Agent.
+
+Setup refuses, before any Docker work, a task without `solution/solve.sh` (a
+regular file) and a Judge with `model_access` (it calls the run's Agent, and
+the oracle has none). A task's `judge_model` needs `--judge-llm-auth`.
+`--cluster`, `--agent-auth` and `--reasoning-effort` are refused.
+
+The command exits 0 only when the run completed, `solve.sh` exited 0, exactly
+N Judge rounds ran (1 without `--max-submissions`) and every round's status is
+`completed`, whatever its score. Otherwise it prints
+`Oracle check failed: <reasons>` and exits 1. Its summary names the
+artifacts directory and, per round, the score, `test.sh`'s exit code and the
+round's runtime.
+
+Treat the exit code as the infrastructure gate only, not as the verdict on
+the baseline. A baseline that the Judge scores 0 still exits 0, and a Judge
+that by design writes no reward for an ineligible baseline gives a round with
+`verifier_error` and exits 1. Judge each round from
+`submissions/agent-N/report.json` (`status`, `exit_code`, `error`),
+`feedback/agent-N.log` and `best_score`, compared with the reward the task
+expects for its baseline. Under `logs/runs/<run_id>/<task_id>/`:
+
+| File | Contents |
+| --- | --- |
+| `final_result.json` | `status` (`completed`, `no_valid_submission`, `failed` or `cancelled`), `best_score`, `best_rewards`, `best_round`, `total_rounds`, `timed_out`, `runtime_seconds`, and for every run: `agent_exit_code` (here `solve.sh`'s), `agent_runtime_seconds` (the Agent's exec) and `first_submission_seconds` (from the Agent's start to the start of the first Judge round, or `null`) |
+| `submissions/agent-N/report.json` | The round's `status` (`completed`, `verifier_error`, `verifier_timeout`, `infrastructure_error` or `submission_error`), `metrics`, `score`, `exit_code` of `test.sh`, `timed_out`, `runtime_seconds` (the whole round: snapshot, Judge start, `test.sh` and reward) and `error` |
+| `submissions/agent-N/test_output.txt`, `feedback/agent-N.log` | The round's complete Judge stdout and stderr |
+| `verifier/agent-N/` | The round's `/logs/verifier` (`reward.json` and whatever `test.sh` wrote; root-owned under `sudo`) |
+| `agent_output.txt` | `rsi-oracle`'s, `solve.sh`'s and `rsi-submit`'s output |
+| `engine_error.json` | Only after an Engine or infrastructure failure: the redacted error |
+| `run-plan.json` | The images, GPU plan, `clean_image` and sandbox grant used |
+
+The oracle's Work image, and so its clean Judge image, lacks the Agent CLI
+and node. A `test.sh` that relied on them by accident fails here although it
+would pass with that Agent; and a pass here does not show that the target
+Agent's CLI installs on the task image. A short run with that Agent covers
+it: building its Work image is the run's first step.
+Leave out `--cooldown`: a submission inside it is refused rather than
+delayed, so fewer than N rounds run and the check fails.
 
 ## Run multi-node tasks on a cluster
 
@@ -496,7 +584,7 @@ above.
 | Option | Purpose | Default |
 | --- | --- | --- |
 | `TASK_DIR` | Path to a supported Harbor task directory. | Required |
-| `--agent NAME` | Agent adapter to run: `codex`, `claude-code`, `qwen-code`, `kimi-code`, `opencode`, `zcode` or `pi` ([Agents](#agents)). | `codex` |
+| `--agent NAME` | Agent adapter to run: `codex`, `claude-code`, `qwen-code`, `kimi-code`, `opencode`, `zcode`, `pi`, or `oracle` for the task's own `solution/solve.sh` ([Agents](#agents)). | `codex` |
 | `--gpus LIST` | Ordered, comma-separated local GPU indexes or UUIDs. The Work container receives the count declared by the task. This option cannot be combined with `--cluster`. | Automatically select the task-declared GPU count; `gpus = "all"` requires an explicit list |
 | `--model NAME` | Override the model used by the selected Agent. | `RSI_AGENT_MODEL`, then the Agent's default |
 | `--reasoning-effort LEVEL` | Set an Agent-supported reasoning effort: `minimal`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra` for Codex; `low`, `medium`, `high`, `xhigh` or `max` for Claude Code; `low`, `medium` or `high` for Kimi Code, OpenCode and ZCode; `minimal`, `low`, `medium` or `high` for pi. Other Agents refuse the option. | Agent default |
@@ -507,7 +595,7 @@ above.
 | `--judge-llm-proxy URL` | HTTP(S) proxy the Judge uses to reach the Judge model. | The run's proxy settings (`RSI_HTTPS_PROXY`, `HTTPS_PROXY`, ...) |
 | `--judge-llm-codex-home DIR` | Codex home holding `auth.json` for `codex-login`. | `$CODEX_HOME`, then `~/.codex` |
 | `--timeout SECONDS` | Override the Agent time limit. | Task `agent.timeout_sec`, or 60 seconds if unset |
-| `--max-submissions N` | Limit how many Judge submissions the Agent may make. | Unlimited |
+| `--max-submissions N` | Limit how many Judge submissions the Agent may make. The `oracle` submits exactly N times. | Unlimited; the `oracle` submits once |
 | `--cooldown SECONDS` | Require a minimum delay between submissions. | `0.0` |
 | `--primary-reward KEY` | Select the reward key used as the primary score. | `reward`, or the only reward key when exactly one exists |
 | `--score-direction DIRECTION` | Choose whether the best score is the maximum or minimum: `maximize` or `minimize`. | `maximize` |

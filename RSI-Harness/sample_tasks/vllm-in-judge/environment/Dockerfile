@@ -1,7 +1,8 @@
-# The Work image of the vLLM-in-Judge demo. The Judge is derived from Work,
-# so everything its fixed procedure needs is installed here: vLLM (in its own
-# virtual environment, so its pins never meet Harbor's), Harbor 0.21.0 and
-# the Hugging Face CLI (`hf`, from vLLM's environment) the Work agent fetches
+# The task image of the vLLM-in-Judge demo. Work adds the Agent CLI and each
+# Judge starts from that clean Work image, so everything its fixed procedure
+# needs is installed here and is in both: vLLM (in its own virtual
+# environment, so its pins never meet Harbor's), Harbor 0.21.0 and the
+# Hugging Face CLI (`hf`, from vLLM's environment) the Work agent fetches
 # the checkpoint with. There is no Docker client or socket: every Harbor
 # environment is created by the host broker behind the injected endpoint,
 # through the rsi_sandbox_harbor plugin found on $RSI_SANDBOX_PYTHONPATH.

@@ -61,6 +61,8 @@ def test_rsi_harness_distribution_owns_complete_rsi_loop_package() -> None:
     driver = package.joinpath("harness", "agent", "driver")
     assert driver.joinpath("rsi-agent-driver.mjs").is_file()
     assert driver.joinpath("rsi-agent-driver.sh").is_file()
+    oracle = package.joinpath("harness", "agent", "oracle")
+    assert oracle.joinpath("rsi-oracle").is_file()
 
     for adapter in ("bluevela", "slurm"):
         cluster_package = resources.files(f"rsi_harness.cluster.{adapter}")

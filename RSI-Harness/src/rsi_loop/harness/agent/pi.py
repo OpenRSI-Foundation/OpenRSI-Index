@@ -30,7 +30,12 @@ import shlex
 from pathlib import Path
 
 from rsi_loop.harness.agent import versions
-from rsi_loop.harness.agent.base import NODE_INSTALL_CMD, Agent, OneShotCommand
+from rsi_loop.harness.agent.base import (
+    NODE_BIN,
+    NODE_INSTALL_CMD,
+    Agent,
+    OneShotCommand,
+)
 from rsi_loop.harness.backend import ContainerBackend, ContainerHandle
 
 EXTENSION_PATH = "/opt/rsi-harness/pi/rsi-never-stop.ts"
@@ -172,7 +177,7 @@ class PiAgent(Agent):
             'mkdir -p "$PI_CODING_AGENT_DIR"',
             f"printf '%s\\n' {shlex.quote(settings)}"
             ' > "$PI_CODING_AGENT_DIR/settings.json"',
-            "node -e "
+            f"{NODE_BIN} -e "
             + shlex.join([_WRITE_MODELS, models, str(self.api_base_env)])
             + ' "$PI_CODING_AGENT_DIR/models.json"',
         ]

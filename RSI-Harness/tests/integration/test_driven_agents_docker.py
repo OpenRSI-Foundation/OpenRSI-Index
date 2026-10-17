@@ -262,9 +262,11 @@ def _wire_listing(glob: str) -> str:
     )
 
 
-def _task(root: Path, *, timeout_seconds: int) -> Path:
+def _task(root: Path, *, timeout_seconds: int, dockerfile: str | None = None) -> Path:
     task = root / "task"
     shutil.copytree(FIXTURE, task)
+    if dockerfile is not None:
+        (task / "environment" / "Dockerfile").write_text(dockerfile)
     config = task / "task.toml"
     text = config.read_text()
     # No-network Work: the CLI reaches only the pinned model endpoint, and
@@ -287,6 +289,7 @@ def _run(
     stop_hook: bool,
     timeout_seconds: int,
     reasoning_effort: str | None = None,
+    dockerfile: str | None = None,
 ) -> DrivenRun:
     """One full production run of ``case`` with the fake model."""
     client = _docker()
@@ -341,7 +344,9 @@ def _run(
     request.addfinalizer(cleanup)
     result = services.run(
         RunRequest(
-            task_dir=_task(tmp_path, timeout_seconds=timeout_seconds),
+            task_dir=_task(
+                tmp_path, timeout_seconds=timeout_seconds, dockerfile=dockerfile
+            ),
             agent_name=case.agent,
             model=MODEL,
             reasoning_effort=reasoning_effort,
@@ -662,3 +667,56 @@ def test_driven_agent_without_stop_hook_runs_one_turn(
     _assert_no_key(run)
     trajectory = get_trajectory(run.run_root / "agent_output.txt")
     assert trajectory is not None and trajectory.tool_use_count == 1
+
+
+# A Debian task image (whose /etc/profile resets PATH in a login shell) with a
+# tool reachable only through its own ENV PATH.
+DEBIAN_IMAGE = "python:3.12-slim-bookworm"
+DEBIAN_DOCKERFILE = f"""\
+FROM {DEBIAN_IMAGE}
+RUN mkdir -p /workspace /opt/task-tools/bin \\
+    && printf '#!/bin/sh\\necho image-path-tool\\n' > /opt/task-tools/bin/task-tool \\
+    && chmod 0755 /opt/task-tools/bin/task-tool
+ENV PATH="/opt/task-tools/bin:${{PATH}}"
+WORKDIR /workspace
+"""
+
+
+@pytest.mark.parametrize("case", CASES, ids=str)
+def test_agent_shell_tool_keeps_the_image_path_on_debian(
+    tmp_path: Path, request: pytest.FixtureRequest, case: DrivenCase
+) -> None:
+    """The commands an Agent's shell tool runs find the image's ENV PATH.
+
+    The Agent starts outside a login shell; a CLI whose own shell tool used
+    one would lose the image's PATH to Debian's /etc/profile here.
+    """
+    client = _docker()
+    try:
+        client.images.get(DEBIAN_IMAGE)
+    except Exception as error:
+        _unavailable(f"local cached {DEBIAN_IMAGE} unavailable: {error}")
+    finally:
+        client.close()
+    command = (
+        "printf 42 > /workspace/answer.txt && rsi-submit; "
+        'task-tool; echo "agent-path:[$PATH]"'
+    )
+    scenario = {"cycle": ["mixed", "text"], "commands": [command]}
+
+    run = _run(
+        tmp_path,
+        request,
+        case,
+        scenario,
+        stop_hook=False,
+        timeout_seconds=AGENT_TIMEOUT_SECONDS,
+        dockerfile=DEBIAN_DOCKERFILE,
+    )
+
+    output = run.agent_output
+    assert run.result.status == RunStatus.COMPLETED, (run.result, output[-4000:])
+    results = "\n".join(run.tool_results())
+    assert "round: agent-1\nstatus: completed" in results, results[-4000:]
+    assert "image-path-tool" in results, results[-4000:]
+    assert re.search(r"agent-path:\[[^\]]*/opt/task-tools/bin", results), results

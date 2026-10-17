@@ -22,6 +22,8 @@ from rsi_harness.models import (
     RunRequest,
     RunResult,
     RunStatus,
+    SubmissionReport,
+    SubmissionStatus,
 )
 from rsi_harness.runtime.sandbox_ledger import PruneRow
 
@@ -1172,3 +1174,137 @@ def test_run_console_reports_login_expiry_and_unused_judge_llm_options(
     assert "task declares no judge_model; the --judge-llm-* options are ignored" in (
         output
     )
+
+
+def _round(round_id: str, status: SubmissionStatus = SubmissionStatus.COMPLETED):
+    return SubmissionReport(
+        round_id=round_id,
+        status=status,
+        rewards={"reward": 1.0},
+        score=1.0,
+        exit_code=0 if status is SubmissionStatus.COMPLETED else 1,
+        duration_seconds=12.25,
+    )
+
+
+def _oracle_result(**updates) -> RunResult:
+    values = {
+        "run_id": "oracle-run",
+        "status": RunStatus.COMPLETED,
+        "total_rounds": 1,
+        "best_score": 1.0,
+        "best_round": "agent-1",
+        "reports": (_round("agent-1"),),
+        "agent_exit_code": 0,
+        "artifacts_dir": Path("/logs/runs/oracle-run/task"),
+    }
+    values.update(updates)
+    return RunResult(**values)
+
+
+def _run_oracle(cli, tmp_path: Path, result: RunResult, *extra: str):
+    cli_module, services = cli
+    services.agents = ("codex", "oracle")
+    task = tmp_path / "task"
+    task.mkdir(exist_ok=True)
+    services.run = lambda _request: result  # type: ignore[method-assign]
+    return CliRunner().invoke(
+        cli_module.app, ["run", str(task), "--agent", "oracle", *extra]
+    )
+
+
+def test_oracle_run_passes_and_prints_where_to_read_it(cli, tmp_path: Path) -> None:
+    result = _run_oracle(cli, tmp_path, _oracle_result())
+
+    assert result.exit_code == 0, result.output
+    assert "Artifacts:" in result.output
+    assert "/logs/runs/oracle-run/task" in result.output
+    assert "Agent exit code:  0" in result.output
+    assert "agent-1: completed score=1.0 exit_code=0 runtime=12.2s" in result.output
+    assert "Oracle check passed" in result.output
+
+
+@pytest.mark.parametrize(
+    ("updates", "extra", "reason"),
+    [
+        ({"agent_exit_code": 2}, (), "solve.sh exited 2"),
+        ({"agent_exit_code": None}, (), "solve.sh returned no exit code"),
+        (
+            {
+                "status": RunStatus.NO_VALID_SUBMISSION,
+                "reports": (_round("agent-1", SubmissionStatus.VERIFIER_ERROR),),
+            },
+            (),
+            "run status is no_valid_submission; agent-1 is verifier_error",
+        ),
+        (
+            {},
+            ("--max-submissions", "2"),
+            "1 Judge round(s) ran, expected 2",
+        ),
+        (
+            {
+                "total_rounds": 2,
+                "reports": (
+                    _round("agent-1"),
+                    _round("agent-2", SubmissionStatus.INFRASTRUCTURE_ERROR),
+                ),
+            },
+            ("--max-submissions", "2"),
+            "agent-2 is infrastructure_error",
+        ),
+    ],
+)
+def test_oracle_run_fails_unless_every_round_completed(
+    cli, tmp_path: Path, updates, extra, reason
+) -> None:
+    result = _run_oracle(cli, tmp_path, _oracle_result(**updates), *extra)
+
+    assert result.exit_code == 1, result.output
+    assert f"Oracle check failed: {reason}" in result.output
+
+
+def test_oracle_run_with_n_completed_rounds_passes(cli, tmp_path: Path) -> None:
+    result = _run_oracle(
+        cli,
+        tmp_path,
+        _oracle_result(total_rounds=2, reports=(_round("agent-1"), _round("agent-2"))),
+        "--max-submissions",
+        "2",
+    )
+
+    assert result.exit_code == 0, result.output
+
+
+def test_model_agent_exit_code_ignores_its_own_exit_code(cli, tmp_path: Path) -> None:
+    cli_module, services = cli
+    task = tmp_path / "task"
+    task.mkdir()
+    services.run = lambda _request: _oracle_result(  # type: ignore[method-assign]
+        agent_exit_code=137, status=RunStatus.NO_VALID_SUBMISSION
+    )
+
+    result = CliRunner().invoke(cli_module.app, ["run", str(task), "--agent", "codex"])
+
+    assert result.exit_code == 0, result.output
+    assert "Oracle check" not in result.output
+
+
+def test_oracle_is_refused_on_a_cluster(cli, tmp_path: Path, monkeypatch) -> None:
+    cli_module, services = cli
+    task = tmp_path / "task"
+    task.mkdir()
+    monkeypatch.setattr(
+        cli_module,
+        "build_cluster_adapter",
+        lambda *_a, **_k: pytest.fail("cluster adapter built"),
+    )
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        ["run", str(task), "--agent", "oracle", "--cluster", "bluevela"],
+    )
+
+    assert result.exit_code == 2
+    assert "--agent oracle runs locally only" in result.output
+    assert services.requests == []

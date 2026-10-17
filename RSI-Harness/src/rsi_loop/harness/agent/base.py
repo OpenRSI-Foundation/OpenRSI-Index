@@ -53,6 +53,10 @@ def select_arch(what: str, *, x86_64: str, aarch64: str) -> str:
     )
 
 
+# Where NODE_INSTALL_CMD puts the pinned node. Agents run node by this path,
+# never by name: a task image may put its own node first on PATH.
+NODE_BIN = "/usr/local/bin/node"
+
 # The pinned node every Agent image installs into /usr/local; the driver, its
 # launcher wrapper and the ZCode launcher rely on it being there. A mirror
 # must serve the same v<version>/node-v<version>-linux-<x64|arm64>.tar.xz
@@ -140,6 +144,10 @@ class Agent(abc.ABC):
     # and the Agent starts. The Work image moves a task image's copy aside
     # and checks the installed one, as it does for the launcher.
     extra_launchers: tuple[str, ...] = ()
+    # Not a model Agent: it runs the task's own solution/solve.sh in Work.
+    # The Harness stages the solution for it and passes it no credential,
+    # model or provider endpoint.
+    runs_task_solution: bool = False
 
     def __init__(self, config: RSILoopConfig) -> None:
         self._config = config

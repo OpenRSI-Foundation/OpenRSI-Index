@@ -26,7 +26,7 @@ from rsi_harness.models import AgentAuthSource, AgentPrepareRequest
 from rsi_harness.runtime.images import DockerImageBuilder, _registered_agent_launcher
 from rsi_harness.runtime.local_auth import resolve_agent_auth
 from rsi_loop.harness.agent import create_agent, versions
-from rsi_loop.harness.agent.base import STOP_HOOK_REASON
+from rsi_loop.harness.agent.base import NODE_BIN, STOP_HOOK_REASON
 from rsi_loop.harness.agent.pi import EXTENSION_PATH, PiAgent
 from rsi_loop.harness.backend import ExecResult
 from rsi_loop.harness.config import RSILoopConfig
@@ -101,7 +101,8 @@ def _launch(
     if environment is None:
         environment = rsi_loop_agent_environment(agent._config, agent, "pi-test")
     completed = subprocess.run(
-        ["/bin/bash", "-c", command],
+        # The pinned node an Agent image installs is this host's node.
+        ["/bin/bash", "-c", command.replace(NODE_BIN, str(NODE))],
         env={
             **environment,
             "PATH": f"{stub_bin}:{Path(str(NODE)).parent}:/usr/bin:/bin",
