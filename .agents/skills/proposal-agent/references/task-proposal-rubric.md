@@ -73,12 +73,12 @@ them to select a decision tier.
   physical node with at most 8 GPUs at peak. CPU-only tasks are eligible under
   the same research and evaluation standards. Multi-node lanes and lanes using
   more than 8 GPUs are outside the currently admitted task class.
-- **Current execution model:** each submission is evaluated in a fresh hidden
-  Judge started from the clean task image, not from Work. Judge reads Work's
-  WORKDIR (the task workspace) read-only, and task-owned tests are injected
-  Judge-only. Image files outside WORKDIR are evaluator authority: the Agent
-  can read them but its changes there never reach Judge. Everything in WORKDIR
-  is candidate-controlled.
+- **Current execution model:** by default, each submission is evaluated in a
+  fresh hidden Judge started from the clean task image, not from Work. Judge
+  reads Work's WORKDIR (the task workspace) read-only, and task-owned tests are
+  injected Judge-only. Image files outside WORKDIR are evaluator authority: the
+  Agent can read them but its changes there never reach Judge. Everything in
+  WORKDIR is candidate-controlled.
 - **Rolling six-month window:** the six calendar months ending on the supplied
   UTC review date.
 - **Directly related work:** a distinct paper or public preprint whose central
@@ -247,9 +247,8 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
 - The proposal must declare its evaluation mode. Prefer direct evaluation when
   a fixed evaluator can answer the scientific question by scoring the submitted
   model, checkpoint, or other artifact.
-- The Judge's evaluation must not depend on the evaluated Agent or its model:
-  the reward never calls the run's Agent, and LLM-judged scoring is not an
-  admitted evaluation mode.
+- The reward must not depend on the run's Agent or the LLM driving it; the
+  Judge never calls the Agent.
 - Follow the contributor's scientifically coherent choice of evaluation-time
   retraining under a fixed protocol when the contributor explains why direct
   evaluation cannot answer the scientific question. In that mode, require a
@@ -309,7 +308,8 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
 - Existing proposal fields must establish that candidate-producing compute runs
   in Work by default, with CPU and RAM needs declared where applicable, and GPU
   needs declared for each phase (explicitly zero GPUs when unused); the
-  deliverable and everything it needs live in WORKDIR; normal evaluation is
+  deliverable and everything it needs live in WORKDIR unless the proposal
+  states why Judge needs Work changes outside it; normal evaluation is
   candidate-only; Solution materializes the traceable baseline without training
   or evaluation; and candidate-invalid results are unscored unless a finite
   scalar was selected.
