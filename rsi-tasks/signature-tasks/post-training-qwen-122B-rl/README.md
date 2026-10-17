@@ -57,8 +57,9 @@ tests/
   evaluate.py
 ```
 
-The Docker build context is `environment/`. The single shared Base/Work/Judge
-image uses the upstream Python 3.11 slim Bookworm family, pinned to OCI digest
+The Docker build context is `environment/`. Work and each Judge start from
+the one task image, which uses the upstream Python 3.11 slim Bookworm family,
+pinned to OCI digest
 `sha256:a36c24f9cbdf4fd0f52d67f0823eeac19c2028c637cecc392d97f980d4fec56b`.
 Only Python's standard library is needed; no runtime installs or network
 downloads occur. Tests and solution are not baked into the image.
@@ -66,8 +67,8 @@ downloads occur. Tests and solution are not baked into the image.
 The pristine `/workspace` contains empty `candidate/` and `research/`
 directories and links to public data and reference documentation in
 `/opt/rsi-assets`. All candidate-owned files stay inside `/workspace`, which
-Harness snapshots for Judge. Work processes, sockets, and in-memory buffers do
-not cross that boundary.
+Harness snapshots for Judge. Work processes, sockets, in-memory buffers, and
+changes outside `/workspace` do not cross that boundary.
 
 The two released data files are copied byte-for-byte into the build context.
 They total 58,379,478 bytes, so this package needs no external model/data mounts,

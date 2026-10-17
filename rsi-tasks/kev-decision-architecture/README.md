@@ -123,8 +123,8 @@ The expanded workload has 53% more requests than the initial package. The
 estimates; the reference finished the full 2,068-request Judge in about 60 s.
 Ensembles or larger architectures take longer and remain bounded by them.
 
-The shared root-capable Work snapshot is **not adversarial attestation**: it can
-alter inherited system libraries outside the checked assets. Candidate manifests
+Judge starts from the clean task image and reads `/workspace` read-only, so root
+Work changes to system libraries do not reach it. Candidate manifests
 are self-reported. Parameter and memory checks use PyTorch registration/allocation;
 they do not attest arbitrary native memory or deliberately hidden parameters.
 Audit trajectories for prohibited training data, model use and hand-coded answers.

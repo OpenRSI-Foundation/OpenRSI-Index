@@ -24,7 +24,7 @@ The official checkpoint card reports validation loss `0.2159`, but no score for 
 
 Agent timeout calculation: `60 h = 18 h Work + (3 submissions × 10 h blocking Judge) + 12 h margin`. The contributor's roughly six-hour single-experiment estimate remains unverified.
 
-RSI-Harness uses a shared Base/Judge. Work runs with root authority, so the public 32B judge weights and shared runtime are visible and potentially mutable despite task-specific checks. Evaluation inputs are withheld in `/tests`, the evaluator never imports candidate code, and the workspace is read-only in Judge, but this is a residual anti-cheat limitation rather than independent-verifier isolation.
+Work runs with root authority, but Judge starts from the clean task image, so root Work changes to the public 32B judge weights or runtime do not reach it. Evaluation inputs are withheld in `/tests`, the evaluator never imports candidate code, and the workspace is read-only in Judge.
 
 ## Run and validate
 
