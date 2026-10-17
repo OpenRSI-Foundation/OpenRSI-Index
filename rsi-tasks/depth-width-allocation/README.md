@@ -31,7 +31,7 @@ The Dockerfile fixes all immutable revisions, applies the source-documented comp
 
 The evaluator independently parses the manifest, enforces scope and budgets, patches only a disposable clean source copy with the reviewed explicit-width adapter and full-precision metric hook, suppresses raw child streams, checks all 100 expected reduced aggregates and the exact token count, then exclusively creates `/logs/verifier/reward.json`. Candidate validation failures and all incomplete/infrastructure failures remain unscored.
 
-RSI-Harness uses a shared Base/Judge design rather than a trust domain independent of root Work. Split read-only workspace reload, task-owned policy, declarative-only input, clean fixed-source reconstruction, offline scoring, receipts, and captured output reduce but do not eliminate that limitation.
+Judge starts from the clean task image, not from Work, so root Work changes outside `/workspace` do not reach it. Split read-only workspace reload, task-owned policy, declarative-only input, clean fixed-source reconstruction, offline scoring, receipts, and captured output limit what the submission can affect.
 
 ## Run and validate
 
