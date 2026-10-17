@@ -3,7 +3,8 @@ schema_version = "1.4"
 [task]
 name = "rsi/harbor-in-judge"
 
-# Work installs Harbor; the Judge is derived from Work. Neither has network
+# The task image installs Harbor; Work adds the Agent CLI and each Judge
+# starts from that clean Work image, so Harbor is in both. Neither has network
 # of its own: Harbor reaches the host broker through the injected endpoint,
 # and only the environments the broker creates get public egress.
 [environment]

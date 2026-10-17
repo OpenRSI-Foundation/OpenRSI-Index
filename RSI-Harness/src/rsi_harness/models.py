@@ -24,6 +24,10 @@ from rsi_harness.runtime.sandbox_contracts import (
 VERIFIER_OUTPUT_TRUNCATION_MARKER = "\n...[verifier output truncated]...\n"
 WORK_FEEDBACK_ROOT = PurePosixPath("/run/rsi-harness/feedback")
 JUDGE_TRAJECTORY_ROOT = PurePosixPath("/logs/agent")
+# Set in every Judge: "none", or "same-user" when the operator's cluster
+# profile chooses it. Always explicit, so an ENV baked into the task's image
+# never decides how a science Judge library isolates the routes it runs.
+JUDGE_ISOLATION_FALLBACK_ENV = "RSI_JUDGE_ISOLATION_FALLBACK"
 MIN_VERIFIER_OUTPUT_LIMIT_BYTES = len(VERIFIER_OUTPUT_TRUNCATION_MARKER.encode("utf-8"))
 
 
@@ -135,6 +139,43 @@ class AgentAuthSource(StrEnum):
     LOCAL = "local"
 
 
+class JudgeLLMAuth(StrEnum):
+    """The kind of credential the operator supplies for ``rsi-agent llm``."""
+
+    API = "api"
+    CODEX_LOGIN = "codex-login"
+
+
+class JudgeLLMRequest(PersistedModel):
+    """Where the Judge LLM credential comes from; never the credential itself.
+
+    ``api``: an OpenAI API key read from ``api_key_file`` or the environment
+    variable ``api_key_env``, sent to ``base_url`` (through ``proxy`` when
+    set). ``codex-login``: the Codex login (``auth.json``) in ``codex_home``.
+    """
+
+    auth: JudgeLLMAuth
+    api_key_env: str | None = None
+    api_key_file: Path | None = None
+    base_url: str | None = None
+    proxy: str | None = None
+    codex_home: Path | None = None
+
+    @model_validator(mode="after")
+    def require_matching_options(self) -> JudgeLLMRequest:
+        if self.auth is JudgeLLMAuth.API and self.codex_home is not None:
+            raise ValueError("a Codex home applies only to a codex-login credential")
+        if self.auth is JudgeLLMAuth.CODEX_LOGIN and (
+            self.api_key_env is not None
+            or self.api_key_file is not None
+            or self.base_url is not None
+        ):
+            raise ValueError("an API key or base URL applies only to an api credential")
+        if self.api_key_env is not None and self.api_key_file is not None:
+            raise ValueError("give the Judge LLM API key by file or variable, not both")
+        return self
+
+
 class CompileOptions(PersistedModel):
     agent_name: str = "codex"
     primary_reward: str | None = None
@@ -164,6 +205,7 @@ class RunRequest(PersistedModel):
     model: str | None = None
     reasoning_effort: str | None = None
     agent_auth: AgentAuthSource | None = None
+    judge_llm: JudgeLLMRequest | None = None
 
     _absolute_task_dir = field_validator("task_dir", mode="after")(_absolute_path)
 
@@ -302,9 +344,20 @@ class VerifierPlan(PersistedModel):
     network: NetworkPolicy = Field(default_factory=NetworkPolicy)
     # "public" also mounts the same task tests read-only in Work.
     visibility: Literal["hidden", "public"] = "hidden"
+    # A hidden Judge starts from the clean Work image, as a public one does,
+    # instead of a snapshot of Work. Compiles record it explicitly (absent in
+    # task.toml is True, public is always True) and a Docker run plan clears
+    # it when the clean image is unavailable. The False default keeps plans
+    # written before the field on the Work-snapshot Judge they started with.
+    clean_image: bool = False
     # The Judge reaches only the Agent's pinned model endpoints with the
     # Agent's credentials; never general egress.
     model_access: bool = False
+    # ``rsi-agent llm``: one plain call to this model, independent of the
+    # Agent, with an operator-supplied credential. None disables it; the
+    # effort is then None too.
+    judge_model: str | None = None
+    judge_model_effort: str | None = None
 
     @field_validator("output_limit_bytes")
     @classmethod
@@ -651,3 +704,7 @@ class RunResult(PersistedModel):
     best_round: str | None = None
     best_rewards: FrozenRewardMap = Field(default_factory=FrozenRewardMap)
     reports: tuple[SubmissionReport, ...] = ()
+    # The Agent's exit code (None when it did not run or return one), and
+    # the directory holding final_result.json and the rounds' reports.
+    agent_exit_code: int | None = None
+    artifacts_dir: Path | None = None

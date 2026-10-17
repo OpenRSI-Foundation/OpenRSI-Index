@@ -225,7 +225,8 @@ def test_work_image_installs_the_pinned_binaries_with_the_driver() -> None:
     )
 
     assert "npm pack --silent --cache" in dockerfile
-    assert f"opencode-linux-x64@{versions.OPENCODE}" in dockerfile
+    assert f"opencode-linux-${{arch}}@{versions.OPENCODE}" in dockerfile
+    assert "x86_64) arch=x64 ;; aarch64|arm64) arch=arm64 ;;" in dockerfile
     assert (
         f"https://github.com/BurntSushi/ripgrep/releases/download/{versions.RIPGREP}/"
     ) in dockerfile
@@ -245,22 +246,48 @@ def _tar_gz(members: dict[str, bytes]) -> bytes:
     return payload.getvalue()
 
 
+# ``uname -m`` -> the name the package and the ripgrep release use for it.
+_ARCHES = {
+    "x86_64": ("x64", "x86_64-unknown-linux-musl"),
+    "aarch64": ("arm64", "aarch64-unknown-linux-gnu"),
+    "arm64": ("arm64", "aarch64-unknown-linux-gnu"),
+}
+
+
 def _run_install(
-    tmp_path: Path, marker: str, fetcher: str, archive: bytes, replace: dict[str, str]
+    tmp_path: Path,
+    marker: str,
+    fetcher: str,
+    archive: bytes,
+    replace: dict[str, str],
+    machine: str = "x86_64",
 ) -> subprocess.CompletedProcess[str]:
-    """Run the install command containing *marker*, *fetcher* serving *archive*."""
+    """Run the install command containing *marker*, *fetcher* serving *archive*.
+
+    ``uname -m`` reports *machine*; the fetcher's arguments go to
+    ``tmp_path / "fetched"``.
+    """
     stub_bin = tmp_path / "bin"
     stub_bin.mkdir()
     served = tmp_path / "served.tgz"
     served.write_bytes(archive)
+    fetched = tmp_path / "fetched"
     stub = stub_bin / fetcher
-    # npm pack leaves the tarball in the working directory; curl streams it.
+    # npm pack leaves the tarball, named after the package, in the working
+    # directory; curl streams it.
+    package = f"opencode-linux-{_ARCHES.get(machine, ('none',))[0]}"
     stub.write_text(
-        f"#!/bin/sh\ncp {served} opencode-linux-x64-{versions.OPENCODE}.tgz\n"
-        if fetcher == "npm"
-        else f"#!/bin/sh\ncat {served}\n"
+        f'#!/bin/sh\necho "$@" > {fetched}\n'
+        + (
+            f"cp {served} {package}-{versions.OPENCODE}.tgz\n"
+            if fetcher == "npm"
+            else f"cat {served}\n"
+        )
     )
     stub.chmod(0o755)
+    uname = stub_bin / "uname"
+    uname.write_text(f"#!/bin/sh\necho {machine}\n")
+    uname.chmod(0o755)
     [install] = [c for c in _agent().install_cmds if marker in c]
     command = install.removeprefix("sudo -E ")
     for old, new in replace.items():
@@ -274,7 +301,10 @@ def _run_install(
     )
 
 
-def test_install_takes_only_the_binary_from_the_package(tmp_path: Path) -> None:
+@pytest.mark.parametrize("machine", sorted(_ARCHES))
+def test_install_takes_only_the_binary_from_the_package(
+    tmp_path: Path, machine: str
+) -> None:
     binary = b"#!/bin/sh\necho opencode\n"
     archive = _tar_gz({"package/bin/opencode": binary, "package/package.json": b"{}"})
     target = tmp_path / "opencode"
@@ -285,15 +315,21 @@ def test_install_takes_only_the_binary_from_the_package(tmp_path: Path) -> None:
         "npm",
         archive,
         {"/usr/local/bin/opencode": str(target)},
+        machine,
     )
 
     assert completed.returncode == 0, completed.stderr
+    package = f"opencode-linux-{_ARCHES[machine][0]}@{versions.OPENCODE}"
+    assert package in (tmp_path / "fetched").read_text().split()
     assert target.read_bytes() == binary
     assert target.stat().st_mode & 0o777 == 0o755
 
 
-def test_install_takes_only_rg_from_the_ripgrep_release(tmp_path: Path) -> None:
-    release = f"ripgrep-{versions.RIPGREP}-x86_64-unknown-linux-musl"
+@pytest.mark.parametrize("machine", sorted(_ARCHES))
+def test_install_takes_only_rg_from_the_ripgrep_release(
+    tmp_path: Path, machine: str
+) -> None:
+    release = f"ripgrep-{versions.RIPGREP}-{_ARCHES[machine][1]}"
     archive = _tar_gz({f"{release}/rg": b"rg", f"{release}/README.md": b"r"})
     target = tmp_path / "ripgrep"
 
@@ -303,11 +339,30 @@ def test_install_takes_only_rg_from_the_ripgrep_release(tmp_path: Path) -> None:
         "curl",
         archive,
         {str(Path(RIPGREP_PATH).parent): str(target)},
+        machine,
     )
 
     assert completed.returncode == 0, completed.stderr
+    url = (
+        "https://github.com/BurntSushi/ripgrep/releases/download/"
+        f"{versions.RIPGREP}/{release}.tar.gz"
+    )
+    assert url in (tmp_path / "fetched").read_text().split()
     assert [p.name for p in target.iterdir()] == ["rg"]
     assert (target / "rg").stat().st_mode & 0o777 == 0o755
+
+
+@pytest.mark.parametrize(
+    ("marker", "fetcher"), [("npm pack", "npm"), ("ripgrep", "curl")]
+)
+def test_install_refuses_an_unsupported_architecture(
+    tmp_path: Path, marker: str, fetcher: str
+) -> None:
+    completed = _run_install(tmp_path, marker, fetcher, b"", {}, "riscv64")
+
+    assert completed.returncode != 0
+    assert "no release for architecture riscv64" in completed.stderr
+    assert not (tmp_path / "fetched").exists()
 
 
 @pytest.mark.parametrize(

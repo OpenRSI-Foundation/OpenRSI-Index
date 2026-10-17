@@ -5,11 +5,12 @@
 # Work (sample_tasks/vllm-in-judge, its scripted agent work/agent.sh, no
 # model CLI; see tests/acceptance/scripted_cli.py) places a small existing
 # checkpoint from the Hugging Face Hub into its WORKDIR and submits. The
-# Judge, derived from Work, runs its fixed procedure /tests/test.sh: vLLM
-# serves the read-only checkpoint on the Judge's GPU, and Harbor runs the
-# terminus-2 agent against it over the tasks in /tests/harbor-tasks, every
-# task environment created by the host broker. Then the A5 leftover audit,
-# `rsi-harness cleanup` and the strict audit, and a PASS/FAIL table:
+# Judge, started from the clean Work image, runs its fixed procedure
+# /tests/test.sh: vLLM serves the read-only checkpoint on the Judge's GPU,
+# and Harbor runs the terminus-2 agent against it over the tasks in
+# /tests/harbor-tasks, every task environment created by the host broker.
+# Then the A5 leftover audit, `rsi-harness cleanup` and the strict audit,
+# and a PASS/FAIL table:
 #
 #   V0 Work      the checkpoint was downloaded and the submission accepted
 #   V1 vLLM      vLLM became healthy and served the WORKDIR checkpoint on a

@@ -43,7 +43,7 @@ The 80,000-token ACE playbook budget uses the pinned source's `cl100k_base` enco
 
 Existing timeout ceilings are retained: Agent 26 hours and each Judge 2.5 hours. These are safety limits, not predicted lightweight runtimes, and they do not impose a submission-count limit. The expert-time metadata is a rough planning estimate; actual adapted-Work timing remains unmeasured.
 
-Audit provenance is self-reported and not scoring authority. Shared Base/Judge rootfs inheritance and root Work identity do not provide an independent trust domain; Judge-owned policy and hidden inputs limit ordinary shortcuts but cannot make shared assets root-independent.
+Audit provenance is self-reported and not scoring authority. Judge starts from the clean task image and reads `/workspace` read-only, so root Work changes elsewhere do not reach it; Judge-owned policy and hidden inputs limit ordinary shortcuts.
 
 ## Run and validate
 

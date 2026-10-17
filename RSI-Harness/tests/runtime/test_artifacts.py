@@ -113,6 +113,9 @@ def test_writes_exact_rsi_loop_tree_and_complete_multi_reward_payloads(
         status=RunStatus.COMPLETED,
         runtime_seconds=42.5,
         timed_out=False,
+        agent_exit_code=0,
+        agent_runtime_seconds=40.0,
+        first_submission_seconds=12.5,
     )
 
     root = tmp_path / "logs" / "runs" / "run-1" / "minimal-gpu"
@@ -159,9 +162,12 @@ def test_writes_exact_rsi_loop_tree_and_complete_multi_reward_payloads(
     final = json.loads((root / "final_result.json").read_text())
     assert final == {
         "agent": "codex",
+        "agent_exit_code": 0,
+        "agent_runtime_seconds": 40.0,
         "best_rewards": {"accuracy": 0.75, "latency": 9.0},
         "best_round": "agent-2",
         "best_score": 0.75,
+        "first_submission_seconds": 12.5,
         "model": None,
         "runtime_seconds": 42.5,
         "status": "completed",

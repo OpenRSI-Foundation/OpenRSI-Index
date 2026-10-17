@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import shlex
+import tarfile
+import tempfile
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
@@ -32,11 +35,59 @@ from rsi_loop.harness.agent import (
     list_agent_classes,
 )
 from rsi_loop.harness.agent.base import STOP_HOOK_REASON
+from rsi_loop.harness.agent.oracle import SOLUTION_DIR, SUBMISSIONS_ENV
 from rsi_loop.harness.backend import ExecResult
 from rsi_loop.harness.config import RSILoopConfig
 
 _CONTAINER_PROMPT_PATH = PurePosixPath("/tmp/rsi-agent-prompt.md")
+# How every Agent (its CLI, a driven CLI's driver, a resume, the oracle) is
+# started in Work. Not a login shell: a login profile may reset PATH (Debian's
+# and Alpine's /etc/profile do), dropping the image's own ENV PATH and the
+# sandbox client directory the exec prepends. Nothing the Agent runs needs a
+# profile: the CLIs, their node and rsi-submit are in /usr/local/bin, put
+# there by the Work image (or, on a cluster, bound there).
+AGENT_SHELL = ("/bin/bash", "-c")
 _CONTROL_ENV_KEYS = ("RSI_JUDGE_URL", "RSI_TOKEN")
+# Where install_hooks stages a task's solution/ for an Agent that runs it.
+_SOLUTION_ARCHIVE_PATH = PurePosixPath("/tmp/rsi-oracle-solution.tar")
+
+
+def task_solution_script(task_dir: Path) -> Path:
+    """Return the task's ``solution/solve.sh``, or raise :class:`SetupError`."""
+
+    script = Path(task_dir) / "solution" / "solve.sh"
+    if script.is_symlink() or not script.is_file():
+        raise SetupError(
+            "the oracle runs solution/solve.sh, which the task does not have "
+            "as a regular file"
+        )
+    return script
+
+
+def _solution_archive(solution: Path, target: Path) -> None:
+    """Write *solution*'s contents to a tar; symlinks stay symlinks."""
+
+    def anonymous(info: tarfile.TarInfo) -> tarfile.TarInfo:
+        info.uid = info.gid = 0
+        info.uname = info.gname = ""
+        return info
+
+    with tarfile.open(target, "w", format=tarfile.PAX_FORMAT) as archive:
+        for child in sorted(solution.iterdir()):
+            archive.add(child, arcname=child.name, filter=anonymous)
+
+
+def _solution_install_script() -> str:
+    archive = shlex.quote(str(_SOLUTION_ARCHIVE_PATH))
+    solution = shlex.quote(SOLUTION_DIR)
+    # Owned by the Work user. rsi-oracle removes it after solve.sh, or only
+    # empties it when its exec user cannot unlink it from the root-owned /.
+    return (
+        f"set -e; rm -rf {solution}; install -d -m 0755 {solution}; "
+        f"tar -xf {archive} -C {solution} --no-same-owner; "
+        f"chown -hR agent:agent {solution}; chmod u+x {solution}/solve.sh; "
+        f"rm -f {archive}"
+    )
 
 
 def validate_agent_reasoning_effort(
@@ -142,7 +193,11 @@ def rsi_loop_agent_environment(
     agent: Agent,
     model: str | None,
 ) -> dict[str, str]:
-    """Build the exact non-control environment passed to an RSI Loop Agent."""
+    """Build the exact non-control environment passed to an RSI Loop Agent.
+
+    An Agent that runs the task's own solution gets the proxy settings only:
+    no credential, model, endpoint or extra variable reaches its Work.
+    """
 
     environment: dict[str, str] = {}
     for value, lower_name, upper_name in (
@@ -153,6 +208,8 @@ def rsi_loop_agent_environment(
         if value:
             environment[lower_name] = value
             environment[upper_name] = value
+    if getattr(agent, "runs_task_solution", False):
+        return environment
     if config.agent_api_key:
         environment[agent.api_key_env] = config.agent_api_key
     if config.agent_api_base_url and agent.api_base_env:
@@ -356,11 +413,14 @@ class RSILoopAgentAdapter:
             # container work, but a refusal here must still be a setup error.
             raise SetupError(str(error)) from error
         command = _apply_reasoning_effort(agent, command, agent_plan.reasoning_effort)
+        environment = self._agent_environment(agent, model)
+        if getattr(agent, "runs_task_solution", False):
+            environment[SUBMISSIONS_ENV] = str(request.max_submissions or 1)
         return PreparedAgent(
             agent_name=agent.name,
-            command=("/bin/bash", "-lc", command),
+            command=(*AGENT_SHELL, command),
             prompt_path=request.prompt_path,
-            environment=tuple(sorted(self._agent_environment(agent, model).items())),
+            environment=tuple(sorted(environment.items())),
         )
 
     def install_hooks(self, request: AgentHookRequest) -> None:
@@ -374,6 +434,8 @@ class RSILoopAgentAdapter:
             raise InfrastructureError("Agent control environment is already installed")
         runtime = self._require_runtime()
         agent = create_agent(request.run_plan.task.agent.name, self._config)
+        if getattr(agent, "runs_task_solution", False):
+            self._stage_solution(runtime, request)
         if request.run_plan.task.agent.install_stop_hook:
             log_dir = request.run_plan.paths.logs
             log_dir.mkdir(parents=True, exist_ok=True)
@@ -455,6 +517,30 @@ class RSILoopAgentAdapter:
         finally:
             self.clear_transient_bindings()
 
+    @staticmethod
+    def _stage_solution(runtime: AgentRuntime, request: AgentHookRequest) -> None:
+        """Install the task's ``solution/`` at ``/solution`` in Work, as root.
+
+        Before the Agent's exec, so a sandbox's Work deadline still starts
+        when the oracle does.
+        """
+
+        task_solution_script(request.run_plan.task.source_dir)
+        solution = request.run_plan.task.source_dir / "solution"
+        with tempfile.TemporaryDirectory(prefix="rsi-oracle-") as raw:
+            archive = Path(raw) / "solution.tar"
+            _solution_archive(solution, archive)
+            runtime.copy_to(request.container, archive, _SOLUTION_ARCHIVE_PATH)
+        result = runtime.exec(
+            request.container,
+            ("/bin/sh", "-c", _solution_install_script()),
+            user="root",
+        )
+        if result.exit_code != 0:
+            raise InfrastructureError(
+                f"staging the task solution in Work failed: {result.output}"
+            )
+
     def clear_transient_bindings(self) -> None:
         """Drop runtime-only submission authority on every cleanup path."""
 
@@ -523,11 +609,13 @@ Each submission stores complete Judge stdout and stderr in
 
 
 __all__ = [
+    "AGENT_SHELL",
     "RSILoopAgentAdapter",
     "RSILoopBackendBridge",
     "rsi_loop_agent_environment",
     "rsi_loop_oneshot",
     "rsi_loop_runtime_secret_values",
+    "task_solution_script",
     "validate_agent_config",
     "validate_agent_reasoning_effort",
 ]

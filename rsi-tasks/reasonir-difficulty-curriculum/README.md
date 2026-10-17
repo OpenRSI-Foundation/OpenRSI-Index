@@ -31,7 +31,7 @@ The fixed trainer produces a durable fixed-budget journal and an atomic adapter/
 
 Judge writes no reward for malformed or candidate-attributably failed artifacts, ambiguous failures, timeouts, dependency/infrastructure failures, or incomplete evaluation. A valid general-regressing candidate receives `G-G0`; otherwise reward is `R`, the equal-weight mean of the three selected BRIGHT scores. The four-dataset BEIR mean `G` retains the general-retrieval non-regression check.
 
-The shared Base/Judge architecture cannot provide root-independent proof that Work used the fixed trainer or prevent all system-package tampering. Candidate journals and hashes are consistency evidence only; Judge trusts task-owned validation and recomputed metrics. Public benchmarks and repeated aggregate feedback also leave adaptive-optimization risk.
+Judge starts from the clean task image, so root Work changes to system packages do not reach it, but nothing proves that Work used the fixed trainer. Candidate journals and hashes are consistency evidence only; Judge trusts task-owned validation and recomputed metrics. Public benchmarks and repeated aggregate feedback also leave adaptive-optimization risk.
 
 ## Run and validate
 

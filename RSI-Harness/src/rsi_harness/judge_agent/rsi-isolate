@@ -1,0 +1,8 @@
+#!/bin/sh
+# rsi-isolate: run one command isolated, inside a Judge. Installed read-only
+# by RSI Harness; see /opt/rsi-isolate/rsi_isolate.py.
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "rsi-isolate: python3 is required in the Judge image" >&2
+    exit 125
+fi
+exec python3 -I -S -B /opt/rsi-isolate/rsi_isolate.py "$@"

@@ -26,6 +26,10 @@ from rsi_harness.cluster.bluevela.image import (
     render_build_driver,
     validate_cached_image,
 )
+from rsi_harness.cluster.bluevela.judge_llm import (
+    ClusterJudgeLLM,
+    preflight_cluster_judge_llm,
+)
 from rsi_harness.cluster.bluevela.resources import (
     ClusterResources,
     MultiNodeResources,
@@ -65,6 +69,7 @@ from rsi_harness.runtime.sandbox_policy import (
 )
 from rsi_harness.task.compiler import HarborTaskCompiler
 from rsi_loop.harness.agent import get_agent_class
+from rsi_loop.harness.config import load_config
 
 
 class SchedulerPort(Protocol):
@@ -188,6 +193,15 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         resource_plan = derive_resource_plan(definition, self.profile)
         resources = resource_plan.single_node or resource_plan.multi_node
         assert resources is not None
+        from rsi_harness.cluster.bluevela.runtime import (
+            require_cluster_judge_model_access,
+        )
+
+        # Refused here, before any build or allocation; the job checks again.
+        require_cluster_judge_model_access(
+            definition, multi_node=resource_plan.multi_node is not None
+        )
+        judge_llm = self._judge_llm(definition, request)
         sandbox = self._sandbox_grant(
             definition, request, multi_node=resource_plan.multi_node is not None
         )
@@ -370,6 +384,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 agent_binary=agent_binary,
                 agent_launcher=agent_launcher,
                 agent_companions=agent_companions,
+                judge_llm=judge_llm,
             )
             render_engine_driver(payload, self.profile, run_spec.script_path)
             manifest["sif_sha256"] = image.sha256_path.read_text().split()[0]
@@ -413,9 +428,6 @@ class BlueVelaClusterAdapter(ClusterAdapter):
     def _compile(self, request: ClusterRunRequest) -> TaskDefinition:
         definition = self.compiler.compile(request.task_dir, request.options)
         validate_sandbox_policy(definition.sandbox, request.sandbox_policy, "cluster")
-        from rsi_harness.cluster.bluevela.runtime import require_no_judge_model_access
-
-        require_no_judge_model_access(definition)
         require_cluster_agent(definition.agent.name)
         if definition.gpu_requirement.count == 0 and not self.supports_cpu_work:
             raise SetupError(
@@ -432,6 +444,44 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 update={"agent": definition.agent.model_copy(update=updates)}
             )
         return definition
+
+    def _judge_llm(
+        self, definition: TaskDefinition, request: ClusterRunRequest
+    ) -> ClusterJudgeLLM | None:
+        """A judge_model task's credential, checked here as on local Docker.
+
+        The job resolves it again (judge_llm.py); only where it comes from
+        reaches the run directory.
+        """
+        if definition.verifier.judge_model is None:
+            if request.judge_llm is not None:
+                self.event_callback("judge_llm_ignored", None)
+            return None
+        # The Work Agent's login as the job reads it (runtime._install_auth).
+        material = resolve_agent_auth(
+            source=request.agent_auth,
+            agent_name=definition.agent.name,
+            agent_api_key=None,
+        )
+        prepared = preflight_cluster_judge_llm(
+            definition,
+            request.judge_llm,
+            agent_auth=material,
+            config=load_config(),
+        )
+        assert prepared is not None
+        cluster, access = prepared
+        self.event_callback(
+            "judge_llm",
+            {
+                "model": access.model,
+                "effort": access.effort,
+                "credential": access.kind.value,
+                "reused": access.reused,
+                "expires_at": access.expires_at,
+            },
+        )
+        return cluster
 
     @staticmethod
     def _sandbox_grant(
@@ -774,6 +824,14 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             base_digest=f"sha256:{image.cache_key}",
             work_digest=f"sha256:{image.cache_key}",
             judge_digest=f"sha256:{image.cache_key}",
+        )
+        # Every cluster Judge starts from the task SIF with a copy of the
+        # workspace, never from Work's rootfs, whatever clean_image says:
+        # record the Judge this run really uses.
+        definition = definition.model_copy(
+            update={
+                "verifier": definition.verifier.model_copy(update={"clean_image": True})
+            }
         )
         return self.compiler.finalize(
             definition,

@@ -32,8 +32,21 @@ from rsi_harness.models import (
 from rsi_harness.runtime.sandbox_policy import parse_sandbox_task
 from rsi_harness.task.compose import ComposeMainServiceParser
 from rsi_harness.task.digest import hash_tree
+from rsi_loop.harness.agent.codex import CodexAgent
 
-_VERIFIER_METADATA_FIELDS = frozenset({"gpus", "model_access", "visibility"})
+_VERIFIER_METADATA_FIELDS = frozenset(
+    {
+        "clean_image",
+        "gpus",
+        "judge_model",
+        "judge_model_effort",
+        "model_access",
+        "visibility",
+    }
+)
+# The reasoning efforts Codex and the OpenAI API accept.
+JUDGE_MODEL_EFFORTS = CodexAgent.reasoning_efforts
+DEFAULT_JUDGE_MODEL_EFFORT = "medium"
 
 
 class HarborTaskCompiler:
@@ -86,6 +99,7 @@ class HarborTaskCompiler:
             verifier_environment = self._merge_environment(
                 agent_environment, task.config.verifier.env
             )
+            self._refuse_judge_controls(verifier_environment)
             definition = TaskDefinition(
                 task_id=task.short_name,
                 instruction=task.instruction,
@@ -113,6 +127,8 @@ class HarborTaskCompiler:
                     gpu_count=self._verifier_gpu_count(task),
                     visibility=self._verifier_visibility(task),
                     model_access=self._verifier_model_access(task),
+                    **self._verifier_judge_model(task),
+                    clean_image=self._verifier_clean_image(task),
                 ),
                 agent=AgentPlan(
                     name=options.agent_name,
@@ -400,6 +416,51 @@ class HarborTaskCompiler:
             )
         return value
 
+    @classmethod
+    def _verifier_judge_model(cls, task: Task) -> dict[str, str | None]:
+        model = cls._verifier_metadata(task, "judge_model", "a model id string")
+        effort = cls._verifier_metadata(
+            task, "judge_model_effort", "a reasoning effort string"
+        )
+        if model is None:
+            if effort is not None:
+                raise UnsupportedTaskError(
+                    "metadata.rsi_harness.verifier.judge_model_effort requires "
+                    "judge_model"
+                )
+            return {"judge_model": None, "judge_model_effort": None}
+        if (
+            not isinstance(model, str)
+            or not model
+            or model != model.strip()
+            or not model.isprintable()
+            or any(character.isspace() for character in model)
+        ):
+            raise UnsupportedTaskError(
+                "metadata.rsi_harness.verifier.judge_model must be a model id "
+                "without spaces"
+            )
+        if effort is None:
+            effort = DEFAULT_JUDGE_MODEL_EFFORT
+        if effort not in JUDGE_MODEL_EFFORTS:
+            raise UnsupportedTaskError(
+                "metadata.rsi_harness.verifier.judge_model_effort must be one of "
+                + ", ".join(sorted(JUDGE_MODEL_EFFORTS))
+            )
+        return {"judge_model": model, "judge_model_effort": effort}
+
+    @classmethod
+    def _verifier_clean_image(cls, task: Task) -> bool:
+        value = cls._verifier_metadata(task, "clean_image", "a boolean")
+        if value is not None and type(value) is not bool:
+            raise UnsupportedTaskError(
+                "metadata.rsi_harness.verifier.clean_image must be a boolean"
+            )
+        # A public Judge always starts from the clean image; record that.
+        if value is None or cls._verifier_visibility(task) == "public":
+            return True
+        return value
+
     @staticmethod
     def _asset_requirements(task: Task) -> tuple[AssetRequirement, ...]:
         metadata = task.config.metadata
@@ -438,6 +499,22 @@ class HarborTaskCompiler:
                 "metadata.rsi_harness.require_disjoint_phase_nodes must be a boolean"
             )
         return value
+
+    @staticmethod
+    def _refuse_judge_controls(environment: tuple[tuple[str, str], ...]) -> None:
+        """RSI_JUDGE_* variables are the Harness operator's, never a task's.
+
+        The verifier environment includes the service (and so the Agent)
+        environment, so one check covers every phase.
+        """
+        names = sorted(
+            name for name, _ in environment if name.upper().startswith("RSI_JUDGE_")
+        )
+        if names:
+            raise UnsupportedTaskError(
+                f"task environment variables {', '.join(names)} are reserved: "
+                "RSI_JUDGE_* settings come from the Harness operator, never a task"
+            )
 
     @staticmethod
     def _merge_environment(

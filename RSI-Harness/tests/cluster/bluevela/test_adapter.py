@@ -37,6 +37,7 @@ from rsi_harness.models import (
     FrozenRewardMap,
     GPURequirement,
     JudgeGPUMode,
+    NetworkPolicy,
     SubmissionReport,
     SubmissionStatus,
 )
@@ -212,12 +213,12 @@ def test_cpu_work_is_rejected_before_cluster_runtime_or_storage(
 
 
 @pytest.mark.parametrize("dry_run", [True, False])
-def test_judge_model_access_is_rejected_before_cluster_runtime_or_storage(
+def test_judge_model_access_compiles_for_cluster_runs(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     dry_run: bool,
 ) -> None:
-    """Apptainer Judges have no network and no Agent relay."""
+    """A model-access Judge runs on clusters: the task reaches runtime checks."""
     task_dir = write_harbor_task(
         tmp_path,
         task_toml=(
@@ -228,19 +229,92 @@ def test_judge_model_access_is_rejected_before_cluster_runtime_or_storage(
     profile = _profile(tmp_path)
     scheduler = RecordingScheduler()
     adapter = BlueVelaClusterAdapter(profile, scheduler=scheduler)
-    monkeypatch.setattr(
-        adapter,
-        "_validate_runtime_inputs",
-        lambda _request: pytest.fail("model access reached runtime validation"),
-    )
+
+    class Reached(Exception):
+        pass
+
+    def reached(_request):
+        raise Reached
+
+    monkeypatch.setattr(adapter, "_validate_runtime_inputs", reached)
     request = _request(tmp_path, dry_run=dry_run).model_copy(
         update={"task_dir": task_dir.resolve()}
     )
 
-    with pytest.raises(SetupError, match="not supported on cluster runs"):
+    with pytest.raises(Reached):
         adapter.run(request)
 
     assert scheduler.events == []
+
+
+@pytest.mark.parametrize(
+    ("agent", "verifier", "multi_node", "message"),
+    [
+        (None, None, True, "multi-node Judge is not supported"),
+        (
+            NetworkPolicy(mode="allowlist", allowlist=("example.org",)),
+            None,
+            False,
+            "public or no-network Agent",
+        ),
+        (
+            NetworkPolicy(mode="no-network"),
+            NetworkPolicy(mode="public"),
+            False,
+            "pinned endpoints needs",
+        ),
+    ],
+)
+def test_judge_model_access_a_cluster_cannot_serve_is_refused_before_submission(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent: NetworkPolicy | None,
+    verifier: NetworkPolicy | None,
+    multi_node: bool,
+    message: str,
+) -> None:
+    """Refused before any build or allocation, not after the job starts."""
+    task_dir = write_harbor_task(
+        tmp_path,
+        task_toml=(
+            DEFAULT_TASK_TOML
+            + "\n[metadata.rsi_harness.verifier]\nmodel_access = true\n"
+        ),
+    )
+    profile = _profile(tmp_path)
+    scheduler = RecordingScheduler()
+    adapter = BlueVelaClusterAdapter(profile, scheduler=scheduler)
+    request = _request(tmp_path, dry_run=False).model_copy(
+        update={"task_dir": task_dir.resolve()}
+    )
+    definition = adapter._compile(request)
+    verifier_updates: dict[str, object] = {}
+    if verifier is not None:
+        verifier_updates["network"] = verifier
+    if multi_node:
+        verifier_updates["gpu_count"] = 16
+        definition = definition.model_copy(
+            update={"gpu_requirement": GPURequirement(count=32)}
+        )
+    updates: dict[str, object] = {
+        "verifier": definition.verifier.model_copy(update=verifier_updates)
+    }
+    if agent is not None:
+        updates["agent"] = definition.agent.model_copy(update={"network": agent})
+    definition = definition.model_copy(update=updates)
+    assert definition.verifier.model_access
+    monkeypatch.setattr(adapter, "_compile", lambda _request: definition)
+    monkeypatch.setattr(
+        adapter,
+        "_validate_runtime_inputs",
+        lambda _request: pytest.fail("the task reached runtime validation"),
+    )
+
+    with pytest.raises(SetupError, match=message):
+        adapter.run(request)
+
+    assert scheduler.events == []
+    assert scheduler.specs == []
     assert not profile.storage.run_root.parent.exists()
 
 
@@ -456,6 +530,41 @@ def test_run_plan_overlaps_work_and_judge_when_single_node_requires_reuse(
     )
     assert plan.gpu_plan.work.uuids == plan.gpu_plan.authorized_pool.uuids
     assert plan.gpu_plan.judge.uuids == plan.gpu_plan.work.uuids[:4]
+
+
+@pytest.mark.parametrize("clean_image", [True, False])
+def test_cluster_run_plan_records_the_clean_judge_it_always_uses(
+    tmp_path: Path, clean_image: bool
+) -> None:
+    """A cluster Judge starts from the task SIF with a workspace copy,
+    whatever clean_image says, so the plan never claims a Work snapshot."""
+    profile = _profile(tmp_path)
+    adapter = BlueVelaClusterAdapter(
+        profile,
+        scheduler=RecordingScheduler(),
+        agent_version_resolver=lambda _name: "0.149.0",
+    )
+    definition = adapter._compile(_request(tmp_path, dry_run=True))
+    definition = definition.model_copy(
+        update={
+            "verifier": definition.verifier.model_copy(
+                update={"clean_image": clean_image}
+            )
+        }
+    )
+    image = SIFImagePlan(
+        cache_key="0" * 64,
+        sif_path=(tmp_path / "task.sif").resolve(),
+        sha256_path=(tmp_path / "task.sif.sha256").resolve(),
+        cache_hit=False,
+    )
+
+    plan = adapter._run_plan(
+        definition, image, derive_resources(definition, profile), tmp_path / "run"
+    )
+
+    assert plan.task.verifier.clean_image is True
+    assert plan.images.judge_ref == plan.images.work_ref == str(image.sif_path)
 
 
 def test_multinode_run_plan_uses_disjoint_host_local_placeholders(

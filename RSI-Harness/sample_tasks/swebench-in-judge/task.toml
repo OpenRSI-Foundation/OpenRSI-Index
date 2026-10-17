@@ -3,7 +3,8 @@ schema_version = "1.4"
 [task]
 name = "rsi/swebench-in-judge"
 
-# Work installs Harbor; the Judge is derived from Work. Neither has network
+# The task image installs Harbor; Work adds the Agent CLI and each Judge
+# starts from that clean Work image, so Harbor is in both. Neither has network
 # of its own, and neither has the task environments: Harbor reaches the host
 # broker through the injected endpoint, and every environment it creates
 # has no network either.

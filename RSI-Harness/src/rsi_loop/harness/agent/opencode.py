@@ -26,16 +26,25 @@ import json
 import shlex
 
 from rsi_loop.harness.agent import versions
-from rsi_loop.harness.agent.base import NODE_INSTALL_CMD, OneShotCommand
+from rsi_loop.harness.agent.base import NODE_INSTALL_CMD, OneShotCommand, select_arch
 from rsi_loop.harness.agent.driven import DrivenAgent, in_scratch_dir
 
-# The platform package, which holds only the native binary; the opencode-ai
+# The platform package for the image's architecture (opencode-linux-x64 or
+# opencode-linux-arm64), which holds only the native binary; the opencode-ai
 # package would pick it in an install script. npm checks the tarball's
 # integrity against the registry.
-_PACKAGE = f"opencode-linux-x64@{versions.OPENCODE}"
+_PACKAGE = f"opencode-linux-${{arch}}@{versions.OPENCODE}"
+_SELECT_PACKAGE = select_arch("opencode", x86_64="x64", aarch64="arm64")
 # OpenCode's grep tool downloads ripgrep on first use when no ``rg`` is on
 # PATH, which a no-network Work cannot do; the image carries it instead.
-_RIPGREP = f"ripgrep-{versions.RIPGREP}-x86_64-unknown-linux-musl"
+# ripgrep publishes a static musl build for x86_64 and a glibc build for
+# aarch64; the pinned node needs glibc anyway.
+_RIPGREP = f"ripgrep-{versions.RIPGREP}-${{arch}}"
+_SELECT_RIPGREP = select_arch(
+    "ripgrep",
+    x86_64="x86_64-unknown-linux-musl",
+    aarch64="aarch64-unknown-linux-gnu",
+)
 _RIPGREP_URL = (
     "https://github.com/BurntSushi/ripgrep/releases/download/"
     f"{versions.RIPGREP}/{_RIPGREP}.tar.gz"
@@ -97,18 +106,20 @@ class OpenCodeAgent(DrivenAgent):
         # honours npm_config_registry; a private cache keeps the tarball out
         # of the image.
         in_scratch_dir(
-            f'npm pack --silent --cache "$tmp/cache" {_PACKAGE} >/dev/null',
-            f"tar -xzf opencode-linux-x64-{versions.OPENCODE}.tgz package/bin/opencode",
+            _SELECT_PACKAGE,
+            f'npm pack --silent --cache "$tmp/cache" "{_PACKAGE}" >/dev/null',
+            f'tar -xzf "opencode-linux-${{arch}}-{versions.OPENCODE}.tgz" package/bin/opencode',
             "install -m 0755 package/bin/opencode /usr/local/bin/opencode",
         ),
         # Only rg is extracted from the release archive, straight into place.
         "sudo -E bash -c "
         + shlex.quote(
             "set -euo pipefail"
+            f" && {_SELECT_RIPGREP}"
             f" && mkdir -p {_RIPGREP_DIR}"
-            f" && curl -fsSL {_RIPGREP_URL}"
+            f' && curl -fsSL "{_RIPGREP_URL}"'
             " | tar -xzf - --no-same-owner --strip-components=1"
-            f" -C {_RIPGREP_DIR} {_RIPGREP}/rg"
+            f' -C {_RIPGREP_DIR} "{_RIPGREP}/rg"'
             f" && chmod 0755 {RIPGREP_PATH}"
         ),
     ]

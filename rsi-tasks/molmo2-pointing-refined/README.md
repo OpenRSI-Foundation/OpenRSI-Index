@@ -41,7 +41,7 @@ The Agent wall-clock budget is `12 × 7,200 = 86,400` seconds for worst-case syn
 
 For each case, the evaluator normalizes time and coordinates to `[0,100]`, converts Euclidean distance to similarity over the three-dimensional normalized diagonal, performs maximum-similarity Hungarian matching, and derives soft precision, recall, and F1. Both empty sets score 1; only one empty set scores 0. Candidate-invalid artifacts receive the declared worst-domain reward 0.0. Missing dependencies, CUDA faults, incomplete evaluation, and other infrastructure failures write no reward.
 
-`tests/` is injected only into Judge, and its evaluator is not present in Work. The selected upstream data and deterministic split are public, so case identity is not cryptographically secret. The declarative, finite candidate interface prevents case-specific executable logic. Judge is still created from the shared Base/Work filesystem and the Agent is root in Work: task-owned hashes protect the model, video archives, and visible fixed runtime, but arbitrary shared system dependency tampering cannot be eliminated completely.
+`tests/` is injected only into Judge, and its evaluator is not present in Work. The selected upstream data and deterministic split are public, so case identity is not cryptographically secret. The declarative, finite candidate interface prevents case-specific executable logic. Judge starts from the clean task image and reads the workspace read-only, so the root Agent's changes outside the workspace do not reach it; task-owned hashes also protect the model, video archives, and visible fixed runtime.
 
 ## Run and validate
 

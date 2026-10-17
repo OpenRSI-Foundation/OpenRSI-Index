@@ -23,9 +23,11 @@ from rsi_harness.integrations.rsi_loop import (
     RSILoopAgentAdapter,
     rsi_loop_agent_environment,
     rsi_loop_runtime_secret_values,
+    task_solution_script,
     validate_agent_config,
     validate_agent_reasoning_effort,
 )
+from rsi_harness.judge_agent import JUDGE_CODEX_CACHE
 from rsi_harness.models import (
     WORK_FEEDBACK_ROOT,
     AgentHookRequest,
@@ -70,8 +72,9 @@ from rsi_harness.runtime.images import DockerImageBuilder
 from rsi_harness.runtime.judge import (
     DockerJudgeRuntimeFactory,
     JudgeRunner,
-    public_judge_image,
+    clean_judge_unavailable,
 )
+from rsi_harness.runtime.judge_llm import resolve_judge_llm, snapshot_judge_refusal
 from rsi_harness.runtime.judge_model_access import (
     JudgeModelAccess,
     resolve_judge_model_access,
@@ -88,6 +91,7 @@ from rsi_harness.runtime.network import (
     PinnedEndpoint,
     firewall_rule_chains,
     no_network_dns_servers,
+    provider_bypasses_proxy,
 )
 from rsi_harness.runtime.recovery import (
     LeaseStore,
@@ -212,6 +216,10 @@ def _agent_endpoints(
     """Resolve provider/proxy authority before any runtime mutation."""
 
     selected = create_agent(definition.agent.name, config)
+    if getattr(selected, "runs_task_solution", False):
+        # No model, so no provider to pin: a no-network Work stays closed
+        # apart from the control endpoint.
+        return ()
     model = definition.agent.model or config.agent_model or selected.default_model
     environment = rsi_loop_agent_environment(config, selected, model)
     default_provider = (
@@ -253,39 +261,9 @@ def _agent_endpoints(
         )
     endpoints = list(proxies)
     for provider in providers:
-        if not proxies or _provider_bypasses_proxy(provider, environment):
+        if not proxies or provider_bypasses_proxy(provider, environment):
             endpoints.append(provider)
-    endpoints = list(dict.fromkeys(endpoints))
-    for endpoint in endpoints:
-        parsed = _parse_agent_endpoint(endpoint)
-        if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
-            raise SetupError(
-                "invalid Agent provider/proxy endpoint for "
-                f"{_safe_endpoint_label(endpoint)}"
-            )
-    pinned = NetworkPolicyEnforcer(run_id="provider-preflight").pin_endpoints(
-        tuple(endpoints)
-    )
-    ipv4_pinned: list[PinnedEndpoint] = []
-    for endpoint in pinned:
-        addresses = tuple(
-            address
-            for address in endpoint.addresses
-            if isinstance(address, ipaddress.IPv4Address)
-        )
-        if not addresses:
-            raise SetupError(
-                "Agent provider/proxy endpoint has no IPv4-safe address: "
-                f"{endpoint.hostname}"
-            )
-        ipv4_pinned.append(
-            PinnedEndpoint(
-                hostname=endpoint.hostname,
-                port=endpoint.port,
-                addresses=addresses,
-            )
-        )
-    result = tuple(ipv4_pinned)
+    result = _pin_ipv4_endpoints(tuple(endpoints), "Agent provider/proxy")
     if definition.agent.network.mode == "allowlist":
         for endpoint in result:
             if not _allowlist_contains_endpoint(
@@ -298,38 +276,37 @@ def _agent_endpoints(
     return result
 
 
-def _provider_bypasses_proxy(provider: str, environment: Mapping[str, str]) -> bool:
-    hostname = urlsplit(provider).hostname
-    if hostname is None:
-        return False
-    normalized = hostname.rstrip(".").lower()
-    try:
-        provider_address = ipaddress.ip_address(normalized)
-    except ValueError:
-        provider_address = None
-    entries = tuple(
-        value for key in ("no_proxy", "NO_PROXY") if (value := environment.get(key))
-    )
-    for entry in entries:
-        for raw_token in entry.split(","):
-            token = raw_token.strip().lower()
-            if not token:
-                continue
-            if token == "*":
-                return True
-            token = token.rsplit(":", 1)[0] if token.count(":") == 1 else token
-            try:
-                network = ipaddress.ip_network(token, strict=False)
-            except ValueError:
-                network = None
-            if provider_address is not None and network is not None:
-                if provider_address in network:
-                    return True
-                continue
-            token = token.removeprefix("*.").lstrip(".")
-            if normalized == token or normalized.endswith(f".{token}"):
-                return True
-    return False
+def _pin_ipv4_endpoints(
+    endpoints: tuple[str, ...], what: str
+) -> tuple[PinnedEndpoint, ...]:
+    """Resolve and pin http(s) endpoints to their IPv4 addresses."""
+    endpoints = tuple(dict.fromkeys(endpoints))
+    for endpoint in endpoints:
+        parsed = _parse_agent_endpoint(endpoint)
+        if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
+            raise SetupError(
+                f"invalid {what} endpoint for {_safe_endpoint_label(endpoint)}"
+            )
+    pinned = NetworkPolicyEnforcer(run_id="provider-preflight").pin_endpoints(endpoints)
+    ipv4_pinned: list[PinnedEndpoint] = []
+    for endpoint in pinned:
+        addresses = tuple(
+            address
+            for address in endpoint.addresses
+            if isinstance(address, ipaddress.IPv4Address)
+        )
+        if not addresses:
+            raise SetupError(
+                f"{what} endpoint has no IPv4-safe address: {endpoint.hostname}"
+            )
+        ipv4_pinned.append(
+            PinnedEndpoint(
+                hostname=endpoint.hostname,
+                port=endpoint.port,
+                addresses=addresses,
+            )
+        )
+    return tuple(ipv4_pinned)
 
 
 def _allowlist_contains_endpoint(
@@ -1110,9 +1087,44 @@ class _ProductionRunComposition:
             self.client,
             rsi_loop_config=self.rsi_loop_config,
         ).prepare(definition, agent=selected)
+        unavailable = clean_judge_unavailable(images)
+        if (
+            unavailable is not None
+            and definition.verifier.visibility != "public"
+            and self.judge_model_access is not None
+            and self.judge_model_access.operator_llm_model is not None
+        ):
+            # A snapshot-of-Work Judge must not get the operator's credential.
+            raise SetupError(
+                snapshot_judge_refusal(self.judge_model_access.operator_llm_model)
+                + f" ({unavailable})"
+            )
+        if (
+            self.judge_model_access is not None
+            and self.judge_model_access.needs_codex_cli
+        ):
+            # The Judge LLM's Codex CLI, mounted read-only in each Judge.
+            codex_cli = DockerImageBuilder(
+                self.client,
+                rsi_loop_config=self.rsi_loop_config,
+            ).prepare_judge_codex(
+                definition,
+                images=images,
+                work_agent=selected,
+                cache_root=self.data_root / JUDGE_CODEX_CACHE,
+            )
+            self.judge_model_access = replace(
+                self.judge_model_access, codex_cli=codex_cli
+            )
         if definition.verifier.visibility == "public":
-            # Refuse before any run state: the Judge needs the clean image.
-            public_judge_image(images)
+            if unavailable is not None:
+                # Refuse before any run state: the Judge needs the clean image.
+                raise SetupError(
+                    f"a public Judge needs the clean Work image, but {unavailable}"
+                )
+        elif definition.verifier.clean_image and unavailable is not None:
+            # Decided before the Agent starts; prepare_plan records it.
+            self.event_callback("judge_clean_image_unavailable", unavailable)
         self.event_callback("images_ready", None)
         return images
 
@@ -1166,6 +1178,24 @@ class _ProductionRunComposition:
         self.plan = self.compiler.finalize(
             definition, images, gpu_plan, paths, "docker-rootfs"
         )
+        # The run plan records the Judge image this run really uses: a public
+        # Judge always the clean image, a hidden one unless it is unavailable.
+        verifier = self.plan.task.verifier
+        clean_image = verifier.visibility == "public" or (
+            verifier.clean_image and clean_judge_unavailable(images) is None
+        )
+        if clean_image is not verifier.clean_image:
+            self.plan = self.plan.model_copy(
+                update={
+                    "task": self.plan.task.model_copy(
+                        update={
+                            "verifier": verifier.model_copy(
+                                update={"clean_image": clean_image}
+                            )
+                        }
+                    )
+                }
+            )
         if self.sandbox_lifecycle.enabled:
             if self._sandbox_grant is None:
                 raise SetupError(
@@ -1869,7 +1899,14 @@ class _ProductionRunComposition:
                 else {}
             ),
         )
-        report = runner.evaluate(request)
+        try:
+            report = runner.evaluate(request)
+        finally:
+            # The next round checks Work's login against this round's copy;
+            # Work's Agent output may print the renewed tokens too.
+            if runner.model_access is not None:
+                self.judge_model_access = runner.model_access
+                self.agent_output_secrets.update(runner.model_access.secret_values)
         self.event_callback(
             "judge_finished",
             {
@@ -1970,11 +2007,23 @@ class ProductionRuntimeServices:
             definition = definition.model_copy(
                 update={"agent": definition.agent.model_copy(update=agent_updates)}
             )
-        validate_agent_config(
+        selected_agent = validate_agent_config(
             self.rsi_loop_config,
             definition.agent.name,
             model=definition.agent.model,
         )
+        if getattr(selected_agent, "runs_task_solution", False):
+            task_solution_script(definition.source_dir)
+            if request.agent_auth is not None:
+                raise SetupError(
+                    f"the {selected_agent.name} Agent uses no credential; "
+                    "drop --agent-auth"
+                )
+            if definition.verifier.model_access:
+                raise SetupError(
+                    "the task's Judge has model_access and calls the run's "
+                    f"Agent; the {selected_agent.name} Agent has none"
+                )
         needs_gpus = (
             definition.gpu_requirement.count != 0 or definition.verifier.gpu_count != 0
         )
@@ -1995,9 +2044,31 @@ class ProductionRuntimeServices:
             agent_api_key=self.rsi_loop_config.agent_api_key,
         )
         api_endpoints = _agent_endpoints(definition, self.rsi_loop_config, agent_auth)
-        judge_model_access = resolve_judge_model_access(
-            definition, self.rsi_loop_config, agent_auth, api_endpoints
+        # Before the Agent starts: a task's Judge LLM needs a usable credential.
+        judge_llm = resolve_judge_llm(
+            definition,
+            request.judge_llm,
+            self.rsi_loop_config,
+            agent_auth,
+            pin=lambda endpoints: _pin_ipv4_endpoints(endpoints, "Judge LLM"),
+            environ=self.verifier_secret_env,
         )
+        judge_model_access = resolve_judge_model_access(
+            definition, self.rsi_loop_config, agent_auth, api_endpoints, judge_llm
+        )
+        if self.event_callback is not None and judge_llm is not None:
+            self.event_callback(
+                "judge_llm",
+                {
+                    "model": judge_llm.model,
+                    "effort": judge_llm.effort,
+                    "credential": judge_llm.kind.value,
+                    "reused": judge_llm.reused,
+                    "expires_at": judge_llm.expires_at,
+                },
+            )
+        elif self.event_callback is not None and request.judge_llm is not None:
+            self.event_callback("judge_llm_ignored", None)
         client = self._client()
         snapshot = self.snapshot or OverlaySnapshotBackend(self.data_root)
         firewall = self.firewall or DockerIptablesFirewallBackend(client)

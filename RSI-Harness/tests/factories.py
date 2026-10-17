@@ -74,7 +74,12 @@ def write_cluster_task(tmp_path: Path) -> Path:
     return write_harbor_task(tmp_path, task_toml=task_toml)
 
 
-def make_run_plan(tmp_path: Path, *, secret_env_names: tuple[str, ...] = ()) -> RunPlan:
+def make_run_plan(
+    tmp_path: Path,
+    *,
+    secret_env_names: tuple[str, ...] = (),
+    clean_image: bool = False,
+) -> RunPlan:
     root = tmp_path.resolve()
     task = TaskDefinition(
         task_id="minimal-gpu",
@@ -88,6 +93,7 @@ def make_run_plan(tmp_path: Path, *, secret_env_names: tuple[str, ...] = ()) -> 
         verifier=VerifierPlan(
             command=("/bin/bash", "/tests/test.sh"),
             secret_env_names=secret_env_names,
+            clean_image=clean_image,
         ),
         agent=AgentPlan(name="codex", secret_env_names=secret_env_names),
     )

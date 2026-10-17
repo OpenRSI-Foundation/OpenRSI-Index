@@ -32,7 +32,7 @@ The build applies the complete exact CPython 3.11/Linux closure in `environment/
 
 Judge copies each regular candidate into its own private scratch before simulator imports, validates all of them, and only then starts one worker process per candidate. `/tests/bootstrap.py` checks candidate scope, immutable repository revisions/cleanliness, pinned package identities, wheel RECORD bytes, task-owned runtime bytes, and offline asset/reference manifests. The evaluator never imports from `/workspace`. The public validator is convenient but not authoritative.
 
-The shared Base/Judge model is not root-independent attestation. Task checks reduce task-specific tampering, while fresh Judge state and the read-only workspace snapshot keep Work processes and modified base files out of scoring.
+Judge starts from the clean task image, so root Work changes outside `/workspace` do not reach it. Task checks reduce task-specific tampering, while fresh Judge state and the read-only workspace snapshot keep Work processes out of scoring.
 
 ## Run and validate
 

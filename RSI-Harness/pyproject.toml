@@ -69,8 +69,11 @@ extend-exclude = [
 ]
 
 [tool.ruff.per-file-target-version]
-# rsi-agent runs under the Judge image's own python3 (3.8 or later).
+# rsi-agent and rsi-isolate run under the Judge image's own python3 (3.8 or
+# later).
 "src/rsi_harness/judge_agent/rsi_agent.py" = "py38"
+"src/rsi_harness/judge_agent/rsi_isolate.py" = "py38"
+"src/rsi_harness/judge_agent/judge_isolation.py" = "py38"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]

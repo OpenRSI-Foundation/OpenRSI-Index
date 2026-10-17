@@ -21,6 +21,7 @@ from pydantic import (
 )
 
 from rsi_harness.errors import SetupError
+from rsi_harness.models import JUDGE_ISOLATION_FALLBACK_ENV
 
 _ENV_REFERENCE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 _SCHEDULER_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")
@@ -185,6 +186,11 @@ class ApptainerProfile(_ProfileModel):
     environment: dict[str, str] = Field(default_factory=dict)
     work_environment: dict[str, str] = Field(default_factory=dict)
     judge_environment: dict[str, str] = Field(default_factory=dict)
+    # The operator's choice for a Judge that is neither root nor able to use
+    # Landlock (a kernel without it): "none" fails such a round closed;
+    # "same-user" runs its routes and Agent calls as the Judge's own user,
+    # without filesystem confinement. Never a task setting.
+    judge_isolation_fallback: Literal["none", "same-user"] = "none"
 
     @field_validator("environment", "work_environment", "judge_environment")
     @classmethod
@@ -192,6 +198,11 @@ class ApptainerProfile(_ProfileModel):
         for name, item in value.items():
             if re.fullmatch(r"[A-Z_][A-Z0-9_]*", name) is None:
                 raise ValueError(f"Apptainer environment name is invalid: {name!r}")
+            if name == JUDGE_ISOLATION_FALLBACK_ENV:
+                raise ValueError(
+                    f"{name} comes from judge_isolation_fallback, not an "
+                    "Apptainer environment table"
+                )
             if "\0" in item:
                 raise ValueError(f"Apptainer environment value contains NUL: {name}")
         return value
