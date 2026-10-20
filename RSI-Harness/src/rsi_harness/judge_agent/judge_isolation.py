@@ -222,7 +222,13 @@ class Ruleset:
     scope on an incomplete ABI 6 backport. The network is not handled.
     """
 
-    def __init__(self, libc, abi: int) -> None:
+    def __init__(
+        self, libc, abi: int, *, allow_missing_landlock_signal: bool = False
+    ) -> None:
+        if type(allow_missing_landlock_signal) is not bool:
+            raise Failure(
+                EXIT_INTERNAL, "allow_missing_landlock_signal must be a boolean"
+            )
         self.libc = libc
         self.abi = min(abi, LANDLOCK_MAX_ABI)
         self.handled = sum(
@@ -248,7 +254,7 @@ class Ruleset:
         # The operator may opt into this one narrowly scoped compatibility
         # policy. Keep all filesystem rights and abstract-socket scoping.
         if fd < 0 and error == errno.EINVAL and abi == 6:
-            if os.environ.get(ALLOW_MISSING_SIGNAL_ENV) == "1":
+            if allow_missing_landlock_signal:
                 fd = create(LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET)
                 if fd >= 0:
                     self.scoped = LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET
@@ -259,10 +265,6 @@ class Ruleset:
                     )
                 else:
                     error = ctypes.get_errno()
-            elif os.environ.get(ALLOW_MISSING_SIGNAL_ENV) is not None:
-                raise Failure(
-                    EXIT_INTERNAL, ALLOW_MISSING_SIGNAL_ENV + " must be 1 or unset"
-                )
         if fd < 0:
             detail = ""
             if error == errno.EINVAL and abi == 6:
@@ -270,9 +272,9 @@ class Ruleset:
                     "Kernel reports Landlock ABI 6 but rejected the ruleset. "
                     "Some RHEL 9 kernels lack signal scoping. Upgrade the kernel "
                     "or use another isolation backend; only if the task permits "
-                    "missing signal isolation may the operator set "
-                    + ALLOW_MISSING_SIGNAL_ENV
-                    + "=1. No protection was disabled."
+                    "missing signal isolation may the operator enable "
+                    "apptainer.judge_allow_missing_landlock_signal. "
+                    "No protection was disabled."
                 )
             raise Failure(
                 EXIT_INTERNAL,
@@ -749,11 +751,17 @@ def preexec(
     return prepare
 
 
-def probe_ruleset(libc, mode: dict) -> dict:
+def probe_ruleset(
+    libc, mode: dict, *, allow_missing_landlock_signal: bool = False
+) -> dict:
     """Check creation, not just the ABI query; do not restrict this process."""
     if mode["landlock_abi"] < 1:
         return mode
-    ruleset = Ruleset(libc, mode["landlock_abi"])
+    ruleset = Ruleset(
+        libc,
+        mode["landlock_abi"],
+        allow_missing_landlock_signal=allow_missing_landlock_signal,
+    )
     try:
         return dict(
             mode,

@@ -29,6 +29,7 @@ from rsi_harness.judge_agent import (
     rsi_isolate,
 )
 from rsi_harness.judge_agent import judge_isolation as isolation
+from tests.landlock_helpers import native_signal_compatibility
 
 PROGRAM = Path(__file__).parents[2] / "src/rsi_harness/judge_agent/rsi_isolate.py"
 SHARED = PROGRAM.with_name("judge_isolation.py")
@@ -68,12 +69,24 @@ print(json.dumps(found))
 """
 
 
-def _run(*arguments, env=None, program=PROGRAM, **options):
-    environment = {"PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+def _operator_environment(env=None):
+    # This helper acts as the test operator. Explicit env overrides below
+    # let policy tests exercise unset/disabled independently.
+    environment = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        isolation.ALLOW_MISSING_SIGNAL_ENV: str(int(native_signal_compatibility())),
+    }
     environment.update(env or {})
+    environment = {
+        key: value for key, value in environment.items() if value is not None
+    }
+    return environment
+
+
+def _run(*arguments, env=None, program=PROGRAM, **options):
     return subprocess.run(
         [sys.executable, "-I", "-S", "-B", str(program), *arguments],
-        env=environment,
+        env=_operator_environment(env),
         capture_output=True,
         text=True,
         timeout=120,
@@ -131,6 +144,10 @@ def test_isolation_reports_landlock_and_the_operator_fallback():
         "mode": "landlock",
         "landlock_abi": LANDLOCK,
         "fallback": "none",
+        "landlock_scoped": (1 if native_signal_compatibility() else 3)
+        if LANDLOCK >= 6
+        else 0,
+        "landlock_signal_scope": LANDLOCK >= 6 and not native_signal_compatibility(),
     }
     allowed = _run("isolation", env={"RSI_JUDGE_ISOLATION_FALLBACK": "same-user"})
     assert json.loads(allowed.stdout)["fallback"] == "same-user"
@@ -425,6 +442,7 @@ def test_a_passed_descriptor_stays_open(tmp_path):
                 str(theirs.fileno()),
             ],
             pass_fds=(theirs.fileno(),),
+            env=_operator_environment(),
             stderr=subprocess.PIPE,
             text=True,
         )
@@ -446,6 +464,7 @@ def test_sigterm_ends_the_command_and_exits_143(tmp_path):
         [sys.executable, "-I", "-S", "-B", str(PROGRAM), "run", "--write"]
         + [str(pids.parent), "--", PYTHON, "-I", "-c", SPAWN]
         + [str(pids), "300"],
+        env=_operator_environment(),
         stderr=subprocess.PIPE,
         text=True,
     )
@@ -603,3 +622,16 @@ def test_the_isolated_users_are_the_harness_range_and_disjoint():
     assert not set(JUDGE_ISOLATE_UIDS) & set(JUDGE_AGENT_UIDS)
     # The OpenRSI-X science Judge library's default route uids start here.
     assert JUDGE_ISOLATE_UIDS[-1] < 64000
+
+
+@requires_landlock
+@pytest.mark.parametrize("policy", [None, "0"])
+def test_native_strict_policy_is_not_enabled_by_functional_test_helper(policy):
+    result = _run("isolation", env={isolation.ALLOW_MISSING_SIGNAL_ENV: policy})
+    if native_signal_compatibility():
+        assert result.returncode == 125
+        assert "landlock_create_ruleset failed" in result.stderr
+        assert not result.stdout
+    else:
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)["landlock_signal_scope"] is (LANDLOCK >= 6)

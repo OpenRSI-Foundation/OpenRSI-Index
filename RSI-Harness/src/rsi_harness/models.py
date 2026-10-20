@@ -28,6 +28,7 @@ JUDGE_TRAJECTORY_ROOT = PurePosixPath("/logs/agent")
 # profile chooses it. Always explicit, so an ENV baked into the task's image
 # never decides how a science Judge library isolates the routes it runs.
 JUDGE_ISOLATION_FALLBACK_ENV = "RSI_JUDGE_ISOLATION_FALLBACK"
+JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL_ENV = "RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL"
 MIN_VERIFIER_OUTPUT_LIMIT_BYTES = len(VERIFIER_OUTPUT_TRUNCATION_MARKER.encode("utf-8"))
 
 

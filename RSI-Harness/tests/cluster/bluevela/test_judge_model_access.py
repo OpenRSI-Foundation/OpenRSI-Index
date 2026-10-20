@@ -542,3 +542,64 @@ def test_a_renewed_login_joins_the_redaction_of_works_later_output(
         composition.evaluate(_request(tmp_path, plan), observer=None)
     assert "RENEWED-TOKEN" in composition.secrets
     assert access.secret_values <= composition.secrets
+
+
+@pytest.mark.parametrize("cluster_name", ["bluevela", "slurm"])
+@pytest.mark.parametrize("allow", [False, True])
+def test_signal_compatibility_is_explicit_in_judge_and_launch_spec(
+    tmp_path, monkeypatch, cluster_name, allow
+):
+    profile = load_cluster_profile(cluster_name)
+    profile = profile.model_copy(
+        update={
+            "apptainer": profile.apptainer.model_copy(
+                update={
+                    "judge_allow_missing_landlock_signal": allow,
+                }
+            ),
+        }
+    )
+    # Ambient host environment never decides the operator policy.
+    monkeypatch.setenv("RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL", "0" if allow else "1")
+    plan = _plan(tmp_path)
+    runtime = _runtime(tmp_path, monkeypatch, plan, profile=profile)
+    composition = object.__new__(NativeEngineComposition)
+    composition.plan = plan
+    composition.runtime = runtime
+    composition.payload = SimpleNamespace(profile=profile, run_id="native-run")
+    composition.rsi_loop_config = RSILoopConfig(agent_api_key=API_KEY)
+    composition.provider_urls = ()
+    access = composition.judge_model_access()
+    assert json.loads(access.launch)["allow_missing_landlock_signal"] is allow
+
+    _, capture, _ = _judge(tmp_path, monkeypatch, plan, access, profile=profile)
+    assert _envs(capture.argv)["RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL"] == (
+        "1" if allow else "0"
+    )
+    assert capture.launch["allow_missing_landlock_signal"] is allow
+
+
+@pytest.mark.parametrize(
+    "table", ["environment", "work_environment", "judge_environment"]
+)
+def test_signal_policy_cannot_be_set_in_profile_environment_tables(table):
+    profile = load_cluster_profile("slurm").apptainer
+    with pytest.raises(ValueError, match="judge_allow_missing_landlock_signal"):
+        type(profile).model_validate(
+            {
+                **profile.model_dump(),
+                table: {"RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL": "1"},
+            }
+        )
+
+
+@pytest.mark.parametrize("value", ["1", "true", 1, None])
+def test_signal_policy_profile_requires_boolean(value):
+    profile = load_cluster_profile("slurm").apptainer
+    with pytest.raises(ValueError):
+        type(profile).model_validate(
+            {
+                **profile.model_dump(),
+                "judge_allow_missing_landlock_signal": value,
+            }
+        )

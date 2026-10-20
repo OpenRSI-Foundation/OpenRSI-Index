@@ -416,8 +416,20 @@ def _interpreter_paths() -> list:
     return sorted(path for path in paths if path != "/")
 
 
+def _allow_missing_landlock_signal() -> bool:
+    """Only the Harness sets this Judge variable from the operator policy."""
+    value = os.environ.get(isolation.ALLOW_MISSING_SIGNAL_ENV, "0")
+    if value not in ("0", "1"):
+        raise isolation.Failure(
+            EXIT_SETUP, isolation.ALLOW_MISSING_SIGNAL_ENV + " must be 0 or 1"
+        )
+    return value == "1"
+
+
 def _ruleset(libc, abi: int, reads, writes, private: str, executable):
-    ruleset = isolation.Ruleset(libc, abi)
+    ruleset = isolation.Ruleset(
+        libc, abi, allow_missing_landlock_signal=_allow_missing_landlock_signal()
+    )
     try:
         for path in list(SYSTEM_PATHS) + _interpreter_paths() + list(reads):
             ruleset.allow(path, isolation.FS_READ)
@@ -676,8 +688,13 @@ def _clean_up(process, owner, cwd_fd, handovers, private, slot_fd) -> list:
 
 def report_isolation() -> int:
     """``rsi-isolate isolation``: print the mode a command would use."""
+    allow_missing_signal = _allow_missing_landlock_signal()
     libc = isolation.load_libc()
-    mode = isolation.probe_ruleset(libc, isolation_mode(libc))
+    mode = isolation.probe_ruleset(
+        libc,
+        isolation_mode(libc),
+        allow_missing_landlock_signal=allow_missing_signal,
+    )
     sys.stdout.write(json.dumps(mode, sort_keys=True) + "\n")
     sys.stdout.flush()
     return 0

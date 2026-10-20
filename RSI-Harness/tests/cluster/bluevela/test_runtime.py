@@ -762,10 +762,12 @@ def test_judge_gets_fresh_writable_tmp_without_mutating_preserved_assets(
 
 
 @pytest.mark.parametrize("cluster_name", ["bluevela", "slurm"])
+@pytest.mark.parametrize("allow_signal_compatibility", [False, True])
 def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
     tmp_path: Path,
     monkeypatch,
     cluster_name,
+    allow_signal_compatibility,
 ) -> None:
     from rsi_harness.cluster.bluevela import judge_controller
 
@@ -775,6 +777,11 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
     profile = load_cluster_profile("bluevela", {"USER": "alice"})
     profile = profile.model_copy(
         update={
+            "apptainer": profile.apptainer.model_copy(
+                update={
+                    "judge_allow_missing_landlock_signal": allow_signal_compatibility,
+                }
+            ),
             "adapter": cluster_name,
             "scheduler": load_cluster_profile(cluster_name).scheduler,
         }
@@ -848,6 +855,10 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
         # Every Judge node gets the operator's isolation fallback, explicitly.
         assert control.worker.environment["RSI_JUDGE_ISOLATION_FALLBACK"] == "none"
         assert control.environment["RSI_JUDGE_ISOLATION_FALLBACK"] == "none"
+        signal_env = "RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL"
+        expected = "1" if allow_signal_compatibility else "0"
+        assert control.worker.environment[signal_env] == expected
+        assert control.environment[signal_env] == expected
         torchrun_sources = tuple(
             item.source
             for item in control.worker.binds

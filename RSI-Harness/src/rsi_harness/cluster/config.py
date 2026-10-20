@@ -21,7 +21,10 @@ from pydantic import (
 )
 
 from rsi_harness.errors import SetupError
-from rsi_harness.models import JUDGE_ISOLATION_FALLBACK_ENV
+from rsi_harness.models import (
+    JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL_ENV,
+    JUDGE_ISOLATION_FALLBACK_ENV,
+)
 
 _ENV_REFERENCE = re.compile(r"\$\{([A-Z_][A-Z0-9_]*)\}")
 _SCHEDULER_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")
@@ -191,6 +194,9 @@ class ApptainerProfile(_ProfileModel):
     # "same-user" runs its routes and Agent calls as the Judge's own user,
     # without filesystem confinement. Never a task setting.
     judge_isolation_fallback: Literal["none", "same-user"] = "none"
+    # Explicit operator consent to the ABI 6 backport missing signal scoping.
+    # Filesystem rights and abstract-socket scoping remain mandatory.
+    judge_allow_missing_landlock_signal: bool = Field(default=False, strict=True)
 
     @field_validator("environment", "work_environment", "judge_environment")
     @classmethod
@@ -202,6 +208,11 @@ class ApptainerProfile(_ProfileModel):
                 raise ValueError(
                     f"{name} comes from judge_isolation_fallback, not an "
                     "Apptainer environment table"
+                )
+            if name == JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL_ENV:
+                raise ValueError(
+                    f"{name} comes from judge_allow_missing_landlock_signal, "
+                    "not an Apptainer environment table"
                 )
             if "\0" in item:
                 raise ValueError(f"Apptainer environment value contains NUL: {name}")

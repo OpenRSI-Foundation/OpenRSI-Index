@@ -70,6 +70,7 @@ from rsi_harness.judge_agent import (
     install_judge_isolate,
 )
 from rsi_harness.models import (
+    JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL_ENV,
     JUDGE_ISOLATION_FALLBACK_ENV,
     JUDGE_TRAJECTORY_ROOT,
     AgentHookRequest,
@@ -997,15 +998,21 @@ class ApptainerAgentRuntime:
         self.auth_secret_values.update(renewed.secret_values)
 
     def _judge_isolation_environment(self) -> dict[str, str]:
-        """The operator's isolation fallback, for a science Judge library.
+        """The operator's isolation policies, for a science Judge library.
 
-        Always set ("none" or "same-user") so an ``ENV`` in the task's
-        image, which Apptainer keeps even with ``--cleanenv``, never decides.
+        Always set the fallback and compatibility flag explicitly so an
+        ``ENV`` in the task's image, which Apptainer keeps even with
+        ``--cleanenv``, never decides.
         """
         return {
             JUDGE_ISOLATION_FALLBACK_ENV: (
                 self.profile.apptainer.judge_isolation_fallback
-            )
+            ),
+            JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL_ENV: (
+                "1"
+                if self.profile.apptainer.judge_allow_missing_landlock_signal
+                else "0"
+            ),
         }
 
     def _worker_template(
@@ -2027,6 +2034,9 @@ class NativeEngineComposition:
             judge_llm,
             egress=egress,
             isolation_fallback=self.payload.profile.apptainer.judge_isolation_fallback,
+            allow_missing_landlock_signal=(
+                self.payload.profile.apptainer.judge_allow_missing_landlock_signal
+            ),
             extra_agent_environment=extra,
         )
         assert access is not None

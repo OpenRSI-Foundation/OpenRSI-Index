@@ -36,6 +36,7 @@ from rsi_harness.models import AgentPlan, NetworkPolicy
 from rsi_harness.runtime.judge_model_access import build_launch_spec
 from rsi_loop.harness.agent.base import NODE_BIN
 from rsi_loop.harness.config import RSILoopConfig
+from tests.landlock_helpers import native_signal_compatibility
 
 PROGRAM = Path(__file__).parents[2] / "src/rsi_harness/judge_agent/rsi_agent.py"
 API_KEY = "sk-synthetic-rsi-agent-key-91c2"
@@ -314,7 +315,14 @@ class Judge:
             network=NetworkPolicy(mode="public" if internet else "no-network"),
         )
         oneshot = rsi_loop_oneshot(config, plan)
-        spec = json.loads(build_launch_spec(oneshot, None, {API_KEY}))
+        spec = json.loads(
+            build_launch_spec(
+                oneshot,
+                None,
+                {API_KEY},
+                allow_missing_landlock_signal=native_signal_compatibility(),
+            )
+        )
         if NODE is not None:
             # The pinned node an Agent image installs is this host's node.
             spec["command"] = spec["command"].replace(NODE_BIN, NODE)
@@ -1473,6 +1481,10 @@ def test_the_isolation_command_reports_landlock(judge):
         "mode": "landlock",
         "landlock_abi": LANDLOCK,
         "fallback": "none",
+        "landlock_scoped": (1 if native_signal_compatibility() else 3)
+        if LANDLOCK >= 6
+        else 0,
+        "landlock_signal_scope": LANDLOCK >= 6 and not native_signal_compatibility(),
     }
 
 
@@ -1645,3 +1657,70 @@ def test_launch_spec_version_2_lists_what_a_confined_agent_never_reads():
     assert "/logs/agent" not in hidden["hidden"]
     with pytest.raises(Exception, match="none or same-user"):
         build_launch_spec(oneshot, None, set(), isolation_fallback="yes")
+
+
+@pytest.mark.parametrize("allow", [False, True])
+def test_launch_spec_carries_signal_compatibility_only_as_operator_policy(allow):
+    spec = json.loads(
+        build_launch_spec(None, None, set(), allow_missing_landlock_signal=allow)
+    )
+    assert spec["allow_missing_landlock_signal"] is allow
+    assert "RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL" not in spec["environment"]
+
+
+@pytest.mark.parametrize("value", ["1", "true", 1, None])
+def test_signal_compatibility_launch_spec_requires_boolean(judge, value):
+    with pytest.raises(SetupError, match="must be a boolean"):
+        build_launch_spec(None, None, set(), allow_missing_landlock_signal=value)
+    spec = judge.spec()
+    spec["allow_missing_landlock_signal"] = value
+    (judge.private / "launch.json").write_text(json.dumps(spec))
+    result = judge.run("isolation")
+    assert result.returncode == 125
+    assert "signal compatibility is invalid" in result.stderr
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_old_launch_specs_keep_signal_compatibility_disabled(
+    judge, monkeypatch, version
+):
+    from rsi_harness.judge_agent import rsi_agent
+
+    spec = judge.spec()
+    spec["version"] = version
+    del spec["allow_missing_landlock_signal"]
+    (judge.private / "launch.json").write_text(json.dumps(spec))
+    loaded = rsi_agent._load_spec(str(judge.root))
+    assert loaded.get("allow_missing_landlock_signal", False) is False
+    monkeypatch.setenv("RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL", "1")
+    seen = []
+
+    def ruleset(_libc, _abi, *, allow_missing_landlock_signal):
+        seen.append(allow_missing_landlock_signal)
+        raise rsi_agent.Failure(125, "probe complete")
+
+    monkeypatch.setattr(rsi_agent.isolation, "Ruleset", ruleset)
+    with pytest.raises(rsi_agent.Failure, match="probe complete"):
+        rsi_agent.call_ruleset(None, 6, loaded, str(judge.root), [])
+    assert seen == [False]
+
+
+@requires_landlock
+@pytest.mark.parametrize("legacy", [False, True])
+def test_native_private_policy_cannot_be_enabled_by_ambient_environment(judge, legacy):
+    spec = judge.spec("codex")
+    if legacy:
+        spec.pop("allow_missing_landlock_signal", None)
+    else:
+        spec["allow_missing_landlock_signal"] = False
+    (judge.private / "launch.json").write_text(json.dumps(spec))
+    result = judge.run(
+        "isolation", env={"RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL": "1"}
+    )
+    if native_signal_compatibility():
+        assert result.returncode != 0
+        assert "landlock_create_ruleset failed" in result.stderr
+        assert not result.stdout
+    else:
+        assert result.returncode == 0, result.stderr
+        assert json.loads(result.stdout)["landlock_signal_scope"] is (LANDLOCK >= 6)

@@ -429,6 +429,9 @@ def test_every_judge_image_gets_the_same_rsi_agent_and_isolation_fallback(
     launcher = mounts["/usr/local/bin/rsi-isolate"]
     assert launcher.read_only and launcher.source == isolate.source / "rsi-isolate"
     assert runtime.exec_environments[0]["RSI_JUDGE_ISOLATION_FALLBACK"] == "none"
+    assert (
+        runtime.exec_environments[0]["RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL"] == "0"
+    )
     if not access:
         assert "/opt/rsi-agent" not in mounts
         return
@@ -462,6 +465,7 @@ def test_launch_spec_hides_tests_by_visibility_not_by_judge_image(
     spec = json.loads(access.launch)
     # Docker has no operator fallback, whichever image the Judge starts from.
     assert spec["isolation_fallback"] == "none"
+    assert spec["allow_missing_landlock_signal"] is False
     assert ("/tests" in spec["hidden"]) is (visibility == "hidden")
     assert {"/logs/verifier", "/run/rsi-agent"} <= set(spec["hidden"])
 

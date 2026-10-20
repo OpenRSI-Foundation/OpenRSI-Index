@@ -303,6 +303,7 @@ def test_successful_judge_lifecycle_and_fixed_security_spec(tmp_path, clean_imag
             VERIFIER_EXPECTED_GPU_UUIDS_ENV: "GPU-c,GPU-d",
             # Always explicit: an ENV in the task's image never decides.
             "RSI_JUDGE_ISOLATION_FALLBACK": "none",
+            "RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL": "0",
         }
     ]
     assert spec.gpu_allocation.uuids == ("GPU-c", "GPU-d")
@@ -975,6 +976,7 @@ def test_verifier_templates_resolve_from_runtime_only_source_before_create(
         "NVIDIA_VISIBLE_DEVICES": "GPU-c,GPU-d",
         "RSI_HARNESS_EXPECTED_GPU_UUIDS": "GPU-c,GPU-d",
         "RSI_JUDGE_ISOLATION_FALLBACK": "none",
+        "RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL": "0",
         "TOKEN": "runtime-verifier-secret",
     }
     assert "runtime-verifier-secret" not in report.model_dump_json()

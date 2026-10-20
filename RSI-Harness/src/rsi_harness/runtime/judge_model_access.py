@@ -266,12 +266,14 @@ def resolve_judge_model_access(
     *,
     egress: JudgeEgress = "pinned",
     isolation_fallback: IsolationFallback = "none",
+    allow_missing_landlock_signal: bool = False,
     extra_agent_environment: Mapping[str, str] | None = None,
 ) -> JudgeModelAccess | None:
     """Grant the Judge model access only on task opt-in.
 
-    ``isolation_fallback`` comes from the operator's cluster profile, never
-    from a task. ``extra_agent_environment`` adds variables to the Agent's own
+    ``isolation_fallback`` and ``allow_missing_landlock_signal`` come from
+    the operator's cluster profile, never from a task.
+    ``extra_agent_environment`` adds variables to the Agent's own
     environment (a cluster's pinned egress relay, for example).
 
     ``model_access``: the Work Agent's own access, through ``rsi-agent exec``.
@@ -329,6 +331,7 @@ def resolve_judge_model_access(
         secret_values,
         visibility=definition.verifier.visibility,
         isolation_fallback=isolation_fallback,
+        allow_missing_landlock_signal=allow_missing_landlock_signal,
         extra_environment=extra_agent_environment,
         llm=None if judge_llm is None else judge_llm.spec,
         credentials_expire_at=None if auth is None else login_expiry(auth),
@@ -366,6 +369,7 @@ def build_launch_spec(
     *,
     visibility: str = "hidden",
     isolation_fallback: IsolationFallback = "none",
+    allow_missing_landlock_signal: bool = False,
     extra_environment: Mapping[str, str] | None = None,
     llm: Mapping[str, Any] | None = None,
     credentials_expire_at: float | None = None,
@@ -389,6 +393,8 @@ def build_launch_spec(
     """
     if isolation_fallback not in ("none", "same-user"):
         raise SetupError("the Judge isolation fallback must be none or same-user")
+    if type(allow_missing_landlock_signal) is not bool:
+        raise SetupError("allow_missing_landlock_signal must be a boolean")
     if oneshot is None:
         oneshot = {
             "agent": None,
@@ -446,6 +452,7 @@ def build_launch_spec(
         "protected": protected,
         "hidden": hidden,
         "isolation_fallback": isolation_fallback,
+        "allow_missing_landlock_signal": allow_missing_landlock_signal,
         "redact": launch_redaction(secret_values, withheld_values),
     }
     if llm is not None:
