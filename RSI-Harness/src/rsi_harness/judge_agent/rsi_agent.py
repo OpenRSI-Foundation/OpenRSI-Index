@@ -1617,7 +1617,8 @@ def report_isolation() -> int:
     """``rsi-agent isolation``: print the mode each call would use."""
     state_root = os.environ.get(STATE_ROOT_ENV) or STATE_ROOT
     spec = _load_spec(state_root, NO_RSI_AGENT)
-    mode = isolation_mode(spec, isolation.load_libc())
+    libc = isolation.load_libc()
+    mode = isolation.probe_ruleset(libc, isolation_mode(spec, libc))
     sys.stdout.write(json.dumps(mode, sort_keys=True) + "\n")
     sys.stdout.flush()
     return EXIT_OK

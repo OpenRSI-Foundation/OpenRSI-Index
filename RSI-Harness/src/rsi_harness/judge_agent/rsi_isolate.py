@@ -371,9 +371,10 @@ def _environment(entries) -> dict:
         name, separator, value = entry.partition("=")
         if not ENV_NAME.match(name):
             raise isolation.Failure(EXIT_SETUP, f"--env {entry}: not a variable name")
-        if name == FALLBACK_ENV:
+        if name in (FALLBACK_ENV, isolation.ALLOW_MISSING_SIGNAL_ENV):
             raise isolation.Failure(
-                EXIT_SETUP, f"--env {name}: the operator's fallback is never passed on"
+                EXIT_SETUP,
+                f"--env {name}: operator isolation policy is never passed on",
             )
         if separator:
             environment[name] = value
@@ -675,7 +676,8 @@ def _clean_up(process, owner, cwd_fd, handovers, private, slot_fd) -> list:
 
 def report_isolation() -> int:
     """``rsi-isolate isolation``: print the mode a command would use."""
-    mode = isolation_mode(isolation.load_libc())
+    libc = isolation.load_libc()
+    mode = isolation.probe_ruleset(libc, isolation_mode(libc))
     sys.stdout.write(json.dumps(mode, sort_keys=True) + "\n")
     sys.stdout.flush()
     return 0

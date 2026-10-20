@@ -40,6 +40,9 @@ LANDLOCK_CREATE_RULESET = 444
 LANDLOCK_ADD_RULE = 445
 LANDLOCK_RESTRICT_SELF = 446
 LANDLOCK_MAX_ABI = 6
+ALLOW_MISSING_SIGNAL_ENV = "RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL"
+LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET = 1
+LANDLOCK_SCOPE_SIGNAL = 2
 # Filesystem rights in bit order, each with the ABI that introduced it.
 LANDLOCK_FS_RIGHTS = (1,) * 13 + (2, 3, 5)
 FS_EXECUTE, FS_WRITE_FILE, FS_READ_FILE, FS_READ_DIR = 1, 2, 4, 8
@@ -215,7 +218,8 @@ class Ruleset:
 
     Every filesystem right of the ABI is handled, so a path without a rule
     grants nothing. From ABI 6, signals and abstract unix sockets stay inside
-    the child's domain. The network is not handled.
+    the child's domain, except for an explicitly opted-in missing signal
+    scope on an incomplete ABI 6 backport. The network is not handled.
     """
 
     def __init__(self, libc, abi: int) -> None:
@@ -226,18 +230,54 @@ class Ruleset:
             for bit, since in enumerate(LANDLOCK_FS_RIGHTS)
             if since <= self.abi
         )
-        scoped = 0b11 if self.abi >= 6 else 0
+        self.scoped = 0b11 if self.abi >= 6 else 0
         size = 8 if self.abi < 4 else 16 if self.abi < 6 else 24
-        self._attr = ctypes.create_string_buffer(
-            struct.pack("<QQQ", self.handled, 0, scoped)[:size], size
-        )
-        fd = syscall(
-            libc, LANDLOCK_CREATE_RULESET, ctypes.addressof(self._attr), size, 0
-        )
+
+        def create(scoped):
+            self._attr = ctypes.create_string_buffer(
+                struct.pack("<QQQ", self.handled, 0, scoped)[:size], size
+            )
+            return syscall(
+                libc, LANDLOCK_CREATE_RULESET, ctypes.addressof(self._attr), size, 0
+            )
+
+        fd = create(self.scoped)
+        error = ctypes.get_errno() if fd < 0 else 0
+        # RHEL 9 has shipped ABI 6 without LANDLOCK_SCOPE_SIGNAL. Never
+        # silently drop a protection because a kernel rejects our ruleset.
+        # The operator may opt into this one narrowly scoped compatibility
+        # policy. Keep all filesystem rights and abstract-socket scoping.
+        if fd < 0 and error == errno.EINVAL and abi == 6:
+            if os.environ.get(ALLOW_MISSING_SIGNAL_ENV) == "1":
+                fd = create(LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET)
+                if fd >= 0:
+                    self.scoped = LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET
+                    sys.stderr.write(
+                        "Landlock compatibility: signal scoping is unavailable; "
+                        "operator explicitly allowed it. Filesystem and abstract "
+                        "UNIX socket restrictions remain enabled.\n"
+                    )
+                else:
+                    error = ctypes.get_errno()
+            elif os.environ.get(ALLOW_MISSING_SIGNAL_ENV) is not None:
+                raise Failure(
+                    EXIT_INTERNAL, ALLOW_MISSING_SIGNAL_ENV + " must be 1 or unset"
+                )
         if fd < 0:
+            detail = ""
+            if error == errno.EINVAL and abi == 6:
+                detail = (
+                    "Kernel reports Landlock ABI 6 but rejected the ruleset. "
+                    "Some RHEL 9 kernels lack signal scoping. Upgrade the kernel "
+                    "or use another isolation backend; only if the task permits "
+                    "missing signal isolation may the operator set "
+                    + ALLOW_MISSING_SIGNAL_ENV
+                    + "=1. No protection was disabled."
+                )
             raise Failure(
                 EXIT_INTERNAL,
-                "landlock_create_ruleset failed: " + os.strerror(ctypes.get_errno()),
+                "landlock_create_ruleset failed: " + os.strerror(error),
+                detail,
             )
         self.fd = int(fd)
 
@@ -707,3 +747,18 @@ def preexec(
             os.umask(umask)
 
     return prepare
+
+
+def probe_ruleset(libc, mode: dict) -> dict:
+    """Check creation, not just the ABI query; do not restrict this process."""
+    if mode["landlock_abi"] < 1:
+        return mode
+    ruleset = Ruleset(libc, mode["landlock_abi"])
+    try:
+        return dict(
+            mode,
+            landlock_scoped=ruleset.scoped,
+            landlock_signal_scope=bool(ruleset.scoped & LANDLOCK_SCOPE_SIGNAL),
+        )
+    finally:
+        ruleset.close()
