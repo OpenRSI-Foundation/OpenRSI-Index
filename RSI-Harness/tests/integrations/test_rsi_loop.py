@@ -1332,13 +1332,18 @@ CODEX_ONESHOT = (
 )
 
 
-def test_codex_one_shot_command_matches_work_launch_flags() -> None:
-    offline = _oneshot("codex")
+@pytest.mark.parametrize(("model", "effort"), [("m", "high"), ("gpt-6-astra", "max")])
+def test_codex_one_shot_command_matches_work_launch_flags(
+    model: str, effort: str
+) -> None:
+    offline = _oneshot("codex", model=model, effort=effort)
     assert offline["command"] == (
-        "codex exec -c 'model_reasoning_effort=\"high\"' "
+        f"codex exec -c 'model_reasoning_effort=\"{effort}\"' "
         '-c web_search="disabled" -c allow_login_shell=false '
-        "-c features.shell_snapshot=false --model m " + CODEX_ONESHOT
+        f"-c features.shell_snapshot=false --model {model} " + CODEX_ONESHOT
     )
+    assert offline["model"] == model
+    assert offline["reasoning_effort"] == effort
     assert offline["schema_option"] == "--output-schema {schema_file}"
     assert offline["output"] == {"mode": "file", "fields": [], "error_field": None}
     assert offline["unsupported"] is None

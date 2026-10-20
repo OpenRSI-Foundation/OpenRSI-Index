@@ -119,7 +119,17 @@ def cli(monkeypatch, tmp_path: Path):
     return cli_module, services
 
 
-def test_run_preserves_every_cli_option_in_request(cli, tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("agent", "model", "effort"),
+    [
+        ("codex", "gpt-test", "xhigh"),
+        ("codex", "gpt-6-astra", "max"),
+        ("claude-code", "claude-opus-5-5", "max"),
+    ],
+)
+def test_run_preserves_every_cli_option_in_request(
+    cli, tmp_path: Path, agent: str, model: str, effort: str
+) -> None:
     cli_module, services = cli
     task = tmp_path / "task"
     task.mkdir()
@@ -132,7 +142,7 @@ def test_run_preserves_every_cli_option_in_request(cli, tmp_path: Path) -> None:
             "run",
             str(task),
             "--agent",
-            "codex",
+            agent,
             "--gpus",
             "0,2",
             "--primary-reward",
@@ -150,9 +160,9 @@ def test_run_preserves_every_cli_option_in_request(cli, tmp_path: Path) -> None:
             "--logs-root",
             str(logs),
             "--model",
-            "gpt-test",
+            model,
             "--reasoning-effort",
-            "xhigh",
+            effort,
             "--agent-auth",
             "local",
             "--disable-stop-hook",
@@ -163,9 +173,9 @@ def test_run_preserves_every_cli_option_in_request(cli, tmp_path: Path) -> None:
     assert len(services.requests) == 1
     request = services.requests[0]
     assert request.task_dir == task.resolve()
-    assert request.agent_name == "codex"
+    assert request.agent_name == agent
     assert request.gpu_selectors == ("0", "2")
-    assert request.options.agent_name == "codex"
+    assert request.options.agent_name == agent
     assert request.options.primary_reward == "accuracy"
     assert request.options.score_direction == "minimize"
     assert request.options.agent_timeout_seconds == 91.5
@@ -174,8 +184,8 @@ def test_run_preserves_every_cli_option_in_request(cli, tmp_path: Path) -> None:
     assert request.paths is not None
     assert request.paths.root.parent == data.resolve()
     assert request.paths.logs == logs.resolve()
-    assert request.model == "gpt-test"
-    assert request.reasoning_effort == "xhigh"
+    assert request.model == model
+    assert request.reasoning_effort == effort
     assert request.agent_auth is AgentAuthSource.LOCAL
     assert request.options.disable_stop_hook is True
     assert "run-123" in result.output
@@ -184,8 +194,21 @@ def test_run_preserves_every_cli_option_in_request(cli, tmp_path: Path) -> None:
     assert "0.75" in result.output
 
 
+@pytest.mark.parametrize(
+    ("agent", "model", "effort"),
+    [
+        ("codex", "gpt-test", "xhigh"),
+        ("codex", "gpt-6-astra", "max"),
+        ("claude-code", "claude-opus-5-5", "max"),
+    ],
+)
 def test_cluster_run_routes_without_constructing_local_docker_services(
-    cli, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    cli,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    agent: str,
+    model: str,
+    effort: str,
 ) -> None:
     cli_module, local_services = cli
     task = tmp_path / "task"
@@ -216,11 +239,11 @@ def test_cluster_run_routes_without_constructing_local_docker_services(
             "--cluster",
             "bluevela",
             "--agent",
-            "codex",
+            agent,
             "--model",
-            "gpt-test",
+            model,
             "--reasoning-effort",
-            "xhigh",
+            effort,
             "--agent-auth",
             "local",
         ],
@@ -229,7 +252,11 @@ def test_cluster_run_routes_without_constructing_local_docker_services(
     assert result.exit_code == 0, result.output
     assert len(requests) == 1
     assert requests[0].task_dir == task.resolve()
-    assert requests[0].model == "gpt-test"
+    assert requests[0].agent_name == agent
+    assert requests[0].options.agent_name == agent
+    assert requests[0].model == model
+    assert requests[0].reasoning_effort == effort
+    assert requests[0].agent_auth is AgentAuthSource.LOCAL
     assert requests[0].dry_run is False
     assert local_services.requests == []
     assert "cluster-123" in result.output
