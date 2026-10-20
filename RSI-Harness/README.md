@@ -172,6 +172,10 @@ nonstandard names, list the variable names in `RSI_AGENT_SECRET_ENV_NAMES`
 | `pi` | pi | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `minimal`, `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
 | `oracle` | Oracle: the task's own `solution/solve.sh`, no model ([Validate a task's Judge with the oracle](#validate-a-tasks-judge-with-the-oracle)) | None; no credential reaches Work | `solution/solve.sh` in the task | No |
 
+For example, pass `--agent codex --model gpt-6-astra --reasoning-effort max`
+or `--agent claude-code --model claude-opus-5-5 --reasoning-effort max`
+to `rsi-harness run`.
+
 Each Agent CLI is installed at an exact pinned version, over HTTPS, into the
 Work image when the image is built, together with the node it runs on. All of
 these versions live in one table,
@@ -447,8 +451,8 @@ uv run rsi-harness run "$TASK" \
   --cluster "$HOME/.config/rsi-harness/profiles/cluster.local.toml" \
   --dry-run \
   --agent codex \
-  --model gpt-5.6-sol \
-  --reasoning-effort xhigh \
+  --model gpt-6-astra \
+  --reasoning-effort max \
   --agent-auth local
 ```
 
@@ -572,7 +576,7 @@ above.
 
 | Command | Purpose | Example |
 | --- | --- | --- |
-| `run TASK_DIR` | Run a Harbor task locally, or submit it to a cluster when `--cluster` is set. | `rsi-harness run ../rsi-tasks/minference-sparse-prefill --agent codex --agent-auth local --model gpt-5.6-sol --reasoning-effort xhigh --gpus 0` |
+| `run TASK_DIR` | Run a Harbor task locally, or submit it to a cluster when `--cluster` is set. | `rsi-harness run ../rsi-tasks/minference-sparse-prefill --agent codex --agent-auth local --model gpt-6-astra --reasoning-effort max --gpus 0` |
 | `visualize` | Serve the run visualizer. | `rsi-harness visualize` |
 | `recover [RUN_ID]` | Recover one interrupted run, or all unfinished runs when `RUN_ID` is omitted. | `rsi-harness recover RUN_ID` |
 | `cleanup RUN_ID` | Remove leftover runtime resources while retaining the final workspace. | `rsi-harness cleanup RUN_ID` |
