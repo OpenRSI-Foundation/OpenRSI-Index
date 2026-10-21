@@ -173,8 +173,9 @@ def _parser() -> argparse.ArgumentParser:
         "isolation",
         help="print how a command would be isolated, as JSON",
         description=(
-            "Print {mode, landlock_abi, fallback}; exit 123 when a command "
-            "cannot be isolated."
+            "Print {mode, landlock_abi, fallback}, plus landlock_scoped and "
+            "landlock_signal_scope when Landlock is available; exit 123 when "
+            "a command cannot be isolated."
         ),
     )
     return parser
