@@ -623,3 +623,17 @@ Judge ([Using the broker](docs/harbor-task-authoring/sandboxes.md#using-the-brok
 RSI Harness builds on [Harbor](https://github.com/harbor-framework/harbor) and
 [EdgeBench](https://github.com/ByteDance-Seed/EdgeBench); we thank both projects
 and their contributors.
+
+## Citation
+
+If you use RSI Harness in your research, please cite:
+
+```bibtex
+@misc{openrsi2026index,
+  title        = {{OpenRSI Index}},
+  author       = {{OpenRSI Foundation}},
+  year         = {2026},
+  howpublished = {\url{https://github.com/OpenRSI-Foundation/OpenRSI-Index}},
+  note         = {Accessed: 2026-10-21}
+}
+```

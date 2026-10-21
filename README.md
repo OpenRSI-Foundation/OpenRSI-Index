@@ -184,3 +184,17 @@ We are still actively expanding the team. We really appreciate the efforts of al
     <td colspan="4">Coming soon.</td>
   </tr>
 </table>
+
+## Citation
+
+If you use OpenRSI Index in your research, please cite:
+
+```bibtex
+@misc{openrsi2026index,
+  title        = {{OpenRSI Index}},
+  author       = {{OpenRSI Foundation}},
+  year         = {2026},
+  howpublished = {\url{https://github.com/OpenRSI-Foundation/OpenRSI-Index}},
+  note         = {Accessed: 2026-10-21}
+}
+```
