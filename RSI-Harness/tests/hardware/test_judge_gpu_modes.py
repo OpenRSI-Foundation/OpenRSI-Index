@@ -4,6 +4,7 @@ import copy
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import textwrap
@@ -1068,13 +1069,18 @@ def test_work_enumeration_writes_and_returns_exact_order(tmp_path: Path) -> None
 
     class Runtime:
         def exec(self, _container, command, **_kwargs):
-            local = (*command[:2], command[2].replace("/workspace", str(workspace)))
+            # Login profiles may replace PATH. Install the stub path inside the
+            # shell after startup so this unit test never enumerates host GPUs.
+            path = shlex.quote(f"{binary}:{os.environ['PATH']}")
+            script = f"export PATH={path}\n" + command[2].replace(
+                "/workspace", str(workspace)
+            )
+            local = (*command[:2], script)
             result = subprocess.run(
                 local,
                 capture_output=True,
                 check=False,
                 text=True,
-                env={**os.environ, "PATH": f"{binary}:{os.environ['PATH']}"},
             )
             return AgentRunResult(exit_code=result.returncode, output=result.stdout)
 

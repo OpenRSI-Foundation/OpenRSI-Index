@@ -518,6 +518,35 @@ through a private proxy to the pinned endpoints for a `"no-network"` Agent
 for a `"public"` Agent, whose egress the site governs, not the Harness. Model
 access on a multi-node Judge is not supported yet.
 
+`rsi-isolate isolation` and `rsi-agent isolation` also try creating the actual
+Landlock ruleset; an ABI query alone does not establish that it can be used.
+For Landlock they report `landlock_scoped` (the selected scope bitmask) and
+`landlock_signal_scope` in addition to the existing fields.
+
+Some RHEL 9 kernels report ABI 6 but omit `LANDLOCK_SCOPE_SIGNAL` (see
+[the XZ upstream report](https://github.com/tukaani-project/xz/commit/5630c33a43a28a3d11030aa9d25fa8617e98da91)).
+The default remains fail-closed. Prefer a corrected kernel or another isolation
+backend when the task requires signal confinement. If the task's isolation
+contract explicitly permits missing signal confinement, the operator may set
+`apptainer.judge_allow_missing_landlock_signal = true` in the cluster profile
+(default `false`). This requires no system administrator privileges: the operator
+is the person launching the Harness run, not the task or its research Agent.
+Every Judge gets `RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL` explicitly as `0` or
+`1`; Docker always uses `0`. Image `ENV` values cannot opt in. Task environment
+tables and all Apptainer environment tables reject this setting. `rsi-agent`
+reads the policy only from its Harness-generated private launch spec, ignoring
+its process environment; older launch specs default to `false`.
+
+This is an opt-in policy decision, not an equivalent replacement for ABI 6:
+only on reported ABI 6 and `EINVAL` does it retry without the signal scope.
+All filesystem rights and abstract UNIX socket scoping remain required;
+other failures still fail closed. Successful compatibility use prints a warning
+on stderr and reports `landlock_scoped: 1`, `landlock_signal_scope: false`.
+This does not enable the unconfined `same-user` fallback and is not inferred
+from kernel version strings. `rsi-isolate --env` cannot forward this policy to
+its child. The shared ruleset code accepts an explicit policy argument, never
+an ambient environment variable.
+
 A `judge_model` task runs on a cluster too, with the same `--judge-llm-*`
 options, on a single-node Judge with a `"public"` or `"no-network"` Verifier.
 An operator's Codex login works only when the compute nodes see and can

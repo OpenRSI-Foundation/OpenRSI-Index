@@ -31,6 +31,7 @@ from rsi_harness.judge_agent import (
     install_judge_isolate,
 )
 from rsi_harness.models import (
+    JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL_ENV,
     JUDGE_ISOLATION_FALLBACK_ENV,
     JUDGE_TRAJECTORY_ROOT,
     VERIFIER_OUTPUT_TRUNCATION_MARKER,
@@ -1578,6 +1579,7 @@ class JudgeRunner:
         # Docker has no operator fallback. Set it explicitly: an ENV in the
         # task's image must not choose how a science Judge library isolates.
         environment[JUDGE_ISOLATION_FALLBACK_ENV] = "none"
+        environment[JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL_ENV] = "0"
         trajectory_mounts = ()
         if trajectory is not None:
             trajectory_mounts = (

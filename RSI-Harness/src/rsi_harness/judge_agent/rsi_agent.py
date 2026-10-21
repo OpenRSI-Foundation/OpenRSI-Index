@@ -89,6 +89,7 @@ STATE_ROOT = "/run/rsi-agent"
 # Tests only: point rsi-agent at another state root (the caller's own files).
 STATE_ROOT_ENV = "RSI_AGENT_STATE_ROOT"
 # Version 2 adds "hidden" and "isolation_fallback"; version 1 still loads.
+# The optional operator policy "allow_missing_landlock_signal" defaults off.
 SPEC_VERSIONS = (1, 2)
 DEFAULT_TIMEOUT = 1800.0
 MAX_SLOTS = 1024
@@ -347,6 +348,8 @@ def _load_spec(state_root: str, absent: str = NO_MODEL_ACCESS) -> dict:
             raise Failure(EXIT_INTERNAL, f"the launch spec {key} list is invalid")
     if spec.get("isolation_fallback", "none") not in ("none", "same-user"):
         raise Failure(EXIT_INTERNAL, "the launch spec isolation fallback is invalid")
+    if type(spec.get("allow_missing_landlock_signal", False)) is not bool:
+        raise Failure(EXIT_INTERNAL, "the launch spec signal compatibility is invalid")
     return spec
 
 
@@ -638,7 +641,11 @@ def call_ruleset(
     libc, abi: int, spec: dict, state_root: str, writable
 ) -> isolation.Ruleset:
     """One call: read all but the hidden paths, write only its own directories."""
-    ruleset = isolation.Ruleset(libc, abi)
+    ruleset = isolation.Ruleset(
+        libc,
+        abi,
+        allow_missing_landlock_signal=spec.get("allow_missing_landlock_signal", False),
+    )
     try:
         # The Harness lists rsi-agent's state, each login file's place, the
         # Judge's outputs and hidden tests; /tmp (staged evidence) and the
@@ -1617,7 +1624,12 @@ def report_isolation() -> int:
     """``rsi-agent isolation``: print the mode each call would use."""
     state_root = os.environ.get(STATE_ROOT_ENV) or STATE_ROOT
     spec = _load_spec(state_root, NO_RSI_AGENT)
-    mode = isolation_mode(spec, isolation.load_libc())
+    libc = isolation.load_libc()
+    mode = isolation.probe_ruleset(
+        libc,
+        isolation_mode(spec, libc),
+        allow_missing_landlock_signal=spec.get("allow_missing_landlock_signal", False),
+    )
     sys.stdout.write(json.dumps(mode, sort_keys=True) + "\n")
     sys.stdout.flush()
     return EXIT_OK

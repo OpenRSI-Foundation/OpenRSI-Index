@@ -53,6 +53,7 @@ from rsi_harness.runtime.trajectory import (
 )
 from rsi_harness.task.compiler import HarborTaskCompiler
 from rsi_loop.harness.config import RSILoopConfig
+from tests.landlock_helpers import native_signal_compatibility
 
 REPO = Path(__file__).parents[2]
 SAMPLE = REPO / "sample_tasks" / "science-ising3d"
@@ -321,7 +322,13 @@ class Round:
             ),
         )
         launch = json.loads(
-            build_launch_spec(oneshot, None, {API_KEY}, visibility="public")
+            build_launch_spec(
+                oneshot,
+                None,
+                {API_KEY},
+                visibility="public",
+                allow_missing_landlock_signal=native_signal_compatibility(),
+            )
         )
         # The fake CLI's record: the only file outside its job a confined
         # call may write (the Harness grants none).

@@ -943,7 +943,13 @@ def test_write_rsi_loop_metadata_is_generic_and_cache_only(tmp_path):
     "anchor", ['network_mode = "no-network"', "[verifier]\ntimeout_sec = 30"]
 )
 @pytest.mark.parametrize(
-    "name", ["RSI_JUDGE_ISOLATION_FALLBACK", "rsi_judge_isolation_fallback"]
+    "name",
+    [
+        "RSI_JUDGE_ISOLATION_FALLBACK",
+        "rsi_judge_isolation_fallback",
+        "RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL",
+        "rsi_judge_allow_missing_landlock_signal",
+    ],
 )
 def test_a_task_cannot_set_an_operator_judge_variable(tmp_path, anchor, name):
     """RSI_JUDGE_* settings (the isolation fallback) are the operator's."""

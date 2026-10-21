@@ -114,6 +114,12 @@ if [ "${RSI_JUDGE_ISOLATION_FALLBACK:-unset}" != none ]; then
     echo '{"reward": 0}' > /logs/verifier/reward.json
     exit 0
 fi
+# A task image must not enable signal-scope compatibility either.
+if [ "${RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL:-unset}" != 0 ]; then
+    echo "unexpected signal compatibility"
+    echo '{"reward": 0}' > /logs/verifier/reward.json
+    exit 0
+fi
 printf 'agent=%s model=%s\n' "$RSI_AGENT_NAME" "$RSI_AGENT_MODEL"
 mkdir -p /tmp/review/work
 printf 'Answer the question.\n' > /tmp/review/prompt.md
@@ -212,6 +218,7 @@ def test_real_judge_calls_the_agent_through_rsi_agent(
         f"FROM {PYTHON_IMAGE}\nRUN mkdir -p /workspace\nWORKDIR /workspace\n"
         # A task's image cannot choose the operator's isolation fallback.
         "ENV RSI_JUDGE_ISOLATION_FALLBACK=same-user\n"
+        "ENV RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL=1\n"
     )
     config = task / "task.toml"
     config.write_text(

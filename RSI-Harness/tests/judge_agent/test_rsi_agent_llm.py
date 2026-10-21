@@ -28,6 +28,7 @@ from rsi_harness.runtime.judge_llm import resolve_judge_llm
 from rsi_harness.runtime.judge_model_access import build_launch_spec
 from rsi_harness.runtime.network import PinnedEndpoint
 from rsi_loop.harness.config import RSILoopConfig
+from tests.landlock_helpers import native_signal_compatibility
 
 PROGRAM = Path(__file__).parents[2] / "src/rsi_harness/judge_agent/rsi_agent.py"
 FAKE_APP_SERVER = Path(__file__).parents[1] / "fakes/fake_codex_app_server.py"
@@ -261,7 +262,15 @@ class Judge:
         self.log = tmp_path / "call.log"
 
     def write(self, llm: dict | None, secrets: set[str] = frozenset()) -> dict:
-        spec = json.loads(build_launch_spec(None, None, set(secrets), llm=llm))
+        spec = json.loads(
+            build_launch_spec(
+                None,
+                None,
+                set(secrets),
+                llm=llm,
+                allow_missing_landlock_signal=native_signal_compatibility(),
+            )
+        )
         # The fake app server's record: the only file outside its job a
         # Landlock-confined call may write (the Harness grants none).
         self.record.touch()

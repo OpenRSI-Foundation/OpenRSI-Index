@@ -12,6 +12,7 @@ from pathlib import Path, PurePosixPath
 import pytest
 
 from rsi_harness.runtime.network import PinnedEndpoint
+from tests.landlock_helpers import native_signal_compatibility
 
 
 def _read_headers(connection: socket.socket) -> bytes:
@@ -267,6 +268,7 @@ import json, os, socket, subprocess, sys
 from urllib.parse import urlsplit
 
 provider_socket, port, agent = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+allow_missing_signal = sys.argv[4]
 request = f"CONNECT provider.test:{port} HTTP/1.1\r\n\r\n".encode()
 
 
@@ -311,7 +313,8 @@ if rsi_agent.landlock_abi(libc)[0] >= 1:
         "import rsi_agent as ra\n"
         "libc = ra._load_libc()\n"
         "directory = os.path.dirname(sys.argv[1])\n"
-        "ruleset = ra.Ruleset(libc, ra.landlock_abi(libc)[0])\n"
+        "ruleset = ra.Ruleset(libc, ra.landlock_abi(libc)[0], "
+        "allow_missing_landlock_signal=(sys.argv[4] == '1'))\n"
         "for path in ra.readable_paths([directory]):\n"
         "    ruleset.allow(path, ra.FS_READ)\n"
         "assert libc.prctl(ra.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) == 0\n"
@@ -333,7 +336,7 @@ if rsi_agent.landlock_abi(libc)[0] >= 1:
     )
     run = subprocess.run(
         [sys.executable, "-I", "-B", "-c", probe, provider_socket, request.decode(),
-         agent],
+         agent, allow_missing_signal],
         capture_output=True,
         text=True,
         timeout=60,
@@ -401,6 +404,7 @@ def test_the_judge_provider_proxy_serves_only_the_registered_relay(
                 str(broker.provider_socket),
                 str(upstream_port),
                 str(source / "judge_agent"),
+                str(int(native_signal_compatibility())),
             ),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
