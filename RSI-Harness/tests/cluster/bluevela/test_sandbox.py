@@ -703,3 +703,37 @@ def test_run_native_engine_wires_the_sandbox_into_the_coordinator(
         assert not (short_root / "sb").exists()
     finally:
         fake.shutdown()
+
+
+def test_cluster_salvage_kills_the_runs_sandboxes_and_closes_the_run(tmp_path):
+    """resume --cluster closes a run whose job died: its E2B sandboxes go and
+    the lease ends interrupted, as local recovery leaves one."""
+    from rsi_harness.models import RunStatus
+    from rsi_harness.runtime.recovery import RecoveryManager
+
+    made, lease, other = _crashed_run(tmp_path)
+    try:
+        run_dir = tmp_path / "runs" / "run-1"
+        store = LeaseStore(run_dir / "leases")
+        store.write(
+            lease.model_copy(update={"recovery_required": True, "error": "lost"})
+        )
+        manager = RecoveryManager(
+            store=store,
+            backend=None,  # type: ignore[arg-type]
+            managed_root=run_dir,
+            e2b_client=lambda _: made.fake,
+        )
+
+        with store.lock("run-1"):
+            manager.salvage_cluster("run-1", ended_at=None)
+
+        assert [box.sandbox_id for box in made.fake.live()] == [other]
+        final = store.read("run-1")
+        assert final.status is RunStatus.CANCELLED
+        assert final.phase == "interrupted"
+        assert not final.recovery_required
+        assert final.work.container_id is None
+        assert all(env.state == "removed" for env in final.sandbox_envs)
+    finally:
+        made.fake.shutdown()

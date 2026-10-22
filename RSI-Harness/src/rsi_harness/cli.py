@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, Annotated, Literal, Protocol
 import typer
 from pydantic import ValidationError
 
-from rsi_harness.cluster.base import ClusterRunRequest
+from rsi_harness.cluster.base import ClusterRunRequest, ClusterRunResult
 from rsi_harness.cluster.bluevela.adapter import build_cluster_adapter
 from rsi_harness.config import EngineConfig
 from rsi_harness.errors import HarnessError, SetupError
@@ -34,6 +34,9 @@ from rsi_harness.runtime.sandbox_policy import load_sandbox_policy
 from rsi_loop.harness.agent import get_agent_class
 
 if TYPE_CHECKING:
+    from rsi_harness.runtime.recovery import AttemptGrants
+    from rsi_harness.runtime.resume import ResumeContext
+
     # The ledger imports the docker SDK: loaded only by prune-images.
     from rsi_harness.runtime.sandbox_ledger import PruneRow
 
@@ -54,6 +57,12 @@ class RuntimeServicesPort(Protocol):
     def recover(self, run_id: str | None) -> tuple[str, ...]: ...
 
     def cleanup(self, run_id: str, *, delete_workspace: bool) -> None: ...
+
+    def plan_resume(
+        self, run_id: str, grants: AttemptGrants, *, dry_run: bool = False
+    ) -> ResumeContext: ...
+
+    def resume(self, context: ResumeContext) -> RunResult: ...
 
     def prune_images(
         self,
@@ -580,14 +589,7 @@ def run_command(
         if dry_run:
             typer.echo("\nDry-run complete; no jobs were submitted.")
             return
-        elapsed = time.monotonic() - started
-        typer.echo(f"\nCluster run completed in {elapsed:.1f}s")
-        typer.echo(_field("Run ID:", cluster_result.run_id))
-        typer.echo(_field("Status:", cluster_result.status.value))
-        typer.echo(_field("Job IDs:", ", ".join(cluster_result.job_ids)))
-        typer.echo(_field("Logs:", cluster_result.log_dir))
-        if cluster_result.status in {RunStatus.FAILED, RunStatus.CANCELLED}:
-            raise typer.Exit(1)
+        _echo_cluster_result(cluster_result, time.monotonic() - started)
         return
 
     try:
@@ -597,6 +599,7 @@ def run_command(
                 data_root=roots.data,
                 logs_root=roots.logs,
                 sandbox_policy=load_sandbox_policy(sandbox_policy),
+                sandbox_policy_path=sandbox_policy.expanduser().resolve(),
             )
         services = _services(
             roots.data,
@@ -660,8 +663,29 @@ def run_command(
     except BaseException as error:
         _fail(error, verbose=verbose)
         return
-    elapsed = time.monotonic() - start
+    _echo_result(result, roots, time.monotonic() - start)
+    if oracle:
+        failures = _oracle_failures(result, max_submissions or 1)
+        if failures:
+            typer.echo(f"\nOracle check failed: {'; '.join(failures)}", err=True)
+            raise typer.Exit(1)
+        typer.echo("\nOracle check passed")
+        return
+    if result.status in {RunStatus.FAILED, RunStatus.CANCELLED}:
+        raise typer.Exit(1)
 
+
+def _echo_cluster_result(result: ClusterRunResult, elapsed: float) -> None:
+    typer.echo(f"\nCluster run completed in {elapsed:.1f}s")
+    typer.echo(_field("Run ID:", result.run_id))
+    typer.echo(_field("Status:", result.status.value))
+    typer.echo(_field("Job IDs:", ", ".join(result.job_ids)))
+    typer.echo(_field("Logs:", result.log_dir))
+    if result.status in {RunStatus.FAILED, RunStatus.CANCELLED}:
+        raise typer.Exit(1)
+
+
+def _echo_result(result: RunResult, roots: RuntimeRoots, elapsed: float) -> None:
     typer.echo(f"\nRun completed in {elapsed:.1f}s")
     typer.echo(_field("Run ID:", result.run_id))
     typer.echo(_field("Status:", result.status.value))
@@ -691,15 +715,138 @@ def run_command(
                 f"  {report.round_id}: {report.status.value} score={score} "
                 f"exit_code={exit_code} runtime={runtime}"
             )
-    if oracle:
-        failures = _oracle_failures(result, max_submissions or 1)
-        if failures:
-            typer.echo(f"\nOracle check failed: {'; '.join(failures)}", err=True)
-            raise typer.Exit(1)
-        typer.echo("\nOracle check passed")
+
+
+@app.command("resume")
+def resume_command(
+    run_id: Annotated[str, typer.Argument()],
+    add_time: Annotated[
+        float | None,
+        typer.Option("--add-time", min=0.0, help="Agent seconds to add to the run"),
+    ] = None,
+    add_submissions: Annotated[
+        int | None,
+        typer.Option("--add-submissions", min=1, help="Submissions to add"),
+    ] = None,
+    cooldown: Annotated[
+        float | None,
+        typer.Option("--cooldown", min=0.0, help="Replace the run's cooldown"),
+    ] = None,
+    gpus: Annotated[
+        str,
+        typer.Option(
+            "--gpus", help="Other GPUs of the same count; default: the run's selectors"
+        ),
+    ] = "",
+    data_root: Annotated[Path, typer.Option("--data-root")] = Path(".rsi-harness"),
+    logs_root: Annotated[Path, typer.Option("--logs-root")] = Path("logs"),
+    cluster: Annotated[
+        str | None,
+        typer.Option(
+            "--cluster",
+            help="Cluster name or profile TOML the run was submitted with",
+        ),
+    ] = None,
+    dry_run: Annotated[
+        bool,
+        typer.Option("--dry-run", help="Print the next attempt; change nothing"),
+    ] = False,
+    verbose: Annotated[bool, typer.Option("--verbose")] = False,
+) -> None:
+    """Continue a run that ended, however it ended, as its next attempt."""
+    from rsi_harness.runtime.recovery import AttemptGrants
+
+    if cluster is not None and gpus:
+        typer.echo(
+            "Error: --gpus is local-only and cannot be used with --cluster",
+            err=True,
+        )
+        raise typer.Exit(2)
+    try:
+        grants = AttemptGrants(
+            add_time_seconds=add_time or 0.0,
+            add_submissions=add_submissions or 0,
+            cooldown_seconds=cooldown,
+            gpu_selectors=_selectors(gpus) if gpus else None,
+        )
+    except typer.BadParameter as error:
+        typer.echo(f"Error: {error}", err=True)
+        raise typer.Exit(2) from None
+    except ValidationError as error:
+        problem = error.errors()[0]
+        typer.echo(f"Error: {problem['loc'][0]}: {problem['msg']}", err=True)
+        raise typer.Exit(2) from None
+    if cluster is not None:
+        try:
+            adapter = build_cluster_adapter(cluster, event_callback=_ClusterConsole())
+            plan = adapter.plan_resume(run_id, grants, dry_run=dry_run)
+        except BaseException as error:
+            _fail(error, verbose=verbose)
+            return
+        _echo_resume(plan.context)
+        typer.echo(_field("Walltime:", plan.spec.walltime))
+        if dry_run:
+            typer.echo("\nDry-run complete; nothing was changed.")
+            return
+        typer.echo()
+        started = time.monotonic()
+        try:
+            cluster_result = adapter.resume(plan)
+        except BaseException as error:
+            _fail(error, verbose=verbose)
+            return
+        _echo_cluster_result(cluster_result, time.monotonic() - started)
         return
+    try:
+        roots = RuntimeRoots(
+            data=data_root.expanduser().resolve(),
+            logs=logs_root.expanduser().resolve(),
+        )
+        services = _services(roots.data, roots.logs, event_callback=_RunConsole())
+        context = services.plan_resume(run_id, grants, dry_run=dry_run)
+    except BaseException as error:
+        _fail(error, verbose=verbose)
+        return
+    _echo_resume(context)
+    if dry_run:
+        typer.echo("\nDry-run complete; nothing was changed.")
+        return
+    typer.echo()
+    start = time.monotonic()
+    try:
+        result = services.resume(context)
+    except BaseException as error:
+        _fail(error, verbose=verbose)
+        return
+    _echo_result(result, roots, time.monotonic() - start)
     if result.status in {RunStatus.FAILED, RunStatus.CANCELLED}:
         raise typer.Exit(1)
+
+
+def _echo_resume(context: ResumeContext) -> None:
+    left = context.submissions_left
+    typer.echo(f"Resuming run {context.run_id} as attempt {context.attempt}")
+    if context.salvage_pending:
+        typer.echo(_field("Salvage:", "runs first (the run did not end cleanly)"))
+    typer.echo(
+        _field(
+            "Agent time:",
+            f"{context.agent_seconds_used:.0f}s used, "
+            f"{context.agent_seconds_left:.0f}s left",
+        )
+    )
+    typer.echo(
+        _field(
+            "Submissions:",
+            f"{context.charged_rounds} used, "
+            + ("unlimited" if left is None else f"{left} left"),
+        )
+    )
+    typer.echo(_field("Next round:", context.next_round_id))
+    if context.base_image_ref is not None:
+        typer.echo(_field("Base image:", context.base_image_ref))
+        if context.workdir_volume is not None:
+            typer.echo(_field("WORKDIR volume:", context.workdir_volume.name))
 
 
 @app.command("visualize")

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import re
 import signal
+import time
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -29,6 +31,7 @@ from rsi_harness.models import (
     RootfsSnapshotMode,
     RunGPUPlan,
     RunRequest,
+    RunResult,
     RunStatus,
     SubmissionReport,
     SubmissionStatus,
@@ -42,7 +45,13 @@ from rsi_harness.runtime.coordinator import (
     StartedSubmissionServer,
     aggregate_result,
 )
-from rsi_harness.runtime.recovery import LeaseStore
+from rsi_harness.runtime.recovery import (
+    AttemptGrants,
+    LeaseStore,
+    PriorRetainedImage,
+    retained_round_id,
+)
+from rsi_harness.runtime.resume import ResumeContext
 from rsi_harness.runtime.submissions import JudgeEndpoint, SubmissionService
 from tests.factories import make_run_plan
 
@@ -522,8 +531,10 @@ class Service:
 
     def register(self, **kwargs):
         self.registered = True
+        self.registration = kwargs
         self.work = kwargs["work_container"]
         self.plan = kwargs["run_plan"]
+        self.rounds = kwargs.get("rounds_allocated", 0)
         return "runtime-secret-token"
 
     def submit(self) -> None:
@@ -2503,6 +2514,47 @@ def test_sigterm_cancels_run_and_restores_previous_handler(tmp_path) -> None:
     assert names.index("server_stop") < names.index("agent_stop")
 
 
+def test_a_second_signal_does_not_interrupt_the_cancelled_runs_cleanup(
+    tmp_path,
+) -> None:
+    backend = ScriptedBackend(tmp_path)
+    previous = signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
+    stop_agent = backend.stop_agent
+
+    def interrupt(prepared, work, timeout):
+        del prepared, work, timeout
+        handler = signal.getsignal(signal.SIGINT)
+        assert callable(handler)
+        handler(signal.SIGINT, None)
+        raise AssertionError("SIGINT handler returned")
+
+    def stop_while_signalled(work):
+        # LSF's SIGTERM after its SIGINT, and the job script's forwarded one.
+        for selected in (signal.SIGTERM, signal.SIGINT):
+            handler = signal.getsignal(selected)
+            assert callable(handler)
+            handler(selected, None)
+        stop_agent(work)
+
+    backend.run_agent = interrupt  # type: ignore[method-assign]
+    backend.stop_agent = stop_while_signalled  # type: ignore[method-assign]
+    coordinator = RunCoordinator(
+        backend=backend,
+        lease_store=LeaseStore(tmp_path / "leases"),
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    )
+
+    result = coordinator.run(RunRequest(task_dir=tmp_path))
+
+    assert result.status == RunStatus.CANCELLED
+    assert ("artifacts_finalize", RunStatus.CANCELLED) in backend.events
+    assert ("work_remove", "work-1") in backend.events
+    assert (signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)) == (
+        previous
+    )
+
+
 def test_submission_error_round_recovers_and_later_valid_round_wins(tmp_path) -> None:
     backend = ScriptedBackend(tmp_path)
     backend.reports[0] = SubmissionReport(
@@ -2969,3 +3021,684 @@ def test_first_submission_seconds_is_measured_to_the_first_round(
     finalized = backend.artifacts.finalized
     assert finalized["first_submission_seconds"] == 5.0
     assert finalized["agent_runtime_seconds"] == 45.0
+
+
+def test_lease_records_the_attempt_agent_budget_and_pause_times(tmp_path) -> None:
+    backend = ScriptedBackend(tmp_path)
+    store = LeaseStore(tmp_path / "leases")
+    backend.store = store
+    artifact_root = tmp_path / "logs" / "runs" / "run-1" / backend.plan.task.task_id
+    start_artifacts = backend.start_artifacts
+
+    def start_artifacts_with_root(plan, run_id):
+        artifacts = start_artifacts(plan, run_id)
+        artifacts.root = artifact_root
+        return artifacts
+
+    observed: list[tuple[str, float | None]] = []
+    evaluate = backend.evaluate_submission
+
+    def evaluate_recording_pauses(request, *, lifecycle_observer):
+        class Observer:
+            def resource_event(self, name, **values):
+                lifecycle_observer.resource_event(name, **values)
+                if name in {"work_pause_planned", "work_unpaused"}:
+                    durable = store.read("run-1")
+                    assert durable is not None
+                    observed.append((name, durable.work.paused_at))
+
+        return evaluate(request, lifecycle_observer=Observer())
+
+    backend.start_artifacts = start_artifacts_with_root  # type: ignore[method-assign]
+    backend.evaluate_submission = evaluate_recording_pauses  # type: ignore[method-assign]
+
+    RunCoordinator(
+        backend=backend,
+        lease_store=store,
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    ).run(RunRequest(task_dir=tmp_path))
+
+    assert [name for name, _ in observed] == [
+        "work_pause_planned",
+        "work_unpaused",
+    ] * 2
+    assert all(paused_at is not None for _, paused_at in observed[::2])
+    assert all(paused_at is None for _, paused_at in observed[1::2])
+    final = store.read("run-1")
+    assert final is not None
+    assert final.artifact_root == artifact_root
+    assert final.work.paused_at is None
+    (attempt,) = final.attempts
+    timeout = backend.plan.task.agent.timeout_seconds
+    assert attempt.attempt == final.attempt == 1
+    assert attempt.agent_started_at is not None
+    assert attempt.agent_deadline == attempt.agent_started_at + timeout
+    assert attempt.ended_at is not None
+    assert attempt.started_at <= attempt.agent_started_at <= attempt.ended_at
+    assert attempt.end_basis == "exited"
+    assert attempt.agent_seconds is not None
+    assert 0.0 <= attempt.agent_seconds <= timeout
+
+
+def test_timed_out_agent_closes_the_attempt_as_stopped_at_its_deadline(
+    tmp_path,
+) -> None:
+    backend = ScriptedBackend(tmp_path)
+    task = backend.plan.task
+    backend.plan = backend.plan.model_copy(
+        update={
+            "task": task.model_copy(
+                update={"agent": task.agent.model_copy(update={"timeout_seconds": 0})}
+            )
+        }
+    )
+    backend.agent_result = AgentRunResult(exit_code=None, timed_out=True)
+    store = LeaseStore(tmp_path / "leases")
+
+    RunCoordinator(
+        backend=backend,
+        lease_store=store,
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    ).run(RunRequest(task_dir=tmp_path))
+
+    final = store.read("run-1")
+    assert final is not None
+    (attempt,) = final.attempts
+    assert attempt.end_basis == "stopped"
+    assert attempt.agent_seconds == 0.0
+
+
+def test_attempt_is_closed_before_cleanup_removes_work(tmp_path) -> None:
+    backend = ScriptedBackend(tmp_path)
+    store = LeaseStore(tmp_path / "leases")
+    remove_work = backend.remove_work
+    at_removal = []
+
+    def remove_work_after_reading_lease(work):
+        durable = store.read("run-1")
+        assert durable is not None
+        at_removal.append(durable.attempts[-1])
+        remove_work(work)
+
+    backend.remove_work = remove_work_after_reading_lease  # type: ignore[method-assign]
+
+    RunCoordinator(
+        backend=backend,
+        lease_store=store,
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    ).run(RunRequest(task_dir=tmp_path))
+
+    (attempt,) = at_removal
+    assert attempt.ended_at is not None
+    assert attempt.end_basis == "exited"
+    final = store.read("run-1")
+    assert final is not None
+    assert final.attempts == (attempt,)
+
+
+def test_cleanup_pause_records_when_work_was_paused(tmp_path) -> None:
+    backend = ScriptedBackend(tmp_path)
+    backend.fail_retain_work = True
+    store = LeaseStore(tmp_path / "leases")
+
+    RunCoordinator(
+        backend=backend,
+        lease_store=store,
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    ).run(RunRequest(task_dir=tmp_path))
+
+    final = store.read("run-1")
+    assert final is not None
+    assert final.work.container_id == "work-1"
+    assert final.work.paused is True
+    assert final.work.paused_at is not None
+    (attempt,) = final.attempts
+    assert attempt.agent_started_at is not None
+    assert attempt.agent_started_at <= final.work.paused_at
+    assert attempt.end_basis == "exited"
+
+
+def test_attempt_stays_open_when_cleanup_cannot_contain_the_agent(tmp_path) -> None:
+    backend = ScriptedBackend(tmp_path)
+    backend.fail_stop_agent = True
+    store = LeaseStore(tmp_path / "leases")
+
+    def quiesce_fails(work):
+        raise RuntimeError("Work pause is unproven")
+
+    backend.quiesce_work = quiesce_fails  # type: ignore[method-assign]
+
+    RunCoordinator(
+        backend=backend,
+        lease_store=store,
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    ).run(RunRequest(task_dir=tmp_path))
+
+    final = store.read("run-1")
+    assert final is not None
+    (attempt,) = final.attempts
+    assert attempt.agent_started_at is not None
+    assert attempt.ended_at is None
+
+
+class ResumingBackend(ScriptedBackend):
+    """Attempt 2 of the run attempt 1 left: it adopts the kept volume."""
+
+    def __init__(self, tmp_path: Path) -> None:
+        super().__init__(tmp_path)
+        self.agent_timeout: float | None = None
+
+    def plan_workdir_volume(self, plan, run_id):
+        raise AssertionError("a resumed run plans no new WORKDIR volume")
+
+    def create_workdir_volume(self, plan, run_id, planned):
+        raise AssertionError("a resumed run creates no WORKDIR volume")
+
+    def adopt_workdir_volume(self, plan, run_id, volume):
+        self.events.append(("volume_adopt", volume.name))
+        return volume
+
+    def plan_retained_work(self, plan, work):
+        super().plan_retained_work(plan, work)
+        return f"rsi-harness-rootfs:retained-work-{'c' * 64}"
+
+    def retain_work(self, plan, work, planned_ref):
+        retained = super().retain_work(plan, work, planned_ref)
+        return retained.model_copy(
+            update={
+                "round_id": retained_round_id("final", 2),
+                "image_id": f"sha256:{'d' * 64}",
+            }
+        )
+
+    def run_agent(self, prepared, work, timeout):
+        self.agent_timeout = timeout
+        return super().run_agent(prepared, work, timeout)
+
+
+def _first_attempt(tmp_path: Path) -> LeaseStore:
+    store = LeaseStore(tmp_path / "leases")
+    result = RunCoordinator(
+        backend=ScriptedBackend(tmp_path),
+        lease_store=store,
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    ).run(RunRequest(task_dir=tmp_path))
+    assert result.status is RunStatus.COMPLETED
+    return store
+
+
+def _resume_context(
+    tmp_path: Path, store: LeaseStore, backend: ScriptedBackend, **updates
+) -> ResumeContext:
+    lease = store.read("run-1")
+    assert lease is not None and lease.work.retained_image_ref is not None
+    context = ResumeContext(
+        run_id="run-1",
+        attempt=2,
+        request=RunRequest(task_dir=tmp_path),
+        sandbox_policy=None,
+        plan=backend.plan,
+        gpu_plan=lease.gpu_plan,
+        reports=(
+            SubmissionReport(
+                round_id="agent-1",
+                status=SubmissionStatus.COMPLETED,
+                rewards={"reward": 2.0},
+                score=2.0,
+            ),
+            SubmissionReport(
+                round_id="agent-2",
+                status=SubmissionStatus.INFRASTRUCTURE_ERROR,
+                error="Judge failed",
+            ),
+        ),
+        charged_rounds=3,
+        last_allocated_at=None,
+        agent_seconds_used=40.0,
+        agent_seconds_left=20.0,
+        max_submissions=6,
+        cooldown_seconds=1.5,
+        grants=AttemptGrants(add_time_seconds=5.0, add_submissions=1),
+        base_image_ref=lease.work.retained_image_ref,
+        base_image_id=lease.work.retained_image_id,
+        base_image_round_id="final",
+        workdir_volume=lease.work.workdir_volume.actual,
+        salvage_pending=False,
+        message="rsi-harness: the run stopped and resumes now as attempt 2.\n",
+    )
+    return replace(context, **updates)
+
+
+def test_resumed_attempt_continues_the_same_run_from_its_kept_state(
+    tmp_path,
+) -> None:
+    store = _first_attempt(tmp_path)
+    first = store.read("run-1")
+    assert first is not None
+    backend = ResumingBackend(tmp_path)
+    backend.store = store
+    context = _resume_context(tmp_path, store, backend)
+
+    result = RunCoordinator(
+        backend=backend,
+        lease_store=store,
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+        resume=context,
+    ).run(RunRequest(task_dir=tmp_path))
+
+    # The old infrastructure_error round does not fail this attempt, and the
+    # best round of attempt 1 still wins.
+    assert result.status is RunStatus.COMPLETED
+    assert result.run_id == "run-1"
+    assert result.best_score == 2.0
+    assert result.total_rounds == 4
+    assert [report.round_id for report in backend.service.reports] == [
+        "agent-4",
+        "agent-5",
+    ]
+    assert backend.service.registration["rounds_allocated"] == 3
+    assert backend.service.registration["max_submissions"] == 6
+    assert backend.service.registration["cooldown_seconds"] == 1.5
+    assert backend.service.registration["prior_reports"] == context.reports
+    assert backend.prepared_max_submissions == 3
+    assert backend.agent_timeout == 20.0
+    names = [name for name, _ in backend.events]
+    assert "volume_adopt" in names
+    assert names.index("volume_adopt") < names.index("work_create")
+    assert backend.artifacts.finalized["attempts"] == 2
+    assert backend.artifacts.finalized["agent_runtime_seconds"] >= 40.0
+
+    final = store.read("run-1")
+    assert final is not None
+    assert final.attempt == 2
+    assert final.status is RunStatus.COMPLETED
+    assert final.attempts[0] == first.attempts[0]
+    second = final.attempts[1]
+    assert second.attempt == 2
+    assert second.grants == context.grants
+    assert second.agent_started_at is not None
+    assert second.agent_deadline == second.agent_started_at + 20.0
+    assert second.ended_at is not None
+    assert final.phase_history.count(RunStatus.PREPARING.value) == 2
+    assert final.work.prior_retained_images == (
+        PriorRetainedImage(
+            ref=first.work.retained_image_ref,
+            id=first.work.retained_image_id,
+            round_id="final",
+        ),
+    )
+    assert (
+        final.work.retained_image_ref == f"rsi-harness-rootfs:retained-work-{'c' * 64}"
+    )
+    assert final.work.retained_image_id == f"sha256:{'d' * 64}"
+    assert final.work.workdir_volume.actual == first.work.workdir_volume.actual
+
+
+def test_a_resumed_run_on_shared_storage_needs_no_retained_image(tmp_path) -> None:
+    """A cluster run's Work state is its shared workspace: the attempt
+    carries the lease forward without an image chain."""
+    store = _first_attempt(tmp_path)
+    backend = ResumingBackend(tmp_path)
+    context = _resume_context(
+        tmp_path,
+        store,
+        backend,
+        base_image_ref=None,
+        base_image_id=None,
+        base_image_round_id=None,
+    )
+
+    result = RunCoordinator(
+        backend=backend,
+        lease_store=store,
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+        resume=context,
+    ).run(RunRequest(task_dir=tmp_path))
+
+    assert result.status is RunStatus.COMPLETED
+    assert [report.round_id for report in backend.service.reports] == [
+        "agent-4",
+        "agent-5",
+    ]
+    final = store.read("run-1")
+    assert final is not None
+    assert final.attempt == 2
+    assert final.work.prior_retained_images == ()
+
+
+def test_a_resumed_attempt_fails_on_its_own_infrastructure_round(tmp_path) -> None:
+    store = _first_attempt(tmp_path)
+    backend = ResumingBackend(tmp_path)
+    backend.reports[1] = backend.reports[1].model_copy(
+        update={
+            "status": SubmissionStatus.INFRASTRUCTURE_ERROR,
+            "score": None,
+            "error": "Judge failed",
+        }
+    )
+
+    result = RunCoordinator(
+        backend=backend,
+        lease_store=store,
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+        resume=_resume_context(tmp_path, store, backend),
+    ).run(RunRequest(task_dir=tmp_path))
+
+    assert result.status is RunStatus.FAILED
+    assert result.best_score == 2.0
+
+
+def test_a_resumed_attempt_without_a_score_of_its_own_stays_completed(
+    tmp_path,
+) -> None:
+    store = _first_attempt(tmp_path)
+    backend = ResumingBackend(tmp_path)
+    backend.reports = [
+        report.model_copy(
+            update={
+                "status": SubmissionStatus.VERIFIER_ERROR,
+                "score": None,
+                "rewards": {},
+                "error": "tests failed to run",
+            }
+        )
+        for report in backend.reports
+    ]
+
+    result = RunCoordinator(
+        backend=backend,
+        lease_store=store,
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+        resume=_resume_context(tmp_path, store, backend),
+    ).run(RunRequest(task_dir=tmp_path))
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.best_round == "agent-1"
+
+
+@pytest.mark.parametrize(
+    "updates", [{"attempt": 3}, {"base_image_id": f"sha256:{'e' * 64}"}]
+)
+def test_a_resume_planned_on_an_older_lease_changes_nothing(tmp_path, updates) -> None:
+    store = _first_attempt(tmp_path)
+    before = store.path_for("run-1").read_bytes()
+    backend = ResumingBackend(tmp_path)
+
+    with pytest.raises(SetupError, match="changed after its resume was planned"):
+        RunCoordinator(
+            backend=backend,
+            lease_store=store,
+            run_id_factory=lambda: "run-1",
+            clock=Clock(),
+            resume=_resume_context(tmp_path, store, backend, **updates),
+        ).run(RunRequest(task_dir=tmp_path))
+
+    assert store.path_for("run-1").read_bytes() == before
+    assert not any(name == "work_create" for name, _ in backend.events)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        SetupError("the task's images changed since run run-1 started"),
+        InfrastructureError("image build failed"),
+    ],
+)
+def test_a_resume_refused_after_the_lease_advanced_restores_it(tmp_path, error) -> None:
+    store = _first_attempt(tmp_path)
+    before = store.path_for("run-1").read_bytes()
+
+    class ChangedImages(ResumingBackend):
+        def prepare_plan(self, definition, images, allocation, request, run_id):
+            assert store.read("run-1").attempt == 2
+            raise error
+
+    backend = ChangedImages(tmp_path)
+
+    with pytest.raises(type(error), match=str(error)):
+        RunCoordinator(
+            backend=backend,
+            lease_store=store,
+            run_id_factory=lambda: "run-1",
+            clock=Clock(),
+            resume=_resume_context(tmp_path, store, backend),
+        ).run(RunRequest(task_dir=tmp_path))
+
+    assert store.path_for("run-1").read_bytes() == before
+    assert backend.artifacts is None
+
+
+def test_a_resumed_attempt_keeps_its_run_id(tmp_path) -> None:
+    store = _first_attempt(tmp_path)
+    backend = ResumingBackend(tmp_path)
+
+    with pytest.raises(SetupError, match="keep its run ID"):
+        RunCoordinator(
+            backend=backend,
+            lease_store=store,
+            run_id_factory=lambda: "run-2",
+            clock=Clock(),
+            resume=_resume_context(tmp_path, store, backend),
+        ).run(RunRequest(task_dir=tmp_path))
+
+
+class SessionWork:
+    """Work as an Agent's CLI meets it: each run names its session in the
+    output, as the real CLI does, and submits once."""
+
+    def __init__(self, agent: str) -> None:
+        self.agent = agent
+        self.prompts: list[str] = []
+        self.launches: list[str] = []
+        self.timeouts: list[float | None] = []
+
+    def copy_to(self, container, source, target):
+        del container
+        if target == PurePosixPath("/tmp/rsi-agent-prompt.md"):
+            self.prompts.append(source.read_text())
+
+    def exec(self, container, command, *, timeout_seconds=None, **options):
+        del container
+        output_path = options.get("output_path")
+        if output_path is None:
+            # Stop hook installation.
+            return AgentRunResult(exit_code=0)
+        launch = command[2].splitlines()[-1]
+        self.launches.append(launch)
+        self.timeouts.append(timeout_seconds)
+        environment = options["environment"]
+        request = urllib.request.Request(
+            f"{environment['RSI_JUDGE_URL']}/api/v1/submit",
+            data=b"",
+            headers={"Authorization": f"Bearer {environment['RSI_TOKEN']}"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            assert response.status == 200
+        if self.agent == "codex":
+            session = (
+                launch.split(" - <")[0].rsplit(" ", 1)[1]
+                if " resume " in launch
+                else "01a0139c-0000-7000-8000-000000000001"
+            )
+            line = f"session id: {session}"
+        else:
+            session = re.search(r"--(?:session-id|resume) (\S+)", launch).group(1)
+            line = json.dumps(
+                {"type": "system", "subtype": "init", "session_id": session}
+            )
+        with output_path.open("a") as output:
+            output.write(f"{line}\n")
+        return AgentRunResult(exit_code=0, full_output_captured=True)
+
+
+def _agent_attempt(ports, store, request, *, resume=None) -> RunResult:
+    """One attempt through the production composition's Agent stages and the
+    real RSI-Loop adapter; only Work's CLI is faked."""
+    from rsi_harness.integrations.rsi_loop import RSILoopAgentAdapter
+    from rsi_harness.runtime.production import _ProductionRunComposition
+    from rsi_loop.harness.config import RSILoopConfig
+
+    composition = _ProductionRunComposition(
+        client=object(),
+        data_root=ports.data_root,
+        logs_root=ports.plan.paths.logs,
+        inventory=object(),
+        rsi_loop_config=RSILoopConfig(),
+        snapshot=object(),
+        firewall=object(),
+        bind_host="127.0.0.1",
+        bridge_gateway="127.0.0.1",
+        omit_gpu_device_requests_for_tests=True,
+        agent_adapter_factory=lambda _config, _runtime: None,
+        quiescence_checker=None,
+        api_endpoints=(),
+        agent_secret_env={},
+        verifier_secret_env={},
+        resume=resume,
+    )
+    composition.run_id = "run-1"
+    composition.work_runtime = ports.work
+    composition.agent = RSILoopAgentAdapter(RSILoopConfig(), runtime=ports.work)
+
+    def start_artifacts(plan, run_id):
+        ports.artifacts = composition.start_artifacts(plan, run_id)
+        return ports.artifacts
+
+    class Compiler:
+        def compile(self, task_dir, options):
+            del options
+            return ports.compile(RunRequest(task_dir=task_dir))
+
+    backend = ProductionCoordinatorBackend(
+        compiler=Compiler(),
+        allocator=ports.allocate,
+        image_preparer=ports.prepare_images,
+        plan_preparer=ports.prepare_plan,
+        artifact_starter=start_artifacts,
+        server_starter=EmbeddedSubmissionServerFactory(
+            bind_host="127.0.0.1", port=0, bridge_gateway="127.0.0.1"
+        ),
+        network_planner=ports.plan_network,
+        network_creator=ports.create_network,
+        network_remover=ports.remove_network,
+        workdir_volume_planner=ports.plan_workdir_volume,
+        workdir_volume_creator=ports.create_workdir_volume,
+        workdir_volume_attester=ports.attest_workdir_volume,
+        workdir_volume_remover=ports.remove_workdir_volume,
+        work_name_planner=ports.plan_work_container,
+        work_creator=ports.create_work,
+        work_feedback_attester=ports.attest_work_feedback_mount,
+        work_policy_planner=ports.plan_work_policy,
+        work_policy_installer=ports.install_work_policy,
+        work_policy_remover=ports.remove_work_policy,
+        work_starter=ports.start_work,
+        work_remover=ports.remove_work,
+        hook_installer=composition.install_hooks,
+        agent_preparer=composition.prepare_agent,
+        agent_runner=composition.run_agent,
+        agent_stopper=ports.stop_agent,
+        work_quiescer=ports.quiesce_work,
+        retained_work_planner=ports.plan_retained_work,
+        work_retainer=ports.retain_work,
+        retained_work_releaser=ports.release_retained_work,
+        evaluator=lambda request, observer: ports.evaluate_submission(
+            request, lifecycle_observer=observer
+        ),
+        event_recorder=ports.record_event,
+        workdir_volume_adopter=getattr(ports, "adopt_workdir_volume", None),
+    )
+    return RunCoordinator(
+        backend=backend,
+        lease_store=store,
+        run_id_factory=lambda: "run-1",
+        # Resume reads round times from the files: the clock is the host's.
+        clock=Clock(time.time()),
+        resume=resume,
+    ).run(request)
+
+
+@pytest.mark.parametrize("agent", ("codex", "claude-code"))
+def test_a_resumed_run_continues_the_agents_own_session(tmp_path, agent) -> None:
+    from rsi_harness.runtime.resume import plan_resume
+    from rsi_harness.runtime.run_request import write_run_request
+
+    def ports_for(cls):
+        ports = cls(tmp_path)
+        task = ports.plan.task
+        ports.plan = ports.plan.model_copy(
+            update={
+                "task": task.model_copy(
+                    update={"agent": task.agent.model_copy(update={"name": agent})}
+                )
+            }
+        )
+        ports.data_root = tmp_path / "data"
+        ports.work = work
+        return ports
+
+    work = SessionWork(agent)
+    store = LeaseStore(tmp_path / "leases")
+    request = RunRequest(
+        task_dir=tmp_path, options=CompileOptions(agent_name=agent, max_submissions=3)
+    )
+    (tmp_path / "data" / "run-1").mkdir(parents=True)
+    write_run_request(tmp_path / "data" / "run-1", run_id="run-1", request=request)
+    first = ports_for(ScriptedBackend)
+    assert _agent_attempt(first, store, request).status is RunStatus.COMPLETED
+    root = first.artifacts.root
+    prompt = (root / "agent_prompt.md").read_text()
+
+    context = plan_resume(
+        "run-1",
+        store=store,
+        data_root=tmp_path / "data",
+        logs_root=first.plan.paths.logs,
+        grants=AttemptGrants(),
+        compile_task=lambda _request: first.plan.task,
+        salvage=None,
+    )
+    second = ports_for(ResumingBackend)
+    second.reports = second.reports[1:]
+    result = _agent_attempt(second, store, context.request, resume=context)
+
+    assert result.status is RunStatus.COMPLETED
+    assert [report.round_id for report in result.reports] == ["agent-1", "agent-2"]
+    assert result.best_round == "agent-2"
+    first_launch, resumed_launch = work.launches
+    if agent == "codex":
+        assert " resume " not in first_launch
+        assert resumed_launch.startswith("exec codex exec resume ")
+        assert resumed_launch.endswith(
+            " 01a0139c-0000-7000-8000-000000000001 - </tmp/rsi-agent-prompt.md"
+        )
+    else:
+        session = first_launch.split("--session-id ")[1].split()[0]
+        assert resumed_launch.startswith(f"exec claude --resume {session} -p ")
+    # The CLI reads only the attempt's message; the run's prompt gains it.
+    assert work.prompts == [prompt, context.message]
+    assert "Submissions left: 2." in context.message
+    assert (root / "agent_prompt.md").read_text() == (
+        f"{prompt}\n## Attempt 2\n\n{context.message}"
+    )
+    assert work.timeouts == [
+        first.plan.task.agent.timeout_seconds,
+        pytest.approx(context.agent_seconds_left),
+    ]
+    output = (root / "agent_output.txt").read_text().splitlines()
+    assert len(output) == 4
+    assert output[1:3] == ["", "--- rsi-harness: attempt 2 ---"]
+    final = json.loads((root / "final_result.json").read_text())
+    assert final["attempts"] == 2
+    assert final["total_rounds"] == 2
+    assert (root / "attempts" / "1" / "final_result.json").exists()

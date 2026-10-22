@@ -1382,7 +1382,7 @@ def test_schema_five_lease_loads_through_the_single_migration(tmp_path):
     path.write_text(json.dumps(raw))
     before = path.read_bytes()
     lease = store.read("old")
-    assert lease.schema_version == 6
+    assert lease.schema_version == 7
     assert (lease.sandbox_envs, lease.sandbox_images, lease.sandbox_builders) == (
         (),
         (),
@@ -1392,7 +1392,7 @@ def test_schema_five_lease_loads_through_the_single_migration(tmp_path):
     assert lease.sandbox_reservation.pool_disk_mb is None
     assert path.read_bytes() == before
     store.write(lease)
-    assert json.loads(path.read_text())["schema_version"] == 6
+    assert json.loads(path.read_text())["schema_version"] == 7
 
 
 @pytest.mark.parametrize("key", ["sandbox_envs", "sandbox_images", "sandbox_builders"])

@@ -513,6 +513,46 @@ def test_cooldown_and_maximum_budget_share_round_allocation_authority(tmp_path) 
     assert "remaining: 0" in second
 
 
+def test_resumed_registration_continues_rounds_cooldown_and_history(
+    tmp_path,
+) -> None:
+    clock = FakeClock(datetime(2026, 1, 1, tzinfo=UTC))
+    writer = FakeArtifactWriter()
+    evaluator = FakeEvaluator(make_report(), artifact_writer=writer)
+    service = SubmissionService(
+        evaluator=evaluator, artifact_writer=writer, clock=clock
+    )
+    prior = make_report("agent-2")
+    token = service.register(
+        run_id="run-a",
+        run_plan=make_run_plan(tmp_path),
+        work_container=ContainerRef(container_id="work-a", role="work"),
+        max_submissions=4,
+        cooldown_seconds=10,
+        rounds_allocated=3,
+        last_allocated_at=clock.current - timedelta(seconds=4),
+        prior_reports=(prior,),
+    )
+
+    with pytest.raises(SubmissionClosedError, match="cooldown has 6.000"):
+        service.submit(token)
+    clock.current += timedelta(seconds=6)
+    feedback = service.submit(token)
+    clock.current += timedelta(seconds=10)
+    with pytest.raises(SubmissionClosedError, match="budget"):
+        service.submit(token)
+
+    assert evaluator.round_ids == ["agent-4"]
+    assert "remaining: 0" in feedback
+    assert [report.round_id for report in service.reports] == ["agent-4"]
+    history = service.history(token)
+    assert history.index("round: agent-2") < history.index("round: agent-4")
+    # Each round's remaining budget follows its own number, not its position.
+    earlier, latest = history.split("round: agent-4")
+    assert "remaining: 2" in earlier
+    assert "remaining: 0" in latest
+
+
 def test_history_requires_token_and_contains_only_this_run(tmp_path) -> None:
     service, token, _, _ = registered_service(tmp_path / "a")
     other, other_token, _, _ = registered_service(

@@ -149,6 +149,36 @@ def test_command_runs_pi_in_print_mode_with_the_extension() -> None:
     assert _agent().resume_cmd is None
 
 
+def test_a_resume_reopens_the_last_session_the_extension_reported(
+    tmp_path: Path,
+) -> None:
+    """--session, not --session-id: a missing session fails the launch
+    instead of starting an empty one under that id. A new session keeps pi's
+    own id, which the extension reports."""
+    agent = _agent()
+    launch = (
+        "exec pi --offline -p -e /opt/rsi-harness/pi/rsi-never-stop.ts "
+        "--provider rsi --model pi-test{} </tmp/rsi-agent-prompt.md"
+    )
+    output = tmp_path / "agent_output.txt"
+    output.write_text(
+        '{"type":"system","subtype":"init","agent":"pi","session_id":"run-1"}\n'
+        '{"type":"user","session_id":"run-1","message":{}}\n'
+        "--- rsi-harness: attempt 2 ---\n"
+        '{"type":"system","subtype":"init","agent":"pi","session_id":"run-2"}\n'
+    )
+
+    started = agent.format_run_cmd(PROMPT, model="pi-test", session_id="run-1")
+    resumed = agent.format_run_cmd(
+        PROMPT, model="pi-test", resume=True, session_id="run-1"
+    )
+
+    assert agent.resumes_sessions
+    assert started.splitlines()[-1] == launch.format("")
+    assert resumed.splitlines()[-1] == launch.format(" --session run-1")
+    assert agent.last_session_id(output) == "run-2"
+
+
 def test_continuation_is_exported_only_when_the_stop_hook_is_enabled() -> None:
     agent = _agent()
 

@@ -16,7 +16,7 @@ from rsi_harness.models import (
     SubmissionReport,
     SubmissionStatus,
 )
-from rsi_harness.runtime.artifacts import RunArtifactWriter
+from rsi_harness.runtime.artifacts import RunArtifactWriter, recorded_submissions
 from tests.factories import make_run_plan
 from tests.fakes import FakeClock
 
@@ -532,3 +532,77 @@ def test_interruption_before_replace_never_exposes_partial_json(
         assert json.loads(target.read_text()) == previous
     else:
         assert not target.exists()
+
+
+def test_reopen_continues_a_run_without_truncating_it(tmp_path: Path) -> None:
+    plan = make_run_plan(tmp_path)
+    first = RunArtifactWriter(plan, run_id="run-1", clock=FakeClock())
+    first.start()
+    first.record_submission(report("agent-1", score=0.5, rewards={}, output="a\n"))
+    (first.root / "agent_output.txt").write_text("attempt one\n")
+    started_at = (first.root / "started_at").read_text()
+    first.record_engine_error("Work stop failed")
+    first.finalize(first_submission_seconds=3.0)
+    # A round the state file never recorded does not come back.
+    (first.root / "submissions" / "agent-2").mkdir()
+    (first.root / "submissions" / "agent-2" / "report.json").write_text(
+        json.dumps({"round": "agent-2", "status": "completed", "score": 9.0})
+    )
+
+    ((recorded, _at),) = recorded_submissions(first.root)
+    assert (recorded.exit_code, recorded.duration_seconds) == (3, 1.25)
+
+    second = RunArtifactWriter(plan, run_id="run-1", clock=FakeClock())
+    second.reopen(2)
+    second.record_submission(report("agent-3", score=0.25, rewards={}, output="b\n"))
+    second.finalize(attempts=2, agent_runtime_seconds=7.0)
+
+    root = second.root
+    assert (root / "started_at").read_text() == started_at
+    assert (root / "agent_output.txt").read_text() == (
+        "attempt one\n\n--- rsi-harness: attempt 2 ---\n"
+    )
+    assert (root / "feedback" / "agent-1.log").read_text() == "a\n"
+    previous = json.loads((root / "attempts" / "1" / "final_result.json").read_text())
+    assert "attempts" not in previous
+    assert not (root / "engine_error.json").exists()
+    assert json.loads((root / "attempts" / "1" / "engine_error.json").read_text()) == {
+        "error": "Work stop failed"
+    }
+    final = json.loads((root / "final_result.json").read_text())
+    assert final["attempts"] == 2
+    assert final["agent_runtime_seconds"] == 7.0
+    assert final["first_submission_seconds"] == 3.0
+    assert final["total_rounds"] == 2
+    assert final["best_round"] == "agent-1"
+    state = json.loads((root / "evolve_state.json").read_text())
+    assert [entry["round"] for entry in state["submissions"]] == [
+        "agent-1",
+        "agent-3",
+    ]
+
+
+def test_reopen_keeps_the_first_submission_time_past_a_crashed_attempt(
+    tmp_path: Path,
+) -> None:
+    plan = make_run_plan(tmp_path)
+    first = RunArtifactWriter(plan, run_id="run-1", clock=FakeClock())
+    first.start()
+    first.record_submission(report("agent-1", score=0.5, rewards={}, output="a\n"))
+    first.finalize(first_submission_seconds=3.0)
+    # Attempt 2 crashed: it never wrote a final_result.json.
+    RunArtifactWriter(plan, run_id="run-1", clock=FakeClock()).reopen(2)
+
+    third = RunArtifactWriter(plan, run_id="run-1", clock=FakeClock())
+    third.reopen(3)
+    third.finalize(attempts=3, first_submission_seconds=9.0)
+
+    final = json.loads((third.root / "final_result.json").read_text())
+    assert final["first_submission_seconds"] == 3.0
+
+
+def test_reopen_requires_an_earlier_attempt(tmp_path: Path) -> None:
+    writer = RunArtifactWriter(make_run_plan(tmp_path), run_id="run-1")
+
+    with pytest.raises(FileNotFoundError):
+        writer.reopen(2)

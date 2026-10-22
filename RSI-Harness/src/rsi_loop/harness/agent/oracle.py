@@ -57,6 +57,7 @@ class OracleAgent(Agent):
         internet: bool = True,
         resume: bool = False,
         continuation: str | None = None,
+        session_id: str | None = None,
     ) -> str:
-        del prompt_path, model, internet, resume, continuation
+        del prompt_path, model, internet, resume, continuation, session_id
         return f"rsi-oracle {shlex.quote(cwd or '.')} {SOLUTION_DIR}"

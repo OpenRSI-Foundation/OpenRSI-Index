@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import os
 import re
@@ -32,6 +33,7 @@ from rsi_harness.models import (
     WORK_FEEDBACK_ROOT,
     AgentHookRequest,
     AgentPrepareRequest,
+    AgentResume,
     AgentRunRequest,
     AgentRunResult,
     ContainerMount,
@@ -56,6 +58,7 @@ from rsi_harness.runtime.coordinator import (
     RunPreparation,
 )
 from rsi_harness.runtime.docker import DockerContainerRuntime
+from rsi_harness.runtime.durable import fsync_directory
 from rsi_harness.runtime.environment import (
     MissingRuntimeEnvironmentError,
     resolve_runtime_environment,
@@ -94,12 +97,16 @@ from rsi_harness.runtime.network import (
     provider_bypasses_proxy,
 )
 from rsi_harness.runtime.recovery import (
+    AttemptGrants,
     LeaseStore,
     RecoveryManager,
     SnapshotRecoveryAuthority,
+    retained_round_id,
 )
 from rsi_harness.runtime.redaction import redact_exact_values, redact_text
+from rsi_harness.runtime.resume import ResumeContext, plan_resume, same_gpu_shape
 from rsi_harness.runtime.rootfs_snapshot import DockerRootfsSnapshotBackend
+from rsi_harness.runtime.run_request import write_run_request
 from rsi_harness.runtime.sandbox import SandboxBroker
 from rsi_harness.runtime.sandbox_budget import SandboxAdmissionPool, SandboxJournal
 from rsi_harness.runtime.sandbox_build import engine_socket
@@ -143,6 +150,7 @@ from rsi_harness.runtime.sandbox_network import (
     plan_builder_network,
 )
 from rsi_harness.runtime.sandbox_policy import (
+    load_sandbox_policy,
     resolve_env_grant,
     resolve_sandbox_grant,
     validate_sandbox_policy,
@@ -519,9 +527,18 @@ class ProductionRecoveryBackend:
         state = container.attrs.get("State") or {}
         config = container.attrs.get("Config") or {}
         labels = config.get("Labels") or {}
+        finished_at: float | None = None
+        try:
+            finished_at = datetime.fromisoformat(state["FinishedAt"]).timestamp()
+        except (KeyError, TypeError, ValueError):
+            pass
         return {
             "running": bool(state.get("Running", False)),
             "paused": bool(state.get("Paused", False)),
+            # Docker reports year 1 for a container that never exited.
+            "finished_at": (
+                finished_at if finished_at is not None and finished_at > 0 else None
+            ),
             "labels": dict(labels),
             "id": container.id,
             "name": (container.attrs.get("Name") or "").removeprefix("/"),
@@ -770,6 +787,28 @@ class ProductionRecoveryBackend:
         except NotFound:
             return
 
+    def commit_work(
+        self,
+        container_id: str,
+        *,
+        run_id: str,
+        task_id: str,
+        round_id: str,
+        planned_ref: str,
+    ) -> str:
+        return (
+            DockerRootfsSnapshotBackend(self._client)
+            .acquire(
+                ContainerRef(container_id=container_id, role="work"),
+                run_id=run_id,
+                task_id=task_id,
+                round_id=round_id,
+                purpose="retained-work",
+                planned_ref=planned_ref,
+            )
+            .image_id
+        )
+
     def remove_policy(self, rule_id: str) -> None:
         try:
             self._firewall.remove(rule_id)
@@ -829,6 +868,8 @@ class _ProductionRunComposition:
         preparation: RunPreparation | None = None,
         compiler: HarborTaskCompiler | None = None,
         sandbox_policy: SandboxPolicy | None = None,
+        sandbox_policy_path: Path | None = None,
+        resume: ResumeContext | None = None,
     ) -> None:
         del inventory
         self.client = client
@@ -877,6 +918,9 @@ class _ProductionRunComposition:
         self.workdir_volume: ManagedWorkdirVolume | None = None
         self.planned_work_policy: NetworkPolicyLease | None = None
         self.sandbox_policy = sandbox_policy
+        self.sandbox_policy_path = sandbox_policy_path
+        self.resume = resume
+        self.attempt = 1 if resume is None else resume.attempt
         self.sandbox_lifecycle = (
             SandboxLifecycle() if sandbox_policy is not None else NullSandboxLifecycle()
         )
@@ -1069,6 +1113,7 @@ class _ProductionRunComposition:
             evaluator=self.evaluate,
             event_recorder=self.event_callback,
             preparation=self.preparation,
+            workdir_volume_adopter=self.adopt_workdir_volume,
         )
 
     def allocate(self, definition: Any, selectors: Sequence[str]) -> Any:
@@ -1154,8 +1199,12 @@ class _ProductionRunComposition:
                     update={"agent": definition.agent.model_copy(update=agent_updates)}
                 )
         run_root = (self.data_root / run_id).resolve()
-        run_root.mkdir(parents=True, mode=0o700, exist_ok=False)
+        if self.resume is None:
+            run_root.mkdir(parents=True, mode=0o700, exist_ok=False)
+        elif not run_root.is_dir():
+            raise SetupError(f"resumed run directory is missing: {run_root}")
         run_root.chmod(0o700)
+        fsync_directory(run_root.parent)
         paths = (
             request.paths.model_copy(
                 update={
@@ -1175,9 +1224,32 @@ class _ProductionRunComposition:
                 workspace=run_root / "workspace",
                 logs=self.logs_root,
             )
+        if self.resume is None:
+            write_run_request(
+                run_root,
+                run_id=run_id,
+                request=request.model_copy(update={"paths": paths}),
+                sandbox_policy_path=self.sandbox_policy_path,
+            )
         self.plan = self.compiler.finalize(
             definition, images, gpu_plan, paths, "docker-rootfs"
         )
+        if self.resume is not None:
+            current, recorded = self.plan.images, self.resume.plan.images
+            if (current.base_digest, current.work_digest, current.judge_digest) != (
+                recorded.base_digest,
+                recorded.work_digest,
+                recorded.judge_digest,
+            ):
+                raise SetupError(
+                    f"the task's images changed since run {run_id} started"
+                )
+            try:
+                retained = self.client.images.get(self.resume.base_image_ref).id
+            except NotFound:
+                retained = None
+            if retained != self.resume.base_image_id:
+                raise SetupError("retained Work image differs from the run's lease")
         # The run plan records the Judge image this run really uses: a public
         # Judge always the clean image, a hidden one unless it is unavailable.
         verifier = self.plan.task.verifier
@@ -1236,7 +1308,10 @@ class _ProductionRunComposition:
 
     def start_artifacts(self, plan: Any, run_id: str) -> RunArtifactWriter:
         self.artifacts = RunArtifactWriter(plan, run_id=run_id)
-        self.artifacts.start()
+        if self.resume is None:
+            self.artifacts.start()
+        else:
+            self.artifacts.reopen(self.resume.attempt)
         return self.artifacts
 
     def start_server(self, evaluator: Any, artifacts: Any, clock: Any) -> Any:
@@ -1319,6 +1394,22 @@ class _ProductionRunComposition:
         ):
             raise SetupError("WORKDIR volume durable plan provenance mismatch")
         actual = self.workdir_volumes.create(planned)
+        self.workdir_volume = actual
+        return actual
+
+    def adopt_workdir_volume(
+        self, plan: Any, run_id: str, volume: ManagedWorkdirVolume
+    ) -> ManagedWorkdirVolume:
+        """Prove a resumed run's kept WORKDIR volume, unreferenced, as Work's."""
+        if (
+            volume.run_id != run_id
+            or volume.task_id != plan.task.task_id
+            or volume.target != plan.workdir
+            or volume.snapshot_mode is not plan.rootfs_snapshot_mode
+        ):
+            raise SetupError("kept WORKDIR volume provenance differs from the run")
+        actual = self.workdir_volumes.inspect(volume, expected_references=())
+        self.planned_workdir_volume = actual
         self.workdir_volume = actual
         return actual
 
@@ -1428,6 +1519,7 @@ class _ProductionRunComposition:
                         volume=workdir_volume,
                         target=plan.workdir,
                         read_only=False,
+                        no_copy=self.resume is not None,
                     ),
                 )
                 if plan.rootfs_snapshot_mode is RootfsSnapshotMode.SPLIT_WORKDIR
@@ -1447,10 +1539,16 @@ class _ProductionRunComposition:
                     ),
                 )
             self.work_public_tests = bool(tests_mounts)
+            # A resumed run's Work is its retained image, proven in prepare_plan.
+            image = (
+                plan.images.work_ref
+                if self.resume is None
+                else self.resume.base_image_ref
+            )
             endpoint = self.sandbox_lifecycle.prepare_work()
             return self.work_runtime.create(
                 ContainerSpec(
-                    image=plan.images.work_ref,
+                    image=image,
                     command=("sleep", "infinity"),
                     workdir=plan.workdir,
                     user="0",
@@ -1603,6 +1701,15 @@ class _ProductionRunComposition:
                     run_plan=plan,
                     prompt_path=self.artifacts.root / "agent_prompt.md",
                     max_submissions=max_submissions,
+                    resume=(
+                        None
+                        if self.resume is None
+                        else AgentResume(
+                            attempt=self.resume.attempt,
+                            message=self.resume.message,
+                            agent_output=self.artifacts.root / "agent_output.txt",
+                        )
+                    ),
                 )
             )
             resolved = self._resolved_agent_environment(plan)
@@ -1698,7 +1805,10 @@ class _ProductionRunComposition:
                 exec_started=result.exec_started,
             )
             if not result.full_output_captured:
-                self.artifacts.root.joinpath("agent_output.txt").write_text(safe_output)
+                with self.artifacts.root.joinpath("agent_output.txt").open(
+                    "w" if self.resume is None else "a"
+                ) as stream:
+                    stream.write(safe_output)
             self.artifacts.root.joinpath("run_agent.log").write_text(safe_output)
             self.event_callback(
                 "agent_finished",
@@ -1785,7 +1895,7 @@ class _ProductionRunComposition:
         return self.rootfs_snapshots.planned_ref(
             run_id=self.run_id,
             task_id=plan.task.task_id,
-            round_id="final",
+            round_id=retained_round_id("final", self.attempt),
             purpose="retained-work",
         )
 
@@ -1796,7 +1906,7 @@ class _ProductionRunComposition:
             work,
             run_id=self.run_id,
             task_id=plan.task.task_id,
-            round_id="final",
+            round_id=retained_round_id("final", self.attempt),
             purpose="retained-work",
             planned_ref=planned_ref,
         )
@@ -1961,6 +2071,9 @@ class ProductionRuntimeServices:
         self.sandbox_policy = (
             None if engine_config is None else engine_config.sandbox_policy
         )
+        self.sandbox_policy_path = (
+            None if engine_config is None else engine_config.sandbox_policy_path
+        )
         configured_verifier_env = (
             {} if engine_config is None else engine_config.verifier_secret_env
         )
@@ -1991,6 +2104,41 @@ class ProductionRuntimeServices:
         return RSILoopAgentAdapter(self.rsi_loop_config).available_agents()
 
     def run(self, request: RunRequest) -> RunResult:
+        return self._run(request)
+
+    def plan_resume(
+        self, run_id: str, grants: AttemptGrants, *, dry_run: bool = False
+    ) -> ResumeContext:
+        """Plan the run's next attempt; a dry run changes nothing."""
+        return plan_resume(
+            run_id,
+            store=LeaseStore(self.data_root / "leases"),
+            data_root=self.data_root,
+            logs_root=self.logs_root,
+            grants=grants,
+            compile_task=lambda request: HarborTaskCompiler().compile(
+                request.task_dir, request.options
+            ),
+            salvage=(
+                None if dry_run else lambda selected: self._recovery().salvage(selected)
+            ),
+        )
+
+    def resume(self, context: ResumeContext) -> RunResult:
+        """Run the planned attempt with the run's own request and policy."""
+        source = context.sandbox_policy
+        if source is not None:
+            if hashlib.sha256(source.path.read_bytes()).hexdigest() != source.sha256:
+                raise SetupError(
+                    f"sandbox policy {source.path} changed since the run started"
+                )
+            self.sandbox_policy = load_sandbox_policy(source.path)
+            self.sandbox_policy_path = source.path
+        return self._run(context.request, resume=context)
+
+    def _run(
+        self, request: RunRequest, *, resume: ResumeContext | None = None
+    ) -> RunResult:
         # Static Harbor validation is deliberately outside the coordinator so
         # an unsupported local task cannot create the data root, contact
         # Docker, or be collapsed into a generic terminal result.
@@ -2033,6 +2181,15 @@ class ProductionRuntimeServices:
             requested=request.gpu_selectors,
             inventory=self.inventory.list_devices() if needs_gpus else (),
         )
+        if (
+            resume is not None
+            and resume.gpu_plan is not None
+            and not same_gpu_shape(gpu_plan, resume.gpu_plan)
+        ):
+            raise SetupError(
+                "a resumed run keeps its GPU count and Judge GPU mode; "
+                "--gpus may only choose other GPUs"
+            )
         preparation = RunPreparation(
             request=request,
             definition=definition,
@@ -2094,11 +2251,18 @@ class ProductionRuntimeServices:
             preparation=preparation,
             compiler=compiler,
             **({"sandbox_policy": self.sandbox_policy} if definition.sandbox else {}),
+            sandbox_policy_path=self.sandbox_policy_path,
+            resume=resume,
         )
         coordinator = self.coordinator_factory(
             backend=ports.backend(),
             lease_store=LeaseStore(self.data_root / "leases"),
             clock=_Clock(),
+            **(
+                {}
+                if resume is None
+                else {"run_id_factory": lambda: resume.run_id, "resume": resume}
+            ),
             **(
                 {
                     "on_lease_ready": ports.bind_sandbox_lease,

@@ -953,6 +953,91 @@ def test_setup_failures_exit_64(driver, protocol, scenario, detail) -> None:
     assert run.prompts() == []
 
 
+# ---------------------------------------------------------------------------
+# Resuming a session of an earlier run
+# ---------------------------------------------------------------------------
+
+
+@requires_node
+@pytest.mark.parametrize(
+    ("protocol", "session", "flags", "expected"),
+    [
+        (
+            "acp",
+            "earlier-acp-session",
+            ("--acp-mode", "yolo"),
+            [
+                ("initialize", None),
+                # Not session/load, which replays the history into the transcript.
+                (
+                    "session/resume",
+                    {"sessionId": "earlier-acp-session", "mcpServers": []},
+                ),
+                ("session/set_mode", {"sessionId": "earlier-acp-session"}),
+                ("session/prompt", {"sessionId": "earlier-acp-session"}),
+                ("session/prompt", {"sessionId": "earlier-acp-session"}),
+            ],
+        ),
+        (
+            "zcode",
+            "sess_earlier",
+            (),
+            [
+                ("session/resume", {"sessionId": "sess_earlier"}),
+                ("session/subscribe", {"sessionId": "sess_earlier"}),
+                ("session/send", {"sessionId": "sess_earlier"}),
+                ("session/send", {"sessionId": "sess_earlier"}),
+            ],
+        ),
+    ],
+)
+def test_resume_session_continues_the_named_session_with_the_prompt(
+    driver, protocol, session, flags, expected
+) -> None:
+    run = driver(
+        protocol,
+        {"turns": [{"text": "where was I"}, {"hold": True, "delayMs": 10_000}]},
+        flags=("--resume-session", session, *flags),
+    )
+
+    run.wait_prompts(2)
+    run.stop()
+
+    received = [e for e in run.events("recv") if e["method"] in dict(expected)]
+    assert [e["method"] for e in received] == [method for method, _ in expected]
+    for event, (_, params) in zip(received, expected, strict=True):
+        assert params is None or params.items() <= event["params"].items()
+    assert [p["text"] for p in run.prompts()] == [PROMPT, STOP_HOOK_REASON]
+    assert {p["sessionId"] for p in run.prompts()} == {session}
+    [init] = [line for line in run.lines() if line.get("subtype") == "init"]
+    assert init["session_id"] == session
+    users = [line for line in run.lines() if line["type"] == "user"]
+    assert users[0]["message"]["content"][0]["text"] == PROMPT
+
+
+@requires_node
+@pytest.mark.parametrize("protocol", ["acp", "zcode"])
+def test_a_session_that_cannot_be_resumed_is_a_setup_failure(driver, protocol) -> None:
+    run = driver(
+        protocol,
+        {"resumeError": {"code": -32602, "message": "Unknown sessionId: gone"}},
+        flags=("--resume-session", "gone"),
+    )
+
+    assert run.wait() == 64
+
+    exit_record = run.lines()[-1]
+    assert exit_record["reason"] == "setup"
+    assert "session/resume failed" in exit_record["error"]
+    assert "Unknown sessionId: gone" in exit_record["error"]
+    assert run.prompts() == []
+    assert not [
+        e
+        for e in run.events("recv")
+        if e["method"] in {"session/new", "session/create", "session/load"}
+    ]
+
+
 @requires_node
 @pytest.mark.parametrize(
     "argv",

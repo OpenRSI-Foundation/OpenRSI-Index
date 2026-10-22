@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import secrets
@@ -11,9 +12,10 @@ import shlex
 import shutil
 import subprocess
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from rsi_harness.cluster.base import (
     ClusterAdapter,
@@ -34,6 +36,7 @@ from rsi_harness.cluster.bluevela.resources import (
     ClusterResources,
     MultiNodeResources,
     derive_resource_plan,
+    resumed_run_walltime,
 )
 from rsi_harness.cluster.bluevela.resources import derive_resources as derive_resources
 from rsi_harness.cluster.config import (
@@ -56,11 +59,13 @@ from rsi_harness.models import (
     RunGPUPlan,
     RunPaths,
     RunPlan,
+    RunRequest,
     RunStatus,
     TaskDefinition,
 )
 from rsi_harness.runtime.local_auth import resolve_agent_auth
 from rsi_harness.runtime.redaction import redact_text
+from rsi_harness.runtime.run_request import write_run_request
 from rsi_harness.runtime.sandbox_contracts import SandboxEnvGrant
 from rsi_harness.runtime.sandbox_policy import (
     resolve_env_grant,
@@ -70,6 +75,13 @@ from rsi_harness.runtime.sandbox_policy import (
 from rsi_harness.task.compiler import HarborTaskCompiler
 from rsi_loop.harness.agent import get_agent_class
 from rsi_loop.harness.config import load_config
+
+if TYPE_CHECKING:
+    from rsi_harness.cluster.bluevela.engine import EnginePayload
+    from rsi_harness.runtime.recovery import AttemptGrants
+    from rsi_harness.runtime.resume import ResumeContext
+
+_RUN_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
 
 
 class SchedulerPort(Protocol):
@@ -86,6 +98,18 @@ class SchedulerPort(Protocol):
         poll_seconds: float,
         on_state: Callable[[str], None] | None = None,
     ) -> LSFJobResult: ...
+
+    def finished(self, job_id: str) -> LSFJobResult | None: ...
+
+
+@dataclass(frozen=True, slots=True)
+class ClusterResumePlan:
+    """A cluster run's next attempt: what it continues and the job that
+    runs it (control/attempts/<k>/run.sh)."""
+
+    context: ResumeContext
+    payload: EnginePayload
+    spec: LSFJobSpec
 
 
 def _utc_now() -> datetime:
@@ -131,13 +155,9 @@ def require_cluster_agent(agent_name: str) -> None:
         )
 
 
-def _resolve_agent_version(agent_name: str) -> str | None:
-    launcher = _agent_launcher(agent_name)
-    executable = shutil.which(launcher)
-    if executable is None:
-        raise SetupError(f"cluster agent executable is unavailable: {launcher}")
+def _binary_version(executable: Path) -> str:
     completed = subprocess.run(
-        (executable, "--version"),
+        (str(executable), "--version"),
         check=False,
         capture_output=True,
         text=True,
@@ -145,8 +165,16 @@ def _resolve_agent_version(agent_name: str) -> str | None:
     output = f"{completed.stdout}\n{completed.stderr}"
     match = re.search(r"\b(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b", output)
     if completed.returncode != 0 or match is None:
-        raise SetupError(f"cannot resolve {agent_name} version from {output.strip()!r}")
+        raise SetupError(f"cannot resolve {executable} version from {output.strip()!r}")
     return match.group(1)
+
+
+def _resolve_agent_version(agent_name: str) -> str | None:
+    launcher = _agent_launcher(agent_name)
+    executable = shutil.which(launcher)
+    if executable is None:
+        raise SetupError(f"cluster agent executable is unavailable: {launcher}")
+    return _binary_version(Path(executable))
 
 
 class BlueVelaClusterAdapter(ClusterAdapter):
@@ -165,6 +193,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         event_callback: Callable[[str, object], None] | None = None,
         source_root: Path | None = None,
         agent_version_resolver: Callable[[str], str | None] = _resolve_agent_version,
+        binary_version: Callable[[Path], str] = _binary_version,
     ) -> None:
         self.profile = profile
         self.scheduler = scheduler or self._make_scheduler()
@@ -177,6 +206,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             else Path(__file__).resolve().parents[4]
         )
         self.agent_version_resolver = agent_version_resolver
+        self.binary_version = binary_version
 
     def _make_scheduler(self) -> SchedulerPort:
         return LSFScheduler(
@@ -387,6 +417,21 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 judge_llm=judge_llm,
             )
             render_engine_driver(payload, self.profile, run_spec.script_path)
+            # What `resume` plans the run's next attempt from.
+            write_run_request(
+                run_dir,
+                run_id=run_id,
+                request=RunRequest(
+                    task_dir=frozen_task,
+                    agent_name=definition.agent.name,
+                    options=request.options,
+                    paths=run_plan.paths,
+                    model=request.model,
+                    reasoning_effort=request.reasoning_effort,
+                    agent_auth=request.agent_auth,
+                    judge_llm=request.judge_llm,
+                ),
+            )
             manifest["sif_sha256"] = image.sha256_path.read_text().split()[0]
             manifest["control_sha256"] = self._control_hashes(control)
             manifest["state"] = "ready"
@@ -398,6 +443,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             run_job_id = self.scheduler.submit(run_spec)
             job_ids.append(run_job_id)
             manifest["run_job_id"] = run_job_id
+            manifest["attempt_jobs"] = {"1": run_job_id}
             manifest["state"] = "running"
             _atomic_json(manifest_path, manifest)
             self.event_callback("job_submitted", {"stage": "run", "job_id": run_job_id})
@@ -420,7 +466,207 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             )
         except BaseException as error:
             manifest["state"] = "failed"
-            manifest["error"] = redact_text(str(error))
+            # A Ctrl-C (KeyboardInterrupt) has no message.
+            manifest["error"] = redact_text(str(error) or type(error).__name__)
+            manifest["job_ids"] = job_ids
+            _atomic_json(manifest_path, manifest)
+            raise
+
+    def plan_resume(
+        self, run_id: str, grants: AttemptGrants, *, dry_run: bool = False
+    ) -> ClusterResumePlan:
+        """Plan the run's next attempt from its frozen control, lease and
+        logs; a dry run changes nothing.
+
+        Refused while the run's job, or another job of its name, is active,
+        or its Engine holds the lease. A run that did not end cleanly is
+        closed first: its E2B sandboxes are killed, a partial round's
+        feedback is withheld and its attempt ends at the job's end.
+        """
+        # Loaded here: the lease and recovery load the Docker SDK.
+        from rsi_harness.cluster.bluevela.engine import (
+            ClusterResume,
+            load_engine_payload,
+        )
+        from rsi_harness.runtime.recovery import LeaseStore, RecoveryManager
+        from rsi_harness.runtime.resume import plan_resume
+
+        if _RUN_ID.fullmatch(run_id) is None:
+            raise SetupError(f"invalid cluster run ID: {run_id!r}")
+        run_dir = self.profile.storage.run_root / run_id
+        manifest_path = run_dir / "RUN_INFO.json"
+        if not manifest_path.is_file():
+            raise SetupError(
+                f"run {run_id} has no RUN_INFO.json under "
+                f"{self.profile.storage.run_root}"
+            )
+        manifest = json.loads(manifest_path.read_text())
+        if manifest.get("multi_node") is not None:
+            raise SetupError(f"run {run_id} is multi-node, which cannot resume yet")
+        job_id = manifest.get("run_job_id")
+        if not isinstance(job_id, str):
+            raise SetupError(f"run {run_id} never submitted its run job")
+        ended = self.scheduler.finished(job_id)
+        if ended is None:
+            raise SetupError(
+                f"run {run_id} is still live in job {job_id}; resume it once "
+                "the job has ended"
+            )
+        control = run_dir / "control"
+        recorded = manifest.get("control_sha256") or {}
+        current = self._control_hashes(control)
+        changed = sorted(
+            {path for path, digest in recorded.items() if current.get(path) != digest}
+            # Only resumed attempts and the Engine's bytecode add files.
+            | {
+                path
+                for path in current.keys() - recorded.keys()
+                if not path.startswith("attempts/")
+                and "__pycache__" not in PurePosixPath(path).parts
+            }
+        )
+        if not recorded or changed:
+            raise SetupError(
+                f"the frozen control of run {run_id} changed: "
+                + (", ".join(changed) or "no digests recorded")
+            )
+        payload = load_engine_payload(control / "run.json")
+        # The cache is shared: an evicted or rebuilt SIF is not the run's.
+        if not validate_cached_image(
+            SIFImagePlan(
+                cache_key=payload.sif_path.stem,
+                sif_path=payload.sif_path,
+                sha256_path=payload.sif_sha256_path,
+                cache_hit=True,
+            )
+        ) or payload.sif_sha256_path.read_text().split()[0] != manifest.get(
+            "sif_sha256"
+        ):
+            raise SetupError(
+                f"the SIF of run {run_id} was evicted or rebuilt; it cannot "
+                "resume on the image it ran on"
+            )
+        # The job refuses an Agent CLI of another version than the run's
+        # (runtime._smoke_agent): refuse it here, before it costs an attempt.
+        binary = payload.agent_binary
+        try:
+            version = None if binary is None else self.binary_version(binary)
+        except (OSError, SetupError):
+            version = None
+        if version != payload.agent_version:
+            raise SetupError(
+                f"run {run_id} ran Agent CLI {binary} {payload.agent_version}, "
+                f"which is now {version or 'unavailable'}; resume needs the "
+                "version the run started with"
+            )
+        definition = payload.run_plan.task
+        name = self._job_name(definition.task_id, "run", definition.agent.name)
+        self.scheduler.require_name_available(name)
+        job_ended_at = ended.ended_at
+        store = LeaseStore(run_dir / "leases")
+        recovery = RecoveryManager(
+            store=store,
+            backend=None,  # type: ignore[arg-type]  # E2B only: no Docker
+            managed_root=run_dir,
+        )
+        context = plan_resume(
+            run_id,
+            store=store,
+            data_root=self.profile.storage.run_root,
+            logs_root=payload.run_plan.paths.logs,
+            grants=grants,
+            compile_task=lambda saved: self.compiler.compile(
+                saved.task_dir, saved.options
+            ),
+            salvage=(
+                None
+                if dry_run
+                else lambda selected: recovery.salvage_cluster(
+                    selected, ended_at=job_ended_at
+                )
+            ),
+            retained_images=False,
+            # As salvage closes it: an unknown end charges up to the deadline.
+            open_attempt_ended_at=math.inf if job_ended_at is None else job_ended_at,
+        )
+        assert payload.resources is not None
+        resources = payload.resources.model_copy(
+            update={
+                "run_walltime": resumed_run_walltime(
+                    definition,
+                    self.profile,
+                    agent_seconds=context.agent_seconds_left,
+                )
+            }
+        )
+        script = control / "attempts" / str(context.attempt) / "run.sh"
+        return ClusterResumePlan(
+            context=context,
+            payload=payload.model_copy(
+                update={
+                    "resources": resources,
+                    "resume": ClusterResume(
+                        attempt=context.attempt,
+                        grants=grants,
+                        agent_seconds_left=context.agent_seconds_left,
+                        submissions_left=context.submissions_left,
+                        next_round_id=context.next_round_id,
+                        message=context.message,
+                        sif_sha256=manifest["sif_sha256"],
+                    ),
+                }
+            ),
+            spec=self._run_spec(run_dir, name, resources, script),
+        )
+
+    def resume(self, plan: ClusterResumePlan) -> ClusterRunResult:
+        """Submit the planned attempt under the run's ID and wait for it."""
+        from rsi_harness.cluster.bluevela.engine import render_engine_driver
+        from rsi_harness.cluster.bluevela.runtime import validate_native_artifacts
+
+        payload = plan.payload
+        manifest_path = payload.run_plan.paths.root / "RUN_INFO.json"
+        manifest = json.loads(manifest_path.read_text())
+        plan.spec.script_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+        render_engine_driver(payload, self.profile, plan.spec.script_path)
+        # Both describe the attempt that failed last.
+        manifest.pop("error", None)
+        manifest.pop("job_ids", None)
+        manifest["attempt"] = plan.context.attempt
+        manifest["state"] = "ready"
+        _atomic_json(manifest_path, manifest)
+        job_ids: list[str] = []
+        try:
+            self.scheduler.require_name_available(plan.spec.name)
+            run_job_id = self.scheduler.submit(plan.spec)
+            job_ids.append(run_job_id)
+            manifest["run_job_id"] = run_job_id
+            manifest.setdefault("attempt_jobs", {})[str(plan.context.attempt)] = (
+                run_job_id
+            )
+            manifest["state"] = "running"
+            _atomic_json(manifest_path, manifest)
+            self.event_callback("job_submitted", {"stage": "run", "job_id": run_job_id})
+            run_result = self.scheduler.wait(
+                run_job_id,
+                poll_seconds=self.profile.scheduler.poll_seconds,
+                on_state=lambda state: self.event_callback(
+                    "job_state", {"stage": "run", "state": state}
+                ),
+            )
+            self._require_success("native Engine run", run_result)
+            log_dir = validate_native_artifacts(payload.run_plan, payload.run_id)
+            manifest["state"] = "completed"
+            _atomic_json(manifest_path, manifest)
+            return ClusterRunResult(
+                run_id=payload.run_id,
+                status=RunStatus.COMPLETED,
+                log_dir=log_dir,
+                job_ids=tuple(job_ids),
+            )
+        except BaseException as error:
+            manifest["state"] = "failed"
+            manifest["error"] = redact_text(str(error) or type(error).__name__)
             manifest["job_ids"] = job_ids
             _atomic_json(manifest_path, manifest)
             raise

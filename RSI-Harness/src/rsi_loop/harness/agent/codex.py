@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import shlex
 from pathlib import Path, PurePosixPath
 
@@ -27,6 +28,7 @@ from rsi_loop.harness.agent.base import (
     STOP_HOOK_REASON,
     Agent,
     OneShotCommand,
+    link_session_store,
 )
 from rsi_loop.harness.backend import ContainerBackend, ContainerHandle
 
@@ -38,6 +40,14 @@ _PROVIDER_FLAGS = (
     "-c model_providers.rsi_proxy.env_key=OPENAI_API_KEY "
     "-c model_providers.rsi_proxy.wire_api=responses"
 )
+# Rollouts are written under ~/.codex/sessions; ``codex exec resume`` finds a
+# session by its rollout alone.
+_SESSIONS = (".codex/sessions", ".codex-sessions")
+_SESSION_STORE = link_session_store(*_SESSIONS)
+# The header line ``codex exec`` prints for every session it starts or resumes.
+_SESSION_LINE = re.compile(r"session id: ([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})")
+# FORCE_COLOR in Work's environment makes it bold even without a TTY.
+_SGR = re.compile(r"\x1b\[[0-9;]*m")
 
 
 class CodexAgent(Agent):
@@ -62,6 +72,8 @@ fi''',
     ]
     run_cmd = 'codex exec --dangerously-bypass-approvals-and-sandbox "$(cat {prompt_file})"'
     resume_cmd = 'codex exec resume --last --dangerously-bypass-approvals-and-sandbox "Continue working."'
+    resumes_sessions = True
+    session_store = _SESSIONS
     api_key_env = "OPENAI_API_KEY"
     api_base_env = "OPENAI_BASE_URL"
     default_api_base_url = "https://api.openai.com"
@@ -86,13 +98,26 @@ fi''',
         internet: bool = True,
         resume: bool = False,
         continuation: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         # The stop hook file installed by install_stop_hook carries the
         # continuation, so the command does not.
-        cmd = super().format_run_cmd(
-            prompt_path, model=model, cwd=cwd, internet=internet, resume=resume,
-        )
-        return self._launch_flags(cmd, model=model, internet=internet)
+        if resume and session_id is not None:
+            # The next user turn is read from stdin ("-").
+            cmd = (
+                "codex exec resume --dangerously-bypass-approvals-and-sandbox"
+                f" {shlex.quote(session_id)} - <{prompt_path}"
+            )
+        else:
+            cmd = super().format_run_cmd(
+                prompt_path, model=model, cwd=cwd, internet=internet, resume=resume,
+            )
+        cmd = self._launch_flags(cmd, model=model, internet=internet)
+        return f"{_SESSION_STORE} &&\nexec {cmd}"
+
+    def session_id_in(self, line: str) -> str | None:
+        match = _SESSION_LINE.fullmatch(_SGR.sub("", line.rstrip("\r\n")))
+        return match.group(1) if match else None
 
     def format_oneshot_cmd(
         self,
@@ -122,10 +147,9 @@ fi''',
         self, cmd: str, *, model: str | None, internet: bool
     ) -> str:
         """Model, provider and web-search flags shared by every launch."""
+        marker = _flags_marker(cmd)
         if model:
-            cmd = cmd.replace(
-                "codex exec", f"codex exec --model {shlex.quote(model)}", 1,
-            )
+            cmd = cmd.replace(marker, f"{marker} --model {shlex.quote(model)}", 1)
 
         if self._config.agent_api_base_url or self._config.agent_extra_env.get(
             "OPENAI_BASE_URL"
@@ -133,30 +157,26 @@ fi''',
             # The install-time config.toml never sees OPENAI_BASE_URL (images
             # build without the Agent environment), so name the provider at
             # launch. The URL and key stay in the environment, not argv.
-            cmd = cmd.replace("codex exec", f"codex exec {_PROVIDER_FLAGS}", 1)
+            cmd = cmd.replace(marker, f"{marker} {_PROVIDER_FLAGS}", 1)
 
         # Codex otherwise saves its shell's environment, API key included,
         # under $HOME, where a Judge's snapshot of Work would capture it.
-        cmd = cmd.replace(
-            "codex exec", "codex exec -c features.shell_snapshot=false", 1,
-        )
+        cmd = cmd.replace(marker, f"{marker} -c features.shell_snapshot=false", 1)
 
         # Codex runs the model's commands in a login shell by default, whose
         # profile may reset PATH (Debian's does): the commands would lose the
         # image's ENV PATH and the sandbox client directory the Agent has.
-        cmd = cmd.replace("codex exec", "codex exec -c allow_login_shell=false", 1)
+        cmd = cmd.replace(marker, f"{marker} -c allow_login_shell=false", 1)
 
         if not internet:
-            cmd = cmd.replace(
-                "codex exec", 'codex exec -c web_search="disabled"', 1,
-            )
+            cmd = cmd.replace(marker, f'{marker} -c web_search="disabled"', 1)
 
         return cmd
 
     def apply_reasoning_effort(self, command: str, effort: str) -> str:
-        marker = "codex exec"
-        if marker not in command:
+        if "codex exec" not in command:
             raise ValueError("RSI Loop Codex command cannot accept reasoning effort")
+        marker = _flags_marker(command)
         override = shlex.quote(f'model_reasoning_effort="{effort}"')
         return command.replace(marker, f"{marker} -c {override}", 1)
 
@@ -245,6 +265,11 @@ chown -R agent:agent /home/agent/.codex
         if result.exit_code != 0:
             raise RuntimeError(f"Failed to configure Codex hooks: {result.output}")
         logger.info("Configured Codex hooks")
+
+
+def _flags_marker(command: str) -> str:
+    """Where launch flags go: ``codex exec resume`` takes them after ``resume``."""
+    return "codex exec resume" if "codex exec resume" in command else "codex exec"
 
 
 # ---------------------------------------------------------------------------

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import stat
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -21,13 +23,16 @@ from rsi_harness.runtime.production import ProductionRecoveryBackend
 from rsi_harness.runtime.recovery import (
     JudgeResourceLease,
     LeaseStore,
+    PriorRetainedImage,
     RecoveryManager,
     ResourceLease,
     RetainedImageRollbackAuthority,
+    RunAttemptLease,
     SnapshotRecoveryAuthority,
     WorkdirVolumeResourceLease,
     WorkResourceLease,
 )
+from rsi_harness.runtime.rootfs_snapshot import rootfs_image_ref
 from rsi_harness.runtime.workdir_volume import managed_workdir_volume_labels
 from tests.fakes import (
     FakeDockerClient,
@@ -45,6 +50,10 @@ SECOND_JUDGE_IMAGE_ID = f"sha256:{'f' * 64}"
 SECOND_RETAINED_IMAGE_ID = f"sha256:{'c' * 64}"
 SECOND_RETAINED_IMAGE_REF = f"rsi-harness-rootfs:retained-work-{'f' * 64}"
 WORKDIR_VOLUME_NAME = f"rsi-harness-workdir-{'1' * 64}"
+SALVAGE_IMAGE_ID = f"sha256:{'9' * 64}"
+SALVAGE_IMAGE_REF = rootfs_image_ref(
+    run_id="run-1", task_id="task-1", round_id="salvage", purpose="retained-work"
+)
 
 
 def workdir_volume(
@@ -170,6 +179,7 @@ class RecoveryBackend:
         self.volume_inspect_error: Exception | None = None
         self.volume_reference_error: Exception | None = None
         self.volume_remove_error: Exception | None = None
+        self.commit_error: Exception | None = None
 
     def list_containers(self, *, labels):
         self.events.append(("list_containers", labels["rsi-harness.role"]))
@@ -286,6 +296,19 @@ class RecoveryBackend:
     def unpause_container(self, container_id: str) -> None:
         self.events.append(("unpause", container_id))
         self.containers[container_id]["paused"] = False
+
+    def commit_work(self, container_id, *, run_id, task_id, round_id, planned_ref):
+        self.events.append(("commit", container_id))
+        if self.commit_error is not None:
+            raise self.commit_error
+        self.images[SALVAGE_IMAGE_ID] = image_state(
+            SALVAGE_IMAGE_ID,
+            planned_ref,
+            role="retained-work-rootfs",
+            round_id=round_id,
+            source_container_id=container_id,
+        )
+        return SALVAGE_IMAGE_ID
 
     def network_in_use(self, network_id: str) -> bool:
         self.events.append(("inspect_network", network_id))
@@ -424,7 +447,7 @@ def test_store_writes_atomic_secret_free_exact_lease_and_serializes_lock(
     assert raw["judge"]["planned_policy_rule_id"] == "policy-judge-real"
     assert raw["judge"]["snapshot_process_id"] == 321
     assert raw["cleanup_image_ref"] == CLEANUP_IMAGE
-    assert raw["schema_version"] == 6
+    assert raw["schema_version"] == 7
     serialized = json.dumps(raw).lower()
     assert "authorization" not in serialized
     assert "bearer" not in serialized
@@ -492,7 +515,7 @@ def test_schema_four_full_rootfs_lease_without_volume_fields_defaults_safely(
     store.path_for("run-1").write_text(json.dumps(payload))
     loaded = store.read("run-1")
 
-    assert loaded.schema_version == 6
+    assert loaded.schema_version == 7
     assert loaded.rootfs_snapshot_mode is RootfsSnapshotMode.FULL_ROOTFS
     assert loaded.work.workdir_volume == WorkdirVolumeResourceLease()
 
@@ -1133,7 +1156,7 @@ def empty_non_image_resources(backend: RecoveryBackend) -> None:
     backend.mounts = set()
 
 
-def test_recovery_clears_planned_retained_ref_after_commit_rollback_absence(
+def test_recovery_clears_absent_planned_final_image_then_salvages_work(
     tmp_path,
 ) -> None:
     store = LeaseStore(tmp_path / "leases")
@@ -1151,10 +1174,11 @@ def test_recovery_clears_planned_retained_ref_after_commit_rollback_absence(
 
     final = store.read("run-1")
     assert final is not None
-    assert final.work.planned_retained_image_ref is None
-    assert final.work.retained_image_id is None
+    assert final.work.planned_retained_image_ref == SALVAGE_IMAGE_REF
+    assert final.work.retained_image_id == SALVAGE_IMAGE_ID
     assert not any(name == "remove_image" for name, _ in backend.events)
-    assert ("list_images", "retained-work-rootfs") in backend.events
+    names = [name for name, _ in backend.events]
+    assert names.index("list_images") < names.index("commit")
 
 
 def test_recovery_attests_and_preserves_image_after_identity_fsync_rollback_failure(
@@ -1185,6 +1209,8 @@ def test_recovery_attests_and_preserves_image_after_identity_fsync_rollback_fail
     assert final.work.retained_image_ref == RETAINED_IMAGE_REF
     assert RETAINED_IMAGE_ID in backend.images
     assert ("inspect_image", RETAINED_IMAGE_ID) in backend.events
+    # The run's final image exists, so the live Work is not salvaged again.
+    assert ("commit", "work-real") not in backend.events
 
 
 def test_recovery_removes_round_image_after_judge_is_already_absent(
@@ -1209,7 +1235,8 @@ def test_recovery_removes_round_image_after_judge_is_already_absent(
 
     manager.recover("run-1")
 
-    assert backend.images == {}
+    # Only the live Work's salvage image is kept.
+    assert set(backend.images) == {SALVAGE_IMAGE_ID}
     names = [name for name, _ in backend.events]
     assert names.index("remove_network") < names.index("remove_image")
     assert names.index("remove_image") < names.index("unpause")
@@ -1240,7 +1267,8 @@ def test_recovery_discovers_planned_only_round_image_after_commit_crash(
 
     manager.recover("run-1")
 
-    assert backend.images == {}
+    # Only the live Work's salvage image is kept.
+    assert set(backend.images) == {SALVAGE_IMAGE_ID}
     assert ("remove_image", JUDGE_IMAGE_ID) in backend.events
     final = store.read("run-1")
     assert final is not None
@@ -1274,7 +1302,8 @@ def test_recovery_contains_every_exact_labeled_round_image_without_selecting_one
 
     manager.recover("run-1")
 
-    assert backend.images == {}
+    # Only the live Work's salvage image is kept.
+    assert set(backend.images) == {SALVAGE_IMAGE_ID}
     assert ("remove_image", JUDGE_IMAGE_ID) in backend.events
     assert ("remove_image", SECOND_JUDGE_IMAGE_ID) in backend.events
 
@@ -1655,9 +1684,12 @@ def test_ordinary_recover_removes_untrusted_retained_image_rollback_authority(
 
     final = store.read("run-1")
     assert final is not None
-    assert final.work.planned_retained_image_ref is None
     assert final.work.retained_image_rollback is None
     assert RETAINED_IMAGE_ID not in backend.images
+    # The rollback image is removed before the live Work is salvaged.
+    assert final.work.retained_image_id == SALVAGE_IMAGE_ID
+    names = [name for name, _ in backend.events]
+    assert names.index("remove_image") < names.index("commit")
 
 
 def test_explicit_cleanup_removes_retained_image_after_every_runtime_dependency(
@@ -1698,6 +1730,7 @@ def test_explicit_cleanup_removes_retained_image_after_every_runtime_dependency(
     manager.cleanup("run-1", delete_workspace=True)
 
     assert backend.images == {}
+    assert ("commit", "work-real") not in backend.events
     names = [name for name, _ in backend.events]
     first_image_remove = names.index("remove_image")
     retained_remove = max(
@@ -1763,6 +1796,7 @@ def test_recovery_distrusts_stale_ids_and_orders_containment_before_unpause(
         ("list_containers", "work"),
         ("unpause", "work-real"),
         ("stop", "work-real"),
+        ("commit", "work-real"),
         ("remove", "work-real"),
         ("inspect_policy", "policy-work-real"),
         ("remove_policy", "policy-work-real"),
@@ -1771,6 +1805,10 @@ def test_recovery_distrusts_stale_ids_and_orders_containment_before_unpause(
         ("inspect_network", "network-work-real"),
         ("remove_network", "network-work-real"),
         ("list_networks", "work"),
+        ("list_images", "retained-work-rootfs"),
+        ("inspect_image", SALVAGE_IMAGE_ID),
+        ("inspect_image", SALVAGE_IMAGE_ID),
+        ("inspect_image_use", SALVAGE_IMAGE_ID),
     ]
     final = store.read("run-1")
     assert final is not None
@@ -2594,6 +2632,29 @@ def test_full_rootfs_recovery_never_queries_volume_ports(tmp_path) -> None:
     ).recover("run-1")
 
 
+@pytest.mark.parametrize(
+    ("finished_at", "expected"),
+    [
+        ("2026-10-21T12:00:00.123456789Z", 1792584000.123456),
+        ("0001-01-01T00:00:00Z", None),
+        (None, None),
+    ],
+)
+def test_production_recovery_reports_when_work_exited(finished_at, expected) -> None:
+    client = FakeDockerClient()
+    container = FakeDockerContainer("work-exited")
+    container.attrs["State"]["FinishedAt"] = finished_at
+    client.containers.by_id[container.id] = container
+    backend = ProductionRecoveryBackend(
+        client, snapshot=object(), firewall=FakeFirewallBackend()
+    )
+
+    state = backend.inspect_container(container.id)
+
+    assert state is not None
+    assert state["finished_at"] == expected
+
+
 def test_production_recovery_normalizes_volume_attrs_and_exact_references() -> None:
     expected_volume = workdir_volume()
     client = FakeDockerClient()
@@ -2818,3 +2879,610 @@ def test_explicit_cleanup_retries_volume_after_image_was_already_deleted(
     assert completed is not None
     assert completed.recovery_required is False
     assert completed.work.workdir_volume == WorkdirVolumeResourceLease()
+
+
+def attempt_lease(tmp_path: Path, **work_updates: object) -> ResourceLease:
+    original = lease(tmp_path)
+    return original.model_copy(
+        update={
+            "artifact_root": tmp_path / "logs" / "runs" / "run-1" / "task-1",
+            "attempts": (
+                RunAttemptLease(
+                    attempt=1,
+                    started_at=90.0,
+                    agent_started_at=100.0,
+                    agent_deadline=200.0,
+                ),
+            ),
+            "work": original.work.model_copy(update=work_updates),
+        }
+    )
+
+
+def test_schema_six_lease_migrates_to_one_open_attempt(tmp_path) -> None:
+    payload = lease(tmp_path).model_dump(mode="json")
+    payload["schema_version"] = 6
+    for key in ("attempt", "artifact_root", "attempts"):
+        payload.pop(key)
+    payload["work"].pop("paused_at")
+    store = LeaseStore(tmp_path)
+    store.path_for("run-1").write_text(json.dumps(payload))
+
+    loaded = store.read("run-1")
+
+    assert loaded is not None
+    assert loaded.schema_version == 7
+    assert loaded.attempt == 1
+    assert loaded.attempts == ()
+    assert loaded.artifact_root is None
+    assert loaded.work.paused_at is None
+
+
+def test_schema_six_lease_cannot_carry_attempt_authority(tmp_path) -> None:
+    payload = attempt_lease(tmp_path).model_dump(mode="json")
+    payload["schema_version"] = 6
+    store = LeaseStore(tmp_path)
+    store.path_for("run-1").write_text(json.dumps(payload))
+
+    with pytest.raises(ValueError, match="attempt authority"):
+        store.read("run-1")
+
+
+def test_lease_attempts_must_end_at_the_current_attempt(tmp_path) -> None:
+    payload = attempt_lease(tmp_path).model_dump(mode="json")
+    payload["attempt"] = 2
+    with pytest.raises(ValidationError, match="current attempt"):
+        ResourceLease.model_validate(payload)
+    payload["attempts"] = [payload["attempts"][0]] * 2
+    payload["attempt"] = 1
+    with pytest.raises(ValidationError, match="current attempt"):
+        ResourceLease.model_validate(payload)
+    with pytest.raises(ValidationError, match="appear together"):
+        RunAttemptLease(attempt=1, started_at=1.0, ended_at=2.0)
+
+
+def test_recovery_hides_unrecorded_judge_output_before_unpausing_work(
+    tmp_path,
+) -> None:
+    current = attempt_lease(tmp_path, paused_at=150.0)
+    root = current.artifact_root
+    assert root is not None
+    (root / "feedback").mkdir(parents=True)
+    (root / "feedback" / "agent-1.log").write_text("accepted\n")
+    (root / "feedback" / "agent-2.log").write_text("partial\n")
+    (root / "evolve_state.json").write_text(
+        json.dumps({"submissions": [{"round": "agent-1"}]})
+    )
+    store = LeaseStore(tmp_path / "leases")
+    store.write(current)
+    backend = RecoveryBackend()
+    unpause = backend.unpause_container
+
+    def unpause_after_move(container_id: str) -> None:
+        assert not (root / "feedback" / "agent-2.log").exists()
+        unpause(container_id)
+
+    backend.unpause_container = unpause_after_move  # type: ignore[method-assign]
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+
+    manager.recover("run-1")
+
+    assert ("unpause", "work-real") in backend.events
+    assert (root / "feedback" / "agent-1.log").read_text() == "accepted\n"
+    moved = root / "verifier" / "agent-2" / "interrupted-feedback.log"
+    assert moved.read_text() == "partial\n"
+
+
+def test_recovery_hides_a_killed_judges_partial_output_from_work(tmp_path) -> None:
+    # A Judge killed mid-round never published its output: what it wrote so
+    # far is under the writer's temporary name, which Work's mount shows.
+    current = attempt_lease(tmp_path, paused_at=150.0)
+    root = current.artifact_root
+    assert root is not None
+    feedback = root / "feedback"
+    feedback.mkdir(parents=True)
+    (feedback / f".agent-2.log.{'a' * 32}").write_text("partial\n")
+    # A round whose output was published, and one evolve_state.json records.
+    (feedback / "agent-3.log").write_text("whole\n")
+    (feedback / f".agent-3.log.{'b' * 32}").write_text("whole\n")
+    (feedback / "agent-1.log").write_text("accepted\n")
+    (feedback / f".agent-1.log.{'c' * 32}").write_text("stale\n")
+    (feedback / ".unrelated.log").write_text("kept\n")
+    (root / "evolve_state.json").write_text(
+        json.dumps({"submissions": [{"round": "agent-1"}]})
+    )
+    store = LeaseStore(tmp_path / "leases")
+    store.write(current)
+
+    RecoveryManager(
+        store=store, backend=RecoveryBackend(), managed_root=tmp_path / "runs"
+    ).recover("run-1")
+
+    assert sorted(path.name for path in feedback.iterdir()) == [
+        ".unrelated.log",
+        "agent-1.log",
+    ]
+    verifier = root / "verifier"
+    assert (verifier / "agent-2" / "interrupted-feedback.log").read_text() == (
+        "partial\n"
+    )
+    assert (verifier / "agent-3" / "interrupted-feedback.log").read_text() == (
+        "whole\n"
+    )
+
+
+def test_recovery_refuses_a_foreign_artifact_root_before_unpausing_work(
+    tmp_path,
+) -> None:
+    store = LeaseStore(tmp_path / "leases")
+    store.write(attempt_lease(tmp_path).model_copy(update={"artifact_root": tmp_path}))
+    backend = RecoveryBackend()
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+
+    with pytest.raises(RuntimeError, match="interrupted Judge output move failed"):
+        manager.recover("run-1")
+
+    assert ("unpause", "work-real") not in backend.events
+    retained = store.read("run-1")
+    assert retained is not None and retained.recovery_required
+    assert retained.work.container_id == "work-real"
+
+
+def test_recovery_salvages_stopped_work_before_removal_once(tmp_path) -> None:
+    store = LeaseStore(tmp_path / "leases")
+    store.write(attempt_lease(tmp_path, paused_at=150.0))
+    backend = RecoveryBackend()
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+
+    manager.recover("run-1")
+
+    events = backend.events
+    assert (
+        events.index(("unpause", "work-real"))
+        < events.index(("stop", "work-real"))
+        < events.index(("commit", "work-real"))
+        < events.index(("remove", "work-real"))
+    )
+    final = store.read("run-1")
+    assert final is not None
+    assert final.status == RunStatus.CANCELLED
+    assert final.work.retained_image_id == SALVAGE_IMAGE_ID
+    assert final.work.retained_image_ref == SALVAGE_IMAGE_REF
+    assert set(backend.images) == {SALVAGE_IMAGE_ID}
+
+    manager.recover("run-1")
+
+    assert backend.events.count(("commit", "work-real")) == 1
+    again = store.read("run-1")
+    assert again is not None
+    assert again.work.retained_image_id == SALVAGE_IMAGE_ID
+
+
+def test_salvage_commit_failure_fails_closed_and_keeps_work(tmp_path) -> None:
+    store = LeaseStore(tmp_path / "leases")
+    store.write(attempt_lease(tmp_path, paused_at=150.0))
+    backend = RecoveryBackend()
+    backend.commit_error = RuntimeError("commit failed")
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+
+    with pytest.raises(RuntimeError, match="salvage Work commit failed"):
+        manager.recover("run-1")
+
+    assert "work-real" in backend.containers
+    retained = store.read("run-1")
+    assert retained is not None and retained.recovery_required
+    assert retained.work.container_id == "work-real"
+    assert retained.work.planned_retained_image_ref == SALVAGE_IMAGE_REF
+    assert retained.work.retained_image_id is None
+    # The attempt was closed from the paused state before the unpause.
+    assert retained.attempts[-1].end_basis == "paused"
+    assert retained.attempts[-1].agent_seconds == 50.0
+
+    backend.commit_error = None
+    manager.recover("run-1")
+
+    assert "work-real" not in backend.containers
+    final = store.read("run-1")
+    assert final is not None and not final.recovery_required
+    assert final.work.retained_image_id == SALVAGE_IMAGE_ID
+    assert final.attempts[-1].end_basis == "paused"
+
+
+def test_recovery_adopts_an_already_committed_salvage_image(tmp_path) -> None:
+    store = LeaseStore(tmp_path / "leases")
+    store.write(attempt_lease(tmp_path, planned_retained_image_ref=SALVAGE_IMAGE_REF))
+    backend = RecoveryBackend()
+    backend.images[SALVAGE_IMAGE_ID] = image_state(
+        SALVAGE_IMAGE_ID,
+        SALVAGE_IMAGE_REF,
+        role="retained-work-rootfs",
+        round_id="salvage",
+    )
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+
+    manager.recover("run-1")
+
+    assert ("commit", "work-real") not in backend.events
+    final = store.read("run-1")
+    assert final is not None
+    assert final.work.retained_image_id == SALVAGE_IMAGE_ID
+    assert final.work.retained_image_ref == SALVAGE_IMAGE_REF
+
+
+@pytest.mark.parametrize(
+    ("state", "paused_at", "basis", "agent_seconds"),
+    [
+        ({"running": True, "paused": True}, 150.0, "paused", 50.0),
+        ({"running": True, "paused": True}, None, "unknown", 100.0),
+        # Stopped now, long after the deadline: capped at the deadline.
+        ({"running": True, "paused": False}, None, "running", 100.0),
+        (
+            {"running": False, "paused": False, "finished_at": 130.0},
+            None,
+            "finished",
+            30.0,
+        ),
+        ({"running": False, "paused": False}, None, "unknown", 100.0),
+        (None, None, "unknown", 100.0),
+    ],
+)
+def test_recovery_closes_the_attempt_from_the_state_work_was_found_in(
+    tmp_path, state, paused_at, basis, agent_seconds
+) -> None:
+    store = LeaseStore(tmp_path / "leases")
+    store.write(attempt_lease(tmp_path, paused_at=paused_at))
+    backend = RecoveryBackend()
+    if state is None:
+        backend.containers.pop("work-real")
+    else:
+        backend.containers["work-real"].update(state)
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+
+    manager.recover("run-1")
+
+    final = store.read("run-1")
+    assert final is not None
+    closed = final.attempts[-1]
+    assert closed.end_basis == basis
+    assert closed.agent_seconds == agent_seconds
+    assert closed.ended_at is not None
+
+
+def test_recovery_keeps_an_attempt_the_run_already_closed(tmp_path) -> None:
+    closed = RunAttemptLease(
+        attempt=1,
+        started_at=90.0,
+        agent_started_at=100.0,
+        agent_deadline=200.0,
+        ended_at=140.0,
+        end_basis="exited",
+        agent_seconds=40.0,
+    )
+    store = LeaseStore(tmp_path / "leases")
+    store.write(attempt_lease(tmp_path).model_copy(update={"attempts": (closed,)}))
+    manager = RecoveryManager(
+        store=store, backend=RecoveryBackend(), managed_root=tmp_path / "runs"
+    )
+
+    manager.recover("run-1")
+
+    final = store.read("run-1")
+    assert final is not None
+    assert final.attempts == (closed,)
+
+
+def test_recovery_creates_salvage_directories_for_the_sudo_operator(
+    tmp_path, monkeypatch
+) -> None:
+    current = attempt_lease(tmp_path, paused_at=150.0)
+    root = current.artifact_root
+    assert root is not None
+    (root / "feedback").mkdir(parents=True)
+    (root / "feedback" / "agent-1.log").write_text("partial\n")
+    store = LeaseStore(tmp_path / "leases")
+    store.write(current)
+    chowned: list[tuple[Path, int, int]] = []
+    monkeypatch.setenv("SUDO_UID", "1234")
+    monkeypatch.setenv("SUDO_GID", "5678")
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setattr(
+        os, "chown", lambda path, uid, gid: chowned.append((Path(path), uid, gid))
+    )
+    previous_umask = os.umask(0o022)
+    try:
+        RecoveryManager(
+            store=store, backend=RecoveryBackend(), managed_root=tmp_path / "runs"
+        ).recover("run-1")
+    finally:
+        os.umask(previous_umask)
+
+    target = root / "verifier" / "agent-1"
+    assert chowned == [(root / "verifier", 1234, 5678), (target, 1234, 5678)]
+    for directory in (root / "verifier", target):
+        assert stat.S_IMODE(directory.stat().st_mode) == 0o755
+    assert (target / "interrupted-feedback.log").read_text() == "partial\n"
+
+
+def test_recovery_salvages_work_when_the_recorded_final_image_is_gone(
+    tmp_path,
+) -> None:
+    store = LeaseStore(tmp_path / "leases")
+    store.write(
+        attempt_lease(
+            tmp_path,
+            planned_retained_image_ref=RETAINED_IMAGE_REF,
+            retained_image_id=RETAINED_IMAGE_ID,
+            retained_image_ref=RETAINED_IMAGE_REF,
+        )
+    )
+    backend = RecoveryBackend()
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+
+    manager.recover("run-1")
+
+    assert ("commit", "work-real") in backend.events
+    final = store.read("run-1")
+    assert final is not None
+    assert final.work.retained_image_id == SALVAGE_IMAGE_ID
+    assert final.work.retained_image_ref == SALVAGE_IMAGE_REF
+
+
+def test_salvage_commit_without_an_image_identity_fails_closed(tmp_path) -> None:
+    store = LeaseStore(tmp_path / "leases")
+    store.write(attempt_lease(tmp_path))
+    backend = RecoveryBackend()
+    backend.commit_work = lambda container_id, **_: "not-an-image"  # type: ignore[method-assign]
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+
+    with pytest.raises(RuntimeError, match="no image identity"):
+        manager.recover("run-1")
+
+    assert "work-real" in backend.containers
+    retained = store.read("run-1")
+    assert retained is not None and retained.recovery_required
+    assert retained.work.retained_image_id is None
+
+
+def test_cleanup_delete_workspace_removes_work_without_salvage(tmp_path) -> None:
+    store = LeaseStore(tmp_path / "leases")
+    store.write(attempt_lease(tmp_path))
+    backend = RecoveryBackend()
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+
+    manager.cleanup("run-1", delete_workspace=True)
+
+    assert ("commit", "work-real") not in backend.events
+    assert "work-real" not in backend.containers
+    assert backend.images == {}
+
+
+def test_cleanup_delete_workspace_removes_the_salvage_image(tmp_path) -> None:
+    store = LeaseStore(tmp_path / "leases")
+    store.write(attempt_lease(tmp_path))
+    backend = RecoveryBackend()
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+    manager.recover("run-1")
+    assert set(backend.images) == {SALVAGE_IMAGE_ID}
+
+    manager.cleanup("run-1", delete_workspace=True)
+
+    assert backend.images == {}
+    final = store.read("run-1")
+    assert final is not None
+    assert final.work.planned_retained_image_ref is None
+    assert final.work.retained_image_id is None
+    assert final.work.retained_image_ref is None
+
+
+def second_attempt_lease(tmp_path: Path, **work_updates: object) -> ResourceLease:
+    """Attempt 2, built on attempt 1's retained ``final`` image."""
+    first = RunAttemptLease(
+        attempt=1,
+        started_at=1.0,
+        agent_started_at=2.0,
+        agent_deadline=52.0,
+        ended_at=40.0,
+        end_basis="exited",
+        agent_seconds=38.0,
+    )
+    current = attempt_lease(
+        tmp_path,
+        prior_retained_images=(
+            PriorRetainedImage(
+                ref=RETAINED_IMAGE_REF, id=RETAINED_IMAGE_ID, round_id="final"
+            ),
+        ),
+        **work_updates,
+    )
+    return current.model_copy(
+        update={
+            "attempt": 2,
+            "attempts": (first, current.attempts[0].model_copy(update={"attempt": 2})),
+        }
+    )
+
+
+def test_a_later_attempt_is_salvaged_under_its_own_name_and_keeps_the_chain(
+    tmp_path,
+) -> None:
+    store = LeaseStore(tmp_path / "leases")
+    store.write(second_attempt_lease(tmp_path, paused_at=150.0))
+    backend = RecoveryBackend()
+    backend.images[RETAINED_IMAGE_ID] = image_state(
+        RETAINED_IMAGE_ID,
+        RETAINED_IMAGE_REF,
+        role="retained-work-rootfs",
+        round_id="final",
+        source_container_id="work-old",
+    )
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+
+    manager.recover("run-1")
+
+    salvage_ref = rootfs_image_ref(
+        run_id="run-1",
+        task_id="task-1",
+        round_id="salvage-a2",
+        purpose="retained-work",
+    )
+    final = store.read("run-1")
+    assert final is not None
+    assert final.work.retained_image_ref == salvage_ref
+    assert backend.images[SALVAGE_IMAGE_ID]["labels"]["rsi-harness.round-id"] == (
+        "salvage-a2"
+    )
+    assert final.work.prior_retained_images == (
+        PriorRetainedImage(
+            ref=RETAINED_IMAGE_REF, id=RETAINED_IMAGE_ID, round_id="final"
+        ),
+    )
+    assert RETAINED_IMAGE_ID in backend.images
+    assert ("remove_image", RETAINED_IMAGE_ID) not in backend.events
+
+    # Recovering again proves the salvage-a2 image and the chain as they are.
+    manager.recover("run-1")
+
+    assert store.read("run-1") == final
+
+
+def test_cleanup_delete_workspace_deletes_the_image_chain_newest_first(
+    tmp_path,
+) -> None:
+    refs = {
+        round_id: rootfs_image_ref(
+            run_id="run-1", task_id="task-1", round_id=round_id, purpose="retained-work"
+        )
+        for round_id in ("final-a2", "final-a3")
+    }
+    third_id = f"sha256:{'d' * 64}"
+    second = second_attempt_lease(
+        tmp_path,
+        container_id=None,
+        planned_container=None,
+        paused=False,
+        planned_retained_image_ref=refs["final-a3"],
+        retained_image_id=third_id,
+        retained_image_ref=refs["final-a3"],
+    )
+    store = LeaseStore(tmp_path / "leases")
+    store.write(
+        second.model_copy(
+            update={
+                "status": RunStatus.COMPLETED,
+                "attempt": 3,
+                "attempts": (
+                    *second.attempts,
+                    second.attempts[1].model_copy(update={"attempt": 3}),
+                ),
+                "work": second.work.model_copy(
+                    update={
+                        "prior_retained_images": (
+                            *second.work.prior_retained_images,
+                            PriorRetainedImage(
+                                ref=refs["final-a2"],
+                                id=SECOND_RETAINED_IMAGE_ID,
+                                round_id="final-a2",
+                            ),
+                        )
+                    }
+                ),
+            }
+        )
+    )
+    backend = RecoveryBackend()
+    empty_non_image_resources(backend)
+    for image_id, ref, round_id in (
+        (RETAINED_IMAGE_ID, RETAINED_IMAGE_REF, "final"),
+        (SECOND_RETAINED_IMAGE_ID, refs["final-a2"], "final-a2"),
+        (third_id, refs["final-a3"], "final-a3"),
+    ):
+        backend.images[image_id] = image_state(
+            image_id, ref, role="retained-work-rootfs", round_id=round_id
+        )
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+
+    manager.recover("run-1")
+    assert set(backend.images) == {
+        RETAINED_IMAGE_ID,
+        SECOND_RETAINED_IMAGE_ID,
+        third_id,
+    }
+
+    manager.cleanup("run-1", delete_workspace=True)
+
+    removed = [value for name, value in backend.events if name == "remove_image"]
+    assert removed == [third_id, SECOND_RETAINED_IMAGE_ID, RETAINED_IMAGE_ID]
+    assert backend.images == {}
+    final = store.read("run-1")
+    assert final is not None
+    assert final.work.retained_image_id is None
+    assert final.work.prior_retained_images == ()
+
+
+def test_recover_drops_a_prior_image_that_is_already_gone(tmp_path) -> None:
+    store = LeaseStore(tmp_path / "leases")
+    store.write(
+        second_attempt_lease(
+            tmp_path, container_id=None, planned_container=None, paused=False
+        ).model_copy(update={"status": RunStatus.COMPLETED})
+    )
+    backend = RecoveryBackend()
+    empty_non_image_resources(backend)
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+
+    manager.recover("run-1")
+
+    final = store.read("run-1")
+    assert final is not None
+    assert final.work.prior_retained_images == ()
+
+
+def test_a_prior_image_with_other_labels_fails_closed(tmp_path) -> None:
+    store = LeaseStore(tmp_path / "leases")
+    store.write(
+        second_attempt_lease(
+            tmp_path, container_id=None, planned_container=None, paused=False
+        ).model_copy(update={"status": RunStatus.COMPLETED})
+    )
+    backend = RecoveryBackend()
+    empty_non_image_resources(backend)
+    backend.images[RETAINED_IMAGE_ID] = image_state(
+        RETAINED_IMAGE_ID,
+        RETAINED_IMAGE_REF,
+        role="retained-work-rootfs",
+        round_id="salvage",
+    )
+    manager = RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    )
+
+    with pytest.raises(RuntimeError, match="rootfs image attestation failed"):
+        manager.recover("run-1")
+
+    assert RETAINED_IMAGE_ID in backend.images

@@ -118,6 +118,7 @@ def test_cli_loads_explicit_operator_policy(tmp_path, monkeypatch):
     )
     assert result.exit_code == 0, result.output
     assert captured["engine_config"].sandbox_policy == policy
+    assert captured["engine_config"].sandbox_policy_path == policy_path.resolve()
 
 
 def test_cli_refuses_docker_policy_with_cluster_before_adapter(tmp_path, monkeypatch):

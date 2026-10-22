@@ -24,7 +24,11 @@ from rsi_harness.integrations.rsi_loop import (
 )
 from rsi_harness.runtime.images import _registered_agent_launcher
 from rsi_loop.harness.agent import create_agent, list_agent_classes, zcode
-from rsi_loop.harness.agent.base import NODE_BIN, STOP_HOOK_REASON
+from rsi_loop.harness.agent.base import (
+    NODE_BIN,
+    STOP_HOOK_REASON,
+    link_session_store,
+)
 from rsi_loop.harness.agent.claude_code import _generate_stop_hook
 from rsi_loop.harness.agent.codex import _generate_codex_stop_hook
 from rsi_loop.harness.agent.driven import DrivenAgent
@@ -120,6 +124,91 @@ def test_native_hook_agents_keep_the_command_without_a_continuation(name: str) -
     )
 
     assert continued == plain
+
+
+@pytest.mark.parametrize("name", AGENT_NAMES)
+def test_an_agent_resumes_the_last_session_its_output_names(
+    name: str, tmp_path: Path
+) -> None:
+    agent = create_agent(name, _config())
+    if not agent.resumes_sessions:
+        # The oracle has no session: a later attempt runs it again.
+        assert agent.runs_task_solution
+        return
+    line = (
+        "session id: {}\n"
+        if name == "codex"
+        else '{{"type":"system","subtype":"init","session_id":"{}"}}\n'
+    )
+    first, second = (f"01a0139c-0000-7000-8000-00000000000{n}" for n in (1, 2))
+    output = tmp_path / "agent_output.txt"
+    output.write_text(line.format(first) + "work\n" + line.format(second))
+
+    session = agent.last_session_id(output)
+    resumed = agent.format_run_cmd(
+        "/tmp/rsi-agent-prompt.md", model="m", cwd="/w", resume=True, session_id=session
+    )
+
+    assert session == second
+    assert second in resumed and first not in resumed
+    assert agent.last_session_id(tmp_path / "missing.txt") is None
+
+
+_CODEX_SESSION = "01a0139c-0000-7000-8000-000000000001"
+
+
+@pytest.mark.parametrize(
+    ("line", "session"),
+    [
+        (f"session id: {_CODEX_SESSION}\n", _CODEX_SESSION),
+        # FORCE_COLOR makes codex print the label in bold without a TTY.
+        (f"\x1b[1msession id:\x1b[0m {_CODEX_SESSION}\n", _CODEX_SESSION),
+        (f"the log said session id: {_CODEX_SESSION}\n", None),
+    ],
+)
+def test_codex_reads_only_its_own_session_header(line: str, session) -> None:
+    assert create_agent("codex", _config()).session_id_in(line) == session
+
+
+def test_a_session_store_link_keeps_an_existing_cli_directory(
+    tmp_path: Path,
+) -> None:
+    step = link_session_store(".codex/sessions", ".codex-sessions")
+    own = tmp_path / "own" / ".codex" / "sessions"
+    own.mkdir(parents=True)
+    (own / "rollout.jsonl").write_text("kept\n")
+
+    for home in (tmp_path / "own", tmp_path / "fresh"):
+        subprocess.run(
+            ["/bin/bash", "-c", step],
+            env={"HOME": str(home), "PATH": "/usr/bin:/bin"},
+            check=True,
+        )
+
+    assert not own.is_symlink()
+    assert [path.name for path in own.iterdir()] == ["rollout.jsonl"]
+    linked = tmp_path / "fresh" / ".codex" / "sessions"
+    assert linked.resolve() == (tmp_path / "fresh" / ".codex-sessions").resolve()
+
+
+@pytest.mark.parametrize("name", DRIVEN_NAMES)
+def test_driven_agents_resume_a_session_through_the_driver(name: str) -> None:
+    agent = create_agent(name, _config())
+
+    started = agent.format_run_cmd(
+        "/tmp/rsi-agent-prompt.md", model="m", cwd="/w", session_id="run-1"
+    )
+    resumed = agent.format_run_cmd(
+        "/tmp/rsi-agent-prompt.md", model="m", cwd="/w", resume=True, session_id="s-1"
+    )
+
+    # Neither protocol lets a new session choose its id.
+    assert started == agent.format_run_cmd(
+        "/tmp/rsi-agent-prompt.md", model="m", cwd="/w"
+    )
+    assert resumed == started.replace(
+        " --prompt-file ", " --resume-session s-1 --prompt-file ", 1
+    )
 
 
 @pytest.mark.parametrize("name", AGENT_NAMES)
