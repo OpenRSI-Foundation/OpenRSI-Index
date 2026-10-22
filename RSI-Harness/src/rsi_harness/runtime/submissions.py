@@ -7,6 +7,7 @@ import json
 import secrets
 import socket
 import threading
+from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -83,6 +84,7 @@ class SubmissionService:
         self._max_submissions: int | None = None
         self._cooldown_seconds = 0.0
         self._reports: list[SubmissionReport] = []
+        self._prior_reports: tuple[SubmissionReport, ...] = ()
         self._round_lock = threading.Lock()
         self._state_lock = threading.Lock()
         self._accepting = True
@@ -95,14 +97,23 @@ class SubmissionService:
         work_container: ContainerRef,
         max_submissions: int | None = None,
         cooldown_seconds: float = 0.0,
+        rounds_allocated: int = 0,
+        last_allocated_at: datetime | None = None,
+        prior_reports: Sequence[SubmissionReport] = (),
     ) -> str:
-        """Register exactly one run and return its runtime-only bearer token."""
+        """Register exactly one run and return its runtime-only bearer token.
+
+        A resumed run continues its earlier attempts' round count, cooldown
+        and history; ``reports`` holds only this attempt's rounds.
+        """
         if not run_id:
             raise ValueError("run_id must not be empty")
         if max_submissions is not None and max_submissions < 0:
             raise ValueError("max_submissions must be non-negative")
         if cooldown_seconds < 0:
             raise ValueError("cooldown_seconds must be non-negative")
+        if rounds_allocated < 0:
+            raise ValueError("rounds_allocated must be non-negative")
         with self._state_lock:
             if self._session is not None:
                 raise RuntimeError("a run is already registered")
@@ -112,7 +123,10 @@ class SubmissionService:
             self._session = SubmissionSessionState(
                 run_id=run_id,
                 token_hash=_token_hash(token),
+                rounds_allocated=rounds_allocated,
+                last_allocated_at=last_allocated_at,
             )
+            self._prior_reports = tuple(prior_reports)
             self._run_plan = run_plan
             self._work_container = work_container
             self._max_submissions = max_submissions
@@ -208,14 +222,17 @@ class SubmissionService:
         """Return only the registered run's completed submission feedback."""
         self._authenticate(token)
         with self._round_lock:
-            if not self._reports:
+            reports = (*self._prior_reports, *self._reports)
+            if not reports:
                 return "No submissions yet.\n"
             return "\n".join(
                 _render_feedback(
                     report,
-                    remaining_budget=self._remaining_budget(index),
+                    remaining_budget=self._remaining_budget(
+                        int(report.round_id.removeprefix("agent-"))
+                    ),
                 )
-                for index, report in enumerate(self._reports, start=1)
+                for report in reports
             )
 
     def close(self, *, timeout_seconds: float = 10.0) -> None:

@@ -35,11 +35,15 @@ from rsi_harness.models import (
 from rsi_harness.runtime.mount_topology import validate_run_plan_mount_topology
 from rsi_harness.runtime.recovery import (
     LeaseStore,
+    PriorRetainedImage,
     ResourceLease,
     RetainedImageRollbackAuthority,
+    RunAttemptLease,
     WorkdirVolumeResourceLease,
+    retained_round_id,
 )
 from rsi_harness.runtime.redaction import redact_text
+from rsi_harness.runtime.resume import ResumeContext
 from rsi_harness.runtime.sandbox_budget import LeaseMutator
 from rsi_harness.runtime.submissions import (
     EmbeddedJudgeServer,
@@ -91,8 +95,17 @@ def _cancellation_signals() -> Iterator[None]:
         return
     previous: dict[signal.Signals, Any] = {}
 
+    def ignore(signum: int, frame: object) -> None:
+        del signum, frame
+
     def cancel(signum: int, frame: object) -> None:
         del frame
+        # Once: a later signal (LSF's bkill sends SIGINT then SIGTERM, and a
+        # cluster job script forwards one more) must not interrupt the
+        # cleanup that closes the attempt. A Python handler, not SIG_IGN,
+        # so the processes cleanup starts do not inherit it.
+        for selected in previous:
+            signal.signal(selected, ignore)
         raise _RunCancelled(f"received signal {signum}")
 
     try:
@@ -201,6 +214,10 @@ class CoordinatorBackend(Protocol):
     def attest_work_feedback_mount(self, work: ContainerRef) -> None: ...
 
     def remove_workdir_volume(self, volume: ManagedWorkdirVolume) -> None: ...
+
+    def adopt_workdir_volume(
+        self, plan: Any, run_id: str, volume: ManagedWorkdirVolume
+    ) -> ManagedWorkdirVolume: ...
 
     def create_work(
         self,
@@ -315,6 +332,10 @@ class ProductionCoordinatorBackend:
     evaluator: Callable[[EvaluationRequest, RoundLifecycleObserver], SubmissionReport]
     event_recorder: Callable[[str, object], None] = lambda _name, _value: None
     preparation: RunPreparation | None = None
+    # Only a backend that can resume a run keeps its WORKDIR volume.
+    workdir_volume_adopter: (
+        Callable[[Any, str, ManagedWorkdirVolume], ManagedWorkdirVolume] | None
+    ) = None
 
     def compile(self, request: RunRequest) -> Any:
         if self.preparation is not None:
@@ -384,6 +405,13 @@ class ProductionCoordinatorBackend:
 
     def remove_workdir_volume(self, volume: ManagedWorkdirVolume) -> None:
         self.workdir_volume_remover(volume)
+
+    def adopt_workdir_volume(
+        self, plan: Any, run_id: str, volume: ManagedWorkdirVolume
+    ) -> ManagedWorkdirVolume:
+        if self.workdir_volume_adopter is None:
+            raise SetupError("this runtime cannot resume a run")
+        return self.workdir_volume_adopter(plan, run_id, volume)
 
     def create_work(
         self,
@@ -649,7 +677,7 @@ class _RoundEvaluator:
         elif name == "work_pause_planned":
             if self._state.status == RunStatus.AGENT_RUNNING:
                 self._transition(RunStatus.SNAPSHOTTING)
-            self._update_work(paused=True)
+            self._update_work(paused=True, paused_at=time.time())
         elif name == "snapshot_planned":
             round_id = str(values["round_id"])
             self._update_judge(
@@ -726,17 +754,20 @@ class _RoundEvaluator:
         elif name == "work_unpaused":
             if self._state.status in {RunStatus.SNAPSHOTTING, RunStatus.JUDGING}:
                 self._transition(RunStatus.AGENT_RUNNING)
-            self._update_work(paused=False)
+            self._update_work(paused=False, paused_at=None)
         elif name == "work_recovery_state":
+            paused = bool(values.get("paused"))
             self._update_work(
                 planned_quiescence=None,
-                paused=bool(values.get("paused")),
+                paused=paused,
                 stopped=bool(values.get("stopped")),
+                **({} if paused else {"paused_at": None}),
             )
         elif name == "work_quiescence_unproven":
             self._update_work(
                 planned_quiescence="pause-if-running",
                 paused=False,
+                paused_at=None,
                 stopped=False,
             )
         elif name == "recovery_required":
@@ -825,6 +856,7 @@ class RunCoordinator:
         clock: Any,
         on_lease_ready: Callable[[LeaseMutator], None] | None = None,
         sandbox_lifecycle: Any = None,
+        resume: ResumeContext | None = None,
     ) -> None:
         from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
 
@@ -834,10 +866,16 @@ class RunCoordinator:
         self._run_id_factory = run_id_factory
         self._clock = clock
         self._on_lease_ready = on_lease_ready
+        # The next attempt of an earlier run, which keeps its run ID.
+        self._resume = resume
         self.phase_history: tuple[RunStatus, ...] = ()
 
     def run(self, request: RunRequest) -> RunResult:
         run_id = str(self._run_id_factory())
+        resume = self._resume
+        if resume is not None and resume.run_id != run_id:
+            raise SetupError("a resumed attempt must keep its run ID")
+        attempt = 1 if resume is None else resume.attempt
         state = CoordinatorState(run_id=run_id)
         started_at = time.monotonic()
         lease: ResourceLease | None = None
@@ -862,6 +900,10 @@ class RunCoordinator:
         agent_result: AgentRunResult | None = None
         agent_started_at: float | None = None
         agent_runtime_seconds: float | None = None
+        agent_timeout: float | None = None
+        # The lease a resumed run ended with, rewritten if its attempt never
+        # starts.
+        resumed_from: ResourceLease | None = None
         drained = False
         drain_failed = False
         work_removed = False
@@ -970,11 +1012,30 @@ class RunCoordinator:
                 history = lease.phase_history
                 if history[-1:] != (status.value,):
                     history += (status.value,)
-                mutate_lease(
-                    lambda current: current.model_copy(
-                        update={"phase": status.value, "phase_history": history}
+                updates: dict[str, object] = {
+                    "phase": status.value,
+                    "phase_history": history,
+                }
+                current_attempt = lease.attempts[-1] if lease.attempts else None
+                if (
+                    status is RunStatus.AGENT_RUNNING
+                    and current_attempt is not None
+                    and current_attempt.agent_started_at is None
+                    and plan is not None
+                ):
+                    # The Agent's wall-clock budget starts now.
+                    now = time.time()
+                    assert agent_timeout is not None
+                    updates["attempts"] = (
+                        *lease.attempts[:-1],
+                        current_attempt.model_copy(
+                            update={
+                                "agent_started_at": now,
+                                "agent_deadline": now + agent_timeout,
+                            }
+                        ),
                     )
-                )
+                mutate_lease(lambda current: current.model_copy(update=updates))
 
         def update_work(**updates: object) -> None:
             mutate_lease(
@@ -1072,18 +1133,69 @@ class RunCoordinator:
                 update_work(planned_quiescence="pause-if-running")
                 observed = self._backend.quiesce_work(work)
                 work_quiescence = WorkQuiescence(observed)
+                paused_at = None
+                if work_quiescence is WorkQuiescence.PAUSED:
+                    # A snapshot pause already in force keeps its start.
+                    paused_at = (
+                        lease.work.paused_at
+                        if lease is not None and lease.work.paused
+                        else None
+                    ) or time.time()
                 update_work(
                     planned_quiescence=None,
-                    paused=work_quiescence is WorkQuiescence.PAUSED,
+                    paused=paused_at is not None,
+                    paused_at=paused_at,
                     stopped=work_quiescence is WorkQuiescence.STOPPED,
                 )
-                return True
             except BaseException as error:
                 cleanup_errors.append(self._error(error))
                 cleanup_blocked = True
                 if lease is not None:
                     persist_recovery(f"Work quiescence is unproven: {error}")
                 return False
+            close_attempt()
+            return True
+
+        def agent_contained() -> bool:
+            return (
+                work is None
+                or work_removed
+                or agent_stopped
+                or work_quiescence is not None
+            )
+
+        def close_attempt() -> None:
+            """Persist the Agent's exec span as soon as it can no longer run,
+            before cleanup discards the Work evidence recover would use."""
+            if (
+                lease is None
+                or not lease.attempts
+                or lease.attempts[-1].ended_at is not None
+            ):
+                return
+            try:
+                mutate_lease(
+                    lambda current: current.model_copy(
+                        update={"attempts": closed_attempts(current)}
+                    )
+                )
+            except BaseException as error:
+                cleanup_errors.append(self._error(error))
+
+        def closed_attempts(current: ResourceLease) -> tuple[RunAttemptLease, ...]:
+            return self._closed_attempts(
+                current,
+                agent_seconds=(
+                    0.0
+                    if agent_started_at is None
+                    else agent_runtime_seconds
+                    if agent_runtime_seconds is not None
+                    else max(0.0, time.monotonic() - agent_started_at)
+                ),
+                exited=agent_result is not None
+                and not agent_result.timed_out
+                and not agent_result.cancelled,
+            )
 
         def cleanup_resources() -> None:
             nonlocal drained, drain_failed, work_removed, network_removed
@@ -1146,6 +1258,7 @@ class RunCoordinator:
                 try:
                     self._backend.stop_agent(work)
                     agent_stopped = True
+                    close_attempt()
                 except BaseException as error:
                     cleanup_errors.append(self._error(error))
                     cleanup_blocked = True
@@ -1172,7 +1285,7 @@ class RunCoordinator:
                         retained_work.purpose != "retained-work"
                         or retained_work.run_id != run_id
                         or retained_work.task_id != plan.task.task_id
-                        or retained_work.round_id != "final"
+                        or retained_work.round_id != retained_round_id("final", attempt)
                         or retained_work.source_container_id != work.container_id
                         or retained_work.image_ref != planned_retained_work
                     ):
@@ -1229,6 +1342,7 @@ class RunCoordinator:
                         container_id=None,
                         planned_container=None,
                         paused=False,
+                        paused_at=None,
                         stopped=False,
                     )
                 except BaseException as error:
@@ -1304,14 +1418,29 @@ class RunCoordinator:
                     gpu_plan = self._backend.allocate(
                         definition, tuple(request.gpu_selectors)
                     )
-                    lease = ResourceLease(
-                        run_id=run_id,
-                        task_id=definition.task_id,
-                        coordinator_pid=os.getpid(),
-                        coordinator_started_at=time.time(),
-                        phase=RunStatus.PREPARING.value,
-                        gpu_plan=gpu_plan,
-                    )
+                    coordinator_started_at = time.time()
+                    if resume is None:
+                        lease = ResourceLease(
+                            run_id=run_id,
+                            task_id=definition.task_id,
+                            coordinator_pid=os.getpid(),
+                            coordinator_started_at=coordinator_started_at,
+                            phase=RunStatus.PREPARING.value,
+                            gpu_plan=gpu_plan,
+                            attempts=(
+                                RunAttemptLease(
+                                    attempt=1, started_at=coordinator_started_at
+                                ),
+                            ),
+                        )
+                    else:
+                        resumed_from = self._leases.read(run_id)
+                        lease = self._resumed_lease(
+                            resumed_from,
+                            resume,
+                            gpu_plan=gpu_plan,
+                            started_at=coordinator_started_at,
+                        )
                     write(lease)
                     if self._on_lease_ready is not None:
                         self._on_lease_ready(mutate_lease)
@@ -1321,12 +1450,24 @@ class RunCoordinator:
                         definition, images, gpu_plan, request, run_id
                     )
                     validate_run_plan_mount_topology(plan)
+                    agent_timeout = (
+                        plan.task.agent.timeout_seconds
+                        if resume is None
+                        else resume.agent_seconds_left
+                    )
                     mutate_lease(
                         lambda current: current.model_copy(
                             update={"rootfs_snapshot_mode": plan.rootfs_snapshot_mode}
                         )
                     )
                     artifacts = self._backend.start_artifacts(plan, run_id)
+                    artifact_root = getattr(artifacts, "root", None)
+                    if isinstance(artifact_root, Path):
+                        mutate_lease(
+                            lambda current: current.model_copy(
+                                update={"artifact_root": artifact_root}
+                            )
+                        )
                     evaluator = _RoundEvaluator(
                         backend=self._backend,
                         state=state,
@@ -1352,7 +1493,35 @@ class RunCoordinator:
                     )
                     resources.callback(emergency_cleanup)
 
-                    if plan.rootfs_snapshot_mode is RootfsSnapshotMode.SPLIT_WORKDIR:
+                    if (
+                        resume is not None
+                        and plan.rootfs_snapshot_mode
+                        is RootfsSnapshotMode.SPLIT_WORKDIR
+                    ):
+                        # The run's kept WORKDIR volume: proven, never created.
+                        if resume.workdir_volume is None:
+                            raise InfrastructureError(
+                                "a resumed split-workdir run requires its kept "
+                                "WORKDIR volume"
+                            )
+                        planned_workdir_volume = resume.workdir_volume
+                        actual_workdir_volume = resume.workdir_volume
+                        workdir_volume_authority_known = True
+                        if (
+                            self._backend.adopt_workdir_volume(
+                                plan, run_id, resume.workdir_volume
+                            )
+                            != resume.workdir_volume
+                        ):
+                            raise InfrastructureError(
+                                "adopted WORKDIR volume differs from the run's lease"
+                            )
+                        evaluator.resource_event(
+                            "workdir_volume_created",
+                            planned=planned_workdir_volume,
+                            actual=actual_workdir_volume,
+                        )
+                    elif plan.rootfs_snapshot_mode is RootfsSnapshotMode.SPLIT_WORKDIR:
                         planned_workdir_volume = self._backend.plan_workdir_volume(
                             plan, run_id
                         )
@@ -1507,18 +1676,36 @@ class RunCoordinator:
                         run_id=run_id,
                         run_plan=plan,
                         work_container=work,
-                        max_submissions=request.options.max_submissions,
-                        cooldown_seconds=request.options.cooldown_seconds,
+                        max_submissions=(
+                            request.options.max_submissions
+                            if resume is None
+                            else resume.max_submissions
+                        ),
+                        cooldown_seconds=(
+                            request.options.cooldown_seconds
+                            if resume is None
+                            else resume.cooldown_seconds
+                        ),
+                        rounds_allocated=0 if resume is None else resume.charged_rounds,
+                        last_allocated_at=(
+                            None if resume is None else resume.last_allocated_at
+                        ),
+                        prior_reports=() if resume is None else resume.reports,
                     )
                     self._backend.install_hooks(plan, work, server.endpoint.url, token)
                     prepared = self._backend.prepare_agent(
-                        plan, request.options.max_submissions
+                        plan,
+                        (
+                            request.options.max_submissions
+                            if resume is None
+                            else resume.submissions_left
+                        ),
                     )
                     transition(RunStatus.AGENT_RUNNING)
                     resources.callback(emergency_cleanup)
                     agent_started_at = time.monotonic()
                     agent_result = self._backend.run_agent(
-                        prepared, work, plan.task.agent.timeout_seconds
+                        prepared, work, agent_timeout
                     )
                     agent_runtime_seconds = max(
                         0.0, time.monotonic() - agent_started_at
@@ -1532,7 +1719,20 @@ class RunCoordinator:
                 # Acceptance closes and all in-flight submissions drain before
                 # history, aggregation, artifacts, Agent, or Work are touched.
                 emergency_cleanup()
+                if (
+                    resume is not None
+                    and isinstance(captured, Exception)
+                    and artifacts is None
+                    and not cleanup_errors
+                ):
+                    # A resume refused or failed before its attempt's artifacts
+                    # exist leaves the run as it ended, to be resumed again.
+                    if lease is not None and resumed_from is not None:
+                        write(resumed_from)
+                    raise captured
+                # FAILED is this attempt's; best-of and the outcome span all.
                 reports = self._history(server, evaluator) if drained else ()
+                all_reports = reports if resume is None else (*resume.reports, *reports)
                 infrastructure_round = any(
                     report.status == SubmissionStatus.INFRASTRUCTURE_ERROR
                     for report in reports
@@ -1547,7 +1747,8 @@ class RunCoordinator:
                 # budget is the normal end of a run; timed_out stays recorded
                 # in final_result.json and the outcome follows the submissions.
                 elif any(
-                    report.status == SubmissionStatus.COMPLETED for report in reports
+                    report.status == SubmissionStatus.COMPLETED
+                    for report in all_reports
                 ):
                     terminal = RunStatus.COMPLETED
                 else:
@@ -1578,12 +1779,18 @@ class RunCoordinator:
                             agent_exit_code=(
                                 None if agent_result is None else agent_result.exit_code
                             ),
-                            agent_runtime_seconds=agent_runtime_seconds,
+                            agent_runtime_seconds=(
+                                agent_runtime_seconds
+                                if resume is None
+                                else resume.agent_seconds_used
+                                + (agent_runtime_seconds or 0.0)
+                            ),
                             first_submission_seconds=(
                                 None
                                 if first_round is None or agent_started_at is None
                                 else max(0.0, first_round - agent_started_at)
                             ),
+                            **({} if resume is None else {"attempts": attempt}),
                         )
                     except BaseException as error:
                         cleanup_errors.append(self._error(error))
@@ -1606,12 +1813,19 @@ class RunCoordinator:
                                 "phase": state.status.value,
                                 "status": state.status,
                                 "error": error_text,
+                                # An Agent cleanup could not contain stays
+                                # open for recover to charge.
+                                "attempts": (
+                                    closed_attempts(current)
+                                    if agent_contained()
+                                    else current.attempts
+                                ),
                             }
                         )
                     )
                 result = aggregate_result(
                     run_id=run_id,
-                    reports=reports,
+                    reports=all_reports,
                     primary_reward=(
                         None if plan is None else plan.task.verifier.primary_reward
                     ),
@@ -1638,6 +1852,97 @@ class RunCoordinator:
         finally:
             resources.close()
             self.phase_history = state.history
+
+    @staticmethod
+    def _resumed_lease(
+        current: ResourceLease | None,
+        resume: ResumeContext,
+        *,
+        gpu_plan: RunGPUPlan,
+        started_at: float,
+    ) -> ResourceLease:
+        """Carry the run's lease into the next attempt: the last retained
+        image joins the chain the new Work is built on. A run without one
+        (a cluster's) keeps its Work state on shared storage instead."""
+        work = None if current is None else current.work
+        chain = () if work is None else work.prior_retained_images
+        retained = resume.base_image_ref is not None
+        if retained and work is not None and work.retained_image_ref is not None:
+            assert work.retained_image_id is not None
+            chain += (
+                PriorRetainedImage(
+                    ref=work.retained_image_ref,
+                    id=work.retained_image_id,
+                    round_id=resume.base_image_round_id,
+                ),
+            )
+        if (
+            current is None
+            or work is None
+            or current.attempt != resume.attempt - 1
+            or current.status is None
+            or current.recovery_required
+            or any(entry.ended_at is None for entry in current.attempts)
+            or (
+                retained
+                and (
+                    not chain
+                    or (chain[-1].ref, chain[-1].id)
+                    != (resume.base_image_ref, resume.base_image_id)
+                )
+            )
+        ):
+            raise SetupError(
+                f"run {resume.run_id} changed after its resume was planned"
+            )
+        return current.model_copy(
+            update={
+                "coordinator_pid": os.getpid(),
+                "coordinator_started_at": started_at,
+                "phase": RunStatus.PREPARING.value,
+                "phase_history": (
+                    *current.phase_history,
+                    RunStatus.PREPARING.value,
+                ),
+                "status": None,
+                "error": None,
+                "gpu_plan": gpu_plan,
+                "attempt": resume.attempt,
+                "attempts": (
+                    *current.attempts,
+                    RunAttemptLease(
+                        attempt=resume.attempt,
+                        started_at=started_at,
+                        grants=resume.grants,
+                    ),
+                ),
+                "work": work.model_copy(
+                    update={
+                        "planned_retained_image_ref": None,
+                        "retained_image_id": None,
+                        "retained_image_ref": None,
+                        "prior_retained_images": chain,
+                    }
+                ),
+            }
+        )
+
+    @staticmethod
+    def _closed_attempts(
+        lease: ResourceLease, *, agent_seconds: float, exited: bool
+    ) -> tuple[RunAttemptLease, ...]:
+        """Close the current attempt with its Agent exec span, capped at the
+        deadline; an attempt already closed is kept."""
+        if not lease.attempts or lease.attempts[-1].ended_at is not None:
+            return lease.attempts
+        return (
+            *lease.attempts[:-1],
+            lease.attempts[-1].closed(
+                ended_at=time.time(),
+                basis="exited" if exited else "stopped",
+                agent_seconds=agent_seconds,
+            ),
+        )
 
     @staticmethod
     def _history(

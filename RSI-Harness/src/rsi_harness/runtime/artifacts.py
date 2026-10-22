@@ -26,6 +26,41 @@ class _SystemClock:
         return datetime.now(UTC)
 
 
+def recorded_submissions(root: Path) -> tuple[tuple[SubmissionReport, float], ...]:
+    """The rounds ``evolve_state.json`` records, with their submission times.
+
+    The state file is written last, so a ``report.json`` of a round it does
+    not list never counts. A listed round without one keeps its state entry.
+    """
+    state = root / "evolve_state.json"
+    if not state.exists():
+        return ()
+    recorded = []
+    for entry in json.loads(state.read_text())["submissions"]:
+        report = root / "submissions" / str(entry["round"]) / "report.json"
+        payload = json.loads(report.read_text()) if report.exists() else {}
+        recorded.append(
+            (
+                SubmissionReport(
+                    round_id=entry["round"],
+                    status=entry["status"],
+                    rewards=entry["rewards"],
+                    score=entry["score"],
+                    exit_code=payload.get("exit_code"),
+                    timed_out=payload.get("timed_out", False),
+                    verifier_output_required=payload.get(
+                        "verifier_output_required", False
+                    ),
+                    full_output_captured=payload.get("full_output_captured", False),
+                    duration_seconds=payload.get("runtime_seconds"),
+                    error=payload.get("error"),
+                ),
+                float(entry["at"]),
+            )
+        )
+    return tuple(recorded)
+
+
 def _sudo_invoking_owner() -> tuple[int, int] | None:
     if os.geteuid() != 0:
         return None
@@ -57,6 +92,9 @@ class RunArtifactWriter:
         self._clock = clock or _SystemClock()
         self._reports: dict[str, SubmissionReport] = {}
         self._submitted_at: dict[str, float] = {}
+        # Set by reopen when an earlier attempt recorded a round.
+        self._submitted_earlier = False
+        self._earlier_first_submission: float | None = None
         self._owner = _sudo_invoking_owner()
         self._ownership_root = run_plan.paths.logs / "runs"
         self.root = run_plan.paths.logs / "runs" / run_id / run_plan.task.task_id
@@ -78,6 +116,50 @@ class RunArtifactWriter:
         self._atomic_write_text(self.root / "run_agent.log", "")
         self._atomic_write_text(self.root / "agent_output.txt", "")
         self._write_state()
+
+    def reopen(self, attempt: int) -> None:
+        """Continue the run's artifacts for a resumed ``attempt``.
+
+        Nothing is truncated: earlier rounds are reloaded, the last attempt's
+        result moves to ``attempts/<attempt - 1>/``, and the Agent output
+        gains a banner line before the new attempt appends to it.
+        """
+        if not (self.root / "evolve_state.json").exists():
+            raise FileNotFoundError(self.root / "evolve_state.json")
+        recorded = recorded_submissions(self.root)
+        for report, submitted_at in recorded:
+            self._reports[report.round_id] = report
+            self._submitted_at[report.round_id] = submitted_at
+        if recorded:
+            # The newest result kept it; an attempt that crashed wrote none.
+            results = (
+                self.root / "final_result.json",
+                *(
+                    self.root / "attempts" / str(number) / "final_result.json"
+                    for number in range(attempt - 2, 0, -1)
+                ),
+            )
+            result = next((path for path in results if path.exists()), None)
+            self._submitted_earlier = True
+            if result is not None:
+                self._earlier_first_submission = json.loads(result.read_text()).get(
+                    "first_submission_seconds"
+                )
+        previous = self.root / "attempts" / str(attempt - 1)
+        for name in ("final_result.json", "engine_error.json"):
+            source = self.root / name
+            if not source.exists():
+                continue
+            self._ensure_directory(previous)
+            os.replace(source, previous / name)
+            self._fsync_directory(previous)
+            self._fsync_directory(self.root)
+        flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+        descriptor = os.open(self.root / "agent_output.txt", flags, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(f"\n--- rsi-harness: attempt {attempt} ---\n")
+            stream.flush()
+            os.fsync(stream.fileno())
 
     def record_submission(self, report: SubmissionReport) -> None:
         self._validate_report(report)
@@ -133,14 +215,19 @@ class RunArtifactWriter:
         agent_exit_code: int | None = None,
         agent_runtime_seconds: float | None = None,
         first_submission_seconds: float | None = None,
+        attempts: int | None = None,
     ) -> None:
         """Write ``final_result.json``.
 
         ``agent_runtime_seconds`` is the Agent's exec, and
         ``first_submission_seconds`` the time from its start to the start of
         the first Judge round that returned a report; both are None when
-        there was none.
+        there was none. A resumed run gives its number of ``attempts``, and
+        its Agent seconds summed over them.
         """
+        if self._submitted_earlier:
+            # Measured in the earlier attempt that first submitted.
+            first_submission_seconds = self._earlier_first_submission
         best = self._best_report()
         payload = {
             "best_score": None if best is None else best.score,
@@ -157,6 +244,8 @@ class RunArtifactWriter:
             "agent_runtime_seconds": agent_runtime_seconds,
             "first_submission_seconds": first_submission_seconds,
         }
+        if attempts is not None:
+            payload["attempts"] = attempts
         self._atomic_write_json(self.root / "final_result.json", payload)
 
     def record_engine_error(self, error: str) -> None:
@@ -343,4 +432,4 @@ class RunArtifactWriter:
             os.close(directory_fd)
 
 
-__all__ = ["RunArtifactWriter"]
+__all__ = ["RunArtifactWriter", "recorded_submissions"]

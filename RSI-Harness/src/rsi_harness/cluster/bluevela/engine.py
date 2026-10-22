@@ -34,7 +34,24 @@ from rsi_harness.models import (
     RunGPUPlan,
     RunPlan,
 )
+from rsi_harness.runtime.recovery import AttemptGrants
 from rsi_harness.runtime.sandbox_policy import _tuples, validate_cluster_sandbox
+
+
+class ClusterResume(PersistedModel):
+    """The attempt a resumed run's job is, as the submit host planned it.
+
+    The Engine plans it again from the run's lease and logs and refuses a
+    run that changed in between."""
+
+    attempt: int = Field(ge=2)
+    grants: AttemptGrants
+    agent_seconds_left: float = Field(gt=0)
+    submissions_left: int | None = None
+    next_round_id: str
+    message: str
+    # The SIF the run started on, which the job's cache sidecar must name.
+    sif_sha256: str
 
 
 class EnginePayload(PersistedModel):
@@ -56,6 +73,8 @@ class EnginePayload(PersistedModel):
     agent_companions: tuple[Path, ...] = ()
     # A judge_model task's Judge LLM, as the submit host checked it.
     judge_llm: ClusterJudgeLLM | None = None
+    # Set for a resumed attempt (control/attempts/<k>/run.json).
+    resume: ClusterResume | None = None
 
     @model_validator(mode="after")
     def _exactly_one_resource_branch(self) -> Self:
@@ -222,6 +241,22 @@ def render_engine_driver(
         for item in ("--bind", f"{path}:{path}")
     ]
     bind_args = " ".join(_quote(item) for item in binds)
+    # A cancelled or timed-out job: Slurm signals this script alone and LSF
+    # the whole job, and either kills what is left once the script exits.
+    # Forward one SIGTERM to the Engine, which closes its attempt for
+    # `resume`, and wait for it.
+    engine = f"""{_quote(sys.executable)} -m rsi_harness.cluster.bluevela.engine \\
+  --payload {_quote(payload_path)} &
+engine_pid=$!
+trap 'trap "" INT TERM; kill -TERM "$engine_pid" 2>/dev/null || true' INT TERM
+while :; do
+  wait "$engine_pid" && engine_status=0 || engine_status=$?
+  kill -0 "$engine_pid" 2>/dev/null || break
+done
+trap - INT TERM
+if (( engine_status )); then exit "$engine_status"; fi
+test -s {_quote(leaf / "final_result.json")}
+"""
     if payload.resources is not None:
         if payload.resources.total_gpus:
             device_environment = '''test -n "${CUDA_VISIBLE_DEVICES:-}"
@@ -265,10 +300,7 @@ trap cleanup EXIT
   sha256sum -c {_quote(payload.sif_sha256_path.name)})
 {device_preflight}
 
-{_quote(sys.executable)} -m rsi_harness.cluster.bluevela.engine \
-  --payload {_quote(payload_path)}
-test -s {_quote(leaf / "final_result.json")}
-"""
+{engine}"""
     else:
         assert payload.multi_node is not None
         inventory_variable = (
@@ -304,10 +336,7 @@ trap cleanup EXIT
 
 (cd {_quote(payload.sif_path.parent)} && \
   sha256sum -c {_quote(payload.sif_sha256_path.name)})
-{_quote(sys.executable)} -m rsi_harness.cluster.bluevela.engine \
-  --payload {_quote(payload_path)}
-test -s {_quote(leaf / "final_result.json")}
-"""
+{engine}"""
     output.write_text(script)
     output.chmod(0o700)
     return payload_path

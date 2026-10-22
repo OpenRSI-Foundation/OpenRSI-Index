@@ -21,6 +21,22 @@ class RootfsSnapshotNotCreatedError(SetupError):
     """Acquire failed with authoritative proof that no image was created."""
 
 
+def rootfs_image_ref(*, run_id: str, task_id: str, round_id: str, purpose: str) -> str:
+    """Return the deterministic task-bound local rootfs image tag."""
+    DockerRootfsSnapshotBackend._validate_identity(
+        run_id=run_id,
+        task_id=task_id,
+        round_id=round_id,
+        purpose=purpose,
+    )
+    return DockerRootfsSnapshotBackend._reference(
+        run_id=run_id,
+        task_id=task_id,
+        round_id=round_id,
+        purpose=purpose,
+    )
+
+
 def _digest(*values: str) -> str:
     payload = b"".join(
         len(value.encode("utf-8")).to_bytes(8, "big") + value.encode("utf-8")
@@ -49,17 +65,8 @@ class DockerRootfsSnapshotBackend:
         self, *, run_id: str, task_id: str, round_id: str, purpose: str
     ) -> str:
         """Return the deterministic task-bound local rootfs image tag."""
-        self._validate_identity(
-            run_id=run_id,
-            task_id=task_id,
-            round_id=round_id,
-            purpose=purpose,
-        )
-        return self._reference(
-            run_id=run_id,
-            task_id=task_id,
-            round_id=round_id,
-            purpose=purpose,
+        return rootfs_image_ref(
+            run_id=run_id, task_id=task_id, round_id=round_id, purpose=purpose
         )
 
     def acquire(
@@ -472,4 +479,8 @@ class DockerRootfsSnapshotBackend:
         )
 
 
-__all__ = ["DockerRootfsSnapshotBackend", "RootfsSnapshotNotCreatedError"]
+__all__ = [
+    "DockerRootfsSnapshotBackend",
+    "RootfsSnapshotNotCreatedError",
+    "rootfs_image_ref",
+]

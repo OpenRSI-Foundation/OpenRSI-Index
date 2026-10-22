@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -333,3 +334,87 @@ def test_resolver_rejects_malformed_json_without_echoing_content(
         _resolve(tmp_path)
 
     assert secret not in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "login", "sessions", "store"),
+    [
+        ("codex", "auth.json", "sessions", ".codex-sessions"),
+        ("claude-code", ".credentials.json", "projects", ".claude-projects"),
+    ],
+)
+def test_agent_sessions_outlive_the_private_login_tmpfs(
+    tmp_path: Path, agent_name: str, login: str, sessions: str, store: str
+) -> None:
+    """The login stays on its tmpfs; the CLI's sessions go to Work's rootfs,
+    where the retained image keeps them for the next attempt."""
+    import subprocess
+
+    from rsi_harness.runtime.local_auth import resolve_agent_auth
+    from rsi_loop.harness.agent import create_agent
+    from rsi_loop.harness.config import RSILoopConfig
+
+    host = tmp_path / "host"
+    if agent_name == "codex":
+        _write_auth(host, {"tokens": {"access_token": "local-access-secret"}})
+    else:
+        _write_claude_auth(host / ".claude", {"claudeAiOauth": {"accessToken": "x"}})
+    material = resolve_agent_auth(
+        source=AgentAuthSource.LOCAL,
+        agent_name=agent_name,
+        agent_api_key=None,
+        environ={},
+        process_uid=os.getuid(),
+        effective_uid=os.geteuid(),
+        user_lookup=_lookup(host, os.getuid()),
+    )
+    assert material is not None
+    [mount] = material.mounts
+    tmpfs = mount.tmpfs.target.relative_to("/home/agent")
+    assert [entry.path.as_posix() for entry in mount.files] == [login]
+    assert not Path(store).is_relative_to(tmpfs)
+
+    # Work's $HOME, with the tmpfs as the Harness fills it, and a CLI that
+    # writes a session and lists the ones it can read.
+    home = tmp_path / "work-home"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    cli = "codex" if agent_name == "codex" else "claude"
+    (bin_dir / cli).write_text(
+        "#!/bin/sh\n"
+        f'ls "$HOME/{tmpfs}/{sessions}/"\n'
+        f'echo transcript > "$HOME/{tmpfs}/{sessions}/session-$$.jsonl"\n'
+    )
+    (bin_dir / cli).chmod(0o755)
+    prompt = tmp_path / "prompt.md"
+    prompt.write_text("Do the task.\n")
+    command = create_agent(agent_name, RSILoopConfig()).format_run_cmd(
+        str(prompt), model="m"
+    )
+
+    def launch() -> str:
+        (home / tmpfs).mkdir(parents=True)
+        (home / tmpfs / login).write_bytes(mount.files[0].content)
+        completed = subprocess.run(
+            ["/bin/bash", "-c", command],
+            env={"HOME": str(home), "PATH": f"{bin_dir}:/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return completed.stdout
+
+    assert launch() == ""
+    assert (home / tmpfs / sessions).resolve() == (home / store).resolve()
+    [saved] = (home / store).iterdir()
+    # Work stops: the tmpfs and the login are gone, the rootfs is retained.
+    shutil.rmtree(home / tmpfs)
+
+    assert launch().split() == [saved.name]
+    assert sorted(path.name for path in (home / tmpfs).iterdir()) == sorted(
+        [login, sessions]
+    )
+    assert all(
+        b"local-access-secret" not in path.read_bytes()
+        for path in (home / store).iterdir()
+    )

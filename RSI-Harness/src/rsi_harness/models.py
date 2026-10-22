@@ -211,6 +211,42 @@ class RunRequest(PersistedModel):
     _absolute_task_dir = field_validator("task_dir", mode="after")(_absolute_path)
 
 
+class SandboxPolicySource(PersistedModel):
+    """The operator's sandbox policy file and the SHA-256 of its bytes."""
+
+    path: Path
+    sha256: str
+
+    _absolute_policy_path = field_validator("path", mode="after")(_absolute_path)
+
+    @field_validator("sha256")
+    @classmethod
+    def valid_digest(cls, value: str) -> str:
+        if re.fullmatch(r"[0-9a-f]{64}", value) is None:
+            raise ValueError("sandbox policy digest must be a SHA-256 hex digest")
+        return value
+
+
+class RunRequestRecord(PersistedModel):
+    """A run's request, saved at its start to rebuild the same run.
+
+    It holds no secret value: the Judge LLM key is a file path or a variable
+    name, and Agent auth is only its source.
+    """
+
+    schema_version: int = Field(default=1, strict=True)
+    run_id: str
+    request: RunRequest
+    sandbox_policy: SandboxPolicySource | None = None
+
+    @field_validator("schema_version")
+    @classmethod
+    def supported_schema(cls, value: int) -> int:
+        if value != 1:
+            raise ValueError("unsupported run request schema version")
+        return value
+
+
 class MainServiceConfig(PersistedModel):
     build_context: Path | None = None
     image: str | None = None
@@ -492,6 +528,9 @@ class ContainerVolumeMount(PersistedModel):
     volume: ManagedWorkdirVolume
     target: PurePosixPath
     read_only: bool
+    # A kept volume is mounted as it is: Docker must not refill it from the
+    # image's WORKDIR.
+    no_copy: bool = False
 
     @model_validator(mode="after")
     def exact_target(self) -> ContainerVolumeMount:
@@ -615,11 +654,30 @@ class PreparedAgent:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentResume:
+    """Continue the Agent's own session from an earlier attempt of this run.
+
+    ``message`` is the next user turn of that session: what happened to the
+    run in between, never a recap of the session itself. ``agent_output``
+    is the host log holding the earlier attempts' output.
+    """
+
+    attempt: int
+    message: str
+    agent_output: Path
+
+    def __post_init__(self) -> None:
+        if self.attempt < 2:
+            raise ValueError("a resumed attempt is numbered from 2")
+        object.__setattr__(self, "agent_output", _runtime_path(self.agent_output))
+
+
+@dataclass(frozen=True, slots=True)
 class AgentPrepareRequest:
     run_plan: RunPlan
     prompt_path: Path
     max_submissions: int | None = None
-    resume: bool = False
+    resume: AgentResume | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "prompt_path", _runtime_path(self.prompt_path))

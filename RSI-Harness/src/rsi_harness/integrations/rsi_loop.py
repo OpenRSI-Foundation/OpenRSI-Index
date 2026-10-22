@@ -6,6 +6,7 @@ import logging
 import shlex
 import tarfile
 import tempfile
+import uuid
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path, PurePosixPath
@@ -16,6 +17,7 @@ from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.models import (
     AgentHookRequest,
     AgentPrepareRequest,
+    AgentResume,
     AgentRunRequest,
     AgentRunResult,
     ContainerRef,
@@ -40,6 +42,9 @@ from rsi_loop.harness.backend import ExecResult
 from rsi_loop.harness.config import RSILoopConfig
 
 _CONTAINER_PROMPT_PATH = PurePosixPath("/tmp/rsi-agent-prompt.md")
+# Next to agent_prompt.md: the next user turn of a continued session, which
+# is all its CLI reads from the container prompt path.
+_RESUME_PROMPT_NAME = "agent_resume_prompt.md"
 # How every Agent (its CLI, a driven CLI's driver, a resume, the oracle) is
 # started in Work. Not a login shell: a login profile may reset PATH (Debian's
 # and Alpine's /etc/profile do), dropping the image's own ENV PATH and the
@@ -277,6 +282,13 @@ def rsi_loop_oneshot(config: RSILoopConfig, agent_plan: Any) -> dict[str, Any]:
     return result
 
 
+def _run_session_id(plan: Any) -> str:
+    """The id a run's first Agent session takes where the CLI lets the
+    caller choose it."""
+
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, plan.paths.root.as_uri()))
+
+
 class _ControlBinding:
     __slots__ = ("container", "submit_url", "token")
 
@@ -391,22 +403,32 @@ class RSILoopAgentAdapter:
             self._config, agent_plan.name, model=agent_plan.model
         )
         model = agent_plan.model or self._config.agent_model or agent.default_model
-        prompt = self._prompt(
-            plan.task.instruction,
-            plan.gpu_plan,
-            request.max_submissions,
-            public_tests=plan.task.verifier.visibility == "public",
-        )
         request.prompt_path.parent.mkdir(parents=True, exist_ok=True)
-        request.prompt_path.write_text(prompt)
+        if request.resume is None or not request.prompt_path.exists():
+            request.prompt_path.write_text(
+                self._prompt(
+                    plan.task.instruction,
+                    plan.gpu_plan,
+                    request.max_submissions,
+                    public_tests=plan.task.verifier.visibility == "public",
+                )
+            )
+        # The first attempt's session takes the run's own id where the CLI
+        # lets it choose one.
+        prompt_path, session_id = request.prompt_path, _run_session_id(plan)
+        if request.resume is not None:
+            prompt_path, session_id = self._resume_prompt(
+                agent, request.prompt_path, request.resume
+            )
         try:
             command = agent.format_run_cmd(
                 str(_CONTAINER_PROMPT_PATH),
                 model=model,
                 cwd=str(plan.workdir),
                 internet=agent_plan.network.mode == "public",
-                resume=request.resume,
+                resume=request.resume is not None and session_id is not None,
                 continuation=STOP_HOOK_REASON if agent_plan.install_stop_hook else None,
+                session_id=session_id,
             )
         except ValueError as error:
             # A backstop: production checks the model before any image or
@@ -419,9 +441,40 @@ class RSILoopAgentAdapter:
         return PreparedAgent(
             agent_name=agent.name,
             command=(*AGENT_SHELL, command),
-            prompt_path=request.prompt_path,
+            prompt_path=prompt_path,
             environment=tuple(sorted(environment.items())),
         )
+
+    def _resume_prompt(
+        self, agent: Agent, prompt_path: Path, resume: AgentResume
+    ) -> tuple[Path, str | None]:
+        """Add the attempt's message to the prompt; return what the CLI reads.
+
+        The Agent continues the last session the run's output names with the
+        message as its next user turn. Without one it starts a new session
+        with the whole prompt, the message included.
+        """
+
+        message = resume.message.rstrip() + "\n"
+        # Appended, never rewritten: Judge trajectory copies are byte ranges
+        # of this file.
+        with prompt_path.open("a") as prompt:
+            prompt.write(f"\n## Attempt {resume.attempt}\n\n{message}")
+        if not agent.resumes_sessions:
+            return prompt_path, None
+        session_id = agent.last_session_id(resume.agent_output)
+        if session_id is None:
+            self._logger.warning(
+                "Agent %s: no session of an earlier attempt in %s; attempt %d "
+                "starts a new session with the whole prompt",
+                agent.name,
+                resume.agent_output,
+                resume.attempt,
+            )
+            return prompt_path, None
+        turn_path = prompt_path.with_name(_RESUME_PROMPT_NAME)
+        turn_path.write_text(message)
+        return turn_path, session_id
 
     def install_hooks(self, request: AgentHookRequest) -> None:
         if request.container.role != "work":

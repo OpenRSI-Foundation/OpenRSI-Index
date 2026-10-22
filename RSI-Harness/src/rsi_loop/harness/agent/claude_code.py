@@ -27,8 +27,14 @@ from rsi_loop.harness.agent.base import (
     STOP_HOOK_REASON,
     Agent,
     OneShotCommand,
+    link_session_store,
 )
 from rsi_loop.harness.backend import ContainerBackend, ContainerHandle
+
+# Transcripts are written under ~/.claude/projects; ``--resume`` finds a
+# session by its transcript alone.
+_SESSIONS = (".claude/projects", ".claude-projects")
+_SESSION_STORE = link_session_store(*_SESSIONS)
 
 
 class ClaudeCodeAgent(Agent):
@@ -54,6 +60,8 @@ class ClaudeCodeAgent(Agent):
         " --verbose"
         " --dangerously-skip-permissions"
     )
+    resumes_sessions = True
+    session_store = _SESSIONS
     api_key_env = "ANTHROPIC_AUTH_TOKEN"
     api_base_env = "ANTHROPIC_BASE_URL"
     default_api_base_url = "https://api.anthropic.com"
@@ -84,12 +92,20 @@ class ClaudeCodeAgent(Agent):
         internet: bool = True,
         resume: bool = False,
         continuation: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         # The stop hook file installed by install_stop_hook carries the
         # continuation, so the command does not.
-        cmd = super().format_run_cmd(
-            prompt_path, model=model, cwd=cwd, internet=internet, resume=resume,
-        )
+        if resume and session_id is not None:
+            cmd = self.run_cmd.format(prompt_file=prompt_path, cwd=cwd).replace(
+                "claude ", f"claude --resume {shlex.quote(session_id)} ", 1
+            )
+        else:
+            cmd = super().format_run_cmd(
+                prompt_path, model=model, cwd=cwd, internet=internet, resume=resume,
+            )
+            if not resume and session_id is not None:
+                cmd += f" --session-id {shlex.quote(session_id)}"
 
         effective_model = (
             model or self._config.agent_model or self.default_model
@@ -106,7 +122,7 @@ class ClaudeCodeAgent(Agent):
                 """ --settings '{"includeGitInstructions":false}'"""
             )
 
-        return cmd
+        return f"{_SESSION_STORE} &&\nexec {cmd}"
 
     def format_oneshot_cmd(
         self,
@@ -137,12 +153,18 @@ class ClaudeCodeAgent(Agent):
         )
 
     def apply_reasoning_effort(self, command: str, effort: str) -> str:
-        marker = "claude "
-        if not command.startswith(marker):
+        # The launch is the last line, after the session store step of a Work
+        # command; a one-shot command is the launch alone.
+        prelude, newline, launch = command.rpartition("\n")
+        marker = "exec claude " if newline else "claude "
+        if not launch.startswith(marker):
             raise ValueError(
                 "RSI Loop Claude Code command cannot accept reasoning effort"
             )
-        return f"claude --effort {shlex.quote(effort)} {command[len(marker) :]}"
+        return (
+            f"{prelude}{newline}{marker}--effort {shlex.quote(effort)} "
+            f"{launch[len(marker) :]}"
+        )
 
     def install_stop_hook(
         self,

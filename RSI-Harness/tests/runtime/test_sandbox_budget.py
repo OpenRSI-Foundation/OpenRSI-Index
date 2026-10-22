@@ -72,13 +72,13 @@ def test_v4_is_read_as_child_free_without_rewriting_file(tmp_path):
     path.write_text(json.dumps(raw))
     before = path.read_bytes()
     lease = store.read("old")
-    assert lease.schema_version == 6
+    assert lease.schema_version == 7
     assert lease.sandboxes == ()
     assert lease.sandbox_reservation is None
     assert path.read_bytes() == before
 
 
-@pytest.mark.parametrize("version", [3, 7, True, "5"])
+@pytest.mark.parametrize("version", [3, 8, True, "5"])
 def test_unknown_or_coerced_schema_cannot_hide_authority(tmp_path, version):
     store = LeaseStore(tmp_path)
     raw = make_lease().model_dump(mode="json")

@@ -17,6 +17,8 @@ class EngineConfig(BaseModel):
     secret_env: dict[str, str] = Field(default_factory=dict)
     verifier_secret_env: dict[str, str] = Field(default_factory=dict)
     sandbox_policy: SandboxPolicy | None = None
+    # The file sandbox_policy was loaded from, recorded with the run's request.
+    sandbox_policy_path: Path | None = None
 
     @field_validator("data_root", "logs_root", mode="after")
     @classmethod

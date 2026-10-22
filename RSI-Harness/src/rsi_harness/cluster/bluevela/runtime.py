@@ -6,6 +6,7 @@ allocation and implements only the Work/Judge ports consumed by RunCoordinator.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -75,6 +76,7 @@ from rsi_harness.models import (
     JUDGE_TRAJECTORY_ROOT,
     AgentHookRequest,
     AgentPrepareRequest,
+    AgentResume,
     AgentRunRequest,
     AgentRunResult,
     ContainerRef,
@@ -92,7 +94,11 @@ from rsi_harness.models import (
     SubmissionStatus,
     WorkQuiescence,
 )
-from rsi_harness.runtime.artifacts import RunArtifactWriter, _sudo_invoking_owner
+from rsi_harness.runtime.artifacts import (
+    RunArtifactWriter,
+    _sudo_invoking_owner,
+    recorded_submissions,
+)
 from rsi_harness.runtime.coordinator import (
     EmbeddedSubmissionServerFactory,
     ProductionCoordinatorBackend,
@@ -121,8 +127,9 @@ from rsi_harness.runtime.local_auth import (
     resolve_agent_auth,
 )
 from rsi_harness.runtime.network import NetworkPolicyEnforcer
-from rsi_harness.runtime.recovery import LeaseStore
+from rsi_harness.runtime.recovery import LeaseStore, retained_round_id
 from rsi_harness.runtime.redaction import redact_exact_values, redact_text
+from rsi_harness.runtime.resume import ResumeContext, plan_resume
 from rsi_harness.runtime.reward import read_reward
 from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
 from rsi_harness.runtime.sandbox_policy import validate_cluster_sandbox
@@ -131,8 +138,9 @@ from rsi_harness.runtime.trajectory import (
     capture_round_trajectory,
     release_round_trajectory,
 )
+from rsi_harness.task.compiler import HarborTaskCompiler
 from rsi_harness.task.digest import require_tests_digest
-from rsi_loop.harness.agent import create_agent
+from rsi_loop.harness.agent import create_agent, get_agent_class
 from rsi_loop.harness.config import load_config
 
 
@@ -310,7 +318,13 @@ class ApptainerAgentRuntime:
                 self.plan.task.source_dir / "tests", self.plan.task.tests_digest
             )
 
-    def initialize(self) -> None:
+    def initialize(self, *, resume: bool = False) -> None:
+        """Prepare the run's directories and Work. A resumed attempt reuses
+        the run's workspace, Agent home, task assets and Judge rounds as
+        they are, and seeds nothing; one whose run never finished seeding,
+        so no Agent ran on it, is seeded again."""
+        if resume and self.allocated_pools is not None:
+            raise SetupError("a multi-node cluster run cannot be resumed yet")
         # The adapter refused these before submitting; check again in the job.
         require_cluster_judge_model_access(
             self.plan.task, multi_node=self.allocated_pools is not None
@@ -325,11 +339,20 @@ class ApptainerAgentRuntime:
             # Public phases retain their configured caches through narrow mounts.
             self.profile.storage.hf_home.mkdir(parents=True, exist_ok=True)
             self.profile.storage.hf_datasets_cache.mkdir(parents=True, exist_ok=True)
-        self.workspace.mkdir(parents=True, mode=0o700, exist_ok=False)
-        self.control.mkdir(parents=True, mode=0o700, exist_ok=False)
-        self.agent_home.mkdir(parents=True, mode=0o700, exist_ok=False)
-        self.task_assets.mkdir(parents=True, mode=0o700, exist_ok=False)
-        self.rounds.mkdir(parents=True, mode=0o700, exist_ok=False)
+        seeded = self.control / "seeded"
+        kept = resume and seeded.is_file()
+        for directory in (
+            self.workspace,
+            self.control,
+            self.agent_home,
+            self.task_assets,
+            self.rounds,
+        ):
+            if not kept:
+                # The image's own files seed a partial copy over again.
+                directory.mkdir(parents=True, mode=0o700, exist_ok=resume)
+            if resume and (not directory.is_dir() or directory.is_symlink()):
+                raise SetupError(f"resumed run directory is missing: {directory}")
         self.work_tmp.mkdir(mode=0o700)
         self.judge_tmp_root.mkdir(mode=0o700)
         submit = self.control / "rsi-submit"
@@ -358,7 +381,22 @@ class ApptainerAgentRuntime:
         self._copies[PurePosixPath("/usr/local/bin/rsi-netns-relay")] = relay
         if self.allocated_pools is not None:
             self._materialize_multinode_torchrun()
+        if not kept:
+            self._seed()
+            self._atomic_control(seeded, "")
+        if judge_needs_rsi_agent(self.plan.task.verifier):
+            self._require_judge_python()
+        self._install_auth()
+        try:
+            self._start_work_broker()
+            self._smoke_agent()
+        except BaseException:
+            self.close_multinode()
+            raise
 
+    def _seed(self) -> None:
+        """Copy the image's WORKDIR into the workspace and its /tmp into the
+        task assets the Judge starts from."""
         seed_target = PurePosixPath("/run/rsi-harness/seed")
         workdir = shlex.quote(str(self.plan.workdir))
         seed = shlex.quote(str(seed_target))
@@ -403,15 +441,6 @@ class ApptainerAgentRuntime:
             raise InfrastructureError(
                 f"cannot preserve task image assets: {assets.output}"
             )
-        if judge_needs_rsi_agent(self.plan.task.verifier):
-            self._require_judge_python()
-        self._install_auth()
-        try:
-            self._start_work_broker()
-            self._smoke_agent()
-        except BaseException:
-            self.close_multinode()
-            raise
 
     def _require_judge_python(self) -> None:
         """rsi-agent runs under the image's own python3, 3.8 or later."""
@@ -679,6 +708,10 @@ class ApptainerAgentRuntime:
         auth_root = self.node_tmp / "agent-auth"
         auth_root.mkdir(mode=0o700)
         agent_home = PurePosixPath("/home/agent")
+        # Work's $HOME is Apptainer's in-memory one, not the Agent home: the
+        # CLI's sessions go from its node-local login directory to the Agent
+        # home on shared storage here, where a resumed attempt finds them.
+        store = get_agent_class(self.plan.task.agent.name).session_store
         for index, mount in enumerate(material.mounts):
             target = mount.tmpfs.target
             if target == agent_home or agent_home not in target.parents:
@@ -691,6 +724,10 @@ class ApptainerAgentRuntime:
                 destination = source / entry.path.name
                 destination.write_bytes(entry.content)
                 destination.chmod(entry.mode)
+            if store is not None and (agent_home / store[0]).parent == target:
+                kept = agent_home / store[1]
+                self.agent_home.joinpath(store[1]).mkdir(mode=0o700, exist_ok=True)
+                source.joinpath(PurePosixPath(store[0]).name).symlink_to(kept)
             self._agent_auth_roots[target] = source
             self._agent_auth_binds.append((source, target, False))
 
@@ -1595,7 +1632,8 @@ class ApptainerAgentRuntime:
         stream = None
         if output_path is not None:
             output_path.parent.mkdir(parents=True, exist_ok=True)
-            stream = output_path.open("w")
+            # Append: a resumed run's Agent output continues the same file.
+            stream = output_path.open("a")
 
         def drain() -> None:
             nonlocal captured_bytes, truncated
@@ -1628,6 +1666,17 @@ class ApptainerAgentRuntime:
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
+        except BaseException:
+            # Cancelled (the job's SIGTERM, which Slurm sends the job script
+            # alone): stop the group before waiting for its output, or the
+            # wait outlasts the job's grace and the attempt is never closed.
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGTERM)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=5)
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            raise
         finally:
             thread.join(timeout=30)
             if stream is not None:
@@ -1839,9 +1888,13 @@ class NativeEngineComposition:
         payload: Any,
         plan: RunPlan,
         allocated_pools: AllocatedPools | None = None,
+        resume: ResumeContext | None = None,
     ) -> None:
         self.payload = payload
         self.plan = plan
+        # The next attempt of the run, which keeps its run ID.
+        self.resume = resume
+        self.attempt = 1 if resume is None else resume.attempt
         self.clock = _Clock()
         self.runtime = ApptainerAgentRuntime(
             payload,
@@ -1914,6 +1967,7 @@ class NativeEngineComposition:
             workdir_volume_creator=self.create_volume,
             workdir_volume_attester=lambda _work, volume: self._require_volume(volume),
             workdir_volume_remover=lambda _volume: None,
+            workdir_volume_adopter=self.adopt_volume,
             work_name_planner=lambda _plan, _run: self.runtime.work_ref.container_id,
             work_creator=self.create_work,
             work_feedback_attester=lambda work: self.runtime._require_work(work),
@@ -1945,7 +1999,10 @@ class NativeEngineComposition:
 
     def start_artifacts(self, plan: RunPlan, run_id: str) -> RunArtifactWriter:
         self.artifacts = RunArtifactWriter(plan, run_id=run_id)
-        self.artifacts.start()
+        if self.resume is None:
+            self.artifacts.start()
+        else:
+            self.artifacts.reopen(self.resume.attempt)
         self.evaluator = NativeJudgeEvaluator(
             self.runtime,
             self.artifacts,
@@ -1983,12 +2040,21 @@ class NativeEngineComposition:
         self.volume = planned
         return planned
 
+    def adopt_volume(
+        self, plan: RunPlan, run_id: str, volume: ManagedWorkdirVolume
+    ) -> ManagedWorkdirVolume:
+        """A resumed run's workspace, which stays where it is."""
+        if volume != self.plan_volume(plan, run_id):
+            raise SetupError("kept workspace authority differs from the run")
+        self.volume = volume
+        return volume
+
     def _require_volume(self, volume: ManagedWorkdirVolume) -> None:
         if volume != self.volume:
             raise SetupError("Work workspace authority differs from its plan")
 
     def create_work(self, *_args: Any) -> ContainerRef:
-        self.runtime.initialize()
+        self.runtime.initialize(resume=self.resume is not None)
         self.secrets.update(self.runtime.auth_secret_values)
         access = self.judge_model_access()
         self.runtime.configure_judge_model_access(access)
@@ -2100,6 +2166,15 @@ class NativeEngineComposition:
                 run_plan=plan,
                 prompt_path=self.artifacts.root / "agent_prompt.md",
                 max_submissions=maximum,
+                resume=(
+                    None
+                    if self.resume is None
+                    else AgentResume(
+                        attempt=self.resume.attempt,
+                        message=self.resume.message,
+                        agent_output=self.artifacts.root / "agent_output.txt",
+                    )
+                ),
             )
         )
         environment = dict(prepared.environment)
@@ -2172,7 +2247,10 @@ class NativeEngineComposition:
 
     def plan_retained(self, plan: RunPlan, work: ContainerRef) -> str:
         del plan, work
-        digest = hashlib.sha256(f"{self.payload.run_id}:final".encode()).hexdigest()
+        round_id = retained_round_id("final", self.attempt)
+        digest = hashlib.sha256(
+            f"{self.payload.run_id}:{round_id}".encode()
+        ).hexdigest()
         return f"rsi-harness-rootfs:retained-work-{digest}"
 
     def retain(
@@ -2184,7 +2262,7 @@ class NativeEngineComposition:
             purpose="retained-work",
             run_id=self.payload.run_id,
             task_id=plan.task.task_id,
-            round_id="final",
+            round_id=retained_round_id("final", self.attempt),
             source_container_id=work.container_id,
             image_id=f"sha256:{digest}",
             image_ref=planned,
@@ -2197,12 +2275,16 @@ class NativeEngineComposition:
 
 def validate_native_artifacts(plan: RunPlan, run_id: str) -> Path:
     root = plan.paths.logs / "runs" / run_id / plan.task.task_id
+    # The first recorded round: agent-1, unless an attempt that was resumed
+    # was interrupted while it was being judged.
+    recorded = recorded_submissions(root)
+    first = recorded[0][0].round_id if recorded else "agent-1"
     required = (
         root / "final_result.json",
         root / "agent_output.txt",
         root / "run_agent.log",
-        root / "submissions" / "agent-1" / "report.json",
-        root / "feedback" / "agent-1.log",
+        root / "submissions" / first / "report.json",
+        root / "feedback" / f"{first}.log",
     )
     missing = tuple(path for path in required if not path.is_file())
     if missing:
@@ -2223,10 +2305,20 @@ def run_native_engine(
     validate_cluster_sandbox(
         plan.task.sandbox, plan.sandbox, multi_node=allocated_pools is not None
     )
+    if (
+        payload.resume is None
+        and LeaseStore(plan.paths.root / "leases").path_for(payload.run_id).exists()
+    ):
+        # A rerun of the first attempt's job would start the run over.
+        raise SetupError(
+            f"run {payload.run_id} already started; rsi-harness resume continues it"
+        )
+    resume = None if payload.resume is None else _planned_resume(payload, plan)
     composition = NativeEngineComposition(
         payload,
         plan,
         allocated_pools=allocated_pools,
+        resume=resume,
     )
     try:
         result = RunCoordinator(
@@ -2235,6 +2327,7 @@ def run_native_engine(
             run_id_factory=lambda: payload.run_id,
             clock=composition.clock,
             **composition.coordinator_options(),
+            **({} if resume is None else {"resume": resume}),
         ).run(composition.request())
     finally:
         composition.runtime.close_multinode()
@@ -2247,6 +2340,32 @@ def run_native_engine(
             f"{result.total_rounds} submissions"
         )
     validate_native_artifacts(plan, payload.run_id)
+
+
+def _planned_resume(payload: Any, plan: RunPlan) -> ResumeContext:
+    """Plan the payload's attempt again from the run's lease and logs, as
+    the submit host did after closing the last one."""
+    # The job checked the SIF against this sidecar before it started us.
+    if payload.sif_sha256_path.read_text().split()[0] != payload.resume.sif_sha256:
+        raise SetupError(f"the SIF of run {payload.run_id} was rebuilt since it ran")
+    context = plan_resume(
+        payload.run_id,
+        store=LeaseStore(plan.paths.root / "leases"),
+        data_root=plan.paths.root.parent,
+        logs_root=plan.paths.logs,
+        grants=payload.resume.grants,
+        compile_task=lambda request: HarborTaskCompiler().compile(
+            request.task_dir, request.options
+        ),
+        salvage=None,
+        retained_images=False,
+    )
+    if context.salvage_pending or context.attempt != payload.resume.attempt:
+        raise SetupError(
+            f"run {payload.run_id} changed after attempt "
+            f"{payload.resume.attempt} was submitted"
+        )
+    return context
 
 
 __all__ = ["ApptainerAgentRuntime", "run_native_engine", "validate_native_artifacts"]

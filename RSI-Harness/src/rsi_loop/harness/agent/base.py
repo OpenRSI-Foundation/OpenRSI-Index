@@ -17,11 +17,13 @@
 from __future__ import annotations
 
 import abc
+import json
 import logging
+import re
 import shlex
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from rsi_loop.harness.agent import versions
 from rsi_loop.harness.backend import ContainerBackend, ContainerHandle
@@ -50,6 +52,30 @@ def select_arch(what: str, *, x86_64: str, aarch64: str) -> str:
         f' *) echo "{what}: no release for architecture $(uname -m);'
         ' x86_64 and aarch64 are supported" >&2; exit 1 ;;'
         " esac"
+    )
+
+
+# What a session id read back from an Agent's output may look like before it
+# goes into a command line or a protocol request.
+_SESSION_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,199}")
+
+
+def link_session_store(link: str, store: str) -> str:
+    """Return a bash step that keeps a CLI's session directory on the rootfs.
+
+    ``--agent-auth local`` mounts a private tmpfs over the CLI's directory
+    under ``$HOME`` for its login, and whatever else the CLI writes there is
+    gone when Work stops: no retained image has it, so a later attempt could
+    not continue the session. *link* (relative to ``$HOME``) becomes a symlink
+    to *store* (likewise), a directory on the rootfs; the login stays on the
+    tmpfs. An existing *link*, the symlink of an earlier attempt or the CLI's
+    own directory, is kept.
+    """
+    link_path = f'"$HOME/{link}"'
+    store_path = f'"$HOME/{store}"'
+    return (
+        f'mkdir -p {store_path} "$HOME/{PurePosixPath(link).parent}" && '
+        f"{{ [ -e {link_path} ] || ln -sfn {store_path} {link_path}; }}"
     )
 
 
@@ -132,6 +158,12 @@ class Agent(abc.ABC):
     timeout: int = 3600
     stop_hook: str | None = None
     resume_cmd: str | None = None
+    # format_run_cmd continues a session of an earlier attempt, named by
+    # last_session_id, with the prompt file as its next user turn.
+    resumes_sessions: bool = False
+    # (link, store) under $HOME as link_session_store keeps the CLI's
+    # sessions off its login tmpfs; None when the CLI needs none.
+    session_store: tuple[str, str] | None = None
     display_name: str | None = None
     # Values accepted by ``apply_reasoning_effort``; empty means the Agent
     # does not support a reasoning effort.
@@ -182,6 +214,7 @@ class Agent(abc.ABC):
         internet: bool = True,
         resume: bool = False,
         continuation: str | None = None,
+        session_id: str | None = None,
     ) -> str:
         """Build the shell command to run the agent.
 
@@ -193,10 +226,56 @@ class Agent(abc.ABC):
         *continuation* is the text to send whenever the Agent ends a turn, or
         ``None`` when the stop hook is disabled. Agents whose stop hook is a
         native hook installed by :meth:`install_stop_hook` ignore it.
+
+        *session_id* names the Agent's session. With *resume* it is the
+        session of an earlier attempt to continue (``resumes_sessions``
+        Agents only), and the prompt file holds its next user turn; without,
+        the id a new session takes where the CLI lets the caller choose it.
+        *resume* without a session id is ``resume_cmd``: the most recent
+        session, with a fixed prompt.
         """
-        if resume and self.resume_cmd:
+        if resume and session_id is None and self.resume_cmd:
             return self.resume_cmd
         return self.run_cmd.format(prompt_file=prompt_path, cwd=cwd)
+
+    def last_session_id(self, output: Path) -> str | None:
+        """Return the id of the last session this Agent started in *output*.
+
+        *output* is the run's ``agent_output.txt``, which holds every attempt.
+        ``None`` when it names none, or the last one is not a plain id.
+        """
+        found = None
+        try:
+            with output.open(encoding="utf-8", errors="replace") as lines:
+                for line in lines:
+                    found = self.session_id_in(line) or found
+        except OSError:
+            return None
+        if found is None or _SESSION_ID.fullmatch(found) is None:
+            return None
+        return found
+
+    def session_id_in(self, line: str) -> str | None:
+        """Return the session id one line of the Agent's output names, if any.
+
+        The default reads the ``session_id`` of a stream-json
+        ``system``/``init`` line, which ``claude -p``, rsi-agent-driver and the
+        pi extension print whenever a session starts or is continued.
+        """
+        if '"init"' not in line:
+            return None
+        try:
+            event = json.loads(line)
+        except ValueError:
+            return None
+        if (
+            not isinstance(event, dict)
+            or event.get("type") != "system"
+            or event.get("subtype") != "init"
+            or not isinstance(event.get("session_id"), str)
+        ):
+            return None
+        return event["session_id"]
 
     def format_oneshot_cmd(
         self,

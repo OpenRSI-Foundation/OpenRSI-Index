@@ -75,6 +75,7 @@ class DrivenAgent(Agent):
     agent_version: str | None = None
 
     install_cmds = [NODE_INSTALL_CMD]
+    resumes_sessions = True
     # Only the launcher matters here: images quarantine and check it, and
     # format_run_cmd renders the real command.
     run_cmd = "rsi-agent-driver --prompt-file {prompt_file}"
@@ -122,9 +123,11 @@ class DrivenAgent(Agent):
         internet: bool = True,
         resume: bool = False,
         continuation: str | None = None,
+        session_id: str | None = None,
     ) -> str:
-        # A driven CLI keeps one session for the whole run, so there is no
-        # resume command: a new run starts a new session.
+        # A driven CLI keeps one session for the whole attempt; a later
+        # attempt continues it through the driver. Neither protocol lets a new
+        # session choose its id.
         effective_model = self.effective_model(model)
         argv = [
             "rsi-agent-driver",
@@ -138,6 +141,8 @@ class DrivenAgent(Agent):
             argv += ["--agent-version", self.agent_version]
         if effective_model:
             argv += ["--model", effective_model]
+        if resume and session_id is not None:
+            argv += ["--resume-session", session_id]
         # The prompt is read from the file: task text in argv could be matched
         # by an Agent's own `pkill -f`, and argv is visible to every process.
         argv += ["--prompt-file", prompt_path]

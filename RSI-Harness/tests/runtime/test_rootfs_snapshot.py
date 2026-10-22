@@ -10,9 +10,11 @@ from docker.errors import APIError, ImageNotFound
 
 from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.models import ContainerRef, RootfsSnapshotLease
+from rsi_harness.runtime.production import ProductionRecoveryBackend
 from rsi_harness.runtime.rootfs_snapshot import (
     DockerRootfsSnapshotBackend,
     RootfsSnapshotNotCreatedError,
+    rootfs_image_ref,
 )
 
 
@@ -122,6 +124,35 @@ def _backend_and_work() -> tuple[DockerRootfsSnapshotBackend, FakeClient, Contai
         work.container_id, client.images
     )
     return DockerRootfsSnapshotBackend(client), client, work
+
+
+def test_recovery_commits_stopped_work_as_a_labelled_salvage_image() -> None:
+    backend, client, work = _backend_and_work()
+    planned = rootfs_image_ref(
+        run_id="run", task_id="task", round_id="salvage", purpose="retained-work"
+    )
+    assert planned == backend.planned_ref(
+        run_id="run", task_id="task", round_id="salvage", purpose="retained-work"
+    )
+
+    recovery = ProductionRecoveryBackend(client, snapshot=backend, firewall=None)
+    image_id = recovery.commit_work(
+        work.container_id,
+        run_id="run",
+        task_id="task",
+        round_id="salvage",
+        planned_ref=planned,
+    )
+
+    image = client.images.get(planned)
+    assert image.id == image_id
+    assert image.attrs["Config"]["Labels"] == {
+        "rsi-harness.run-id": "run",
+        "rsi-harness.task-id": "task",
+        "rsi-harness.round-id": "salvage",
+        "rsi-harness.source-container-id": work.container_id,
+        "rsi-harness.role": "retained-work-rootfs",
+    }
 
 
 def test_acquire_commits_attested_rootfs_image_with_deterministic_safe_tag() -> None:

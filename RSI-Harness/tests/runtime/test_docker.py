@@ -474,6 +474,32 @@ def test_create_passes_exact_attested_workdir_volume_with_role_access(
     ]
 
 
+def test_create_mounts_a_kept_workdir_volume_without_copying_the_image(tmp_path):
+    """A resumed Work keeps WORKDIR as the Agent left it, even when emptied."""
+    client = FakeDockerClient()
+    volume = _workdir_volume()
+    _install_workdir_volume(client, volume)
+    runtime = make_runtime(client, tmp_path)
+
+    runtime.create(
+        ContainerSpec(
+            image="image",
+            workdir=PurePosixPath("/workspace"),
+            volume_mounts=(
+                ContainerVolumeMount(
+                    volume=volume,
+                    target=PurePosixPath("/workspace"),
+                    read_only=False,
+                    no_copy=True,
+                ),
+            ),
+        )
+    )
+
+    (mount,) = client.containers.created[0]["mounts"]
+    assert mount["VolumeOptions"] == {"NoCopy": True}
+
+
 @pytest.mark.parametrize(
     ("role", "read_only"),
     (("work", True), ("judge", False), ("helper", False)),
@@ -1841,6 +1867,24 @@ def test_exec_streams_complete_redacted_output_while_return_stays_bounded(tmp_pa
     assert result.full_output_captured is True
     assert output_path.read_text() == ("abcd[REDACTED] access_token=[REDACTED]\nijkl")
     assert "".join(live_output) == output_path.read_text()
+
+
+def test_exec_appends_to_an_existing_output_artifact(tmp_path):
+    """A resumed run's Agent output continues the earlier attempts' file."""
+    client = FakeDockerClient(chunks=(b"second attempt\n",))
+    client.containers.by_id["work"] = FakeDockerContainer("work")
+    runtime = make_runtime(client, tmp_path)
+    output_path = (tmp_path / "engine-root" / "agent-output.txt").resolve()
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text("first attempt\n")
+
+    runtime.exec(
+        ContainerRef(container_id="work", role="work"),
+        ("sh", "-c", "produce-output"),
+        output_path=output_path,
+    )
+
+    assert output_path.read_text() == "first attempt\nsecond attempt\n"
 
 
 def test_exec_live_output_callback_failure_does_not_disturb_capture(tmp_path):
