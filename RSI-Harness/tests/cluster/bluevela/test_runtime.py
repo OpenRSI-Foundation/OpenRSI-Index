@@ -1570,3 +1570,227 @@ def test_native_hook_install_starts_no_network_agent_broker(
         assert (node_tmp / "network/submit.sock").is_socket()
     finally:
         runtime.close_agent_network()
+
+
+def _codex_runtime(tmp_path: Path, monkeypatch, **payload) -> ApptainerAgentRuntime:
+    node_tmp = tmp_path / "node-tmp"
+    node_tmp.mkdir()
+    monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
+    return ApptainerAgentRuntime(
+        SimpleNamespace(
+            **{
+                "profile": load_cluster_profile("bluevela"),
+                "run_id": "native-run",
+                "sif_path": tmp_path / "task.sif",
+                "agent_binary": Path(sys.executable),
+                "agent_launcher": "codex",
+                "agent_companions": (),
+                "agent_auth": None,
+                "agent_version": "0.149.0",
+                **payload,
+            }
+        ),
+        make_run_plan(tmp_path),
+    )
+
+
+def test_resumed_initialize_reuses_the_run_directories_and_seeds_nothing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(command, **_options):
+        calls.append(tuple(command))
+        return AgentRunResult(exit_code=0, output="0.149.0\n")
+
+    monkeypatch.setattr(runtime, "_run", fake_run)
+    runtime.initialize()
+    (runtime.workspace / "answer.py").write_text("answer = 42\n")
+    (runtime.agent_home / ".codex").mkdir()
+    (runtime.rounds / "agent-1").mkdir()
+    # The next attempt's job: a fresh node-local scratch.
+    node_tmp = tmp_path / "node-tmp-2"
+    node_tmp.mkdir()
+    monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
+    resumed = ApptainerAgentRuntime(runtime.payload, runtime.plan)
+    calls.clear()
+    monkeypatch.setattr(resumed, "_run", fake_run)
+
+    resumed.initialize(resume=True)
+
+    assert calls == [("/usr/local/bin/codex", "--version")]
+    assert (resumed.workspace / "answer.py").read_text() == "answer = 42\n"
+    assert (resumed.agent_home / ".codex").is_dir()
+    assert (resumed.rounds / "agent-1").is_dir()
+    assert (resumed.control / "rsi-submit").is_file()
+
+
+def test_resumed_initialize_refuses_a_missing_run_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    runtime.control.mkdir(parents=True)
+    (runtime.control / "seeded").write_text("\n")
+    monkeypatch.setattr(runtime, "_run", lambda *_a, **_k: pytest.fail("Work started"))
+
+    with pytest.raises(SetupError, match="resumed run directory is missing"):
+        runtime.initialize(resume=True)
+
+
+def test_resumed_initialize_seeds_a_run_that_never_finished_seeding(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Attempt 1 died copying the image's WORKDIR, before any Agent ran: the
+    next attempt seeds the partial workspace and task assets again."""
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    runtime.workspace.mkdir(parents=True)
+    (runtime.workspace / "partial.py").write_text("trunc")
+    runtime.control.mkdir(parents=True)
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(command, **_options):
+        calls.append(tuple(command))
+        return AgentRunResult(exit_code=0, output="0.149.0\n")
+
+    monkeypatch.setattr(runtime, "_run", fake_run)
+
+    runtime.initialize(resume=True)
+
+    shells = [command[-1] for command in calls]
+    assert any("/run/rsi-harness/seed" in shell for shell in shells)
+    assert any("/run/rsi-harness/task-tmp" in shell for shell in shells)
+    assert (runtime.control / "seeded").is_file()
+    assert runtime.task_assets.is_dir() and runtime.rounds.is_dir()
+
+
+def test_resumed_initialize_refuses_a_multinode_run(
+    tmp_path: Path, monkeypatch
+) -> None:
+    node_tmp = tmp_path / "node-tmp"
+    node_tmp.mkdir()
+    monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
+    profile = load_cluster_profile("bluevela")
+    profile = profile.model_copy(
+        update={"resources": profile.resources.model_copy(update={"gpus_per_node": 4})}
+    )
+    runtime = ApptainerAgentRuntime(
+        SimpleNamespace(profile=profile, run_id="native-run"),
+        make_run_plan(tmp_path),
+        allocated_pools=_multi_pools(),
+    )
+
+    with pytest.raises(SetupError, match="multi-node cluster run cannot be resumed"):
+        runtime.initialize(resume=True)
+
+
+@pytest.mark.parametrize(
+    ("agent_name", "target", "login", "link", "store"),
+    [
+        ("codex", "/home/agent/.codex", "auth.json", "sessions", ".codex-sessions"),
+        (
+            "claude-code",
+            "/home/agent/.claude",
+            ".credentials.json",
+            "projects",
+            ".claude-projects",
+        ),
+    ],
+)
+def test_local_login_sessions_are_kept_in_the_shared_agent_home(
+    tmp_path: Path, monkeypatch, agent_name, target, login, link, store
+) -> None:
+    """Under --agent-auth local the login directory is node-local; the CLI's
+    sessions in it reach the Agent home, which a resumed attempt mounts."""
+    material = AgentAuthMaterial(
+        agent_name=agent_name,
+        mounts=(
+            AgentAuthMount(
+                tmpfs=ContainerTmpfs(
+                    target=PurePosixPath(target),
+                    options="rw,nosuid,nodev,noexec,mode=0700",
+                ),
+                files=(AgentAuthFile(path=PurePosixPath(login), content=b"{}"),),
+            ),
+        ),
+        secret_values=frozenset(),
+    )
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.runtime.resolve_agent_auth",
+        lambda **_options: material,
+    )
+    runtime = _codex_runtime(tmp_path, monkeypatch, agent_auth=AgentAuthSource.LOCAL)
+    agent = runtime.plan.task.agent.model_copy(update={"name": agent_name})
+    runtime.plan = runtime.plan.model_copy(
+        update={"task": runtime.plan.task.model_copy(update={"agent": agent})}
+    )
+    runtime.agent_home.mkdir(parents=True)
+
+    runtime._install_auth()
+
+    ((source, bound, _read_only),) = runtime._agent_auth_binds
+    assert bound == PurePosixPath(target)
+    assert source.is_relative_to(runtime.node_tmp)
+    assert os.readlink(source / link) == f"/home/agent/{store}"
+    assert (runtime.agent_home / store).is_dir()
+
+
+def test_agent_output_is_appended_across_attempts(tmp_path: Path, monkeypatch) -> None:
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    runtime.workspace.mkdir(parents=True)
+    output = tmp_path / "agent_output.txt"
+    output.write_text("attempt 1\n")
+    monkeypatch.setattr(
+        runtime,
+        "_base_command",
+        lambda **_options: (sys.executable, "-c", "print('attempt 2')"),
+    )
+    monkeypatch.setattr(runtime, "_network_command", lambda command, **_o: ())
+
+    runtime._run(
+        (), devices=(), network_mode="public", output_path=output, timeout_seconds=30
+    )
+
+    assert output.read_text() == "attempt 1\nattempt 2\n"
+
+
+def test_a_cancelled_run_stops_its_process_group_before_reading_its_output(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The job's SIGTERM reaches only the Engine: Work, still running and
+    holding its output open, is stopped at once instead of being waited on."""
+
+    class Cancelled(BaseException):
+        pass
+
+    def cancel(*_args):
+        raise Cancelled
+
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    pid_file = tmp_path / "child.pid"
+    monkeypatch.setattr(
+        runtime,
+        "_base_command",
+        lambda **_options: (
+            "sh",
+            "-c",
+            f"sleep 300 & echo $! > {pid_file}; wait",
+        ),
+    )
+    monkeypatch.setattr(runtime, "_network_command", lambda command, **_o: ())
+    previous = signal.signal(signal.SIGALRM, cancel)
+    signal.setitimer(signal.ITIMER_REAL, 0.5)
+    started = time.monotonic()
+    try:
+        with pytest.raises(Cancelled):
+            runtime._run((), devices=(), network_mode="public", timeout_seconds=300)
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous)
+
+    assert time.monotonic() - started < 15
+    child = int(pid_file.read_text())
+    deadline = time.monotonic() + 10
+    while _process_state(child) not in (None, "Z"):
+        assert time.monotonic() < deadline
+        time.sleep(0.05)

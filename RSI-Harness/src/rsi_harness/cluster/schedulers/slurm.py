@@ -6,6 +6,7 @@ import re
 import subprocess
 import time
 from collections.abc import Callable
+from datetime import datetime
 
 from pydantic import field_validator
 
@@ -106,6 +107,8 @@ class SlurmScheduler:
             f"--mem={spec.memory_mb}M",
             f"--time={hours * 60 + minutes}",
             "--export=ALL",
+            # A site requeue would rerun the payload over the same run logs.
+            "--no-requeue",
         ]
         if spec.group:
             argv.append(f"--account={spec.group}")
@@ -230,6 +233,57 @@ class SlurmScheduler:
         except KeyboardInterrupt:
             self.cancel(job_id)
             raise
+
+    def finished(self, job_id: str) -> SlurmJobResult | None:
+        """The job's end, or None while Slurm still runs or queues it.
+
+        squeue lists every unfinished job; one it no longer lists has ended,
+        state ``UNKNOWN`` when accounting has no record of it either.
+        """
+        self._require_job_id(job_id)
+        completed = self._runner(
+            (self._status_binary, "--noheader", f"--jobs={job_id}", "--format=%i|%T")
+        )
+        if completed.returncode and "invalid job id" not in (
+            self._detail(completed).lower()
+        ):
+            raise InfrastructureError(
+                f"cannot query Slurm job {job_id}: {self._detail(completed)}"
+            )
+        state = self._exact_status(job_id, completed.stdout, accounting=False)
+        if state is not None and state[0] in _ACTIVE_STATES:
+            return None
+        accounting = self._runner(
+            (
+                self._accounting_binary,
+                "--noheader",
+                "--parsable2",
+                "--allocations",
+                f"--jobs={job_id}",
+                "--format=JobIDRaw,State%32,ExitCode,End",
+            )
+        )
+        if accounting.returncode:
+            raise InfrastructureError(
+                f"cannot query Slurm accounting for {job_id}: "
+                f"{self._detail(accounting)}"
+            )
+        rows = [line.rsplit("|", 1) for line in accounting.stdout.splitlines()]
+        state = self._exact_status(
+            job_id, "\n".join(row[0] for row in rows), accounting=True
+        )
+        if state is None:
+            return SlurmJobResult(job_id=job_id, state="UNKNOWN", exit_code=1)
+        if state[0] in _ACTIVE_STATES:
+            return None
+        end = next(row[-1] for row in rows if row[0].strip().split("|", 1)[0] == job_id)
+        try:
+            ended_at: float | None = datetime.fromisoformat(end.strip()).timestamp()
+        except ValueError:
+            ended_at = None
+        return SlurmJobResult(
+            job_id=job_id, state=state[0], exit_code=state[1], ended_at=ended_at
+        )
 
     def cancel(self, job_id: str) -> None:
         self._require_job_id(job_id)

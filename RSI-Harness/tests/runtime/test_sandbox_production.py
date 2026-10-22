@@ -105,6 +105,76 @@ def test_resolved_envelope_is_reserved_before_parent_setup(composed):
     assert token not in store.path_for("run-1").read_text()
 
 
+def test_prepare_plan_saves_the_run_request_with_the_policy_digest(composed):
+    import hashlib
+
+    from rsi_harness.runtime.run_request import read_run_request
+
+    ports, plan, definition, _, mutate, _ = composed
+    policy = ports.data_root.parent / "policy.toml"
+    policy.write_text("[sandbox]\n")
+    ports.sandbox_policy_path = policy
+    ports.bind_sandbox_lease(mutate)
+    ports.prepare_plan(
+        definition,
+        plan.images,
+        plan.gpu_plan,
+        RunRequest(task_dir=definition.source_dir, gpu_selectors=("0",)),
+        "run-1",
+    )
+
+    record = read_run_request(ports.data_root / "run-1")
+    assert record.run_id == "run-1"
+    assert record.request.task_dir == definition.source_dir
+    assert record.request.gpu_selectors == ("0",)
+    assert record.request.paths is not None
+    assert record.request.paths.root == (ports.data_root / "run-1").resolve()
+    assert record.sandbox_policy is not None
+    assert record.sandbox_policy.path == policy
+    assert (
+        record.sandbox_policy.sha256 == hashlib.sha256(policy.read_bytes()).hexdigest()
+    )
+
+
+def test_services_hand_the_policy_path_to_the_run_composition(tmp_path):
+    import shutil
+
+    from rsi_harness.config import EngineConfig
+    from rsi_harness.models import RunResult, RunStatus
+    from tests.integration.test_run_engine import FIXTURE, _OneDeviceInventory
+
+    task = tmp_path / "task"
+    shutil.copytree(FIXTURE, task)
+    policy = tmp_path / "policy.toml"
+    captured = []
+
+    class Coordinator:
+        def __init__(self, *, backend, lease_store, clock) -> None:
+            del lease_store, clock
+            captured.append(backend)
+
+        def run(self, request):
+            del request
+            return RunResult(run_id="run-1", status=RunStatus.COMPLETED)
+
+    production.ProductionRuntimeServices(
+        data_root=tmp_path / "data",
+        logs_root=tmp_path / "logs",
+        docker_client=object(),
+        inventory=_OneDeviceInventory(),
+        rsi_loop_config=RSILoopConfig(
+            agent_api_key="sk-test",
+            agent_api_base_url="http://198.51.100.8:8443/v1",
+        ),
+        engine_config=EngineConfig(sandbox_policy_path=policy),
+        coordinator_factory=Coordinator,
+        bridge_gateway="127.0.0.1",
+    ).run(RunRequest(task_dir=task, agent_name="codex", model="gpt-test"))
+
+    (backend,) = captured
+    assert backend.work_creator.__self__.sandbox_policy_path == policy
+
+
 def test_different_child_daemon_is_rejected_before_reservation(composed):
     from rsi_harness.errors import SetupError
 

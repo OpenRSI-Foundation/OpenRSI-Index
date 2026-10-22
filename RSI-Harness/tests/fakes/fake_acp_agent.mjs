@@ -10,6 +10,8 @@
 //   log           JSONL path (required)
 //   initError     {code,message}: fail initialize
 //   sessionError  {code,message}: fail session/new
+//   resumeError   {code,message}: fail session/resume (which otherwise
+//                 continues the session it names)
 //   ignoreSigterm true: survive SIGTERM (tests the driver's SIGKILL)
 //   ignoreStdinEnd true: keep running when stdin closes, like a CLI stuck in
 //                 a tool call, so only the driver's signals can end it
@@ -37,7 +39,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 
 const scenario = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const turns = scenario.turns ?? [{}];
-const sessionId = 'fake-acp-session-1';
+let sessionId = 'fake-acp-session-1';
 let promptCount = 0;
 let nextId = 1;
 const pending = new Map();
@@ -233,6 +235,13 @@ function onMessage(msg) {
     case 'session/new':
       if (scenario.sessionError) send({ id: msg.id, error: scenario.sessionError });
       else send({ id: msg.id, result: { sessionId } });
+      break;
+    case 'session/resume':
+      if (scenario.resumeError) send({ id: msg.id, error: scenario.resumeError });
+      else {
+        sessionId = msg.params.sessionId;
+        send({ id: msg.id, result: {} });
+      }
       break;
     case 'session/set_mode':
       send({ id: msg.id, result: {} });

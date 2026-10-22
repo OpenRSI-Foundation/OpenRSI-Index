@@ -8,6 +8,8 @@
 // Scenario keys:
 //   log            JSONL path (required)
 //   createError    {code,message}: fail session/create
+//   resumeError    {code,message}: fail session/resume (which otherwise
+//                  continues the session it names)
 //   rejectSends    answer this many session/send calls with -32010 first
 //   sendErrors     [{code,message}]: answer the next session/send calls with
 //                  these errors, in order, before accepting any
@@ -33,7 +35,7 @@ import { appendFileSync, readFileSync } from 'node:fs';
 
 const scenario = JSON.parse(readFileSync(process.argv[2], 'utf8'));
 const turns = scenario.turns ?? [{}];
-const sessionId = 'sess_fake-zcode-1';
+let sessionId = 'sess_fake-zcode-1';
 let rejectSends = scenario.rejectSends ?? 0;
 const sendErrors = [...(scenario.sendErrors ?? [])];
 let locked = false;
@@ -151,6 +153,13 @@ function onMessage(msg) {
     case 'session/create':
       if (scenario.createError) send({ id: msg.id, error: scenario.createError });
       else send({ id: msg.id, result: { session: { sessionId, status: 'idle' } } });
+      break;
+    case 'session/resume':
+      if (scenario.resumeError) send({ id: msg.id, error: scenario.resumeError });
+      else {
+        sessionId = msg.params.sessionId;
+        send({ id: msg.id, result: { session: { sessionId, status: 'idle' } } });
+      }
       break;
     case 'session/subscribe':
       send({ id: msg.id, result: { subscribed: true } });

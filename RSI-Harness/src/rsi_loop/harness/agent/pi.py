@@ -101,6 +101,7 @@ class PiAgent(Agent):
     requires_model = True
     # Sent as the OpenAI ``reasoning_effort``, without a client-side mapping.
     reasoning_efforts = frozenset({"minimal", "low", "medium", "high"})
+    resumes_sessions = True
 
     def check_config(self) -> None:
         super().check_config()
@@ -191,9 +192,12 @@ class PiAgent(Agent):
         internet: bool = True,
         resume: bool = False,
         continuation: str | None = None,
+        session_id: str | None = None,
     ) -> str:
-        # pi keeps one session for the whole run, so there is no resume
-        # command: a new run starts a new session.
+        # pi keeps one session for the whole attempt; a later attempt opens it
+        # again. --session, unlike --session-id, fails when the session is
+        # missing instead of starting an empty one under that id. A new
+        # session keeps pi's own id: --session-id would print a warning.
         effective_model = self._effective_model(model)
         prelude = self._prelude(effective_model)
         # The extension continues only while this is set, that is, while the
@@ -213,6 +217,8 @@ class PiAgent(Agent):
             "--model",
             effective_model,
         ]
+        if resume and session_id is not None:
+            argv += ["--session", session_id]
         # The prompt is read from the file: task text in argv could be matched
         # by an Agent's own `pkill -f`, and argv is visible to every process.
         # A file, not an open pipe, also lets pi's print mode reach its end.

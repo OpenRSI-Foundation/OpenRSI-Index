@@ -4,7 +4,9 @@
 // The driver starts the CLI as a child speaking ACP v1 or the ZCode Protocol
 // over stdio, sends the task prompt, and at every turn end sends the
 // continuation reason into the SAME session. It never relaunches the CLI: when
-// the child exits, the driver exits with the child's code.
+// the child exits, the driver exits with the child's code. With
+// --resume-session ID it continues that session of an earlier run instead of
+// creating one, and the prompt is its next user turn.
 //
 // stdout carries only normalized, Claude-Code-stream-json-compatible JSON
 // lines, because the harness stores it as agent_output.txt and the visualizer,
@@ -272,6 +274,7 @@ const VALUE_FLAGS = new Set([
   'agent-name',
   'agent-version',
   'model',
+  'resume-session',
 ]);
 const BOOL_FLAGS = new Set(['version']);
 
@@ -769,14 +772,26 @@ class Driver {
     const agentInfo = isObject(init.result?.agentInfo) ? init.result.agentInfo : {};
     this.transcript.agentVersion ??= agentInfo.version ?? null;
     this.transcript.agentName ??= agentInfo.name ?? null;
-    const created = await this.rpc.request(
-      'session/new',
-      { cwd: process.cwd(), mcpServers: [] },
-      TIMINGS.setupTimeoutMs,
-    );
-    const sessionId = created.result?.sessionId;
-    if (created.error || typeof sessionId !== 'string') {
-      return this.setupFailed('session/new', created.error ?? { message: 'no sessionId' });
+    let sessionId = this.opts['resume-session'] ?? null;
+    if (sessionId !== null) {
+      // Not session/load: it replays the whole history as session/update
+      // notifications, which would be written into the transcript again.
+      const resumed = await this.rpc.request(
+        'session/resume',
+        { sessionId, cwd: process.cwd(), mcpServers: [] },
+        TIMINGS.setupTimeoutMs,
+      );
+      if (resumed.error) return this.setupFailed('session/resume', resumed.error);
+    } else {
+      const created = await this.rpc.request(
+        'session/new',
+        { cwd: process.cwd(), mcpServers: [] },
+        TIMINGS.setupTimeoutMs,
+      );
+      sessionId = created.result?.sessionId;
+      if (created.error || typeof sessionId !== 'string') {
+        return this.setupFailed('session/new', created.error ?? { message: 'no sessionId' });
+      }
     }
     this.sessionId = sessionId;
     this.transcript.sessionId = sessionId;
@@ -1046,15 +1061,23 @@ class Driver {
 
   async runZcode() {
     const cwd = process.cwd();
-    const created = await this.rpc.request(
-      'session/create',
-      // A generated title is one more model request after the first prompt.
-      { workspace: { workspacePath: cwd, workspaceKey: cwd }, mode: 'yolo', titleGenerationEnabled: false },
-      TIMINGS.setupTimeoutMs,
-    );
-    const sessionId = created.result?.session?.sessionId;
-    if (created.error || typeof sessionId !== 'string') {
-      return this.setupFailed('session/create', created.error ?? { message: 'no sessionId' });
+    const workspace = { workspacePath: cwd, workspaceKey: cwd };
+    let sessionId = this.opts['resume-session'] ?? null;
+    if (sessionId !== null) {
+      // ZCode restores the session's mode from its history.
+      const resumed = await this.rpc.request('session/resume', { sessionId, workspace }, TIMINGS.setupTimeoutMs);
+      if (resumed.error) return this.setupFailed('session/resume', resumed.error);
+    } else {
+      const created = await this.rpc.request(
+        'session/create',
+        // A generated title is one more model request after the first prompt.
+        { workspace, mode: 'yolo', titleGenerationEnabled: false },
+        TIMINGS.setupTimeoutMs,
+      );
+      sessionId = created.result?.session?.sessionId;
+      if (created.error || typeof sessionId !== 'string') {
+        return this.setupFailed('session/create', created.error ?? { message: 'no sessionId' });
+      }
     }
     this.sessionId = sessionId;
     this.transcript.sessionId = sessionId;

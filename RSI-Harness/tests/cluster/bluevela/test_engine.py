@@ -240,6 +240,75 @@ def test_cpu_driver_executes_without_nvidia_tools(
     assert result.is_file()
 
 
+@pytest.mark.parametrize("signalled", ["script", "job"])
+def test_a_cancelled_job_waits_for_the_engine_to_close_its_attempt(
+    tmp_path: Path, monkeypatch, signalled: str
+) -> None:
+    """scancel and the walltime signal the job script alone (Slurm) or the
+    whole job (LSF), and kill what is left once the script exits: the
+    script forwards SIGTERM to the Engine and waits for it."""
+    import hashlib
+    import os
+    import signal
+    import subprocess
+    import sys
+    import time
+
+    payload = _cpu_payload(tmp_path)
+    payload.sif_path.write_bytes(b"cpu-image")
+    payload.sif_sha256_path.write_text(
+        f"{hashlib.sha256(b'cpu-image').hexdigest()}  {payload.sif_path.name}\n"
+    )
+    ready, closed = tmp_path / "ready", tmp_path / "closed"
+    engine = tmp_path / "fake-engine"
+    engine.write_text(
+        f"#!{sys.executable}\n"
+        "import pathlib, signal, sys, time\n"
+        "def close(*_):\n"
+        "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        "    time.sleep(1)\n"
+        f"    pathlib.Path({str(closed)!r}).write_text('closed')\n"
+        "    sys.exit(1)\n"
+        "signal.signal(signal.SIGTERM, close)\n"
+        f"pathlib.Path({str(ready)!r}).write_text('ready')\n"
+        "time.sleep(60)\n"
+    )
+    engine.chmod(0o700)
+    profile = payload.profile.model_copy(
+        update={
+            "apptainer": payload.profile.apptainer.model_copy(
+                update={"temp_root": tmp_path}
+            )
+        }
+    )
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.engine.sys.executable", str(engine)
+    )
+    output = tmp_path / "cpu-run.sh"
+    render_engine_driver(payload, profile, output)
+    process = subprocess.Popen(
+        ["/bin/bash", str(output)],
+        start_new_session=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    try:
+        deadline = time.monotonic() + 30
+        while not ready.exists():
+            assert process.poll() is None and time.monotonic() < deadline
+            time.sleep(0.05)
+        if signalled == "script":
+            os.kill(process.pid, signal.SIGTERM)
+        else:
+            os.killpg(process.pid, signal.SIGTERM)
+
+        assert process.wait(timeout=30) == 1
+        assert closed.read_text() == "closed"
+    finally:
+        if process.poll() is None:
+            os.killpg(process.pid, signal.SIGKILL)
+
+
 def test_cpu_engine_binds_an_empty_gpu_pool(tmp_path: Path, monkeypatch) -> None:
     payload = _cpu_payload(tmp_path)
     monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)

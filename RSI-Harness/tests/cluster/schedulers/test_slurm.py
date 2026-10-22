@@ -58,6 +58,7 @@ def test_render_single_node_resources_and_walltime(tmp_path):
         "--mem=65536M",
         "--time=135",
         "--export=ALL",
+        "--no-requeue",
         "--account=research",
         "--gres=gpu:4",
         "--tmp=71680M",
@@ -244,3 +245,48 @@ def test_name_collision_is_exact():
     scheduler.require_name_available("task")
     with pytest.raises(InfrastructureError, match="already active"):
         scheduler.require_name_available("task")
+
+
+def test_finished_is_none_while_the_job_is_queued_or_running():
+    runner = Runner([completed("123|PENDING\n")])
+
+    assert SlurmScheduler(runner=runner).finished("123") is None
+    assert len(runner.calls) == 1
+
+
+@pytest.mark.parametrize("state", ["TIMEOUT", "PREEMPTED", "NODE_FAIL", "CANCELLED"])
+def test_finished_reads_the_end_from_accounting(state):
+    from datetime import datetime
+
+    runner = Runner(
+        [
+            completed(stderr="slurm_load_jobs error: Invalid job id", code=1),
+            completed(
+                f"123|{state} by 1000|0:15|2026-10-21T18:30:19\n"
+                "123.batch|CANCELLED|0:15|2026-10-21T18:30:19\n"
+            ),
+        ]
+    )
+
+    result = SlurmScheduler(runner=runner).finished("123")
+
+    assert result is not None
+    assert result.state == state
+    assert result.exit_code != 0
+    assert result.ended_at == datetime(2026, 10, 21, 18, 30, 19).timestamp()
+    assert runner.calls[1][-1] == "--format=JobIDRaw,State%32,ExitCode,End"
+
+
+def test_finished_counts_a_job_slurm_no_longer_lists_as_ended():
+    runner = Runner([completed(""), completed("")])
+
+    result = SlurmScheduler(runner=runner).finished("123")
+
+    assert result is not None
+    assert (result.state, result.ended_at) == ("UNKNOWN", None)
+
+
+def test_finished_is_none_while_accounting_still_runs_it():
+    runner = Runner([completed(""), completed("123|RUNNING|0:0|Unknown\n")])
+
+    assert SlurmScheduler(runner=runner).finished("123") is None

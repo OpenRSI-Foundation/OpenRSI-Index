@@ -94,9 +94,10 @@ def _phase_gpu_counts(
 def _walltimes(
     definition: TaskDefinition,
     profile: ClusterProfile,
+    agent_seconds: float | None = None,
 ) -> tuple[str, str]:
     run_seconds = (
-        definition.agent.timeout_seconds
+        (definition.agent.timeout_seconds if agent_seconds is None else agent_seconds)
         + definition.verifier.timeout_seconds
         + profile.resources.walltime_margin_seconds
     )
@@ -141,6 +142,16 @@ def derive_resources(
         build_walltime=build_walltime,
         run_walltime=run_walltime,
     )
+
+
+def resumed_run_walltime(
+    definition: TaskDefinition,
+    profile: ClusterProfile,
+    *,
+    agent_seconds: float,
+) -> str:
+    """The run walltime of a resumed attempt with ``agent_seconds`` left."""
+    return _walltimes(definition, profile, agent_seconds)[1]
 
 
 def derive_resource_plan(
@@ -205,4 +216,5 @@ __all__ = [
     "PhaseResources",
     "derive_resource_plan",
     "derive_resources",
+    "resumed_run_walltime",
 ]

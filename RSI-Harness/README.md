@@ -582,19 +582,50 @@ sudo -E "$(command -v rsi-harness)" recover RUN_ID
 Omit `RUN_ID` to recover every unfinished recorded run.
 
 A completed run keeps its final Work state as a Docker image, plus a managed
-WORKDIR volume when split mode is used. Ordinary cleanup removes leftover
-runtime resources but keeps that final state:
+WORKDIR volume when split mode is used. `recover` and `cleanup` keep an
+interrupted run's Work state the same way, so it can be resumed. Ordinary
+cleanup removes leftover runtime resources but keeps that state:
 
 ```bash
 sudo -E "$(command -v rsi-harness)" cleanup RUN_ID
 ```
 
-Delete the retained final state explicitly when it is no longer needed:
+Delete the retained state explicitly when it is no longer needed:
 
 ```bash
 sudo -E "$(command -v rsi-harness)" cleanup RUN_ID \
   --delete-workspace --yes
 ```
+
+### Resume
+
+`resume` continues a local run as its next attempt, whatever ended it: a
+finished, cancelled, crashed or timed-out run. A run that did not end cleanly
+is recovered first. Work is rebuilt from the retained image and WORKDIR
+volume, so files are kept; background processes and GPU state are not. The
+Agent continues its own session (or, if none is found, a new one with the
+original prompt) and is told what changed.
+
+```bash
+sudo -E "$(command -v rsi-harness)" resume RUN_ID --dry-run
+sudo -E "$(command -v rsi-harness)" resume RUN_ID --add-time 3600
+```
+
+The run keeps its Agent time and submissions left. `--add-time SECONDS` and
+`--add-submissions N` grant more, `--cooldown SECONDS` replaces the cooldown,
+and `--gpus LIST` picks other GPUs of the same count. Everything else comes
+from the run's saved request. A round that was being judged at a crash counts
+and has no score. An Agent left running by a crash may work past its deadline
+until recovery; that work is kept and its attempt is charged up to the
+deadline, so the run resumes only with `--add-time`. `final_result.json` of a
+resumed run records its `attempts`.
+
+On a cluster, `resume RUN_ID --cluster PROFILE` runs on the submit host once
+the run's job has ended, and submits the next attempt under the same run ID
+with a walltime sized to the time left; multi-node runs cannot resume yet.
+An attempt whose job end the scheduler no longer records is charged up to
+its deadline. Only the workspace and the Agent home are kept there: other
+files Work wrote outside them are lost with the job.
 
 ## Quick Commands
 
@@ -608,6 +639,7 @@ above.
 | `run TASK_DIR` | Run a Harbor task locally, or submit it to a cluster when `--cluster` is set. | `rsi-harness run ../rsi-tasks/minference-sparse-prefill --agent codex --agent-auth local --model gpt-6-astra --reasoning-effort max --gpus 0` |
 | `visualize` | Serve the run visualizer. | `rsi-harness visualize` |
 | `recover [RUN_ID]` | Recover one interrupted run, or all unfinished runs when `RUN_ID` is omitted. | `rsi-harness recover RUN_ID` |
+| `resume RUN_ID` | Continue a run as its next attempt ([Resume](#resume)). | `rsi-harness resume RUN_ID --add-time 3600` |
 | `cleanup RUN_ID` | Remove leftover runtime resources while retaining the final workspace. | `rsi-harness cleanup RUN_ID` |
 | `cleanup RUN_ID --delete-workspace --yes` | Also delete the retained final workspace without prompting. | `rsi-harness cleanup RUN_ID --delete-workspace --yes` |
 | `sandbox prune-images` | Remove images that managed sandboxes first pulled to this host ([Pulled images](docs/sandbox-operator-guide.md#pulled-images)). | `rsi-harness sandbox prune-images --dry-run` |
@@ -643,7 +675,8 @@ above.
 The default roots are resolved relative to the current working directory.
 `visualize` uses the same roots and listens on `127.0.0.1:8000` by default.
 Both `recover` and `cleanup` also accept `--data-root`, `--logs-root`,
-`--verbose`, and `--cluster NAME` (to kill a cluster run's E2B sandboxes).
+`--verbose`, and `--cluster NAME` (to kill a cluster run's E2B sandboxes);
+`resume` accepts the same roots, `--verbose` and `--cluster NAME`.
 `rsi-sandbox` is not a host command: it is the client injected into Work and
 Judge ([Using the broker](docs/harbor-task-authoring/sandboxes.md#using-the-broker)).
 

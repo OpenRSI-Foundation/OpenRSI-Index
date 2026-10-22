@@ -6,6 +6,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import uuid
 from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 
@@ -20,6 +21,7 @@ from rsi_harness.integrations.rsi_loop import (
 from rsi_harness.models import (
     AgentHookRequest,
     AgentPrepareRequest,
+    AgentResume,
     AgentRunRequest,
     AgentRunResult,
     ContainerRef,
@@ -30,6 +32,8 @@ from rsi_harness.models import (
 )
 from rsi_loop.harness.agent import create_agent, list_agent_classes
 from rsi_loop.harness.agent.base import NODE_BIN, STOP_HOOK_REASON
+from rsi_loop.harness.agent.claude_code import _SESSION_STORE as CLAUDE_SESSION_STORE
+from rsi_loop.harness.agent.codex import _SESSION_STORE as CODEX_SESSION_STORE
 from rsi_loop.harness.config import RSILoopConfig, load_config
 from tests.factories import make_run_plan
 from tests.fakes import register_fake_driven_agent
@@ -280,7 +284,8 @@ def test_prepare_maps_generic_reasoning_effort_to_codex_cli_override(
     assert prepared.command == (
         "/bin/bash",
         "-c",
-        f"codex exec -c 'model_reasoning_effort=\"{effort}\"' "
+        f"{CODEX_SESSION_STORE} &&\n"
+        f"exec codex exec -c 'model_reasoning_effort=\"{effort}\"' "
         '-c web_search="disabled" -c allow_login_shell=false '
         "-c features.shell_snapshot=false --model gpt-test "
         "--dangerously-bypass-approvals-and-sandbox "
@@ -313,9 +318,18 @@ def test_codex_command_names_the_configured_endpoint_as_its_provider(
 
     assert url not in command
     assert "model_provider" not in default
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "codex").write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    (bin_dir / "codex").chmod(0o755)
     argv = subprocess.run(
-        ["bash", "-c", 'codex() { printf "%s\\n" "$@"; }; ' + command],
-        env={**os.environ, "OPENAI_BASE_URL": url},
+        ["bash", "-c", command],
+        env={
+            **os.environ,
+            "OPENAI_BASE_URL": url,
+            "HOME": str(tmp_path / "home"),
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+        },
         cwd=tmp_path,
         check=True,
         capture_output=True,
@@ -336,8 +350,8 @@ def test_codex_command_names_the_configured_endpoint_as_its_provider(
 @pytest.mark.parametrize(
     ("resume", "expected_prefix"),
     (
-        (False, "claude --effort max -p --output-format stream-json"),
-        (True, 'claude --effort max --continue -p "Continue working."'),
+        (False, "exec claude --effort max -p --output-format stream-json"),
+        (True, "exec claude --effort max --resume claude-session-1 -p"),
     ),
 )
 def test_prepare_maps_generic_reasoning_effort_to_claude_cli_flag(
@@ -365,12 +379,18 @@ def test_prepare_maps_generic_reasoning_effort_to_claude_cli_flag(
         AgentPrepareRequest(
             run_plan=plan,
             prompt_path=prompt_path,
-            resume=resume,
+            resume=_resume(
+                tmp_path,
+                '{"type":"system","subtype":"init","session_id":"claude-session-1"}',
+            )
+            if resume
+            else None,
         )
     )
 
     assert prepared.command[:2] == ("/bin/bash", "-c")
-    assert prepared.command[2].startswith(expected_prefix)
+    assert prepared.command[2].startswith(f"{CLAUDE_SESSION_STORE} &&\n")
+    assert prepared.command[2].splitlines()[-1].startswith(expected_prefix)
     assert "--model claude-opus-5" in prepared.command[2]
     assert "--reasoning-effort" not in prepared.command[2]
 
@@ -579,11 +599,11 @@ def test_claude_prompt_is_read_from_stdin_and_never_expanded_into_argv(
     )
 
     prepared = RSILoopAgentAdapter(RSILoopConfig()).prepare(
-        AgentPrepareRequest(run_plan=plan, prompt_path=prompt_path, resume=False)
+        AgentPrepareRequest(run_plan=plan, prompt_path=prompt_path)
     )
 
     command = prepared.command[2]
-    assert command.startswith("claude -p ")
+    assert command.splitlines()[-1].startswith("exec claude -p ")
     assert "$(cat" not in command
     assert " </tmp/rsi-agent-prompt.md" in command
     assert " --model claude-opus-5" in command
@@ -1903,7 +1923,7 @@ def test_every_agent_starts_outside_a_login_shell(
         AgentPrepareRequest(
             run_plan=plan,
             prompt_path=(tmp_path / "prompt.md").resolve(),
-            resume=resume,
+            resume=_resume(tmp_path, *_SESSION_LINES) if resume else None,
         )
     )
 
@@ -1947,7 +1967,7 @@ def test_codex_runs_the_models_commands_outside_a_login_shell() -> None:
     )
 
     for command in commands:
-        assert command.startswith("codex exec ")
+        assert command.splitlines()[-1].removeprefix("exec ").startswith("codex exec ")
         assert command.count("-c allow_login_shell=false") == 1, command
 
 
@@ -2065,3 +2085,203 @@ def test_context_limits_load_from_rsi_environment(
     # Kept as given: only an Agent that needs them rejects a bad value.
     assert config.agent_context_window == "200000"
     assert config.agent_max_output_tokens == "not-a-number"
+
+
+# -- resumed attempts ----------------------------------------------------------
+
+# What each kind of Agent prints when a session starts: a stream-json init
+# line (claude -p, rsi-agent-driver, the pi extension) or Codex's header.
+_SESSION_LINES = (
+    '{"type":"system","subtype":"init","session_id":"session-1"}',
+    "session id: 01a0139c-0000-7000-8000-000000000001",
+)
+_MESSAGE = "This is attempt 2 of the run. 600 s and 2 submissions remain."
+
+
+def _resume(tmp_path: Path, *lines: str) -> AgentResume:
+    output = tmp_path / "agent_output.txt"
+    output.write_text("".join(f"{line}\n" for line in lines))
+    return AgentResume(attempt=2, message=_MESSAGE, agent_output=output)
+
+
+def _plan_for(tmp_path: Path, name: str):
+    plan = make_run_plan(tmp_path)
+    return plan.model_copy(
+        update={
+            "task": plan.task.model_copy(
+                update={
+                    "agent": plan.task.agent.model_copy(
+                        update={"name": name, "model": "m"}
+                    )
+                }
+            )
+        }
+    )
+
+
+def test_resume_appends_the_attempt_and_continues_the_last_session(
+    tmp_path: Path,
+) -> None:
+    """The prompt keeps its first bytes, Judges see the attempt's message, and
+    the CLI reads only that message, as its next user turn."""
+    plan = _plan_for(tmp_path, "codex")
+    prompt_path = (tmp_path / "agent_prompt.md").resolve()
+    adapter = RSILoopAgentAdapter(RSILoopConfig())
+    adapter.prepare(AgentPrepareRequest(run_plan=plan, prompt_path=prompt_path))
+    original = prompt_path.read_text()
+    resume = _resume(
+        tmp_path,
+        "session id: 01a0139c-0000-7000-8000-000000000001",
+        "session id: not a plain id",
+        "  session id: 01a0139c-0000-7000-8000-00000000000f",
+        "--- rsi-harness: attempt 2 ---",
+        "session id: 01a0139c-0000-7000-8000-000000000002",
+        "codex output",
+    )
+
+    prepared = adapter.prepare(
+        AgentPrepareRequest(
+            run_plan=plan, prompt_path=prompt_path, max_submissions=2, resume=resume
+        )
+    )
+
+    assert prompt_path.read_text() == f"{original}\n## Attempt 2\n\n{_MESSAGE}\n"
+    assert prepared.prompt_path == prompt_path.with_name("agent_resume_prompt.md")
+    assert prepared.prompt_path.read_text() == f"{_MESSAGE}\n"
+    launch = prepared.command[2].splitlines()[-1]
+    assert launch.startswith("exec codex exec resume -c ")
+    assert launch.endswith(
+        " --model m --dangerously-bypass-approvals-and-sandbox"
+        " 01a0139c-0000-7000-8000-000000000002 - </tmp/rsi-agent-prompt.md"
+    )
+
+
+@pytest.mark.parametrize("output", (None, "", "codex output only"))
+def test_resume_without_an_earlier_session_starts_a_new_one_with_the_whole_prompt(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture, output: str | None
+) -> None:
+    plan = _plan_for(tmp_path, "claude-code")
+    prompt_path = (tmp_path / "agent_prompt.md").resolve()
+    adapter = RSILoopAgentAdapter(RSILoopConfig())
+    adapter.prepare(AgentPrepareRequest(run_plan=plan, prompt_path=prompt_path))
+    resume = _resume(tmp_path, *(() if output is None else (output,)))
+    if output is None:
+        resume.agent_output.unlink()
+
+    with caplog.at_level("WARNING"):
+        prepared = adapter.prepare(
+            AgentPrepareRequest(run_plan=plan, prompt_path=prompt_path, resume=resume)
+        )
+
+    assert prepared.prompt_path == prompt_path
+    assert prompt_path.read_text().endswith(f"\n## Attempt 2\n\n{_MESSAGE}\n")
+    launch = prepared.command[2].splitlines()[-1]
+    assert launch.startswith("exec claude -p ")
+    # The run's own id may already belong to the lost session.
+    assert "--session-id" not in launch and "--resume" not in launch
+    assert "attempt 2 starts a new session with the whole prompt" in caplog.text
+
+
+def test_resumed_claude_continues_its_session_with_the_message_on_stdin(
+    tmp_path: Path,
+) -> None:
+    plan = _plan_for(tmp_path, "claude-code")
+    prompt_path = (tmp_path / "agent_prompt.md").resolve()
+    adapter = RSILoopAgentAdapter(RSILoopConfig())
+    first = adapter.prepare(AgentPrepareRequest(run_plan=plan, prompt_path=prompt_path))
+    session = first.command[2].split("--session-id ")[1].split()[0]
+    resume = _resume(
+        tmp_path,
+        '{"type":"system","subtype":"init","session_id":"not a plain id"}',
+        f'{{"type":"system","subtype":"init","session_id":"{session}"}}',
+        # A tool result quoting an init line is not one.
+        '{"type":"user","message":{"content":"{\\"type\\":\\"system\\",'
+        '\\"subtype\\":\\"init\\",\\"session_id\\":\\"other\\"}"}}',
+        f'{{"type":"result","subtype":"success","session_id":"{session}"}}',
+    )
+
+    prepared = adapter.prepare(
+        AgentPrepareRequest(run_plan=plan, prompt_path=prompt_path, resume=resume)
+    )
+
+    assert first.command[2].splitlines()[-1] == (
+        "exec claude -p --output-format stream-json --verbose"
+        " --dangerously-skip-permissions </tmp/rsi-agent-prompt.md"
+        f" --session-id {session} --model m --disallowedTools WebSearch,WebFetch"
+    )
+    assert prepared.command[2].splitlines()[-1] == (
+        f"exec claude --resume {session} -p --output-format stream-json --verbose"
+        " --dangerously-skip-permissions </tmp/rsi-agent-prompt.md --model m"
+        " --disallowedTools WebSearch,WebFetch"
+    )
+    assert prepared.prompt_path.read_text() == f"{_MESSAGE}\n"
+
+
+def test_the_first_claude_session_id_is_the_runs_own(tmp_path: Path) -> None:
+    """The same for every attempt of one run and different for another run."""
+
+    def session_id(root: Path) -> str:
+        root.mkdir()
+        prepared = RSILoopAgentAdapter(RSILoopConfig()).prepare(
+            AgentPrepareRequest(
+                run_plan=_plan_for(root, "claude-code"), prompt_path=root / "p.md"
+            )
+        )
+        return prepared.command[2].split("--session-id ")[1].split()[0]
+
+    first = session_id(tmp_path / "a")
+    assert str(uuid.UUID(first)) == first
+    assert session_id(tmp_path / "b") != first
+    shutil.rmtree(tmp_path / "a")
+    assert session_id(tmp_path / "a") == first
+
+
+def test_resumed_oracle_reruns_with_the_remaining_submissions(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    plan = make_run_plan(tmp_path)
+    plan = plan.model_copy(
+        update={
+            "task": plan.task.model_copy(
+                update={"agent": plan.task.agent.model_copy(update={"name": "oracle"})}
+            )
+        }
+    )
+    prompt_path = (tmp_path / "agent_prompt.md").resolve()
+    adapter = RSILoopAgentAdapter(RSILoopConfig())
+    first = adapter.prepare(
+        AgentPrepareRequest(run_plan=plan, prompt_path=prompt_path, max_submissions=5)
+    )
+
+    with caplog.at_level("WARNING"):
+        prepared = adapter.prepare(
+            AgentPrepareRequest(
+                run_plan=plan,
+                prompt_path=prompt_path,
+                max_submissions=3,
+                resume=_resume(tmp_path, "rsi-oracle: submission 1/5"),
+            )
+        )
+
+    assert prepared.command == first.command
+    assert dict(prepared.environment)["RSI_ORACLE_SUBMISSIONS"] == "3"
+    assert caplog.text == ""
+
+
+def test_legacy_resume_keeps_the_most_recent_session_command() -> None:
+    """run_agent.py's bool resume: the fixed prompt, flags after ``resume``."""
+    codex = create_agent("codex", RSILoopConfig()).format_run_cmd(
+        "/tmp/prompt.md", model="m", resume=True
+    )
+    claude = create_agent("claude-code", RSILoopConfig()).format_run_cmd(
+        "/tmp/prompt.md", model="m", resume=True
+    )
+
+    assert codex.splitlines()[-1] == (
+        "exec codex exec resume -c allow_login_shell=false"
+        " -c features.shell_snapshot=false --model m --last"
+        ' --dangerously-bypass-approvals-and-sandbox "Continue working."'
+    )
+    assert claude.splitlines()[-1].startswith(
+        'exec claude --continue -p "Continue working."'
+    )

@@ -71,6 +71,7 @@ def test_gpu_submit_argv_is_explicit_and_single_host(tmp_path: Path) -> None:
         "select[tmp>=512000] span[hosts=1]",
         "-gpu",
         "num=4:mode=shared:j_exclusive=yes",
+        "-rn",
         "-o",
         str(tmp_path / "lsf.%J.out"),
         "-e",
@@ -162,6 +163,7 @@ def test_excluded_hosts_reject_unsafe_or_duplicate_names(tmp_path: Path) -> None
         "-gpu",
         "num=8:mode=shared:j_exclusive=yes",
         "-x",
+        "-rn",
         "-o",
         str(tmp_path / "lsf.%J.out"),
         "-e",
@@ -244,3 +246,94 @@ def test_exact_live_job_name_is_rejected_before_submission() -> None:
     assert runner.calls == [
         ("bjobs", "-noheader", "-o", "job_name stat"),
     ]
+
+
+def test_finished_is_none_while_the_job_runs() -> None:
+    runner = FakeRunner([_completed("RUN - -\n")])
+
+    assert LSFScheduler(runner=runner).finished("123") is None
+    assert runner.calls == [
+        ("bjobs", "-a", "-noheader", "-o", "stat exit_code finish_time", "123")
+    ]
+
+
+@pytest.mark.parametrize(
+    ("output", "state", "exit_code"),
+    [("DONE - Oct 21 18:30\n", "DONE", 0), ("EXIT 140 Oct 21 18:30 L\n", "EXIT", 140)],
+)
+def test_finished_reports_the_end_to_the_end_of_its_minute(
+    output: str, state: str, exit_code: int
+) -> None:
+    from datetime import datetime
+
+    result = LSFScheduler(runner=FakeRunner([_completed(output)])).finished("123")
+
+    assert result is not None
+    assert (result.state, result.exit_code) == (state, exit_code)
+    assert result.ended_at is not None
+    ended = datetime.fromtimestamp(result.ended_at)
+    assert (ended.month, ended.day, ended.hour, ended.minute, ended.second) == (
+        10,
+        21,
+        18,
+        30,
+        59,
+    )
+    assert ended <= datetime.now()
+
+
+def test_finished_counts_a_job_lsf_no_longer_finds_as_ended() -> None:
+    runner = FakeRunner(
+        [
+            _completed(stderr="Job <123> is not found\n", returncode=255),
+            _completed(stderr="No matching job found\n", returncode=255),
+        ]
+    )
+
+    result = LSFScheduler(runner=runner).finished("123")
+
+    assert result is not None
+    assert (result.state, result.ended_at) == ("UNKNOWN", None)
+    assert runner.calls[-1] == ("bhist", "-l", "-n", "0", "123")
+
+
+def test_finished_takes_a_cleaned_job_end_from_its_history() -> None:
+    from datetime import datetime
+
+    history = (
+        "Job <123>, User <alice>, Project <default>, Command <run.sh>\n"
+        "Tue Oct 20 10:00:00: Submitted from host <login1>, to Queue <normal>,\n"
+        "                     CWD <$HOME>;\n"
+        "Tue Oct 20 10:00:05: Dispatched 1 Task(s) on Host(s) <node1>;\n"
+        "Tue Oct 20 10:00:05: Starting (Pid 4242);\n"
+        "Tue Oct 20 11:02:03: Exited with exit code 130. The CPU time used is\n"
+        "                     12.0 seconds.\n"
+        "Tue Oct 20 11:02:03: Completed <exit>.\n"
+    )
+    runner = FakeRunner(
+        [
+            _completed(stderr="Job <123> is not found\n", returncode=255),
+            _completed(history),
+        ]
+    )
+
+    result = LSFScheduler(runner=runner).finished("123")
+
+    assert result is not None
+    assert result.state == "UNKNOWN"
+    assert result.ended_at is not None
+    ended = datetime.fromtimestamp(result.ended_at)
+    assert (ended.month, ended.day, ended.hour, ended.minute, ended.second) == (
+        10,
+        20,
+        11,
+        2,
+        3,
+    )
+
+
+def test_finished_does_not_hide_a_failed_query() -> None:
+    runner = FakeRunner([_completed(stderr="LSF is down\n", returncode=255)])
+
+    with pytest.raises(InfrastructureError, match="LSF is down"):
+        LSFScheduler(runner=runner).finished("123")

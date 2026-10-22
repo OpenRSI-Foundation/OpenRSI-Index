@@ -35,6 +35,9 @@ class FakeServices:
     recovered: list[str | None] = field(default_factory=list)
     cleaned: list[tuple[str, bool]] = field(default_factory=list)
     pruned: list[tuple[float | None, bool]] = field(default_factory=list)
+    resume_plans: list[tuple[str, object, bool]] = field(default_factory=list)
+    resumed: list[object] = field(default_factory=list)
+    resume_refusal: Exception | None = None
     event_callback: Callable[[str, object], None] | None = None
 
     def available_agents(self) -> tuple[str, ...]:
@@ -71,6 +74,22 @@ class FakeServices:
     def cleanup(self, run_id: str, *, delete_workspace: bool) -> None:
         self.cleaned.append((run_id, delete_workspace))
 
+    def plan_resume(self, run_id: str, grants, *, dry_run: bool = False):
+        self.resume_plans.append((run_id, grants, dry_run))
+        if self.resume_refusal is not None:
+            raise self.resume_refusal
+        return _resume_context(run_id, grants)
+
+    def resume(self, context) -> RunResult:
+        self.resumed.append(context)
+        return RunResult(
+            run_id=context.run_id,
+            status=RunStatus.COMPLETED,
+            total_rounds=5,
+            best_score=0.9,
+            best_round="agent-5",
+        )
+
     def prune_images(self, *, older_than_seconds, dry_run, confirm):
         from rsi_harness.runtime.sandbox_ledger import KEPT, REMOVED, WOULD_REMOVE
 
@@ -87,6 +106,43 @@ class FakeServices:
         if not confirm(rows):
             return None
         return (replace(rows[0], action=REMOVED), rows[1])
+
+
+def _resume_context(run_id: str, grants):
+    from rsi_harness.models import ManagedWorkdirVolume, RootfsSnapshotMode
+    from rsi_harness.runtime.resume import ResumeContext
+    from tests.factories import make_run_plan
+
+    plan = make_run_plan(Path("/tmp/rsi-cli-test"))
+    return ResumeContext(
+        run_id=run_id,
+        attempt=2,
+        request=RunRequest(task_dir=Path("/tmp/rsi-cli-test/task")),
+        sandbox_policy=None,
+        plan=plan,
+        gpu_plan=plan.gpu_plan,
+        reports=(),
+        charged_rounds=3,
+        last_allocated_at=None,
+        agent_seconds_used=40.0,
+        agent_seconds_left=80.0,
+        max_submissions=5,
+        cooldown_seconds=0.0,
+        grants=grants,
+        base_image_ref=f"rsi-harness-rootfs:retained-work-{'a' * 64}",
+        base_image_id=None,
+        base_image_round_id="salvage",
+        workdir_volume=ManagedWorkdirVolume(
+            name=f"rsi-harness-workdir-{'1' * 64}",
+            run_id=run_id,
+            task_id=plan.task.task_id,
+            target=plan.workdir,
+            snapshot_mode=RootfsSnapshotMode.SPLIT_WORKDIR,
+            freshness_nonce="f" * 64,
+        ),
+        salvage_pending=True,
+        message="",
+    )
 
 
 def _pulled(letter: str):
@@ -1335,3 +1391,163 @@ def test_oracle_is_refused_on_a_cluster(cli, tmp_path: Path, monkeypatch) -> Non
     assert result.exit_code == 2
     assert "--agent oracle runs locally only" in result.output
     assert services.requests == []
+
+
+def test_resume_dry_run_prints_the_next_attempt_and_changes_nothing(cli) -> None:
+    cli_module, services = cli
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        [
+            "resume",
+            "run-1",
+            "--add-time",
+            "60",
+            "--add-submissions",
+            "2",
+            "--cooldown",
+            "5",
+            "--gpus",
+            "2,3",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    ((run_id, grants, dry_run),) = services.resume_plans
+    assert (run_id, dry_run) == ("run-1", True)
+    assert grants.add_time_seconds == 60.0
+    assert grants.add_submissions == 2
+    assert grants.cooldown_seconds == 5.0
+    assert grants.gpu_selectors == ("2", "3")
+    assert services.resumed == []
+    assert "Resuming run run-1 as attempt 2" in result.output
+    assert "runs first" in result.output
+    assert "40s used, 80s left" in result.output
+    assert "3 used, 2 left" in result.output
+    assert "agent-4" in result.output
+    assert f"retained-work-{'a' * 64}" in result.output
+    assert f"rsi-harness-workdir-{'1' * 64}" in result.output
+    assert "nothing was changed" in result.output
+
+
+def test_resume_runs_the_planned_attempt_and_prints_its_result(cli) -> None:
+    cli_module, services = cli
+
+    result = CliRunner().invoke(cli_module.app, ["resume", "run-1"])
+
+    assert result.exit_code == 0, result.output
+    ((_, grants, dry_run),) = services.resume_plans
+    assert not dry_run
+    assert grants.add_time_seconds == 0.0
+    assert grants.gpu_selectors is None
+    (context,) = services.resumed
+    assert context.run_id == "run-1"
+    assert "Best round:" in result.output and "agent-5" in result.output
+
+
+def test_resume_prints_a_refusal(cli) -> None:
+    cli_module, services = cli
+    services.resume_refusal = SetupError("run run-1 is still live")
+
+    result = CliRunner().invoke(cli_module.app, ["resume", "run-1"])
+
+    assert result.exit_code == 1
+    assert "setup_error: run run-1 is still live" in result.output
+    assert services.resumed == []
+
+
+@pytest.mark.parametrize("option", ["--add-time", "--cooldown"])
+def test_resume_refuses_an_infinite_grant(cli, option) -> None:
+    cli_module, services = cli
+
+    result = CliRunner().invoke(cli_module.app, ["resume", "run-1", option, "inf"])
+
+    assert result.exit_code == 2
+    assert "finite number" in result.output
+    assert services.resume_plans == []
+
+
+class _ResumingCluster:
+    def __init__(self, tmp_path: Path) -> None:
+        self.tmp_path = tmp_path
+        self.plans: list[tuple[str, object, bool]] = []
+        self.resumed: list[object] = []
+
+    def plan_resume(self, run_id, grants, *, dry_run=False):
+        from types import SimpleNamespace
+
+        self.plans.append((run_id, grants, dry_run))
+        context = replace(
+            _resume_context(run_id, grants),
+            base_image_ref=None,
+            base_image_round_id=None,
+        )
+        return SimpleNamespace(context=context, spec=SimpleNamespace(walltime="01:16"))
+
+    def resume(self, plan):
+        self.resumed.append(plan)
+        return ClusterRunResult(
+            run_id=plan.context.run_id,
+            status=RunStatus.COMPLETED,
+            log_dir=(self.tmp_path / "cluster-logs").resolve(),
+            job_ids=("702",),
+        )
+
+
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_resume_on_a_cluster_plans_then_submits_the_attempt(
+    cli, tmp_path: Path, monkeypatch, dry_run: bool
+) -> None:
+    cli_module, services = cli
+    cluster = _ResumingCluster(tmp_path)
+    names: list[str] = []
+    monkeypatch.setattr(
+        cli_module,
+        "build_cluster_adapter",
+        lambda name, event_callback=None: names.append(name) or cluster,
+    )
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        [
+            "resume",
+            "run-1",
+            "--cluster",
+            "bluevela",
+            "--add-time",
+            "60",
+            *(["--dry-run"] if dry_run else []),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert names == ["bluevela"]
+    ((run_id, grants, planned_dry),) = cluster.plans
+    assert (run_id, grants.add_time_seconds, planned_dry) == ("run-1", 60.0, dry_run)
+    assert services.resume_plans == []
+    assert "Resuming run run-1 as attempt 2" in result.output
+    assert "Walltime:" in result.output and "01:16" in result.output
+    assert "Base image:" not in result.output
+    if dry_run:
+        assert cluster.resumed == []
+        assert "nothing was changed" in result.output
+    else:
+        assert len(cluster.resumed) == 1
+        assert "Job IDs:" in result.output and "702" in result.output
+
+
+def test_resume_on_a_cluster_refuses_gpus(cli, monkeypatch) -> None:
+    cli_module, _services = cli
+    monkeypatch.setattr(
+        cli_module,
+        "build_cluster_adapter",
+        lambda *_a, **_k: pytest.fail("cluster adapter built"),
+    )
+
+    result = CliRunner().invoke(
+        cli_module.app, ["resume", "run-1", "--cluster", "bluevela", "--gpus", "0"]
+    )
+
+    assert result.exit_code == 2
+    assert "--gpus is local-only" in result.output

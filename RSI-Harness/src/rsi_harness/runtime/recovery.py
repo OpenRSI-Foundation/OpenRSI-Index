@@ -9,6 +9,7 @@ import os
 import re
 import stat
 import tempfile
+import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath
@@ -24,9 +25,11 @@ from rsi_harness.models import (
     RunGPUPlan,
     RunStatus,
 )
+from rsi_harness.runtime.artifacts import _sudo_invoking_owner
 from rsi_harness.runtime.durable import durable_mkdir, fsync_directory
 from rsi_harness.runtime.image_authority import is_immutable_image_ref
 from rsi_harness.runtime.redaction import redact_structure, redact_text
+from rsi_harness.runtime.rootfs_snapshot import rootfs_image_ref
 from rsi_harness.runtime.sandbox_contracts import (
     MAX_ENV_SERVICES,
     EnvE2BHost,
@@ -74,6 +77,11 @@ from rsi_harness.runtime.workdir_volume import (
 )
 
 _SAFE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
+# Where a Judge's output is written until the round publishes it as
+# feedback/<round>.log (docker._RawOutputWriter).
+_PARTIAL_FEEDBACK = re.compile(
+    r"\.(?P<round>[A-Za-z0-9][A-Za-z0-9_.-]*)\.log\.[0-9a-f]{32}\Z"
+)
 _RUN_LABEL = "rsi-harness.run-id"
 _TASK_LABEL = "rsi-harness.task-id"
 _ROLE_LABEL = "rsi-harness.role"
@@ -104,6 +112,22 @@ def _absolute_optional_path(value: Path | None) -> Path | None:
     return value
 
 
+def retained_round_id(kind: Literal["final", "salvage"], attempt: int) -> str:
+    """The round label of an attempt's retained Work image; attempt 1 keeps
+    the plain name."""
+    return kind if attempt == 1 else f"{kind}-a{attempt}"
+
+
+def _salvage_ref(lease: ResourceLease) -> str:
+    """The retained image ref recover commits an interrupted Work to."""
+    return rootfs_image_ref(
+        run_id=lease.run_id,
+        task_id=lease.task_id,
+        round_id=retained_round_id("salvage", lease.attempt),
+        purpose="retained-work",
+    )
+
+
 class RetainedImageRollbackAuthority(PersistedModel):
     """Exact acquired image authority awaiting rollback/recovery."""
 
@@ -122,6 +146,39 @@ class RetainedImageRollbackAuthority(PersistedModel):
     def valid_image_ref(cls, value: str) -> str:
         if _RETAINED_IMAGE_REF.fullmatch(value) is None:
             raise ValueError("invalid retained Work rollback image reference")
+        return value
+
+
+class PriorRetainedImage(PersistedModel):
+    """An earlier attempt's retained Work image, the base of a later one.
+
+    A child image keeps its parent, so the chain is removed only newest-first
+    by ``cleanup --delete-workspace``.
+    """
+
+    ref: str
+    id: str
+    round_id: str
+
+    @field_validator("ref")
+    @classmethod
+    def valid_ref(cls, value: str) -> str:
+        if _RETAINED_IMAGE_REF.fullmatch(value) is None:
+            raise ValueError("invalid prior retained Work image reference")
+        return value
+
+    @field_validator("id")
+    @classmethod
+    def valid_id(cls, value: str) -> str:
+        if _RETAINED_IMAGE_ID.fullmatch(value) is None:
+            raise ValueError("invalid prior retained Work image ID")
+        return value
+
+    @field_validator("round_id")
+    @classmethod
+    def safe_label(cls, value: str) -> str:
+        if _SAFE_ID.fullmatch(value) is None:
+            raise ValueError("unsafe prior retained Work image label")
         return value
 
 
@@ -231,8 +288,12 @@ class WorkResourceLease(PersistedModel):
     retained_image_id: str | None = None
     retained_image_ref: str | None = None
     retained_image_rollback: RetainedImageRollbackAuthority | None = None
+    # Earlier attempts' retained images, oldest first.
+    prior_retained_images: tuple[PriorRetainedImage, ...] = ()
     planned_quiescence: Literal["pause-if-running"] | None = None
     paused: bool = False
+    # Wall-clock time of the last Harness pause; the Agent's time ends here.
+    paused_at: float | None = None
     stopped: bool = False
     workdir_volume: WorkdirVolumeResourceLease = Field(
         default_factory=WorkdirVolumeResourceLease
@@ -380,10 +441,73 @@ class SnapshotRecoveryAuthority(PersistedModel):
     )
 
 
+# How an attempt's end was observed: the Agent exited or was stopped by its
+# Harness, or recovery found Work paused, running, finished or unknown.
+AttemptEndBasis = Literal[
+    "exited", "stopped", "paused", "running", "finished", "unknown"
+]
+
+
+class AttemptGrants(PersistedModel):
+    """What ``rsi-harness resume`` added to the run for one attempt."""
+
+    add_time_seconds: float = Field(default=0.0, ge=0, allow_inf_nan=False)
+    add_submissions: int = Field(default=0, ge=0)
+    # Replace the run's cooldown and GPU selectors from this attempt on.
+    cooldown_seconds: float | None = Field(default=None, ge=0, allow_inf_nan=False)
+    gpu_selectors: tuple[str, ...] | None = None
+
+
+class RunAttemptLease(PersistedModel):
+    """Wall-clock Agent time of one attempt at the run; closed once at its end."""
+
+    attempt: int = Field(strict=True, ge=1)
+    started_at: float
+    agent_started_at: float | None = None
+    agent_deadline: float | None = None
+    ended_at: float | None = None
+    end_basis: AttemptEndBasis | None = None
+    agent_seconds: float | None = None
+    grants: AttemptGrants | None = None
+
+    @model_validator(mode="after")
+    def consistent_attempt(self) -> RunAttemptLease:
+        if (self.agent_started_at is None) != (self.agent_deadline is None):
+            raise ValueError("Agent start and deadline must appear together")
+        closed = (self.ended_at, self.end_basis, self.agent_seconds)
+        if any(value is not None for value in closed) and not all(
+            value is not None for value in closed
+        ):
+            raise ValueError("attempt end, basis and Agent time must appear together")
+        if self.agent_seconds is not None and self.agent_seconds < 0:
+            raise ValueError("attempt Agent seconds must be non-negative")
+        return self
+
+    def closed(
+        self,
+        *,
+        ended_at: float,
+        basis: AttemptEndBasis,
+        agent_seconds: float,
+    ) -> RunAttemptLease:
+        """This attempt ended, its Agent time capped at the deadline."""
+        if self.agent_started_at is not None and self.agent_deadline is not None:
+            agent_seconds = min(
+                agent_seconds, self.agent_deadline - self.agent_started_at
+            )
+        return self.model_copy(
+            update={
+                "ended_at": ended_at,
+                "end_basis": basis,
+                "agent_seconds": max(0.0, agent_seconds),
+            }
+        )
+
+
 class ResourceLease(PersistedModel):
     """Secret-free recovery authority for every runtime resource in one run."""
 
-    schema_version: int = Field(default=6, strict=True)
+    schema_version: int = Field(default=7, strict=True)
     run_id: str
     task_id: str
     coordinator_pid: int
@@ -410,6 +534,10 @@ class ResourceLease(PersistedModel):
     sandbox_e2b: EnvE2BHost | None = None
     recovery_required: bool = False
     error: str | None = None
+    attempt: int = Field(default=1, strict=True, ge=1)
+    # The run's logs directory (runs/<run_id>/<task_id>), for recovery.
+    artifact_root: Path | None = None
+    attempts: tuple[RunAttemptLease, ...] = ()
 
     @field_validator("run_id", "task_id")
     @classmethod
@@ -418,7 +546,7 @@ class ResourceLease(PersistedModel):
             raise ValueError("lease identifiers must be safe path components")
         return value
 
-    @field_validator("workspace_path", mode="after")
+    @field_validator("workspace_path", "artifact_root", mode="after")
     @classmethod
     def absolute_optional_path(cls, value: Path | None) -> Path | None:
         return _absolute_optional_path(value)
@@ -432,8 +560,14 @@ class ResourceLease(PersistedModel):
 
     @model_validator(mode="after")
     def current_recovery_schema_and_sources(self) -> ResourceLease:
-        if self.schema_version != 6:
+        if self.schema_version != 7:
             raise ValueError("unsupported resource lease schema version")
+        numbers = tuple(entry.attempt for entry in self.attempts)
+        if numbers and (
+            numbers[-1] != self.attempt
+            or any(left >= right for left, right in zip(numbers, numbers[1:]))
+        ):
+            raise ValueError("lease attempts differ from the current attempt")
         seen: set[str] = set()
         for child in self.sandboxes:
             if child.owner.run_id != self.run_id or child.owner.task_id != self.task_id:
@@ -600,6 +734,16 @@ class RecoveryBackend(Protocol):
 
     def unpause_container(self, container_id: str) -> None: ...
 
+    def commit_work(
+        self,
+        container_id: str,
+        *,
+        run_id: str,
+        task_id: str,
+        round_id: str,
+        planned_ref: str,
+    ) -> str: ...
+
     def remove_policy(self, rule_id: str) -> None: ...
 
     def policy_exists(self, rule_id: str) -> bool: ...
@@ -683,6 +827,18 @@ class LeaseStore:
             raw["sandbox_envs"] = []
             raw["sandbox_images"] = []
             raw["sandbox_builders"] = []
+        if type(raw.get("schema_version")) is int and raw["schema_version"] == 6:
+            if (
+                raw.get("attempts")
+                or raw.get("artifact_root") is not None
+                or raw.get("attempt", 1) != 1
+                or (raw.get("work") or {}).get("paused_at") is not None
+            ):
+                raise ValueError("schema 6 cannot carry attempt authority")
+            raw["schema_version"] = 7
+            raw["attempt"] = 1
+            raw["artifact_root"] = None
+            raw["attempts"] = []
         # JSON validation preserves strict nested tuple/scalar contracts.
         lease = ResourceLease.model_validate_json(json.dumps(raw))
         if lease.run_id != run_id:
@@ -750,13 +906,53 @@ class RecoveryManager:
         recovered: list[str] = []
         for selected in run_ids:
             with self._store.lock(selected):
-                lease = self._store.read(selected)
-                if lease is None:
+                if self._store.read(selected) is None:
                     continue
-                mark_interrupted = lease.status is None or lease.recovery_required
-                self._recover_locked(lease, mark_interrupted=mark_interrupted)
+                self.salvage(selected)
                 recovered.append(selected)
         return tuple(recovered)
+
+    def salvage(self, run_id: str) -> None:
+        """Recover one run whose lease lock the caller already holds."""
+        lease = self._require_lease(run_id)
+        mark_interrupted = lease.status is None or lease.recovery_required
+        self._recover_locked(lease, mark_interrupted=mark_interrupted)
+
+    def salvage_cluster(self, run_id: str, *, ended_at: float | None) -> None:
+        """Close a cluster run whose scheduler job has ended, under the lock
+        the caller holds, as ``salvage`` does a local one.
+
+        The job's end ended its Work and Judge processes; only its E2B
+        sandboxes outlive it. The attempt ends at Work's pause, else at the
+        job's end (``ended_at``, if the scheduler recorded it), else at the
+        Agent deadline.
+        """
+        lease = self._require_lease(run_id)
+        if lease.sandbox_e2b is not None:
+            lease = self._recover_e2b_envs(lease)
+        self._backend_call(
+            lease,
+            "interrupted Judge output move",
+            lambda: self._hide_interrupted_feedback(lease),
+        )
+        if lease.work.paused_at is not None:
+            lease = self._close_attempt(
+                lease, ended_at=lease.work.paused_at, basis="paused"
+            )
+        else:
+            lease = self._close_attempt(lease, ended_at=ended_at, basis="finished")
+        lease = self._update_work(
+            lease,
+            container_id=None,
+            planned_quiescence=None,
+            paused=False,
+            paused_at=None,
+            stopped=False,
+        )
+        lease = self._update_judge(lease, container_id=None)
+        self._write_recovered(
+            lease, mark_interrupted=lease.status is None or lease.recovery_required
+        )
 
     def recover_e2b(self, run_id: str) -> bool:
         """Kill only the run's E2B sandboxes (a cluster run, whose Work and
@@ -912,8 +1108,25 @@ class RecoveryManager:
         retained_source_container_id = (
             work[0] if work is not None else lease.work.container_id
         )
-        if work is not None:
+        # Work reads feedback/ through its mount: hide a partial round's
+        # output before any unpause, for this Work and the next attempt's.
+        self._backend_call(
+            lease,
+            "interrupted Judge output move",
+            lambda: self._hide_interrupted_feedback(lease),
+        )
+        if work is None:
+            lease = self._close_attempt(lease, ended_at=None, basis="unknown")
+        else:
             work_id, state = work
+            if bool(state.get("paused", False)):
+                lease = self._close_attempt(
+                    lease, ended_at=lease.work.paused_at, basis="paused"
+                )
+            elif not bool(state.get("running", False)):
+                lease = self._close_attempt(
+                    lease, ended_at=state.get("finished_at"), basis="finished"
+                )
             if bool(state.get("paused", False)):
                 self._backend_call(
                     lease,
@@ -938,6 +1151,9 @@ class RecoveryManager:
             )
             if inspected is not None and bool(inspected.get("running", False)):
                 self._fail_closed(lease, "Work termination cannot be proven")
+            lease = self._close_attempt(lease, ended_at=time.time(), basis="running")
+            if not delete_retained_image:
+                lease = self._salvage_work(lease, work_id)
             self._backend_call(
                 lease,
                 "Work removal",
@@ -957,6 +1173,7 @@ class RecoveryManager:
             container_id=None,
             planned_quiescence=None,
             paused=False,
+            paused_at=None,
             stopped=False,
         )
         lease = self._recover_policies(lease, "work")
@@ -973,7 +1190,10 @@ class RecoveryManager:
         lease = self._recover_workdir_volume(lease, delete=delete_retained_image)
         # No Work or Judge binds an endpoint any more.
         self._remove_sandbox_root(lease)
+        self._write_recovered(lease, mark_interrupted=mark_interrupted)
 
+    def _write_recovered(self, lease: ResourceLease, *, mark_interrupted: bool) -> None:
+        """Write the lease of a run whose resources are all accounted for."""
         phase = "interrupted" if mark_interrupted else lease.phase
         status = RunStatus.CANCELLED if mark_interrupted else lease.status
         history = lease.phase_history
@@ -994,6 +1214,128 @@ class RecoveryManager:
             }
         )
         self._store.write(final)
+
+    def _hide_interrupted_feedback(self, lease: ResourceLease) -> None:
+        """Move each feedback/<round>.log of a round evolve_state.json does not
+        record, or else the Judge's partial output of it, to
+        verifier/<round>/interrupted-feedback.log."""
+        root = lease.artifact_root
+        if root is None:
+            return
+        if root.parts[-3:] != ("runs", lease.run_id, lease.task_id):
+            raise ValueError("artifact root is not the run's logs directory")
+        feedback = root / "feedback"
+        if feedback.is_symlink():
+            raise ValueError("feedback directory is a symlink")
+        if not feedback.is_dir():
+            return
+        state = root / "evolve_state.json"
+        recorded = (
+            {entry["round"] for entry in json.loads(state.read_text())["submissions"]}
+            if state.exists()
+            else set()
+        )
+        owner = _sudo_invoking_owner()
+        moved = False
+        # A Judge killed mid-round leaves its output so far under the
+        # temporary name it is published from, in Work's view as well. A
+        # round's published output goes first: it is the whole of it.
+        outputs = [
+            (path, path.name.removesuffix(".log"), False)
+            for path in sorted(feedback.glob("*.log"))
+        ] + [
+            (path, match["round"], True)
+            for path in sorted(feedback.iterdir())
+            if (match := _PARTIAL_FEEDBACK.fullmatch(path.name)) is not None
+        ]
+        for output, round_id, partial in outputs:
+            target = root / "verifier" / round_id
+            if (
+                round_id in recorded
+                or _SAFE_ID.fullmatch(round_id) is None
+                or (partial and (target / "interrupted-feedback.log").exists())
+            ):
+                if partial:
+                    output.unlink()
+                    moved = True
+                continue
+            # Readable by the operator, like the rest of the run's logs.
+            for directory in (target.parent, target):
+                if not directory.exists():
+                    durable_mkdir(directory, mode=0o755)
+                    if owner is not None:
+                        os.chown(directory, *owner)
+            os.replace(output, target / "interrupted-feedback.log")
+            fsync_directory(target)
+            moved = True
+        if moved:
+            fsync_directory(feedback)
+
+    def _close_attempt(
+        self,
+        lease: ResourceLease,
+        *,
+        ended_at: float | None,
+        basis: Literal["paused", "running", "finished", "unknown"],
+    ) -> ResourceLease:
+        """Close the current attempt once; an unknown end charges the whole
+        Agent budget, and any end is capped at the Agent deadline."""
+        if not lease.attempts or lease.attempts[-1].ended_at is not None:
+            return lease
+        current = lease.attempts[-1]
+        if ended_at is None:
+            basis = "unknown"
+        agent_seconds = 0.0
+        if current.agent_started_at is not None and current.agent_deadline is not None:
+            end = current.agent_deadline if ended_at is None else ended_at
+            agent_seconds = end - current.agent_started_at
+        closed = current.closed(
+            ended_at=time.time() if ended_at is None else ended_at,
+            basis=basis,
+            agent_seconds=agent_seconds,
+        )
+        updated = lease.model_copy(update={"attempts": (*lease.attempts[:-1], closed)})
+        self._store.write(updated)
+        return updated
+
+    def _salvage_work(self, lease: ResourceLease, work_id: str) -> ResourceLease:
+        """Commit the stopped Work as the run's retained image, as a finished
+        run's cleanup does, unless that image already exists."""
+        work = lease.work
+        if any(
+            value is not None
+            for value in (
+                work.planned_retained_image_ref,
+                work.retained_image_id,
+                work.retained_image_ref,
+                work.retained_image_rollback,
+            )
+        ):
+            # Prove a recorded image still exists, and adopt or clear an
+            # earlier commit whose outcome is unknown.
+            lease = self._recover_retained_images(
+                lease, delete=False, source_container_id=work_id
+            )
+            if lease.work.retained_image_id is not None:
+                return lease
+        planned = _salvage_ref(lease)
+        lease = self._update_work(lease, planned_retained_image_ref=planned)
+        image_id = self._backend_call(
+            lease,
+            "salvage Work commit",
+            lambda: self._backend.commit_work(
+                work_id,
+                run_id=lease.run_id,
+                task_id=lease.task_id,
+                round_id=retained_round_id("salvage", lease.attempt),
+                planned_ref=planned,
+            ),
+        )
+        if not isinstance(image_id, str) or not _RETAINED_IMAGE_ID.fullmatch(image_id):
+            self._fail_closed(lease, "salvage Work commit returned no image identity")
+        return self._update_work(
+            lease, retained_image_id=image_id, retained_image_ref=planned
+        )
 
     def _contain_parents_after_sandbox_failure(
         self, lease: ResourceLease
@@ -2895,6 +3237,59 @@ class RecoveryManager:
         delete: bool,
         source_container_id: str | None,
     ) -> ResourceLease:
+        lease = self._recover_current_retained_image(
+            lease, delete=delete, source_container_id=source_container_id
+        )
+        return self._recover_prior_retained_images(lease, delete=delete)
+
+    def _recover_prior_retained_images(
+        self, lease: ResourceLease, *, delete: bool
+    ) -> ResourceLease:
+        """Attest the earlier attempts' images, or delete them newest-first;
+        a child image keeps its parent, so the current one goes first."""
+        kept: list[PriorRetainedImage] = []
+        for prior in reversed(lease.work.prior_retained_images):
+            required = self._image_labels(
+                lease, role=_RETAINED_IMAGE_ROLE, round_id=prior.round_id
+            )
+            direct = self._backend_call(
+                lease,
+                "prior retained Work image inspection",
+                lambda prior=prior: self._backend.inspect_image(prior.id),
+            )
+            if direct is None:
+                continue
+            self._attest_image_state(
+                lease,
+                image_id=prior.id,
+                state=direct,
+                required=required,
+                # Its source Work is gone; labels, ref and ID prove it.
+                source_container_id=None,
+                expected_ref=prior.ref,
+            )
+            if not delete:
+                kept.append(prior)
+                continue
+            self._remove_images(
+                lease,
+                candidates=((prior.id, direct),),
+                required=required,
+                source_container_id=None,
+                purpose="prior retained Work",
+            )
+        kept.reverse()
+        if tuple(kept) == lease.work.prior_retained_images:
+            return lease
+        return self._update_work(lease, prior_retained_images=tuple(kept))
+
+    def _recover_current_retained_image(
+        self,
+        lease: ResourceLease,
+        *,
+        delete: bool,
+        source_container_id: str | None,
+    ) -> ResourceLease:
         work = lease.work
         rollback = work.retained_image_rollback
         has_authority = any(
@@ -2913,7 +3308,14 @@ class RecoveryManager:
         required = self._image_labels(
             lease,
             role=_RETAINED_IMAGE_ROLE,
-            round_id="final",
+            round_id=retained_round_id(
+                (
+                    "salvage"
+                    if work.planned_retained_image_ref == _salvage_ref(lease)
+                    else "final"
+                ),
+                lease.attempt,
+            ),
         )
         candidates = self._find_images(
             lease,

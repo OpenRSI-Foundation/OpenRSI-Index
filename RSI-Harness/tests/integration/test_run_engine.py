@@ -215,6 +215,333 @@ def test_production_installs_hooks_before_securing_generic_agent_auth(
     assert secret in composition.agent_output_secrets
 
 
+def _resume_context(plan, tmp_path: Path, **updates):
+    from rsi_harness.runtime.recovery import AttemptGrants
+    from rsi_harness.runtime.resume import ResumeContext
+
+    context = ResumeContext(
+        run_id="run-1",
+        attempt=2,
+        request=RunRequest(task_dir=tmp_path),
+        sandbox_policy=None,
+        plan=plan,
+        gpu_plan=plan.gpu_plan,
+        reports=(),
+        charged_rounds=1,
+        last_allocated_at=None,
+        agent_seconds_used=10.0,
+        agent_seconds_left=50.0,
+        max_submissions=3,
+        cooldown_seconds=0.0,
+        grants=AttemptGrants(),
+        base_image_ref=f"rsi-harness-rootfs:retained-work-{'a' * 64}",
+        base_image_id=f"sha256:{'b' * 64}",
+        base_image_round_id="final",
+        workdir_volume=_managed_workdir_volume(plan),
+        salvage_pending=False,
+        message="resumed\n",
+    )
+    return replace(context, **updates)
+
+
+def _resumed_composition(plan, tmp_path: Path, context, client=None):
+    from rsi_harness.runtime.production import _ProductionRunComposition
+
+    composition = _ProductionRunComposition(
+        client=client
+        or SimpleNamespace(
+            images=SimpleNamespace(
+                get=lambda ref: SimpleNamespace(id=context.base_image_id)
+            )
+        ),
+        data_root=tmp_path / "data",
+        logs_root=plan.paths.logs,
+        inventory=object(),
+        rsi_loop_config=RSILoopConfig(),
+        snapshot=object(),
+        firewall=object(),
+        bind_host="127.0.0.1",
+        bridge_gateway="127.0.0.1",
+        omit_gpu_device_requests_for_tests=True,
+        agent_adapter_factory=lambda _config, _runtime: object(),
+        quiescence_checker=None,
+        api_endpoints=(),
+        agent_secret_env={},
+        verifier_secret_env={},
+        resume=context,
+    )
+    composition.run_id = "run-1"
+    return composition
+
+
+def test_production_resumed_attempt_builds_work_from_the_retained_image(
+    tmp_path: Path,
+) -> None:
+    from rsi_harness.runtime.artifacts import RunArtifactWriter
+    from rsi_harness.runtime.rootfs_snapshot import rootfs_image_ref
+
+    plan = make_run_plan(tmp_path / "plan")
+    context = _resume_context(plan, tmp_path)
+    volume = context.workdir_volume
+    first = RunArtifactWriter(plan, run_id="run-1")
+    first.start()
+    (first.root / "agent_output.txt").write_text("attempt one\n")
+
+    class WorkRuntime:
+        spec = None
+
+        def create(self, spec, *, planned_name):
+            del planned_name
+            self.spec = spec
+            return ContainerRef(container_id="work-2", role="work")
+
+    class Agent:
+        request = None
+
+        def prepare(self, request):
+            self.request = request
+            return PreparedAgent(
+                agent_name="codex",
+                command=("codex",),
+                prompt_path=request.prompt_path,
+            )
+
+        def run(self, request):
+            del request
+            # An output the runtime could not stream to the file itself.
+            return AgentRunResult(exit_code=0, output="attempt two\n")
+
+    composition = _resumed_composition(plan, tmp_path, context)
+    composition.work_runtime = WorkRuntime()
+    artifacts = composition.start_artifacts(plan, "run-1")
+    composition.workdir_volume = volume
+    composition.create_work(
+        plan,
+        "run-1",
+        ManagedNetwork(
+            network_id="network-1",
+            name="network-1",
+            run_id="run-1",
+            task_id=plan.task.task_id,
+            role="work",
+            internal=False,
+        ),
+        "planned-work",
+        volume,
+    )
+    agent = Agent()
+    composition.agent = agent
+    prepared = composition.prepare_agent(plan, 2)
+    composition.run_agent(
+        prepared, ContainerRef(container_id="work-2", role="work"), 50.0
+    )
+
+    spec = composition.work_runtime.spec
+    assert spec.image == context.base_image_ref
+    (mount,) = spec.volume_mounts
+    assert mount.no_copy is True
+    assert (artifacts.root / "agent_output.txt").read_text() == (
+        "attempt one\n\n--- rsi-harness: attempt 2 ---\nattempt two\n"
+    )
+    resume = agent.request.resume
+    assert (resume.attempt, resume.message) == (2, "resumed\n")
+    assert resume.agent_output == artifacts.root / "agent_output.txt"
+    assert agent.request.max_submissions == 2
+    assert composition.plan_retained_work(
+        plan, ContainerRef(container_id="work-2", role="work")
+    ) == rootfs_image_ref(
+        run_id="run-1",
+        task_id=plan.task.task_id,
+        round_id="final-a2",
+        purpose="retained-work",
+    )
+
+
+def _missing_image(_ref):
+    raise docker.errors.ImageNotFound("gone")
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ("run_dir", "resumed run directory is missing"),
+        ("digest", "task's images changed"),
+        ("image_id", "retained Work image differs"),
+        ("image_gone", "retained Work image differs"),
+    ],
+)
+def test_production_resumed_plan_refuses_a_changed_run_and_keeps_its_request(
+    tmp_path: Path, change: str, message: str
+) -> None:
+    plan = make_run_plan(tmp_path / "plan")
+    context = _resume_context(plan, tmp_path)
+    finalized = plan
+    if change == "digest":
+        finalized = plan.model_copy(
+            update={
+                "images": plan.images.model_copy(
+                    update={"work_digest": f"sha256:{'e' * 64}"}
+                )
+            }
+        )
+    get = {
+        "image_id": lambda _ref: SimpleNamespace(id=f"sha256:{'c' * 64}"),
+        "image_gone": _missing_image,
+    }.get(change, lambda _ref: SimpleNamespace(id=context.base_image_id))
+    composition = _resumed_composition(
+        plan, tmp_path, context, SimpleNamespace(images=SimpleNamespace(get=get))
+    )
+    composition.compiler = SimpleNamespace(
+        finalize=lambda _definition, _images, _gpu, _paths, _kind: finalized
+    )
+    saved = tmp_path / "data" / "run-1" / "request.json"
+    if change != "run_dir":
+        saved.parent.mkdir(parents=True)
+        saved.write_text('{"saved": true}\n')
+
+    with pytest.raises(SetupError, match=message):
+        composition.prepare_plan(
+            plan.task,
+            plan.images,
+            plan.gpu_plan,
+            RunRequest(task_dir=tmp_path),
+            "run-1",
+        )
+
+    if change == "run_dir":
+        assert not saved.parent.exists()
+    else:
+        assert saved.read_text() == '{"saved": true}\n'
+
+
+def test_production_adopts_only_the_runs_own_workdir_volume(tmp_path: Path) -> None:
+    plan = make_run_plan(tmp_path / "plan")
+    context = _resume_context(plan, tmp_path)
+    composition = _resumed_composition(plan, tmp_path, context)
+    inspected = []
+
+    def inspect(volume, *, expected_references):
+        inspected.append((volume, expected_references))
+        return volume
+
+    composition.workdir_volumes = SimpleNamespace(inspect=inspect)
+    foreign = context.workdir_volume.model_copy(update={"run_id": "run-2"})
+
+    with pytest.raises(SetupError, match="provenance differs"):
+        composition.adopt_workdir_volume(plan, "run-1", foreign)
+    assert inspected == []
+
+    adopted = composition.adopt_workdir_volume(plan, "run-1", context.workdir_volume)
+
+    assert adopted == context.workdir_volume
+    assert inspected == [(context.workdir_volume, ())]
+    assert composition.workdir_volume == context.workdir_volume
+
+
+def _resume_services(tmp_path: Path, coordinator_factory=None):
+    from rsi_harness.runtime.production import ProductionRuntimeServices
+
+    def no_coordinator(**_kwargs):
+        raise AssertionError("a refused resume builds no coordinator")
+
+    return ProductionRuntimeServices(
+        data_root=tmp_path / "data",
+        logs_root=tmp_path / "logs",
+        docker_client=object(),
+        inventory=_OneDeviceInventory(),
+        rsi_loop_config=RSILoopConfig(agent_api_base_url="https://127.0.0.1/v1"),
+        coordinator_factory=coordinator_factory or no_coordinator,
+        bridge_gateway="127.0.0.1",
+    )
+
+
+def test_production_dry_run_plans_a_resume_without_salvage(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import rsi_harness.runtime.production as production
+    from rsi_harness.runtime.recovery import AttemptGrants
+
+    planned = []
+    monkeypatch.setattr(
+        production, "plan_resume", lambda run_id, **kwargs: planned.append(kwargs)
+    )
+    services = _resume_services(tmp_path)
+    salvaged = []
+    monkeypatch.setattr(
+        services,
+        "_recovery",
+        lambda: SimpleNamespace(salvage=lambda run_id: salvaged.append(run_id)),
+    )
+
+    services.plan_resume("run-1", AttemptGrants(), dry_run=True)
+    services.plan_resume("run-1", AttemptGrants())
+
+    dry, real = planned
+    assert dry["salvage"] is None
+    real["salvage"]("run-1")
+    assert salvaged == ["run-1"]
+
+
+def test_production_resume_refuses_a_changed_sandbox_policy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import hashlib
+
+    import rsi_harness.runtime.production as production
+    from rsi_harness.models import SandboxPolicySource
+
+    policy = tmp_path / "policy.toml"
+    policy.write_text("original\n")
+    digest = hashlib.sha256(policy.read_bytes()).hexdigest()
+    plan = make_run_plan(tmp_path / "plan")
+    context = _resume_context(
+        plan,
+        tmp_path,
+        sandbox_policy=SandboxPolicySource(path=policy, sha256=digest),
+    )
+    services = _resume_services(tmp_path)
+    runs = []
+    monkeypatch.setattr(
+        services, "_run", lambda request, *, resume: runs.append(resume)
+    )
+    monkeypatch.setattr(
+        production, "load_sandbox_policy", lambda path: ("policy", path)
+    )
+
+    services.resume(context)
+
+    assert runs == [context]
+    assert services.sandbox_policy == ("policy", policy)
+    assert services.sandbox_policy_path == policy
+    policy.write_text("changed\n")
+    with pytest.raises(SetupError, match="changed since the run started"):
+        services.resume(context)
+    assert runs == [context]
+
+
+def test_production_resume_keeps_the_gpu_count(tmp_path: Path) -> None:
+    devices = tuple(
+        GPUDevice(index=index, uuid=f"GPU-{index}", name="Test GPU")
+        for index in range(2)
+    )
+    plan = make_run_plan(tmp_path / "plan")
+    context = _resume_context(
+        plan,
+        tmp_path,
+        gpu_plan=RunGPUPlan(
+            authorized_pool=GPUAllocation(devices=devices),
+            work=GPUAllocation(devices=devices),
+            judge=GPUAllocation(),
+            judge_mode=JudgeGPUMode.FREEZE_ONLY,
+        ),
+    )
+
+    with pytest.raises(SetupError, match="keeps its GPU count"):
+        _resume_services(tmp_path)._run(
+            RunRequest(task_dir=FIXTURE.resolve()), resume=context
+        )
+
+
 def test_production_services_resolve_explicit_agent_auth_before_composition(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1029,8 +1356,11 @@ class _DockerObjectCollection:
 
 
 class _DockerContainer:
-    def __init__(self, identity, labels, *, collection=None, removable=True):
+    def __init__(
+        self, identity, labels, *, collection=None, removable=True, images=None
+    ):
         self.id = identity
+        self.images = images
         self.attrs = {
             "Config": {"Labels": dict(labels)},
             "State": {"Running": True, "Paused": identity.startswith("work")},
@@ -1047,6 +1377,13 @@ class _DockerContainer:
 
     def unpause(self):
         self.attrs["State"]["Paused"] = False
+
+    def commit(self, *, repository, tag, conf, **_kwargs):
+        image = _DockerImage(
+            f"sha256:{'c' * 64}", conf["Labels"], f"{repository}:{tag}"
+        )
+        self.images.objects[image.id] = image
+        return image
 
     def remove(self, force=False):
         del force
@@ -1081,6 +1418,27 @@ class _DockerImage:
 
 
 class _DockerImageCollection(_DockerObjectCollection):
+    def get(self, identity):
+        for image in self.objects.values():
+            if identity == image.id or identity in image.attrs["RepoTags"]:
+                return image
+        from docker.errors import ImageNotFound
+
+        raise ImageNotFound("missing")
+
+    def list(self, **kwargs):
+        filters = kwargs.get("filters") or {}
+        self.filters.append(filters)
+        wanted = dict(label.split("=", 1) for label in filters.get("label", ()))
+        return [
+            image
+            for image in self.objects.values()
+            if all(
+                image.attrs["Config"]["Labels"].get(key) == value
+                for key, value in wanted.items()
+            )
+        ]
+
     def remove(self, identity, force=False):
         del force
         self.objects.pop(identity, None)
@@ -1108,11 +1466,13 @@ def _production_recovery_client(*, removable_work=True):
         }
 
     containers = _DockerObjectCollection()
+    images = _DockerImageCollection()
     work = _DockerContainer(
         "work-real",
         labels("work"),
         collection=containers,
         removable=removable_work,
+        images=images,
     )
     judge = _DockerContainer("judge-real", labels("judge"), collection=containers)
     containers.objects = {work.id: work, judge.id: judge}
@@ -1128,7 +1488,7 @@ def _production_recovery_client(*, removable_work=True):
     return SimpleNamespace(
         containers=containers,
         networks=networks,
-        images=_DockerImageCollection(),
+        images=images,
     )
 
 
@@ -2724,6 +3084,8 @@ def test_production_recovery_normalizes_docker_labels_and_finds_all_resources(
     assert final.work.container_id is None
     assert client.containers.objects == {}
     assert client.networks.objects == {}
+    # The live Work is kept as its salvage image.
+    assert final.work.retained_image_id == f"sha256:{'c' * 64}"
 
 
 def test_production_cleanup_retains_live_work_authority_and_workspace(

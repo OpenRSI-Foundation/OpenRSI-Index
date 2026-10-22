@@ -6,6 +6,7 @@ import re
 import subprocess
 import time
 from collections.abc import Callable
+from datetime import datetime
 from pathlib import Path
 from typing import Self
 
@@ -19,12 +20,48 @@ _SAFE_JOB_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 _SAFE_HOST = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$")
 _TERMINAL_STATES = {"DONE", "EXIT"}
 _TRANSIENT_STATUS_ERRORS = ("communication time out",)
+# bhist -l's line for a job's end: "Tue Oct 21 18:30:12: Exited with exit code
+# 140. ...", "...: Done successfully. ..." or "...: Completed <exit>; ...".
+_HISTORY_END = re.compile(
+    r"^\s*(?:[A-Z][a-z]{2} )?([A-Z][a-z]{2} +\d{1,2} \d{2}:\d{2}:\d{2}(?: \d{4})?): "
+    r"(?:Done successfully|Exited|Completed <(?:done|exit)>)",
+    re.MULTILINE,
+)
 
 CommandRunner = Callable[[tuple[str, ...]], subprocess.CompletedProcess[str]]
 
 
 def _run(argv: tuple[str, ...]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(argv, check=False, capture_output=True, text=True)
+
+
+def _finish_time(fields: list[str]) -> float | None:
+    """An LSF time ("Oct 21 18:30" from bjobs' ``finish_time``, with its
+    seconds from bhist, the year when LSB_DISPLAY_YEAR is set, and bjobs'
+    trailing flag letter), as an epoch; a time in minutes to the end of its
+    minute, so an attempt is never charged short."""
+    if fields and len(fields[-1]) == 1 and fields[-1].isalpha():
+        fields = fields[:-1]
+    value = " ".join(fields)
+    now = datetime.now()
+    for layout in (
+        "%b %d %H:%M:%S %Y",
+        "%b %d %H:%M %Y",
+        "%b %d %H:%M:%S",
+        "%b %d %H:%M",
+    ):
+        try:
+            # The year first: Feb 29 parses only with its own year.
+            parsed = datetime.strptime(
+                value if "%Y" in layout else f"{value} {now.year}",
+                layout if "%Y" in layout else f"{layout} %Y",
+            )
+        except ValueError:
+            continue
+        if "%Y" not in layout and parsed > now:
+            parsed = parsed.replace(year=now.year - 1)
+        return parsed.timestamp() + (0 if "%S" in layout else 59)
+    return None
 
 
 class LSFJobSpec(PersistedModel):
@@ -90,6 +127,8 @@ class LSFJobResult(PersistedModel):
     job_id: str
     state: str
     exit_code: int
+    # When the job ended, if the scheduler still records it (``finished``).
+    ended_at: float | None = None
 
 
 class LSFScheduler:
@@ -99,12 +138,14 @@ class LSFScheduler:
         submit_binary: str = "bsub",
         status_binary: str = "bjobs",
         cancel_binary: str = "bkill",
+        history_binary: str = "bhist",
         runner: CommandRunner = _run,
         sleeper: Callable[[float], None] = time.sleep,
     ) -> None:
         self._submit_binary = submit_binary
         self._status_binary = status_binary
         self._cancel_binary = cancel_binary
+        self._history_binary = history_binary
         self._runner = runner
         self._sleeper = sleeper
 
@@ -153,6 +194,8 @@ class LSFScheduler:
             argv.append("-x")
         argv.extend(
             (
+                # A site rerun would run the payload over the same run logs.
+                "-rn",
                 "-o",
                 str(spec.stdout_path),
                 "-e",
@@ -239,6 +282,54 @@ class LSFScheduler:
         except KeyboardInterrupt:
             self.cancel(job_id)
             raise
+
+    def finished(self, job_id: str) -> LSFJobResult | None:
+        """The job's end, or None while LSF still runs or queues it.
+
+        bjobs lists every unfinished job; one it no longer finds has ended
+        and been cleaned from its history, state ``UNKNOWN``, with the end
+        bhist still records, if any.
+        """
+        self._require_job_id(job_id)
+        completed = self._runner(
+            (
+                self._status_binary,
+                "-a",
+                "-noheader",
+                "-o",
+                "stat exit_code finish_time",
+                job_id,
+            )
+        )
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        if "is not found" in detail:
+            return LSFJobResult(
+                job_id=job_id,
+                state="UNKNOWN",
+                exit_code=1,
+                ended_at=self._history_end(job_id),
+            )
+        if completed.returncode != 0:
+            raise InfrastructureError(f"cannot query LSF job {job_id}: {detail}")
+        fields = completed.stdout.split()
+        state, exit_code = self._parse_status(job_id, " ".join(fields[:2]))
+        if state not in _TERMINAL_STATES:
+            return None
+        return LSFJobResult(
+            job_id=job_id,
+            state=state,
+            exit_code=exit_code,
+            ended_at=_finish_time(fields[2:]),
+        )
+
+    def _history_end(self, job_id: str) -> float | None:
+        """The job's last end in every LSF event log, kept long after bjobs
+        forgets the job; None if bhist has none."""
+        completed = self._runner((self._history_binary, "-l", "-n", "0", job_id))
+        if completed.returncode != 0:
+            return None
+        ends = _HISTORY_END.findall(completed.stdout)
+        return _finish_time(ends[-1].split()) if ends else None
 
     def cancel(self, job_id: str) -> None:
         self._require_job_id(job_id)
