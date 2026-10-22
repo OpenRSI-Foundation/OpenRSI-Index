@@ -6,6 +6,12 @@ Locate the contributor's local `OpenRSI-Index` checkout from their supplied path
 
 Use one native Codex or Claude Code session for one proposal. Keep that session for feedback, revisions, contributor-owned `/task <answer or correction>` responses, and final upload; a closed client may resume it. Use a separate checkout for a second proposal. The client records its own trajectory: no hook setup, activation, early binding, or frozen snapshot is needed.
 
+Prepare the proposal and Discussion title/body in English by default, unless the
+contributor explicitly requests another delivery language. Show that exact
+rendering before final confirmation; do not translate or rewrite it at posting
+time. Contributor-facing explanations remain in their language. Existing
+Discussions and original session transcripts are not automatically translated.
+
 After the contributor confirms the final rendered proposal, write and reread it under the Round 6 file rules, then directly create the Task Ideas Discussion from that confirmed file and title. The confirmation authorizes this handoff; do not ask a second permission question before running:
 
 ```text

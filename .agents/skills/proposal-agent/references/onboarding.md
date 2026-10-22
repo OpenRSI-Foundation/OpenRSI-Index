@@ -18,6 +18,10 @@ FrontierRSI turns representative, fully open model-development projects into aud
 3. **Production relevance, not a toy result.** The selected experiment should preserve the causal mechanism and evaluation path of the source project. When the full workflow is too expensive, a faithful slice is acceptable only if improvement on that slice remains informative about the real problem.
 4. **Prefer a live frontier.** Frontier timing is a prioritization signal. Prefer questions that address newly important capability in the current research cycle. A less active area receives lower priority on an active frontier.
 
+We will discuss the task in your language and prepare the final proposal and
+Discussion title/body in English by default, unless you request another delivery
+language. You will review the complete deliverable before it is submitted.
+
 ## Bring one project
 
 Start by choosing one project through either route:
