@@ -1,5 +1,11 @@
 # [Task Title]
 
+Default the completed proposal to English, including its title, headings and all
+explanatory prose, unless the contributor explicitly requests another delivery
+language. Preserve names, identifiers, paths, citations and source quotations.
+Chat explanations may use the contributor's language; keep the confirmed
+scientific requirements unchanged.
+
 Complete every row below. Keep the proposal concise and use repository evidence
 rather than paper claims. This proposal is written before baseline reproduction,
 so do not invent measured baseline results, run-to-run variance, verified
