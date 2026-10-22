@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import re
 import shlex
 import tarfile
 import tempfile
+import time
 import uuid
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 from urllib.parse import unquote, urlsplit
@@ -45,6 +48,20 @@ _CONTAINER_PROMPT_PATH = PurePosixPath("/tmp/rsi-agent-prompt.md")
 # Next to agent_prompt.md: the next user turn of a continued session, which
 # is all its CLI reads from the container prompt path.
 _RESUME_PROMPT_NAME = "agent_resume_prompt.md"
+_CAPACITY_PROMPT_PATH = PurePosixPath("/tmp/rsi-agent-capacity-retry.md")
+_CAPACITY_PROMPT = (
+    "Your previous turn ended because the model service was temporarily at "
+    "capacity. Continue the same task and session. The Harness has NOT restarted "
+    "Work: background training and other jobs may still be running. Check their "
+    "state before launching replacements. Existing submissions and the original "
+    "time budget still apply.\n"
+)
+_CAPACITY_RETRY_DELAYS = (30, 60, 120, 240, 300)
+_ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
+_CODEX_ROLLOUT_DIAGNOSTIC = re.compile(
+    r"\d{4}-\d\d-\d\dT\S+\s+ERROR codex_core::session: "
+    r"failed to record rollout items:.*"
+)
 # How every Agent (its CLI, a driven CLI's driver, a resume, the oracle) is
 # started in Work. Not a login shell: a login profile may reset PATH (Debian's
 # and Alpine's /etc/profile do), dropping the image's own ENV PATH and the
@@ -298,6 +315,48 @@ class _ControlBinding:
         self.token = token
 
 
+@dataclass(frozen=True)
+class _CapacityRetry:
+    command: tuple[str, ...]
+    resume_command: Callable[[str], tuple[str, ...]]
+    session_id_in: Callable[[str], str | None]
+
+
+def _codex_at_capacity(output: str) -> bool:
+    """Only an explicit terminal capacity error, not mentions in tool output."""
+
+    lines = _ANSI_SGR.sub("", output).splitlines()
+    # Only skip the CLI's known footer/rollout shutdown diagnostics. An old
+    # capacity error inside tool output must not mask a different later failure.
+    while lines:
+        if not lines[-1].strip() or _CODEX_ROLLOUT_DIAGNOSTIC.fullmatch(lines[-1]):
+            lines.pop()
+        elif (
+            len(lines) >= 2
+            and re.fullmatch(r"[0-9][0-9,]*", lines[-1])
+            and lines[-2] == "tokens used"
+        ):
+            del lines[-2:]
+        else:
+            break
+    if not lines or not lines[-1].startswith("ERROR: "):
+        return False
+    error = lines[-1][7:]
+    if error == "Selected model is at capacity. Please try a different model.":
+        return True
+    try:
+        detail = json.loads(error)
+    except ValueError:
+        return False
+    if not isinstance(detail, dict):
+        return False
+    detail = detail.get("error", detail)
+    return isinstance(detail, dict) and (
+        detail.get("code") == "server_overloaded"
+        or detail.get("codex_error_info") == "server_overloaded"
+    )
+
+
 class AgentRuntime(Protocol):
     """Engine operations needed by the Agent integration."""
 
@@ -391,11 +450,13 @@ class RSILoopAgentAdapter:
         self._runtime = runtime
         self._logger = logger or logging.getLogger(__name__)
         self._control: _ControlBinding | None = None
+        self._capacity_retry: _CapacityRetry | None = None
 
     def available_agents(self) -> tuple[str, ...]:
         return tuple(sorted(agent_class.name for agent_class in list_agent_classes()))
 
     def prepare(self, request: AgentPrepareRequest) -> PreparedAgent:
+        self._capacity_retry = None
         plan = request.run_plan
         agent_plan = plan.task.agent
         validate_agent_reasoning_effort(agent_plan.name, agent_plan.reasoning_effort)
@@ -438,12 +499,34 @@ class RSILoopAgentAdapter:
         environment = self._agent_environment(agent, model)
         if getattr(agent, "runs_task_solution", False):
             environment[SUBMISSIONS_ENV] = str(request.max_submissions or 1)
-        return PreparedAgent(
+        prepared = PreparedAgent(
             agent_name=agent.name,
             command=(*AGENT_SHELL, command),
             prompt_path=prompt_path,
             environment=tuple(sorted(environment.items())),
         )
+        if agent.name == "codex":
+
+            def resume_command(session_id: str) -> tuple[str, ...]:
+                command = agent.format_run_cmd(
+                    str(_CAPACITY_PROMPT_PATH),
+                    model=model,
+                    cwd=str(plan.workdir),
+                    internet=agent_plan.network.mode == "public",
+                    resume=True,
+                    session_id=session_id,
+                )
+                return (
+                    *AGENT_SHELL,
+                    _apply_reasoning_effort(
+                        agent, command, agent_plan.reasoning_effort
+                    ),
+                )
+
+            self._capacity_retry = _CapacityRetry(
+                prepared.command, resume_command, agent.session_id_in
+            )
+        return prepared
 
     def _resume_prompt(
         self, agent: Agent, prompt_path: Path, resume: AgentResume
@@ -546,11 +629,7 @@ class RSILoopAgentAdapter:
                 exec_options["output_callback"] = request.output_callback
             if request.on_exec_start is not None:
                 exec_options["on_exec_start"] = request.on_exec_start
-            result = runtime.exec(
-                request.container,
-                request.prepared.command,
-                **exec_options,
-            )
+            result = self._exec_with_capacity_retry(request, runtime, exec_options)
             safe_output = redact_exact_values(
                 result.output,
                 {
@@ -569,6 +648,101 @@ class RSILoopAgentAdapter:
             raise InfrastructureError(safe_error or type(error).__name__) from error
         finally:
             self.clear_transient_bindings()
+
+    def _exec_with_capacity_retry(
+        self,
+        request: AgentRunRequest,
+        runtime: AgentRuntime,
+        exec_options: dict[str, Any],
+    ) -> AgentRunResult:
+        retry = self._capacity_retry
+        command = request.prepared.command
+        if (
+            retry is None
+            or request.prepared.agent_name != "codex"
+            or command != retry.command
+        ):
+            return runtime.exec(request.container, command, **exec_options)
+
+        deadline = (
+            None
+            if request.timeout_seconds is None
+            else time.monotonic() + request.timeout_seconds
+        )
+        outputs: list[str] = []
+        captured = True
+        truncated = False
+        started = False
+        session_id: str | None = None
+        retries = 0
+        while True:
+            result = runtime.exec(request.container, command, **exec_options)
+            outputs.append(result.output)
+            captured = captured and result.full_output_captured
+            truncated = truncated or result.output_truncated
+            started = started or result.exec_started
+            # Use this exec's header, not --last or an old session printed by a
+            # tool reading a previous trajectory. Bounded runtime output keeps
+            # the header as well as the terminal error.
+            if session_id is None:
+                session_id = next(
+                    (
+                        found
+                        for line in result.output.splitlines()[:64]
+                        if (found := retry.session_id_in(line)) is not None
+                    ),
+                    None,
+                )
+            if (
+                result.exit_code != 1
+                or not result.exec_started
+                or result.timed_out
+                or result.cancelled
+                or not _codex_at_capacity(result.output)
+                or session_id is None
+            ):
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                result = replace(result, exit_code=None, timed_out=True)
+                break
+            if retries == 0:
+                with tempfile.TemporaryDirectory(prefix="rsi-capacity-retry-") as raw:
+                    prompt = Path(raw) / "prompt.md"
+                    prompt.write_text(_CAPACITY_PROMPT)
+                    runtime.copy_to(request.container, prompt, _CAPACITY_PROMPT_PATH)
+            delay = _CAPACITY_RETRY_DELAYS[
+                min(retries, len(_CAPACITY_RETRY_DELAYS) - 1)
+            ]
+            retries += 1
+            notice = (
+                f"RSI Harness: Codex model at capacity; retry {retries} in {delay}s "
+                "in the same session. Work is still running."
+            )
+            self._logger.warning("%s", notice)
+            resumed = retry.resume_command(session_id)
+            # Waiting inside the bounded exec keeps cancellation/timeout in the
+            # runtime's existing containment path, with Work and GPU jobs alive.
+            command = (
+                *resumed[:2],
+                f"printf '%s\\n' {shlex.quote(notice)}\nsleep {delay} &&\n{resumed[2]}",
+            )
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    result = replace(result, exit_code=None, timed_out=True)
+                    break
+                exec_options["timeout_seconds"] = remaining
+            # A sandbox's Work deadline must only be activated once, never
+            # reset by a capacity retry. The remaining timeout includes sleep.
+            exec_options.pop("on_exec_start", None)
+
+        return replace(
+            result,
+            output="\n".join(outputs),
+            exec_started=started,
+            full_output_captured=captured,
+            output_truncated=truncated,
+        )
 
     @staticmethod
     def _stage_solution(runtime: AgentRuntime, request: AgentHookRequest) -> None:
@@ -598,6 +772,7 @@ class RSILoopAgentAdapter:
         """Drop runtime-only submission authority on every cleanup path."""
 
         self._control = None
+        self._capacity_retry = None
 
     def _require_runtime(self) -> AgentRuntime:
         if self._runtime is None:

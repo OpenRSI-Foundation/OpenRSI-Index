@@ -599,6 +599,12 @@ sudo -E "$(command -v rsi-harness)" cleanup RUN_ID \
 
 ### Resume
 
+During a run, an explicit Codex model-capacity error is retried automatically
+in the same session, with waits of 30, 60, 120, 240, then at most 300 seconds.
+Work is not restarted, and waiting counts toward the original Agent timeout.
+This does not retry normal completion, cancellation, or other errors, and
+requires a session ID from Codex. It does not create a new Harness attempt.
+
 `resume` continues a local run as its next attempt, whatever ended it: a
 finished, cancelled, crashed or timed-out run. A run that did not end cleanly
 is recovered first. Work is rebuilt from the retained image and WORKDIR
