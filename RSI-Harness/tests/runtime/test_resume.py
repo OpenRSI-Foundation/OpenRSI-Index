@@ -378,6 +378,37 @@ def test_a_failed_salvage_is_a_refusal(tmp_path) -> None:
         run.plan_resume(salvage=salvage)
 
 
+def test_backend_validation_precedes_salvage_under_the_run_lock(tmp_path):
+    run = Run(tmp_path)
+    lease = run.write_lease(status=None)
+    before = run.store.path_for("run-1").read_bytes()
+    events = []
+
+    def validate(context):
+        events.append("validate")
+        assert context.salvage_pending
+        assert context.agent_seconds_left == 22.0
+        with pytest.raises(SetupError, match="still live"):
+            run.plan_resume()
+        raise SetupError("backend cannot run this remaining plan")
+
+    def salvage(_run_id):
+        events.append("salvage")
+        run.store.write(lease.model_copy(update={"status": RunStatus.CANCELLED}))
+
+    with pytest.raises(SetupError, match="backend cannot run"):
+        run.plan_resume(salvage=salvage, validate_before_salvage=validate)
+    assert events == ["validate"]
+    assert run.store.path_for("run-1").read_bytes() == before
+
+    context = run.plan_resume(
+        salvage=salvage,
+        validate_before_salvage=lambda context: events.append("accepted"),
+    )
+    assert events == ["validate", "accepted", "salvage"]
+    assert not context.salvage_pending
+
+
 def _no_time(run: Run) -> None:
     run.write_lease(attempts=(closed_attempt(agent_seconds=60.0),))
 

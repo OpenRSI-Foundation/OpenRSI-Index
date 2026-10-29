@@ -8,6 +8,7 @@ from pathlib import Path
 
 from pydantic import field_validator
 
+from rsi_harness.cluster.bluevela.preflight import apptainer_preflight
 from rsi_harness.cluster.config import ClusterProfile
 from rsi_harness.models import PersistedModel
 from rsi_harness.task.digest import hash_tree
@@ -97,8 +98,8 @@ def render_build_driver(
 set -euo pipefail
 umask 077
 
+{apptainer_preflight(profile.apptainer.binary)}
 builder={_quote(profile.builder.binary)}
-apptainer={_quote(profile.apptainer.binary)}
 frozen_context={_quote(Path(frozen_context).resolve())}
 cache_dir={_quote(cache_dir)}
 final_sif={_quote(plan.sif_path)}

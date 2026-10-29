@@ -1,6 +1,7 @@
 """Pure sandbox fixtures, independent of Docker and host inventory."""
 
 import json
+import socket
 import tomllib
 from contextlib import nullcontext
 
@@ -17,6 +18,19 @@ from rsi_harness.runtime.sandbox_policy import (
     resolve_env_grant,
     resolve_sandbox_grant,
 )
+
+
+def bound_socket_send_buffer(connection):
+    """Keep backpressure fixtures independent of large HPC socket defaults.
+
+    Match the usual Linux effective send buffer, including enough capacity for
+    the pipelined-response fixture's final short tail. Linux doubles SO_SNDBUF;
+    other hosts may return the requested size without doubling it.
+    """
+    size = 212992
+    connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, size // 2)
+    if connection.getsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF) < size:
+        connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, size)
 
 
 class FakeClock:

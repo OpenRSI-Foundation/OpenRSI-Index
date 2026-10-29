@@ -101,6 +101,10 @@ from OpenRSI-X's `science-task-agent` skill.
 
 ## Requirements
 
+An experimental [native macOS controller](docs/macos-docker-desktop.md) uses
+Docker Desktop for CPU-only validation. Its scope and remaining acceptance
+limitations are documented separately; the requirements below describe Linux.
+
 - Linux with a working `docker` command
 - for GPU tasks, NVIDIA GPUs, the NVIDIA Container Toolkit, and a working
   `nvidia-smi` command
@@ -158,6 +162,12 @@ from Engine artifacts. Do not put credentials in the Harbor task directory.
 from logs, while ordinary settings remain unchanged. For credentials with
 nonstandard names, list the variable names in `RSI_AGENT_SECRET_ENV_NAMES`
 (comma-separated).
+
+During a run, an explicit Codex model-capacity error is retried automatically
+in the same session, with waits of 30, 60, 120, 240, then at most 300 seconds.
+Work is not restarted, and waiting counts toward the original Agent timeout.
+This does not retry normal completion, cancellation, or other errors, and
+requires a session ID from Codex. It does not create a new Harness attempt.
 
 ### Agents
 
@@ -344,7 +354,7 @@ sudo -E "$(command -v rsi-harness)" run /absolute/path/to/task --agent oracle \
 ```
 
 Omit `--gpus` for a CPU task and `--sandbox-policy` for a task without
-sandboxes. Run it as root (`sudo -E`) like every run: the firewall needs it,
+sandboxes. For local Docker, run it as root (`sudo -E`): the firewall needs it,
 and without root the command stops at the firewall probe. (A Harness that
 runs as non-root with a test firewall also cannot read a `reward.json` that
 `test.sh` wrote as root with mode `0600`, and reports a false
@@ -379,12 +389,36 @@ every Agent.
 Setup refuses, before any Docker work, a task without `solution/solve.sh` (a
 regular file) and a Judge with `model_access` (it calls the run's Agent, and
 the oracle has none). A task's `judge_model` needs `--judge-llm-auth`.
-`--cluster`, `--agent-auth` and `--reasoning-effort` are refused.
+`--agent-auth` and `--reasoning-effort` are refused.
+
+### Oracle on a single-node Slurm/Apptainer allocation
+
+No sudo or Docker daemon is needed on the execution host:
+
+```bash
+rsi-harness run /absolute/path/to/task --agent oracle \
+  --cluster /absolute/site.toml --dry-run
+rsi-harness run /absolute/path/to/task --agent oracle \
+  --cluster /absolute/site.toml --timeout 3600 --max-submissions 2
+```
+
+Set the timeout from the baseline Work and Judge costs; 3600 is only an example.
+The real run uses the native Engine, the site's SIF build/cache, Work/Judge GPU
+separation, snapshots, isolation, feedback and artifact paths. The frozen
+Harness provides the launcher, so no installed model CLI/version or Work login
+is required. Solution is a disposable, user-owned directory bound writable only
+into Work at `/solution`; the launcher empties it before submitting. The source
+solution is preserved and the directory is never bound into Judge.
+
+Only a **single-node Slurm** allocation is supported here, including CPU-only
+and GPU tasks. LSF, multi-node Oracle and resuming Oracle validation are refused.
+The [cluster setup and preflight](#run-multi-node-tasks-on-a-cluster) below apply
+to Oracle too. CPU/GPU totals come from the task, including separate Judge GPUs.
 
 The command exits 0 only when the run completed, `solve.sh` exited 0, exactly
 N Judge rounds ran (1 without `--max-submissions`) and every round's status is
-`completed`, whatever its score. Otherwise it prints
-`Oracle check failed: <reasons>` and exits 1. Its summary names the
+`completed`, whatever its score. Otherwise it exits nonzero. Local Docker prints `Oracle check failed: <reasons>`;
+on Slurm this diagnostic is also retained in the Engine job log and the job fails. Its summary names the
 artifacts directory and, per round, the score, `test.sh`'s exit code and the
 round's runtime.
 
@@ -443,6 +477,63 @@ For Slurm, copy `src/rsi_harness/cluster/slurm/profile.toml` instead and set
 `constraint`. Add the task's Work/Judge data binds to the empty lists. Both
 profiles use `builder.walltime` in **HH:MM**; the Slurm adapter converts it to
 minutes for `sbatch`.
+
+Set `apptainer.binary` to an absolute path on the compute nodes. Profile loading
+rejects relative paths; it does not require the binary to exist on the submit
+host. Build and Engine jobs check its executable permissions on their nodes,
+including when using a cached/imported SIF. The submit host needs scheduler
+commands, task/configuration files, shared staging storage and any Agent
+CLI/credentials to stage; Oracle needs no Work model CLI. A research Agent's CLI
+must also run inside the task container: its `--version` probe runs before model
+calls. Host-only wrappers and undeclared dependencies are not installed for it.
+Both probes require one distinct three-part version in `--version` output
+(prerelease/build suffixes and surrounding banners are allowed). Missing or
+ambiguous versions are refused; the container version must equal the frozen
+submit-host version, including on resume.
+
+`--dry-run` checks the task and allocation without submitting jobs. Runtime
+validation must exercise the actual image, container/isolation support, Agent
+CLI and Judge on the selected nodes. Use a validated imported SIF when the site
+cannot build images; this does not bypass its kernel or storage requirements.
+
+Optional Slurm site policies (omit them to retain existing behavior):
+
+- `scheduler.request_tmp = false` omits `sbatch --tmp` on both build and run
+  jobs for sites that report `TmpDisk=0`. It does **not** lower the required
+  scratch space or disable the compute-node free-space checks.
+- `[scheduler.build]` can override `partition`, `account`, `qos`, `constraint`,
+  `gpus` and `exclusive` for image construction only. Unspecified location
+  settings inherit the run settings; empty account/QOS/constraint clears the
+  corresponding request. Build CPU, memory and time still come from the normal
+  build plan. This supports a CPU build partition or a GPU partition that
+  requires a GPU even for builds, without changing Work/Judge allocations.
+- `scheduler.run_walltime_limit = "12:00"` limits each **single-node research**
+  allocation, not the total research budget. If the remaining run would exceed
+  it, the job requests an advance `B:TERM` signal, reserving the task's Judge
+  timeout plus the site's walltime margin. The batch shell forwards the signal
+  to the Engine; existing cancellation/drain and lease accounting preserve the
+  workspace and completed evidence. Slurm may deliver the warning up to 60
+  seconds early ([Slurm signal semantics](https://slurm.schedmd.com/sbatch.html#OPT_signal)).
+  Plans with no Work interval, or whose declared budget needs more than the
+  remaining attempt limit, are rejected before submission. This check includes
+  remaining time and grants on resume, before recovery changes retained state.
+
+A segmented attempt ends as an interruption, with a nonzero exit; it is not a
+successful completed research run. After confirming the job is terminal, inspect
+its artifacts, then use `rsi-harness resume RUN_ID --cluster PROFILE --dry-run`
+and `rsi-harness resume RUN_ID --cluster PROFILE` to submit the next attempt.
+The next allocation is capped again, while only the actual recorded Agent time
+is charged against the original budget. Do not add `--add-time` merely to cross
+a scheduler boundary. There is no automatic resubmission loop. A forcibly
+interrupted or unverified Judge round remains unverified under existing recovery
+rules; reserved time is not a guarantee against node failure or preemption.
+The capacity check uses the configured overhead margin and Slurm's early signal
+window. It cannot predict actual startup time, repeated Judge work, or additional
+interruptions: these can consume more allocations, so each resume rechecks the
+remaining budget against the remaining attempts. It does not guarantee that the
+research budget will finish within the planned number of jobs.
+Oracle, multi-node runs and sandbox tasks cannot be segmented by this option;
+use a sufficiently long allocation. Image builds are not segmented either.
 
 Preview the resolved job without submitting it:
 
@@ -598,12 +689,6 @@ sudo -E "$(command -v rsi-harness)" cleanup RUN_ID \
 ```
 
 ### Resume
-
-During a run, an explicit Codex model-capacity error is retried automatically
-in the same session, with waits of 30, 60, 120, 240, then at most 300 seconds.
-Work is not restarted, and waiting counts toward the original Agent timeout.
-This does not retry normal completion, cancellation, or other errors, and
-requires a session ID from Codex. It does not create a new Harness attempt.
 
 `resume` continues a local run as its next attempt, whatever ended it: a
 finished, cancelled, crashed or timed-out run. A run that did not end cleanly

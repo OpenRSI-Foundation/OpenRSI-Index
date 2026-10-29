@@ -78,6 +78,17 @@ class SchedulerProfile(_ProfileModel):
         return value
 
 
+class SlurmBuildProfile(_ProfileModel):
+    """Scheduling overrides for image construction, never Work or Judge."""
+
+    partition: str | None = None
+    account: str | None = None
+    qos: str | None = None
+    constraint: str | None = None
+    gpus: int = Field(default=0, ge=0)
+    exclusive: bool = False
+
+
 class SlurmSchedulerProfile(SchedulerProfile):
     kind: Literal["slurm"]
     submit_binary: str = "sbatch"
@@ -100,6 +111,20 @@ class SlurmSchedulerProfile(SchedulerProfile):
     group: str = Field(default="", validation_alias=AliasChoices("account", "group"))
     qos: str | None = None
     constraint: str | None = None
+    request_tmp: bool = True
+    build: SlurmBuildProfile | None = None
+    # Total research time stays in the task/lease; this limits each allocation.
+    run_walltime_limit: str | None = None
+
+    @field_validator("run_walltime_limit")
+    @classmethod
+    def _run_walltime_limit(cls, value: str | None) -> str | None:
+        if value is not None and (
+            re.fullmatch(r"\d+:[0-5]\d", value) is None
+            or not int(value.replace(":", ""))
+        ):
+            raise ValueError("run_walltime_limit must be positive HH:MM")
+        return value
 
     @field_validator("accounting_binary", "control_binary")
     @classmethod
@@ -197,6 +222,13 @@ class ApptainerProfile(_ProfileModel):
     # Explicit operator consent to the ABI 6 backport missing signal scoping.
     # Filesystem rights and abstract-socket scoping remain mandatory.
     judge_allow_missing_landlock_signal: bool = Field(default=False, strict=True)
+
+    @field_validator("binary")
+    @classmethod
+    def _absolute_binary(cls, value: Path) -> Path:
+        if not value.is_absolute():
+            raise ValueError("apptainer.binary must be an absolute compute-node path")
+        return value
 
     @field_validator("environment", "work_environment", "judge_environment")
     @classmethod

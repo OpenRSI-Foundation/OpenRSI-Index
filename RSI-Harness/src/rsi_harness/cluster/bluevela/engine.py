@@ -21,6 +21,7 @@ from rsi_harness.cluster.bluevela.allocation import (
     probe_and_partition,
 )
 from rsi_harness.cluster.bluevela.judge_llm import ClusterJudgeLLM
+from rsi_harness.cluster.bluevela.preflight import apptainer_preflight
 from rsi_harness.cluster.bluevela.resources import MultiNodeResources
 from rsi_harness.cluster.config import ClusterProfile, SlurmSchedulerProfile
 from rsi_harness.cluster.slurm.allocation import discover_slurm_inventory
@@ -228,7 +229,13 @@ def render_engine_driver(
     """Render a driver that starts the native Engine, never Harbor CLI."""
     output = Path(output_path).resolve()
     payload_path = output.with_suffix(".json")
-    payload_path.write_text(payload.model_dump_json(indent=2))
+    serialized = payload.model_dump(mode="json")
+    # These controls are consumed by the submit host only. Do not send new
+    # profile keys to an older frozen compute runtime when resuming a run.
+    scheduler = serialized["profile"]["scheduler"]
+    for name in ("request_tmp", "build", "run_walltime_limit"):
+        scheduler.pop(name, None)
+    payload_path.write_text(json.dumps(serialized, indent=2))
     leaf = (
         payload.run_plan.paths.logs
         / "runs"
@@ -274,6 +281,7 @@ export APPTAINERENV_CUDA_VISIBLE_DEVICES=""'''
 set -euo pipefail
 umask 077
 
+{apptainer_preflight(profile.apptainer.binary)}
 {device_environment}
 export APPTAINER_BIND={_quote(profile.apptainer.dns_bind)}
 export HF_HOME={_quote(profile.storage.hf_home)}
@@ -312,6 +320,7 @@ trap cleanup EXIT
 set -euo pipefail
 umask 077
 
+{apptainer_preflight(profile.apptainer.binary)}
 test -n "${{{inventory_variable}:-}}"
 export APPTAINER_BIND={_quote(profile.apptainer.dns_bind)}
 export HF_HOME={_quote(profile.storage.hf_home)}

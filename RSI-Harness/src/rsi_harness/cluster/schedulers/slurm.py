@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from datetime import datetime
 
-from pydantic import field_validator
+from pydantic import Field, field_validator
 
 from rsi_harness.cluster.schedulers.lsf import LSFJobResult, LSFJobSpec
 from rsi_harness.errors import InfrastructureError, SetupError
@@ -59,6 +59,10 @@ class SlurmJobSpec(LSFJobSpec):
 
     qos: str | None = None
     constraint: str | None = None
+    request_tmp: bool = True
+    # Slurm's advance signal is sent to the batch shell, which forwards it
+    # only to the Engine. Accepted Judge rounds retain their drain deadline.
+    signal_seconds: int = Field(default=0, ge=0, le=65535)
 
     @field_validator("walltime")
     @classmethod
@@ -118,8 +122,10 @@ class SlurmScheduler:
             argv.append(f"--constraint={spec.constraint}")
         if spec.gpu_count:
             argv.append(f"--gres=gpu:{spec.gpu_count}")
-        if spec.local_tmp_mb:
+        if spec.local_tmp_mb and spec.request_tmp:
             argv.append(f"--tmp={spec.local_tmp_mb}M")
+        if spec.signal_seconds:
+            argv.append(f"--signal=B:TERM@{spec.signal_seconds}")
         if spec.exclusive:
             argv.append("--exclusive")
         if spec.excluded_hosts:

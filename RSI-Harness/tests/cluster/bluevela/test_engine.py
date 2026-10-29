@@ -277,7 +277,7 @@ def test_a_cancelled_job_waits_for_the_engine_to_close_its_attempt(
     profile = payload.profile.model_copy(
         update={
             "apptainer": payload.profile.apptainer.model_copy(
-                update={"temp_root": tmp_path}
+                update={"temp_root": tmp_path, "binary": Path("/bin/sh")}
             )
         }
     )

@@ -27,8 +27,8 @@ from rsi_harness.models import (
     RunRequest,
     RunResult,
     RunStatus,
-    SubmissionStatus,
 )
+from rsi_harness.runtime.oracle import oracle_failures as _oracle_failures
 from rsi_harness.runtime.redaction import redact_text
 from rsi_harness.runtime.sandbox_policy import load_sandbox_policy
 from rsi_loop.harness.agent import get_agent_class
@@ -335,27 +335,6 @@ def _runs_task_solution(agent: str) -> bool:
         return False
 
 
-def _oracle_failures(result: RunResult, submissions: int) -> list[str]:
-    """Why an oracle run does not show a working Judge; empty when it does."""
-    failures = []
-    if result.agent_exit_code is None:
-        failures.append("solve.sh returned no exit code")
-    elif result.agent_exit_code != 0:
-        failures.append(f"solve.sh exited {result.agent_exit_code}")
-    if result.status is not RunStatus.COMPLETED:
-        failures.append(f"run status is {result.status.value}")
-    if result.total_rounds != submissions:
-        failures.append(
-            f"{result.total_rounds} Judge round(s) ran, expected {submissions}"
-        )
-    failures.extend(
-        f"{report.round_id} is {report.status.value}"
-        for report in result.reports
-        if report.status is not SubmissionStatus.COMPLETED
-    )
-    return failures
-
-
 @app.command("run")
 def run_command(
     task_dir: Annotated[Path, typer.Argument()],
@@ -512,13 +491,6 @@ def run_command(
         typer.echo("Error: --dry-run requires --cluster", err=True)
         raise typer.Exit(2)
     oracle = _runs_task_solution(agent)
-    if oracle and cluster is not None:
-        typer.echo(
-            f"Error: --agent {agent} runs locally only and cannot be used with "
-            "--cluster",
-            err=True,
-        )
-        raise typer.Exit(2)
     judge_llm = None
     judge_llm_options = (
         judge_llm_api_key_env,
@@ -590,6 +562,8 @@ def run_command(
             typer.echo("\nDry-run complete; no jobs were submitted.")
             return
         _echo_cluster_result(cluster_result, time.monotonic() - started)
+        if oracle:
+            typer.echo("\nOracle check passed")
         return
 
     try:

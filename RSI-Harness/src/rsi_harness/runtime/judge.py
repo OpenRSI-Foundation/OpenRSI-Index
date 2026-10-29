@@ -13,6 +13,7 @@ from typing import Any, Protocol
 from rsi_harness.errors import (
     ContainerExecNotStartedError,
     InfrastructureError,
+    RecoveryRequiredError,
     RetryableSubmissionError,
     SetupError,
     StateTransitionError,
@@ -57,6 +58,7 @@ from rsi_harness.models import (
     WorkQuiescence,
 )
 from rsi_harness.runtime.artifacts import _sudo_invoking_owner
+from rsi_harness.runtime.desktop import PrivateLogContentError
 from rsi_harness.runtime.docker import DockerContainerRuntime
 from rsi_harness.runtime.environment import (
     MissingRuntimeEnvironmentError,
@@ -360,11 +362,13 @@ class DockerJudgeRoundRuntime:
             self._runtime.install_network_policy(container, lease)
             return container
         except Exception as primary:
+            typed_recovery = isinstance(primary, RecoveryRequiredError)
             recovery_required = "recovery_required" in _error_text(primary)
             cleanup: list[str] = []
             try:
                 self.remove(container)
             except Exception as error:
+                typed_recovery |= isinstance(error, RecoveryRequiredError)
                 cleanup.append(f"container removal: {_error_text(error)}")
                 try:
                     self.contain_after_remove_failure(container)
@@ -373,7 +377,11 @@ class DockerJudgeRoundRuntime:
                         "emergency containment unproven: "
                         f"{_error_text(containment_error)}"
                     )
-            if self._lease is not None and self._safe_to_release_isolation:
+            if (
+                self._lease is not None
+                and self._safe_to_release_isolation
+                and not typed_recovery
+            ):
                 try:
                     self._enforcer.cleanup(self._lease)
                 except Exception as error:
@@ -384,10 +392,13 @@ class DockerJudgeRoundRuntime:
                     )
                 else:
                     self._lease = None
-            if recovery_required:
+            if typed_recovery or recovery_required:
                 self._safe_to_release_isolation = False
             detail = _combined_error(_error_text(primary), cleanup)
-            raise InfrastructureError(detail or "Judge creation failed") from primary
+            error_type = (
+                RecoveryRequiredError if typed_recovery else InfrastructureError
+            )
+            raise error_type(detail or "Judge creation failed") from primary
 
     def start(self, container: ContainerRef) -> None:
         self._runtime.start(container)
@@ -431,7 +442,7 @@ class DockerJudgeRoundRuntime:
         options = {} if deadline is None else {"deadline": deadline}
         if output_redact_values:
             options["output_redact_values"] = output_redact_values
-        return self._runtime.exec(
+        result = self._runtime.exec(
             container,
             command,
             timeout_seconds=timeout_seconds,
@@ -440,6 +451,16 @@ class DockerJudgeRoundRuntime:
             redact_output=False,
             **options,
         )
+        collector = getattr(self._runtime, "collect_private_judge_logs", None)
+        if collector is not None:
+            try:
+                collector(container)
+            except PrivateLogContentError as error:
+                # Export follows a completed exec: preserve its output-capture
+                # evidence even though none of its rewards may be accepted.
+                error.exec_result = result
+                raise
+        return result
 
     def remove(self, container: ContainerRef) -> None:
         self._runtime.remove(container)
@@ -966,13 +987,32 @@ class JudgeRunner:
         except StateTransitionError as error:
             engine_bug = error
         except Exception as error:
+            if (
+                isinstance(error, PrivateLogContentError)
+                and error.exec_result is not None
+            ):
+                output = _bounded_output(
+                    redact_exact_values(error.exec_result.output, exec_output_secrets),
+                    limit=plan.task.verifier.output_limit_bytes,
+                    truncated=error.exec_result.output_truncated,
+                )
+                exit_code = error.exec_result.exit_code
+                timed_out = error.exec_result.timed_out
+                full_output_captured = error.exec_result.full_output_captured
             if isinstance(error, ContainerExecNotStartedError):
                 verifier_output_required = False
                 full_output_captured = False
             primary_error = _error_text(error, verifier_error_secrets)
-            status = SubmissionStatus.INFRASTRUCTURE_ERROR
+            status = (
+                SubmissionStatus.VERIFIER_ERROR
+                if isinstance(error, PrivateLogContentError)
+                else SubmissionStatus.INFRASTRUCTURE_ERROR
+            )
             score = None
-            if "recovery_required" in primary_error:
+            if isinstance(error, RecoveryRequiredError) or (
+                not isinstance(error, PrivateLogContentError)
+                and "recovery_required" in primary_error
+            ):
                 safe_to_release_isolation = False
         finally:
             if family_freeze_started:

@@ -16,6 +16,20 @@ from fastapi.testclient import TestClient
 from rsi_harness.runtime.sandbox_contracts import SandboxError
 from tests.runtime.test_sandbox import kit as kit
 from tests.runtime.test_sandbox import work as work
+from tests.sandbox_helpers import bound_socket_send_buffer
+
+
+@pytest.fixture
+def bounded_send_buffer(monkeypatch):
+    from rsi_harness.runtime.sandbox_server import _BoundedH11Protocol
+
+    original = _BoundedH11Protocol.connection_made
+
+    def connect(protocol, transport):
+        bound_socket_send_buffer(transport.get_extra_info("socket"))
+        original(protocol, transport)
+
+    monkeypatch.setattr(_BoundedH11Protocol, "connection_made", connect)
 
 
 @pytest.fixture
@@ -531,7 +545,7 @@ def _download_request(kit, work, monkeypatch):
 
 
 def test_download_transport_backlog_is_chunk_bounded_and_body_is_complete(
-    live_servers, kit, work, monkeypatch
+    live_servers, kit, work, monkeypatch, bounded_send_buffer
 ):
     import http.client
     import io
@@ -732,7 +746,7 @@ def test_cancelled_executor_waiter_returns_only_unstarted_worker_capacity(
 
 
 def test_default_nonreaders_cannot_retain_all_work_and_judge_connections(
-    live_servers, kit, work, monkeypatch
+    live_servers, kit, work, monkeypatch, bounded_send_buffer
 ):
     from rsi_harness.integrations.sandbox_client import SandboxClient
     from rsi_harness.runtime.sandbox_contracts import SandboxOwner
@@ -789,7 +803,7 @@ def test_default_nonreaders_cannot_retain_all_work_and_judge_connections(
 
 @pytest.mark.parametrize("close", [False, True])
 def test_flush_deadline_aborts_even_when_peer_dribbles_or_close_is_pending(
-    live_servers, kit, work, monkeypatch, close
+    live_servers, kit, work, monkeypatch, close, bounded_send_buffer
 ):
     from rsi_harness.runtime.sandbox_server import SandboxRequestSlots
 
@@ -817,7 +831,7 @@ def test_flush_deadline_aborts_even_when_peer_dribbles_or_close_is_pending(
 
 @pytest.mark.parametrize("abort", ["flush", "suspend"])
 def test_transport_abort_preserves_pipelined_mutation_worker_and_request_slot(
-    live_servers, kit, work, monkeypatch, abort
+    live_servers, kit, work, monkeypatch, abort, bounded_send_buffer
 ):
     from rsi_harness.runtime.sandbox_contracts import SandboxBundleEntry
     from rsi_harness.runtime.sandbox_server import SandboxRequestSlots

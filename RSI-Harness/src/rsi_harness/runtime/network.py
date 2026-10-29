@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 
 from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.models import ContainerRef, ManagedNetwork, NetworkPolicy
+from rsi_harness.runtime.desktop import DesktopHost, is_desktop
 
 IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -138,7 +139,9 @@ class DockerIptablesFirewallBackend:
         runner: Callable[[list[str]], subprocess.CompletedProcess[str]] | None = None,
     ) -> None:
         self._client = client
-        self._runner = runner or self._run
+        self._runner = runner or (
+            DesktopHost(client).firewall if is_desktop(client) else self._run
+        )
 
     @staticmethod
     def _run(command: list[str]) -> subprocess.CompletedProcess[str]:

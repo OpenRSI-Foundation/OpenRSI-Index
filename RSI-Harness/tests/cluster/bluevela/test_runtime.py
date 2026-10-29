@@ -1594,6 +1594,58 @@ def _codex_runtime(tmp_path: Path, monkeypatch, **payload) -> ApptainerAgentRunt
     )
 
 
+@pytest.mark.parametrize(
+    ("exit_code", "output"),
+    [
+        (127, ""),
+        (0, "codex-cli 0.148.0\n"),
+        (0, "codex-cli 0.149.01\n"),
+        (0, "codex-cli 0.149.0-beta.1\n"),
+        (0, "codex-cli 0.149.0\nwrapper 1.2.3\n"),
+        (0, ""),
+    ],
+)
+def test_agent_binary_probe_explains_unusable_container_cli(
+    tmp_path, monkeypatch, exit_code, output
+):
+    binary = tmp_path / "host-wrapper"
+    runtime = _codex_runtime(tmp_path, monkeypatch, agent_binary=binary)
+    calls = []
+
+    def run(command, **options):
+        calls.append((command, options))
+        return AgentRunResult(exit_code=exit_code, output=output)
+
+    monkeypatch.setattr(runtime, "_run", run)
+    with pytest.raises(InfrastructureError) as caught:
+        runtime._smoke_agent()
+    message = str(caught.value)
+    assert str(binary) in message
+    assert f"exited {exit_code}" in message
+    assert "expected '0.149.0'" in message
+    assert "host-only wrappers" in message
+    assert calls[0][0] == ("/usr/local/bin/codex", "--version")
+    assert calls[0][1]["timeout_seconds"] == 60
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "codex-cli 0.149.0\n",
+        "Wrapper starting CLI\ncodex-cli v0.149.0\n",
+        "CLI 0.149.0\nversion 0.149.0\n",
+    ],
+)
+def test_agent_binary_probe_accepts_exact_version_with_banner(
+    tmp_path, monkeypatch, output
+):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        runtime, "_run", lambda *_a, **_kw: AgentRunResult(exit_code=0, output=output)
+    )
+    runtime._smoke_agent()
+
+
 def test_resumed_initialize_reuses_the_run_directories_and_seeds_nothing(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1794,3 +1846,197 @@ def test_a_cancelled_run_stops_its_process_group_before_reading_its_output(
     while _process_state(child) not in (None, "Z"):
         assert time.monotonic() < deadline
         time.sleep(0.05)
+
+
+def _capture_verbose_codex_result(tmp_path, monkeypatch, *, multiline=True):
+    """Exercise production capture with only the Apptainer launcher replaced."""
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    session = "01a16125-90ff-70a0-8d09-1a36fffb91d0"
+    header = f"OpenAI Codex v0.159.2\nsession id: {session}\nprivate-secret 中文\n"
+    terminal = "ERROR: Selected model is at capacity. Please try a different model.\n"
+    row = "x" * 998 + "🧪" + ("\n" if multiline else "")
+    trailer = "\nprivate-secret END中文\n" + terminal
+    script = (
+        "import sys; "
+        f"sys.stdout.buffer.write({header.encode()!r}); "
+        f"sys.stdout.buffer.write({row.encode()!r} * 16010); "
+        f"sys.stdout.buffer.write({trailer.encode()!r}); sys.exit(1)"
+    )
+    monkeypatch.setattr(
+        runtime, "_base_command", lambda **_options: (sys.executable, "-c", script)
+    )
+    monkeypatch.setattr(runtime, "_network_command", lambda command, **_o: ())
+    output = tmp_path / "complete-output.log"
+    output.write_text("prior attempt\n")
+    streamed = []
+    result = runtime._run(
+        (),
+        devices=(),
+        network_mode="public",
+        timeout_seconds=30,
+        output_path=output,
+        output_redact_values=("private-secret",),
+        output_callback=streamed.append,
+    )
+    expected = header + row * 16010 + trailer
+    from rsi_harness.cluster.bluevela.runtime import _safe_output
+
+    expected = _safe_output(expected, {"private-secret"})
+    return result, output, streamed, expected
+
+
+@pytest.mark.parametrize("multiline", [False, True])
+def test_apptainer_capture_retains_verbose_header_and_terminal_error(
+    tmp_path, monkeypatch, multiline
+):
+    result, output, streamed, expected = _capture_verbose_codex_result(
+        tmp_path, monkeypatch, multiline=multiline
+    )
+    assert len(expected.encode()) > 16_000_000
+    assert result.exit_code == 1
+    assert not result.timed_out
+    assert result.output_truncated
+    # Preserve the existing completeness flag; test the persisted log itself.
+    assert not result.full_output_captured
+    assert len(result.output.encode()) <= 16_000_000
+    assert result.output.startswith("OpenAI Codex v0.159.2\nsession id: ")
+    assert result.output.endswith("Please try a different model.\n")
+    assert "中文" in result.output and "END中文" in result.output
+    assert "�" not in result.output
+    assert "private-secret" not in result.output
+    assert output.read_text() == "prior attempt\n" + expected
+    assert "".join(streamed) == expected
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_apptainer_copy_to_owns_temporary_sources_and_replaces_prior_copy(
+    tmp_path, monkeypatch, directory
+):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    source = tmp_path / "temporary-source"
+    if directory:
+        source.mkdir()
+        (source / "script.sh").write_text("first\n")
+        (source / "script.sh").chmod(0o750)
+    else:
+        source.write_text("first\n")
+        source.chmod(0o750)
+    target = PurePosixPath("/tmp/copied-input")
+    runtime.copy_to(runtime.work_ref, source, target)
+    staged = runtime._copies[target]
+    original = source / "script.sh" if directory else source
+    copied = staged / "script.sh" if directory else staged
+    original.write_text("source changed\n")
+    assert copied.read_text() == "first\n"
+    assert copied.stat().st_mode & 0o777 == 0o750
+    if directory:
+        import shutil
+
+        shutil.rmtree(source)
+    else:
+        source.unlink()
+    assert copied.read_text() == "first\n"
+    assert staged.is_relative_to(runtime.node_tmp / "copied-inputs")
+    command = runtime._base_command(
+        devices=(),
+        environment=None,
+        extra_binds=(),
+        mount_workspace=True,
+        mount_agent_home=True,
+        containall=True,
+        network_mode="public",
+    )
+    assert f"{staged}:{target}:ro" in command
+
+    # A repeated copy may change the source type. It replaces only its own
+    # staged input, leaving no old directory or stale content behind.
+    source.write_text("replacement\n")
+    runtime.copy_to(runtime.work_ref, source, target)
+    assert not staged.exists()
+    assert runtime._copies[target].read_text() == "replacement\n"
+    assert len(list((runtime.node_tmp / "copied-inputs").iterdir())) == 1
+
+
+def test_apptainer_copy_to_failure_preserves_prior_bind_and_builtin_source(
+    tmp_path, monkeypatch
+):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    builtin = tmp_path / "built-in-agent"
+    builtin.write_text("CLI")
+    target = PurePosixPath("/usr/local/bin/agent")
+    runtime._copies[target] = builtin
+    source = tmp_path / "source"
+    source.write_text("replacement")
+    runtime.copy_to(runtime.work_ref, source, target)
+    assert builtin.read_text() == "CLI"
+    staged = runtime._copies[target]
+    with pytest.raises(FileNotFoundError):
+        runtime.copy_to(runtime.work_ref, tmp_path / "missing", target)
+    assert runtime._copies[target] == staged
+    assert staged.read_text() == "replacement"
+    assert len(list((runtime.node_tmp / "copied-inputs").iterdir())) == 1
+
+
+def test_apptainer_copy_to_preserves_directory_symlinks_without_dereferencing_host(
+    tmp_path, monkeypatch
+):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    source = tmp_path / "source-tree"
+    source.mkdir()
+    (source / "local").write_text("local payload")
+    (source / "relative").symlink_to("local")
+    (source / "dangling").symlink_to("container-created-later")
+    outside = tmp_path / "host-only"
+    outside.write_text("host-only bytes")
+    outside.chmod(0o600)
+    (source / "absolute").symlink_to(outside)
+    target = PurePosixPath("/tmp/tree")
+
+    runtime.copy_to(runtime.work_ref, source, target)
+
+    copied = runtime._copies[target]
+    for name in ("relative", "dangling", "absolute"):
+        assert (copied / name).is_symlink()
+        assert (copied / name).readlink() == (source / name).readlink()
+    assert (copied / "local").read_text() == "local payload"
+    assert outside.read_text() == "host-only bytes"
+    assert outside.stat().st_mode & 0o777 == 0o600
+
+
+def test_apptainer_copy_to_cleans_readonly_tree_on_replacement_and_failed_copy(
+    tmp_path, monkeypatch
+):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    source = tmp_path / "read-only-source"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    (nested / "file").write_text("payload")
+    nested.chmod(0o555)
+    source.chmod(0o555)
+    target = PurePosixPath("/tmp/tree")
+    runtime.copy_to(runtime.work_ref, source, target)
+    previous = runtime._copies[target]
+    assert previous.stat().st_mode & 0o777 == 0o555
+    runtime.copy_to(runtime.work_ref, source, target)
+    assert not previous.exists()
+    current = runtime._copies[target]
+
+    def fail_after_partial_readonly_copy(_source, destination, **_options):
+        nested = destination / "nested"
+        nested.mkdir(parents=True)
+        (nested / "file").write_text("partial")
+        nested.chmod(0o555)
+        destination.chmod(0o555)
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.runtime.shutil.copytree",
+        fail_after_partial_readonly_copy,
+    )
+    with pytest.raises(OSError, match="copy failed"):
+        runtime.copy_to(runtime.work_ref, source, target)
+    assert runtime._copies[target] == current
+    assert (current / "nested/file").read_text() == "payload"
+    assert len(list((runtime.node_tmp / "copied-inputs").iterdir())) == 1
+    assert source.stat().st_mode & 0o777 == 0o555
+    assert (source / "nested").stat().st_mode & 0o777 == 0o555

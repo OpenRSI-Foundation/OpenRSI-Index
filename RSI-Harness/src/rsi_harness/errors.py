@@ -49,6 +49,10 @@ class InfrastructureError(HarnessError):
         super().__init__(ErrorCode.INFRASTRUCTURE_ERROR, message)
 
 
+class RecoveryRequiredError(InfrastructureError):
+    """Retain runtime isolation and evidence until explicit recovery succeeds."""
+
+
 class ContainerExecNotStartedError(InfrastructureError):
     """Docker rejected an exec before any output-capture obligation existed."""
 

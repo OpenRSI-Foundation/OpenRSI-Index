@@ -16,6 +16,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -24,6 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
+from rsi_harness.cluster.agent_version import parse_agent_version
 from rsi_harness.cluster.bluevela.allocation import AllocatedPools
 from rsi_harness.cluster.bluevela.judge_controller import JudgeControllerControl
 from rsi_harness.cluster.bluevela.judge_llm import (
@@ -56,6 +58,7 @@ from rsi_harness.errors import (
 from rsi_harness.integrations.rsi_loop import (
     RSILoopAgentAdapter,
     rsi_loop_runtime_secret_values,
+    task_solution_script,
 )
 from rsi_harness.integrations.submit_client import generate_submit_client
 from rsi_harness.judge_agent import (
@@ -127,6 +130,8 @@ from rsi_harness.runtime.local_auth import (
     resolve_agent_auth,
 )
 from rsi_harness.runtime.network import NetworkPolicyEnforcer
+from rsi_harness.runtime.oracle import oracle_failures
+from rsi_harness.runtime.output import BoundedBytes
 from rsi_harness.runtime.recovery import LeaseStore, retained_round_id
 from rsi_harness.runtime.redaction import redact_exact_values, redact_text
 from rsi_harness.runtime.resume import ResumeContext, plan_resume
@@ -141,6 +146,7 @@ from rsi_harness.runtime.trajectory import (
 from rsi_harness.task.compiler import HarborTaskCompiler
 from rsi_harness.task.digest import require_tests_digest
 from rsi_loop.harness.agent import create_agent, get_agent_class
+from rsi_loop.harness.agent import oracle as oracle_module
 from rsi_loop.harness.config import load_config
 
 
@@ -175,6 +181,8 @@ def _agent_provider_urls(
     *,
     auth_resolver: Callable[..., AgentAuthMaterial | None] = resolve_agent_auth,
 ) -> tuple[str, ...]:
+    if plan.task.agent.name == "oracle":
+        return ()
     if config.http_proxy or config.https_proxy:
         raise SetupError(
             "Blue Vela no-network Agent does not support an upstream proxy"
@@ -220,6 +228,8 @@ class ApptainerAgentRuntime:
             plan.paths.logs / "runs" / payload.run_id / plan.task.task_id / "feedback"
         )
         self._copies: dict[PurePosixPath, Path] = {}
+        self._copied_inputs: dict[PurePosixPath, tempfile.TemporaryDirectory[str]] = {}
+        self._oracle_solution: Path | None = None
         # The Agent CLI and its companions, also bound into a model-access Judge.
         self._agent_cli_targets: list[PurePosixPath] = []
         self.auth_material: AgentAuthMaterial | None = None
@@ -323,6 +333,16 @@ class ApptainerAgentRuntime:
         the run's workspace, Agent home, task assets and Judge rounds as
         they are, and seeds nothing; one whose run never finished seeding,
         so no Agent ran on it, is seeded again."""
+        if self.plan.task.agent.name == "oracle":
+            if (
+                self.profile.scheduler.kind != "slurm"
+                or self.allocated_pools is not None
+            ):
+                raise SetupError("Oracle requires a single-node Slurm allocation")
+            if resume:
+                raise SetupError(
+                    "Oracle validation cannot resume; start a fresh validation"
+                )
         if resume and self.allocated_pools is not None:
             raise SetupError("a multi-node cluster run cannot be resumed yet")
         # The adapter refused these before submitting; check again in the job.
@@ -359,13 +379,27 @@ class ApptainerAgentRuntime:
         submit.write_text(generate_submit_client())
         submit.chmod(0o755)
         self._copies[PurePosixPath("/usr/local/bin/rsi-submit")] = submit
-        if self.payload.agent_binary is None or not self.payload.agent_binary.is_file():
-            raise SetupError("cluster Agent binary is unavailable on shared storage")
         launcher = getattr(self.payload, "agent_launcher", "codex")
-        self._copies[PurePosixPath("/usr/local/bin") / launcher] = (
-            self.payload.agent_binary
+        if self.plan.task.agent.name == "oracle":
+            # The frozen Harness package supplies this script; no installed model
+            # CLI, credential, root operation or image rebuild is needed.
+            source = Path(oracle_module.__file__).with_suffix("") / "rsi-oracle"
+            binary = self.control / "rsi-oracle"
+            shutil.copyfile(source, binary)
+            binary.chmod(0o755)
+        else:
+            if (
+                self.payload.agent_binary is None
+                or not self.payload.agent_binary.is_file()
+            ):
+                raise SetupError("cluster Agent binary does not exist")
+            binary = self.payload.agent_binary
+        self._copies[PurePosixPath("/usr/local/bin") / launcher] = binary
+        self._agent_cli_targets = (
+            []
+            if self.plan.task.agent.name == "oracle"
+            else [PurePosixPath("/usr/local/bin") / launcher]
         )
-        self._agent_cli_targets = [PurePosixPath("/usr/local/bin") / launcher]
         for companion in self.payload.agent_companions:
             if not companion.is_file():
                 raise SetupError(
@@ -756,6 +790,8 @@ class ApptainerAgentRuntime:
             broker.stop()
 
     def _smoke_agent(self) -> None:
+        if self.plan.task.agent.name == "oracle":
+            return
         version = self.payload.agent_version
         if not version:
             raise SetupError("cluster Agent runtime requires an exact version")
@@ -767,10 +803,41 @@ class ApptainerAgentRuntime:
             network_mode=self.plan.task.agent.network.mode,
             timeout_seconds=60,
         )
-        if result.exit_code != 0 or version not in result.output:
+        reported = None
+        if result.exit_code == 0:
+            try:
+                reported = parse_agent_version(result.output)
+            except SetupError:
+                pass
+        if reported != version:
             raise InfrastructureError(
-                f"cluster Agent binary smoke failed: {result.output}"
+                "cluster Agent binary smoke failed: "
+                f"{self.payload.agent_binary} as {command[0]} --version "
+                f"exited {result.exit_code}; expected {version!r}, "
+                f"parsed version {reported!r}; "
+                f"output={result.output!r}. Put an executable that works inside "
+                "the task container on the submit host's PATH; host-only "
+                "wrappers and their dependencies are not installed implicitly."
             )
+
+    def stage_solution(self) -> None:
+        """Stage a disposable Work-only copy, owned by the Slurm user."""
+        task_solution_script(self.plan.task.source_dir)
+        destination = self.node_tmp / "oracle-solution"
+        shutil.copytree(
+            self.plan.task.source_dir / "solution", destination, symlinks=True
+        )
+        # The launcher must be able to empty the bind before rsi-submit. Never
+        # chmod through a task symlink into the submit host's filesystem.
+        for root, directories, files in os.walk(destination, followlinks=False):
+            Path(root).chmod(Path(root).stat().st_mode | 0o700)
+            for name in files:
+                path = Path(root) / name
+                if not path.is_symlink():
+                    path.chmod(path.stat().st_mode | 0o600)
+        script = destination / "solve.sh"
+        script.chmod(script.stat().st_mode | 0o100)
+        self._oracle_solution = destination
 
     def copy_to(
         self, container: ContainerRef, source: Path, target: PurePosixPath
@@ -800,7 +867,29 @@ class ApptainerAgentRuntime:
                 else:
                     shutil.copy2(source, destination)
                 return
-        self._copies[target] = source
+        # Match Docker copy_to's source-lifetime contract: callers may remove
+        # a temporary source immediately after this returns. Keep these
+        # read-only binds under node-owned storage, never a host path derived
+        # from the requested container target.
+        copies = self.node_tmp / "copied-inputs"
+        copies.mkdir(mode=0o700, exist_ok=True)
+        staging = tempfile.TemporaryDirectory(prefix="copy-", dir=copies)
+        destination = Path(staging.name) / "payload"
+        try:
+            if source.is_dir():
+                shutil.copytree(source, destination, symlinks=True)
+            else:
+                shutil.copy2(source, destination)
+        except BaseException:
+            staging.cleanup()
+            raise
+        previous = self._copied_inputs.get(target)
+        self._copied_inputs[target] = staging
+        self._copies[target] = destination
+        # Bound staging space by current targets. Only explicit copy owners are
+        # retired; built-in Agent binaries and shims are never cleanup targets.
+        if previous is not None:
+            previous.cleanup()
 
     def exec(
         self,
@@ -1456,6 +1545,8 @@ class ApptainerAgentRuntime:
                     )
                 )
         if mount_agent_home:
+            if phase == "work" and self._oracle_solution is not None:
+                binds.append((self._oracle_solution, PurePosixPath("/solution"), False))
             binds.append((self.agent_home, PurePosixPath("/home/agent"), False))
             binds.extend(self._agent_auth_binds)
             binds.extend(
@@ -1626,27 +1717,19 @@ class ApptainerAgentRuntime:
                 self._process = process
                 self._paused = False
         secrets = set(output_redact_values)
-        captured: list[str] = []
-        captured_bytes = 0
-        truncated = False
+        captured = BoundedBytes(16_000_000)
         stream = None
         if output_path is not None:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             # Append: a resumed run's Agent output continues the same file.
-            stream = output_path.open("a")
+            stream = output_path.open("a", encoding="utf-8")
 
         def drain() -> None:
-            nonlocal captured_bytes, truncated
             assert process.stdout is not None
             for raw in process.stdout:
                 safe = _safe_output(raw, secrets)
                 encoded = safe.encode()
-                if captured_bytes < 16_000_000:
-                    remaining = 16_000_000 - captured_bytes
-                    captured.append(encoded[:remaining].decode(errors="ignore"))
-                    captured_bytes += min(len(encoded), remaining)
-                else:
-                    truncated = True
+                captured.append(encoded)
                 if stream is not None:
                     stream.write(safe)
                     stream.flush()
@@ -1686,9 +1769,9 @@ class ApptainerAgentRuntime:
                     self._paused = False
         return AgentRunResult(
             exit_code=process.returncode,
-            output="".join(captured),
-            output_truncated=truncated,
-            full_output_captured=not truncated,
+            output=captured.value.decode("utf-8", errors="ignore"),
+            output_truncated=captured.truncated,
+            full_output_captured=not captured.truncated,
             timed_out=timed_out,
         )
 
@@ -1882,6 +1965,14 @@ class NativeJudgeEvaluator:
         return True
 
 
+class _ClusterAgentAdapter(RSILoopAgentAdapter):
+    @staticmethod
+    def _stage_solution(
+        runtime: ApptainerAgentRuntime, request: AgentHookRequest
+    ) -> None:
+        runtime.stage_solution()
+
+
 class NativeEngineComposition:
     def __init__(
         self,
@@ -1904,7 +1995,7 @@ class NativeEngineComposition:
         self.artifacts: RunArtifactWriter | None = None
         config = load_config()
         self.rsi_loop_config = config
-        self.agent = RSILoopAgentAdapter(config, runtime=self.runtime)
+        self.agent = _ClusterAgentAdapter(config, runtime=self.runtime)
         self.provider_urls = (
             _agent_provider_urls(payload, plan, config)
             if plan.task.agent.network.mode == "no-network"
@@ -2273,26 +2364,38 @@ class NativeEngineComposition:
         print(f"[rsi-engine] {name}: {value}", flush=True)
 
 
-def validate_native_artifacts(plan: RunPlan, run_id: str) -> Path:
+def validate_native_artifacts(
+    plan: RunPlan, run_id: str, *, visibility_timeout: float = 0.0
+) -> Path:
+    """Require native evidence; the submit host may wait for shared-FS visibility.
+
+    Callers must first confirm the scheduler job succeeded. The compute node
+    validates immediately; only the submit host needs the bounded grace period.
+    Missing evidence still fails, and malformed evidence is never retried.
+    """
     root = plan.paths.logs / "runs" / run_id / plan.task.task_id
-    # The first recorded round: agent-1, unless an attempt that was resumed
-    # was interrupted while it was being judged.
-    recorded = recorded_submissions(root)
-    first = recorded[0][0].round_id if recorded else "agent-1"
-    required = (
-        root / "final_result.json",
-        root / "agent_output.txt",
-        root / "run_agent.log",
-        root / "submissions" / first / "report.json",
-        root / "feedback" / f"{first}.log",
-    )
-    missing = tuple(path for path in required if not path.is_file())
-    if missing:
-        raise InfrastructureError(
-            "native Engine run is missing artifacts: "
-            + ", ".join(str(path) for path in missing)
+    deadline = time.monotonic() + visibility_timeout
+    while True:
+        # A resumed attempt may have a different first recorded round.
+        recorded = recorded_submissions(root)
+        first = recorded[0][0].round_id if recorded else "agent-1"
+        required = (
+            root / "final_result.json",
+            root / "agent_output.txt",
+            root / "run_agent.log",
+            root / "submissions" / first / "report.json",
+            root / "feedback" / f"{first}.log",
         )
-    return root
+        missing = tuple(path for path in required if not path.is_file())
+        if not missing:
+            return root
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise InfrastructureError(
+                "native Engine run is missing artifacts: "
+                + ", ".join(str(path) for path in missing)
+            )
+        time.sleep(min(1.0, remaining))
 
 
 def run_native_engine(
@@ -2334,6 +2437,10 @@ def run_native_engine(
     (plan.paths.root / "engine-result.json").write_text(
         result.model_dump_json(indent=2)
     )
+    if plan.task.agent.name == "oracle":
+        failures = oracle_failures(result, payload.options.max_submissions or 1)
+        if failures:
+            raise InfrastructureError("Oracle check failed: " + "; ".join(failures))
     if result.status is not RunStatus.COMPLETED:
         raise InfrastructureError(
             f"native Engine ended in {result.status.value}: "

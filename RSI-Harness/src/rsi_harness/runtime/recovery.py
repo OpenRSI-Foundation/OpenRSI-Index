@@ -668,6 +668,8 @@ class RecoveryBackend(Protocol):
 
     def remove_container(self, container_id: str) -> None: ...
 
+    def collect_private_judge_logs(self, container_id: str, target: Path) -> None: ...
+
     def terminate_sandbox(self, child: SandboxLease) -> None: ...
 
     def remove_sandbox(self, child: SandboxLease) -> None: ...
@@ -2926,6 +2928,24 @@ class RecoveryManager:
         )
         if inspected is not None and bool(inspected.get("running", False)):
             self._fail_closed(lease, "Judge containment cannot be proven")
+        if inspected is not None and inspected.get("private_log_volume") is True:
+            round_id = inspected.get("labels", {}).get("rsi-harness.round-id", "")
+            if (
+                lease.artifact_root is None
+                or _SAFE_ID.fullmatch(round_id) is None
+                or lease.artifact_root.parts[-3:]
+                != ("runs", lease.run_id, lease.task_id)
+            ):
+                self._fail_closed(
+                    lease, "private Judge log recovery destination is unproven"
+                )
+            self._backend_call(
+                lease,
+                "private Judge log export",
+                lambda: self._backend.collect_private_judge_logs(
+                    judge_id, lease.artifact_root / "verifier" / round_id
+                ),
+            )
         self._backend_call(
             lease,
             "Judge removal",

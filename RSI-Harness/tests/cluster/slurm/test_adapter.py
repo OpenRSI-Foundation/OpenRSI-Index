@@ -86,6 +86,8 @@ def test_slurm_reuses_build_run_and_artifact_lifecycle(
             "builder": local.builder,
         }
     )
+    # Submission and dry-run must work without compute-node software locally.
+    local.apptainer.binary.unlink()
     scheduler = RecordingSlurmScheduler()
     events = {}
     adapter = SlurmClusterAdapter(

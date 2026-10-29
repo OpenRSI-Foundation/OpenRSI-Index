@@ -50,6 +50,33 @@ def test_packaged_bluevela_profile_contains_cluster_policy() -> None:
     assert profile.resources.gpus_per_node == 8
 
 
+@pytest.mark.parametrize("binary", ["apptainer", "bin/apptainer", "./apptainer"])
+def test_apptainer_binary_must_be_absolute_before_scheduler_use(tmp_path, binary):
+    packaged = resources.files("rsi_harness.cluster.slurm").joinpath("profile.toml")
+    path = tmp_path / "site.toml"
+    profile_text = packaged.read_text()
+    import re
+
+    profile_text = re.sub(
+        r'(?m)^binary = "[^"]*apptainer"$', f'binary = "{binary}"', profile_text
+    )
+    path.write_text(profile_text)
+    with pytest.raises(SetupError, match="absolute compute-node path"):
+        load_cluster_profile(path, {"USER": "alice"})
+
+
+def test_apptainer_absolute_path_need_not_exist_on_submit_host(tmp_path):
+    from rsi_harness.cluster.config import ApptainerProfile
+
+    profile = load_cluster_profile("slurm", {"USER": "alice"})
+    missing_binary = tmp_path / "compute-only" / "apptainer"
+    assert not missing_binary.exists()
+    updated = ApptainerProfile.model_validate(
+        {**profile.apptainer.model_dump(), "binary": missing_binary}
+    )
+    assert updated.binary == missing_binary
+
+
 def test_profile_runtime_environment_is_expanded_and_portable(tmp_path) -> None:
     packaged = resources.files("rsi_harness.cluster.bluevela").joinpath("profile.toml")
     profile_path = tmp_path / "profile.toml"

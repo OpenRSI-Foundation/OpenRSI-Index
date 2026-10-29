@@ -20,6 +20,23 @@ account = "rsi"
 # constraint = "a100"
 exclusive = true
 poll_seconds = 10.0
+# Sites with TmpDisk=0 can omit the scheduler's --tmp request. Real scratch
+# requirements are still checked inside build and Engine jobs.
+# request_tmp = false
+# Optional per-allocation limit, HH:MM. Single-node research can resume under
+# the same total budget after an early signal drains Judge and closes Work.
+# run_walltime_limit = "12:00"
+
+# Image builds can use a different partition/account/QOS/constraint, or request
+# a GPU when the selected build partition rejects GPU-less jobs. CPU and memory
+# still come from [builder]. These settings never change Work/Judge resources.
+# [scheduler.build]
+# partition = "cpu"
+# account = "rsi"
+# qos = "normal"
+# constraint = ""  # clear a run-only constraint
+# gpus = 0
+# exclusive = false
 
 [storage]
 run_root = "/srv/rsi/harness/runs"

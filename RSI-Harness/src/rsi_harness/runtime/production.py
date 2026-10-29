@@ -7,6 +7,7 @@ import ipaddress
 import os
 import re
 import shutil
+import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
@@ -56,6 +57,16 @@ from rsi_harness.runtime.coordinator import (
     ProductionCoordinatorBackend,
     RunCoordinator,
     RunPreparation,
+)
+from rsi_harness.runtime.desktop import (
+    DesktopHost,
+    PrivateLogContentError,
+    export_private_logs,
+    has_private_log_volume,
+    is_desktop,
+    validate_desktop_images,
+    validate_desktop_task,
+    validate_local_daemon,
 )
 from rsi_harness.runtime.docker import DockerContainerRuntime
 from rsi_harness.runtime.durable import fsync_directory
@@ -521,8 +532,7 @@ class ProductionRecoveryBackend:
             )
         )
 
-    @staticmethod
-    def _container_state(container: Any) -> Mapping[str, Any]:
+    def _container_state(self, container: Any) -> Mapping[str, Any]:
         container.reload()
         state = container.attrs.get("State") or {}
         config = container.attrs.get("Config") or {}
@@ -543,6 +553,7 @@ class ProductionRecoveryBackend:
             "id": container.id,
             "name": (container.attrs.get("Name") or "").removeprefix("/"),
             "image_id": container.attrs.get("Image"),
+            "private_log_volume": has_private_log_volume(self._client, container),
         }
 
     def inspect_container(self, container_id: str) -> Mapping[str, Any] | None:
@@ -559,9 +570,21 @@ class ProductionRecoveryBackend:
 
     def remove_container(self, container_id: str) -> None:
         try:
-            self._client.containers.get(container_id).remove(force=False)
+            container = self._client.containers.get(container_id)
+            if has_private_log_volume(self._client, container):
+                container.remove(force=False, v=True)
+            else:
+                container.remove(force=False)
         except NotFound:
             return
+
+    def collect_private_judge_logs(self, container_id: str, target: Path) -> None:
+        try:
+            export_private_logs(self._client, container_id, target)
+        except PrivateLogContentError:
+            # Recovery marks interrupted rounds unscored. The controller-owned
+            # rejection diagnostic is already durable; cleanup can proceed.
+            pass
 
     def terminate_sandbox(self, child: SandboxLease) -> None:
         SandboxDockerBackend(self._client).terminate(child)
@@ -1132,6 +1155,8 @@ class _ProductionRunComposition:
             self.client,
             rsi_loop_config=self.rsi_loop_config,
         ).prepare(definition, agent=selected)
+        if is_desktop(self.client):
+            validate_desktop_images(images)
         unavailable = clean_judge_unavailable(images)
         if (
             unavailable is not None
@@ -1181,6 +1206,8 @@ class _ProductionRunComposition:
         request: RunRequest,
         run_id: str,
     ) -> Any:
+        if is_desktop(self.client):
+            validate_desktop_images(images)
         self.run_id = run_id
         self.event_callback("run_started", run_id)
         if self.preparation is not None:
@@ -2089,6 +2116,8 @@ class ProductionRuntimeServices:
     def _gateway(self, client: Any) -> str:
         if self.bridge_gateway is not None:
             return self.bridge_gateway
+        if is_desktop(client):
+            return DesktopHost(client).gateway()
         try:
             configs = client.networks.get("bridge").attrs["IPAM"]["Config"]
             gateway = next(
@@ -2172,6 +2201,13 @@ class ProductionRuntimeServices:
                     "the task's Judge has model_access and calls the run's "
                     f"Agent; the {selected_agent.name} Agent has none"
                 )
+        client = None
+        if sys.platform == "darwin":
+            # Mac capability refusal precedes Linux-only inventory access.
+            # Linux keeps static resource/auth checks ahead of daemon contact.
+            client = self._client()
+            validate_local_daemon(client)
+            validate_desktop_task(definition, None)
         needs_gpus = (
             definition.gpu_requirement.count != 0 or definition.verifier.gpu_count != 0
         )
@@ -2226,7 +2262,10 @@ class ProductionRuntimeServices:
             )
         elif self.event_callback is not None and request.judge_llm is not None:
             self.event_callback("judge_llm_ignored", None)
-        client = self._client()
+        if client is None:
+            client = self._client()
+        if is_desktop(client):
+            validate_desktop_task(definition, judge_llm)
         snapshot = self.snapshot or OverlaySnapshotBackend(self.data_root)
         firewall = self.firewall or DockerIptablesFirewallBackend(client)
         ports = _ProductionRunComposition(
@@ -2276,6 +2315,7 @@ class ProductionRuntimeServices:
 
     def _recovery(self) -> RecoveryManager:
         client = self._client()
+        validate_local_daemon(client)
         snapshot = self.snapshot or OverlaySnapshotBackend(self.data_root)
         firewall = self.firewall or DockerIptablesFirewallBackend(client)
         return RecoveryManager(

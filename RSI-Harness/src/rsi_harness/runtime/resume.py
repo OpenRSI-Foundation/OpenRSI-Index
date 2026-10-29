@@ -104,6 +104,7 @@ def plan_resume(
     salvage: Callable[[str], None] | None,
     retained_images: bool = True,
     open_attempt_ended_at: float | None = None,
+    validate_before_salvage: Callable[[ResumeContext], None] | None = None,
 ) -> ResumeContext:
     """Plan attempt k+1 of ``run_id`` under its lock; a live run is refused.
 
@@ -114,7 +115,8 @@ def plan_resume(
     Work state is its shared workspace and Agent home) no Work image is
     needed. An attempt salvage has yet to close is counted up to its pause,
     else ``open_attempt_ended_at`` (when its end is known, as a cluster
-    job's), else now.
+    job's), else now. A backend can validate the read-only plan under this
+    same lock before salvage changes any retained state.
     """
     try:
         recorded = store.path_for(run_id).exists()
@@ -130,6 +132,21 @@ def plan_resume(
             f"run {run_id} is still live (its Engine holds the lease)"
         ) from None
     try:
+        if validate_before_salvage is not None:
+            preview = _plan_locked(
+                run_id,
+                store=store,
+                data_root=data_root,
+                logs_root=logs_root,
+                grants=grants,
+                compile_task=compile_task,
+                salvage=None,
+                retained_images=retained_images,
+                open_attempt_ended_at=open_attempt_ended_at,
+            )
+            validate_before_salvage(preview)
+            if salvage is None or not preview.salvage_pending:
+                return preview
         return _plan_locked(
             run_id,
             store=store,
