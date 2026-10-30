@@ -218,8 +218,8 @@ Evaluate all nine gates before deciding. Do not stop at the first concern.
 - The contributor must give a reasonable explanation for why useful improvement
   or discovery space exists and why a meaningful gain should be distinguishable
   from ordinary metric noise. For a bounded metric, the proposal records the
-  expected baseline, which must leave at least 20% of the metric's ceiling as
-  headroom.
+  expected baseline and explains plausible improvement headroom in the metric's
+  stated direction and units.
 - At proposal stage, a technically plausible contributor justification is
   sufficient. Do not demand measured variance, repeated baseline runs,
   confidence intervals, p-values, fixed repeat counts, or a finalized minimum
