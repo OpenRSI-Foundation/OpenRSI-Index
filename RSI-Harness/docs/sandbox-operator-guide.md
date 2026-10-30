@@ -102,8 +102,19 @@ How it works, on each:
   sandbox, and `tool_install` uploads tmux the same way.
 - `close_judge` and the run's close kill sandboxes; a kill is the removal.
   `rsi-harness recover` and `cleanup` list the run's sandboxes by
-  `rsi_run_id`, kill them and check that none is left. When the provider is
-  unreachable they keep the lease for another try.
+  `rsi_run_id` (on Daytona also from the run's sandbox ledger, see
+  [Daytona](#daytona)), kill them and check that none is left. When the
+  provider is unreachable they keep the lease for another try.
+- When the provider refuses a sandbox for capacity (on Daytona a rate limit,
+  the organization's quota, or no runner within the queue timeout) and the
+  backend proved that nothing landed (on Daytona a read of the sandbox's
+  name finds nothing), the env is rolled back and `env_create` answers
+  `quota` with the field `provider_capacity`: nothing remains, and a later
+  request may succeed. A refusal after the sandbox existed (a poll while it
+  started), or one whose landing cannot be read, is an ordinary failed
+  create instead. The Harbor plugin retries it with a new
+  request, waiting 5 s and then twice as long each time up to 60 s, for at
+  most 15 minutes in all; then the trial's environment fails to start.
 
 Refused with `unsupported` ("... unsupported on the <backend> backend"):
 more than one service (Compose), volumes and mounts, tmpfs, healthchecks,
@@ -247,7 +258,7 @@ target = "us"
 <!-- fields: EnvDaytonaHost -->
 | Field | Meaning |
 |---|---|
-| `api_key_file` | Absolute path of a file holding the API key (sandbox permissions suffice), read by the broker only |
+| `api_key_file` | Absolute path of a file holding the API key (sandbox permissions suffice; `write:sandboxes` alone works, see below), read by the broker only |
 | `api_key_env` | Instead of `api_key_file`: the variable holding the key |
 | `target` | The region of every sandbox (required) |
 | `api_url` | The API URL; default Daytona Cloud (`https://app.daytona.io/api`); set it for a self-hosted Daytona |
@@ -268,6 +279,32 @@ What Daytona does differently:
   per-sandbox network settings, or its own policy replaces `none` and
   allowlists.
 - Non-root users and `freeze_work` as on Modal.
+- A key with only `write:sandboxes` works: Daytona refuses its deletes (403)
+  and its listing comes back empty. The broker records every sandbox it
+  creates in the run's sandbox ledger, `<run_id>.sandboxes.jsonl` beside the
+  run's lease (`<data_root>/leases`; on a cluster the run's `leases`
+  directory under the profile's `run_root`): the name before the request,
+  the id once it answers, the end once it is proven. Recovery, `cleanup`
+  (also `--cluster`) and an env's kill find sandboxes in the listing and
+  in the ledger, each read again by id (or, for a create that never
+  answered, by name). Where it would delete, a refused delete becomes a
+  stop, which removes the ephemeral sandbox: one still starting or building
+  is waited for first (up to 180 s), the stop itself waits up to 60 s for
+  the stopped state, then the sandbox is read until Daytona no longer finds
+  it (up to 30 s). One kill can thus take up to about 270 s (330 s for the
+  first, whose refused delete may wait up to 60 s too), and it does not
+  shorten for `close_judge`'s deadline. One still there is a leftover: the
+  kill fails naming its id and state, the ledger keeps it, and the next
+  `recover` tries again; recovery still kills the run's other sandboxes
+  and names every leftover. Until then a leftover holds quota until its
+  TTL. A key that may delete and list works as before.
+- Each create asks Daytona to cancel it after 2 minutes without a runner
+  (`queue_timeout`, below the 180 s create timeout); Daytona honors that only
+  where the organization enables queue timeouts. A cancelled create is a
+  capacity refusal.
+- A template's build sandbox that Daytona refuses for capacity is asked for
+  again, backing off from 5 to 60 s, for at most 10 minutes; then the pull
+  fails.
 
 ### Remote backends on a cluster
 
@@ -311,8 +348,9 @@ Requirements and limits:
   Agent (on the controller host) reaches the socket, not remote ranks.
 - `rsi-harness recover --cluster NAME [RUN_ID]` and
   `rsi-harness cleanup --cluster NAME RUN_ID` kill the run's sandboxes by
-  `rsi_run_id` (from the run's lease under the profile's `run_root`) once
-  its job has ended; a run whose Engine still holds its lease is refused.
+  `rsi_run_id` (from the run's lease under the profile's `run_root`, and on
+  Daytona the sandbox ledger beside it) once its job has ended; a run whose
+  Engine still holds its lease is refused.
   The scheduler already ended Work and Judge. If nothing recovers a killed
   job, each sandbox's timeout (see How it works above) ends it, except E2B
   Work sandboxes paused for a Judge round, which only recovery kills.
@@ -865,6 +903,9 @@ The first seven are the version 1 profile operations. Errors are
 | `expired` | 410 |
 | `unknown-outcome` | 502 |
 | `infrastructure` | 503 |
+
+A remote provider's capacity refusal of `env_create` is `quota` with the
+field `provider_capacity` (see [Remote backends](#remote-backends)).
 
 An unknown operation is `unsupported`, and so is any other method or path
 under `/v1/` or `/v2/`, Engine API paths such as `/v1/containers/json`

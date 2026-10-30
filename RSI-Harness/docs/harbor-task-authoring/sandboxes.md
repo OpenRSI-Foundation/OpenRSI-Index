@@ -328,7 +328,10 @@ Errors are `permission`, `unsupported`, `invalid`, `busy`, `quota`,
 `expired`, `unknown-outcome` or `infrastructure` (HTTP statuses in the
 operator guide's [protocol](../sandbox-operator-guide.md#the-protocol)). Do not automatically retry
 `exec` or another mutating request after `unknown-outcome`; inspect `status`,
-destroy the exact handle when safe, or let recovery reconcile it.
+destroy the exact handle when safe, or let recovery reconcile it. An
+`env_create` refused with `quota` and the field `provider_capacity` made
+nothing: a remote provider had no capacity, and a new request after a wait
+may succeed (the Harbor plugin waits up to 15 minutes).
 
 Work children pause with their parent during submission, so their lifetime can
 expire while paused. If the engine cannot prove that an expired paused child

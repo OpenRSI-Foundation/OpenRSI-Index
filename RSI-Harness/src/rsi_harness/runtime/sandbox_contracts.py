@@ -13,6 +13,8 @@ from typing import Annotated, ClassVar, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from rsi_harness.errors import InfrastructureError
+
 PositiveInt = Annotated[int, Field(strict=True, gt=0)]
 NonNegativeInt = Annotated[int, Field(strict=True, ge=0)]
 Seconds = Annotated[float, Field(strict=True, gt=0, allow_inf_nan=False)]
@@ -913,6 +915,17 @@ class SandboxError(Exception):
         self.code = code
         self.field = field
         self.message = message
+
+
+# env_create's ``quota`` field when the remote provider refused for capacity.
+PROVIDER_CAPACITY = "provider_capacity"
+
+
+class ProviderCapacityError(InfrastructureError):
+    """A remote provider refused a sandbox for capacity: the organization's
+    quota, a rate limit (429) or no free capacity. The request made
+    nothing, so a later one may succeed: env_create answers ``quota``
+    (field ``provider_capacity``), which a caller may wait on."""
 
 
 class SandboxChildStopped(SandboxError):

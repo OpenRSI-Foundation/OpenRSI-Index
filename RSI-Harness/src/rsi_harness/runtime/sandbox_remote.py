@@ -35,6 +35,14 @@ client's flags say: without ``native_pid`` a command starts through
 root through ``setpriv``; with ``freeze = "signal"`` a freeze stops the
 sandbox's processes (``SignalFreeze``).
 
+A client whose key may not list keeps the run's sandbox ledger
+(sandbox_remote_ledger, its ``ledger`` attribute, set by ``bind_ledger``
+beside the run's lease): its ``list`` merges the listing with the sandboxes
+the ledger holds, so recovery and an env's kill find them either way. A
+provider's capacity refusal of a create is a ``ProviderCapacityError``:
+the env is rolled back and env_create answers ``quota`` (field
+``provider_capacity``), which a caller may wait on.
+
 Credentials live only in the client: leases, plans, sandbox metadata,
 capabilities and logs carry where they are, never them. Private registry
 credentials (``read_registry_auth``) are never recorded either; the client
@@ -79,6 +87,7 @@ from rsi_harness.runtime.sandbox_archive import (
     _require_path,
 )
 from rsi_harness.runtime.sandbox_contracts import (
+    ProviderCapacityError,
     SandboxError,
     SandboxOwner,
     below,
@@ -114,6 +123,10 @@ from rsi_harness.runtime.sandbox_images import (
     image_view,
     pull_reference,
     reference_text,
+)
+from rsi_harness.runtime.sandbox_remote_ledger import (
+    SandboxLedger,
+    sandbox_ledger_path,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -250,6 +263,14 @@ def run_metadata(run_id: str) -> dict[str, str]:
     return {f"{META_PREFIX}run_id": run_id}
 
 
+def bind_ledger(client: RemoteClient, lease_root: Path, run_id: str) -> None:
+    """Give ``client`` the run's sandbox ledger, beside the run's lease in
+    ``lease_root``, when it keeps one (its ``ledger`` attribute): the
+    Engine's broker, a resumed attempt and recovery bind the same file."""
+    if hasattr(client, "ledger"):
+        client.ledger = SandboxLedger(sandbox_ledger_path(lease_root, run_id), run_id)
+
+
 # -- the SDK surface ------------------------------------------------------------
 
 
@@ -276,6 +297,10 @@ class RemoteClient(Protocol):
     ENV as the sandbox applies it again to every process, given the
     registry config's ``Env``. ``lookup`` finds an env's sandbox by name
     when a listing may not show it yet (None: the backend names none).
+    A client with a ``ledger`` attribute records its sandboxes there
+    (``bind_ledger``) and lists them from it too; ``create`` raises
+    ``ProviderCapacityError`` when the provider refused for capacity and
+    the client proved that nothing was made (otherwise another error).
 
     What the backend lacks is emulated (the module's docstring):
     ``native_pid`` False, ``start`` only runs argv and its process's pid
@@ -1613,6 +1638,13 @@ class SandboxEnvRemoteBackend:
                 allow_internet=service.allow_internet,
                 allow_out=service.allow_out,
             )
+        except ProviderCapacityError:
+            # The client proved nothing was made (the contract), so nothing
+            # is looked up under the rate limit that refused it: absent,
+            # then retried by the caller (env_create answers quota
+            # provider_capacity).
+            self._gone(lease, commit)
+            raise
         except Exception as error:
             # A create without an answer may still land: find it by metadata.
             self._kill_env(lease)
@@ -2518,8 +2550,11 @@ def kill_run_sandboxes(
 ) -> tuple[str, ...]:
     """Recovery: kill every sandbox (running or paused) carrying the run's
     metadata, and prove none is left. A listing may still show a killed
-    one: it counts as gone once its state does, within ``wait_sec``.
-    Templates stay (a shared cache)."""
+    one: it counts as gone once its state does, within ``wait_sec``. A
+    client with a ledger lists the run's sandboxes from it too (the
+    module's docstring). A kill that fails does not stop the others; every
+    sandbox still there at the end is named. Templates stay (a shared
+    cache)."""
     selector = run_metadata(run_id)
 
     def listed() -> list[str]:
@@ -2530,8 +2565,19 @@ def kill_run_sandboxes(
         ]
 
     killed = listed()
+    failures: dict[str, Exception] = {}
     for sandbox_id in killed:
-        client.kill(sandbox_id)
+        try:
+            client.kill(sandbox_id)
+        except Exception as error:
+            LOGGER.warning(
+                "%s sandbox %s of run %s not killed: %s",
+                client.name,
+                sandbox_id,
+                run_id,
+                error,
+            )
+            failures[sandbox_id] = error
     end = time.monotonic() + wait_sec
     left = listed()
     while left:
@@ -2542,10 +2588,16 @@ def kill_run_sandboxes(
             break
         time.sleep(poll)
     if left:
+        why = "; ".join(
+            f"{sandbox_id}: {failures[sandbox_id]}"
+            for sandbox_id in left[:8]
+            if sandbox_id in failures
+        )
         raise InfrastructureError(
             f"{client.name} sandboxes of run {run_id} remain after kill: "
-            f"{', '.join(left[:8])}"
+            f"{', '.join(left[:8])}" + (f" ({why})" if why else "")
         )
+    # Every one is gone now, a failed kill's too (another way, or late).
     return tuple(killed)
 
 
@@ -2562,6 +2614,7 @@ __all__ = [
     "RemoteTransfer",
     "SandboxEnvRemoteBackend",
     "SignalFreeze",
+    "bind_ledger",
     "built_template_name",
     "config_env",
     "group_argv",

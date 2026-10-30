@@ -1691,10 +1691,11 @@ class RecoveryManager:
 
     def _recover_remote_envs(self, lease: ResourceLease) -> ResourceLease:
         """Remote envs: kill every sandbox carrying the run's metadata,
-        running or paused (a paused one may never expire), prove none is
-        left, then journal each env removed. Templates stay: a shared
-        cache."""
+        running or paused (a paused one may never expire), listed or held
+        in the run's sandbox ledger, prove none is left, then journal each
+        env removed. Templates stay: a shared cache."""
         from rsi_harness.runtime.sandbox_remote import (
+            bind_ledger,
             kill_run_sandboxes,
             remote_client,
         )
@@ -1708,6 +1709,8 @@ class RecoveryManager:
             else:
                 client = remote_client(name, settings)
             try:
+                # The ledger the run's broker kept beside this lease.
+                bind_ledger(client, self._store.root, lease.run_id)
                 killed = kill_run_sandboxes(client, lease.run_id)
             finally:
                 client.close()

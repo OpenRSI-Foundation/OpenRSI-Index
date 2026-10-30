@@ -84,6 +84,12 @@ _LIVE_QUOTAS = frozenset(
     }
 )
 _LIVE_RETRY_SEC = 2.0
+# A remote provider's capacity refusal (env_create quota provider_capacity)
+# made nothing either: retried, backing off from the first wait to the
+# last, for at most _CAPACITY_WAIT_SEC in all.
+_PROVIDER_CAPACITY = "provider_capacity"
+_CAPACITY_RETRY_SEC = (5.0, 60.0)
+_CAPACITY_WAIT_SEC = 900.0
 _BUSY_RETRY_SEC = 0.05
 _WAIT_SEC = 25
 # The start wait is measured here, the broker checks it on arrival: this much
@@ -713,6 +719,8 @@ class ManagedSandboxEnvironment(ComposeServiceOpsMixin, BaseEnvironment):
         """Create the env; returns when it expires on this loop's clock,
         counted from before the request so never later than the broker's."""
         loop = asyncio.get_running_loop()
+        capacity_end: float | None = None
+        wait, longest = _CAPACITY_RETRY_SEC
         while True:
             request_id = uuid.uuid4().hex
             self._create = (spec, request_id)
@@ -726,6 +734,23 @@ class ManagedSandboxEnvironment(ComposeServiceOpsMixin, BaseEnvironment):
                     self.logger.debug("managed sandbox waits for %s", error.field)
                     await asyncio.sleep(_LIVE_RETRY_SEC)
                     continue
+                if error.code == "quota" and error.field == _PROVIDER_CAPACITY:
+                    # Nothing was made either; wait a bounded time for the
+                    # provider (its quota or rate limit) to have room.
+                    self._create = None
+                    if capacity_end is None:
+                        capacity_end = sent + _CAPACITY_WAIT_SEC
+                    if loop.time() + wait <= capacity_end:
+                        self.logger.info(
+                            "managed sandbox waits %.0f s for provider capacity", wait
+                        )
+                        await asyncio.sleep(wait)
+                        wait = min(longest, wait * 2)
+                        continue
+                    raise ManagedSandboxError(
+                        f"env_create quota ({error.field}): the provider had no "
+                        f"capacity for {_CAPACITY_WAIT_SEC:.0f} s: {error}"
+                    ) from None
                 if error.code != "unknown-outcome":
                     self._create = None
                 raise ManagedSandboxError(

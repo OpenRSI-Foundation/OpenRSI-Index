@@ -72,7 +72,9 @@ from rsi_harness.runtime.sandbox_build import (
 )
 from rsi_harness.runtime.sandbox_buildfs import state_fs
 from rsi_harness.runtime.sandbox_contracts import (
+    PROVIDER_CAPACITY,
     EnvRunLimits,
+    ProviderCapacityError,
     SandboxError,
     allow_pattern_matches,
     parse_allow_entry,
@@ -872,6 +874,18 @@ class SandboxEnvs:
         try:
             try:
                 lease = self._backend.create(plan, lease, self._commit(env))
+            except ProviderCapacityError as error:
+                # A remote provider's capacity refusal, rolled back: nothing
+                # was made and a later create may succeed (the caller waits).
+                LOGGER.warning("sandbox env %s create refused: %s", env_id, error)
+                with self._lock:
+                    self._removed(env)
+                raise SandboxError(
+                    "quota",
+                    PROVIDER_CAPACITY,
+                    "the env provider is at capacity (its quota or rate limit); "
+                    "the env was rolled back, nothing remains; retry later",
+                ) from None
             except SetupError as error:
                 # Rolled back and proven absent: the env is gone, not unknown.
                 LOGGER.warning("sandbox env %s create failed: %s", env_id, error)

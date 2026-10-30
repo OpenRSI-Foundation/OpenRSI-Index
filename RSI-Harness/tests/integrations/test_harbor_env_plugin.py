@@ -1013,6 +1013,28 @@ def test_live_quota_is_retried_and_other_errors_are_not(broker, tmp_path, monkey
         run(environment.start(force_build=False))
 
 
+def test_provider_capacity_is_waited_for_a_bounded_time(broker, tmp_path, monkeypatch):
+    monkeypatch.setattr(plugin, "_CAPACITY_RETRY_SEC", (0.01, 0.02))
+    environment = make_env(broker, tmp_path)
+    broker.fail["env_create"] = [Failure("quota", "provider_capacity")] * 3
+
+    async def scenario():
+        await environment.start(force_build=False)
+        await environment.stop(delete=True)
+
+    run(scenario())
+    ids = [item["request_id"] for item in broker.meta("env_create")]
+    assert len(ids) == 4 and len(set(ids)) == 4
+    # Past the bound the refusal is terminal, naming what it waited for.
+    monkeypatch.setattr(plugin, "_CAPACITY_WAIT_SEC", 0.05)
+    broker.fail["env_create"] = [Failure("quota", "provider_capacity")] * 100
+    environment = make_env(broker, tmp_path)
+    started = time.monotonic()
+    with pytest.raises(ManagedSandboxError, match="provider_capacity"):
+        run(environment.start(force_build=False))
+    assert time.monotonic() - started < 5
+
+
 def test_start_waits_only_for_what_is_left_of_the_env_lifetime(broker, tmp_path):
     # Spec A8: a Judge with a 900 s verifier timeout (= max_wait_timeout_sec)
     # creates envs that live a little less than that. The create and the
