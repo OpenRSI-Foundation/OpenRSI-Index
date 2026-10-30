@@ -161,7 +161,11 @@ from rsi_harness.runtime.sandbox_policy import (
     resolve_sandbox_grant,
     validate_sandbox_policy,
 )
-from rsi_harness.runtime.sandbox_remote import remote_backend, remote_env_runtime
+from rsi_harness.runtime.sandbox_remote import (
+    bind_ledger,
+    remote_backend,
+    remote_env_runtime,
+)
 from rsi_harness.runtime.sandbox_tools import check_tools
 from rsi_harness.runtime.snapshot import OverlaySnapshotBackend
 from rsi_harness.runtime.workdir_volume import (
@@ -1002,8 +1006,11 @@ class _ProductionRunComposition:
                 run_id = lease.run_id
 
                 def build_broker() -> SandboxBroker:
+                    client = make_client(credentials, settings)
+                    # Beside the run's lease, where recovery reads it.
+                    bind_ledger(client, self.data_root / "leases", run_id)
                     runtime = remote_env_runtime(
-                        make_client(credentials, settings),
+                        client,
                         spool_root=sandbox_spool_root(self.data_root, run_id),
                         host=grant.environments.host,
                     )

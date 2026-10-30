@@ -492,6 +492,22 @@ def test_busy_work_envs_make_the_submission_retryable_before_any_pause(
         fake.shutdown()
 
 
+def test_the_cluster_broker_keeps_its_ledger_beside_the_runs_lease(
+    tmp_path, short_root, monkeypatch
+):
+    """On shared storage, where recover --cluster reads it after the job;
+    the broker's own root is node-local scratch."""
+    fake = RemoteFake(tmp_path / "daytona", **FAKES["daytona"])
+    fake.ledger = None  # a client that keeps one
+    try:
+        sandbox, plan, _store, _ = _bound(tmp_path, short_root, monkeypatch, fake)
+        expected = plan.paths.root / "leases" / "run-1.sandboxes.jsonl"
+        assert (fake.ledger.path, fake.ledger.run_id) == (expected, "run-1")
+        sandbox.lifecycle.close()
+    finally:
+        fake.shutdown()
+
+
 def test_apptainer_mounts_each_phase_endpoint_and_starts_the_work_deadline(
     tmp_path, monkeypatch
 ):
@@ -618,11 +634,14 @@ def test_cluster_recovery_kills_the_runs_sandboxes_by_metadata(tmp_path, backend
             )
         assert len(made.fake.live()) == 3
 
+        made.fake.ledger = None  # a client that keeps one
         recovered = recover_cluster_sandboxes(
             run_root, remote_client=lambda _: made.fake
         )
 
         assert recovered == ("run-1",)
+        # It read the ledger the run's broker kept beside the lease.
+        assert made.fake.ledger.path == store.root / "run-1.sandboxes.jsonl"
         assert [box.sandbox_id for box in made.fake.live()] == [other]
         assert store.read("run-1").sandbox_envs == ()
         # Nothing left to kill: a second pass is a no-op that still succeeds.

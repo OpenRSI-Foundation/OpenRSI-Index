@@ -28,7 +28,9 @@ from rsi_harness.runtime.sandbox import SandboxBroker
 from rsi_harness.runtime.sandbox_archive import StageStore
 from rsi_harness.runtime.sandbox_budget import SandboxJournal
 from rsi_harness.runtime.sandbox_contracts import (
+    PROVIDER_CAPACITY,
     EnvE2BHost,
+    ProviderCapacityError,
     SandboxError,
     SandboxOwner,
 )
@@ -827,6 +829,31 @@ def test_a_compose_env_is_refused_at_create_and_charges_nothing(kit):
     assert kit.fake.live() == []
     usage = kit.broker.capabilities(work.credential)["environments"]["usage"]
     assert usage["envs_live"] == 0
+
+
+@every
+def test_a_provider_capacity_refusal_is_a_quota_the_caller_may_wait_on(kit):
+    work = open_work(kit)
+    handle = pull(kit, work)
+    kit.fake.fail["create"] = ProviderCapacityError(
+        "daytona refused the sandbox for capacity: Total CPU limit exceeded"
+    )
+    before = len(kit.fake.calls)
+    with pytest.raises(SandboxError) as refused:
+        kit.broker.env_create(work.credential, single(handle), "full")
+    assert (refused.value.code, refused.value.field) == ("quota", PROVIDER_CAPACITY)
+    assert "nothing remains" in refused.value.message
+    # The client proved nothing landed: nothing is listed again under the
+    # rate limit that refused it.
+    assert [call for call in kit.fake.calls[before:] if call[0] == "list"] == []
+    # Rolled back: no sandbox, no live charge, nothing journaled.
+    assert kit.fake.live() == []
+    usage = kit.broker.capabilities(work.credential)["environments"]["usage"]
+    assert usage["envs_live"] == 0
+    assert kit.broker.journal.envs() == ()
+    # With room again, the caller's next request creates the env.
+    env_id = ready(kit, work, handle, "again")
+    assert sandbox_of(kit, env_id).state == "running"
 
 
 # -- builds ---------------------------------------------------------------------------
@@ -1800,6 +1827,19 @@ def test_recovery_kills_the_runs_sandboxes_by_metadata(tmp_path, action, mode):
         assert recovered.sandbox_envs == ()
         assert not recovered.recovery_required
         assert ("list", {"rsi_run_id": "run-1"}) in made.fake.calls
+    finally:
+        made.fake.shutdown()
+
+
+def test_recovery_reads_the_ledger_beside_the_runs_lease(tmp_path):
+    made, lease, other = _crashed_run(tmp_path, "daytona")
+    try:
+        made.fake.ledger = None  # a client that keeps one
+        manager, store, _ = _recovery(tmp_path, lease, made.fake)
+        manager.recover("run-1")
+        assert made.fake.ledger.path == store.root / "run-1.sandboxes.jsonl"
+        assert made.fake.ledger.run_id == "run-1"
+        assert [box.sandbox_id for box in made.fake.live()] == [other]
     finally:
         made.fake.shutdown()
 

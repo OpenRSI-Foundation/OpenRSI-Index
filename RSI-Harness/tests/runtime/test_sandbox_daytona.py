@@ -5,6 +5,11 @@ The fake runs each session command as the daemon does: the session's shell
 sources the command (``{ . file; }``) and writes its exit code afterwards,
 with stdin held open, and the log follows line by line. The broker over
 Daytona's flags runs in tests/runtime/test_sandbox_e2b.py's generic tests.
+
+``FakeDaytona.can_delete`` and ``listing`` make the key one with
+``write:sandboxes`` only, as measured on 2026-10-30: a delete is refused
+(403), the listing comes back empty (or refused), and a stop removes an
+ephemeral sandbox.
 """
 
 from __future__ import annotations
@@ -12,6 +17,8 @@ from __future__ import annotations
 import asyncio
 import importlib.metadata
 import io
+import itertools
+import json
 import os
 import sys
 import tomllib
@@ -22,7 +29,11 @@ import pytest
 
 from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.runtime import sandbox_daytona
-from rsi_harness.runtime.sandbox_contracts import EnvDaytonaHost, SandboxOwner
+from rsi_harness.runtime.sandbox_contracts import (
+    EnvDaytonaHost,
+    ProviderCapacityError,
+    SandboxOwner,
+)
 from rsi_harness.runtime.sandbox_daytona import (
     SDK_VERSION,
     SdkDaytonaClient,
@@ -31,10 +42,12 @@ from rsi_harness.runtime.sandbox_daytona import (
     sandbox_shape,
 )
 from rsi_harness.runtime.sandbox_remote import (
+    kill_run_sandboxes,
     sandbox_metadata,
     start_group,
     template_name,
 )
+from rsi_harness.runtime.sandbox_remote_ledger import SandboxLedger
 from tests.runtime.test_sandbox_modal import ConnectProxy
 
 KEY = "dtn_" + "5ec" * 8
@@ -48,15 +61,38 @@ METADATA = sandbox_metadata(
 
 
 class DaytonaError(Exception):
-    pass
+    status_code = None
 
 
 class DaytonaNotFoundError(DaytonaError):
-    pass
+    status_code = 404
 
 
 class DaytonaConflictError(DaytonaError):
+    status_code = 409
+
+
+class DaytonaForbiddenError(DaytonaError):
+    status_code = 403
+
+
+class DaytonaRateLimitError(DaytonaError):
+    status_code = 429
+
+
+class DaytonaBadRequestError(DaytonaError):
+    status_code = 400
+
+
+class DaytonaTimeoutError(DaytonaError):
+    sandbox_id = None
+
+
+class DaytonaQueueTimeoutError(DaytonaTimeoutError):
     pass
+
+
+DENIED = "Failed to remove sandbox: Access denied"
 
 
 def model(name):
@@ -206,7 +242,17 @@ class FakeBox:
 
     async def delete(self, timeout):
         self.sdk.calls.append(("delete", self.id))
+        if not self.sdk.can_delete:
+            raise DaytonaForbiddenError(DENIED)
         self.state = "destroyed"
+
+    async def stop(self, timeout, force):
+        """An ephemeral sandbox is gone once stopped (unless ``stop_leaves``)."""
+        self.sdk.calls.append(("stop", self.id, force))
+        if self.sdk.stop_leaves or self.id in self.sdk.stuck:
+            self.state = "stopped"
+        else:
+            self.sdk.boxes.pop(self.id, None)
 
 
 class FakeDaytona:
@@ -219,11 +265,33 @@ class FakeDaytona:
         self.boxes = {}
         self.fail_build = None
         self.cut_after = None
+        # A key with write:sandboxes only: no delete, an empty (or refused)
+        # listing; ``refuse`` holds the errors the next creates raise, and a
+        # create whose answer is lost still makes its sandbox.
+        self.can_delete = True
+        self.listing = "full"  # "empty" | "refused"
+        self.stop_leaves = False
+        self.refuse = []
+        # Errors raised after the sandbox was made (the SDK's polls after
+        # the request); a queue timeout's sandbox the API destroyed first.
+        self.refuse_after = []
+        # Errors the next gets raise.
+        self.fail_get = []
+        # Sandbox ids a stop leaves in place (``stop_leaves`` for all).
+        self.stuck = set()
+        self.lose_answer = False
+        # Sandbox id -> reads before a starting one has started.
+        self.settle = {}
+        ids = itertools.count()
         sdk = self
         module = types.ModuleType("daytona")
         module.DaytonaError = DaytonaError
         module.DaytonaNotFoundError = DaytonaNotFoundError
         module.DaytonaConflictError = DaytonaConflictError
+        module.DaytonaForbiddenError = DaytonaForbiddenError
+        module.DaytonaRateLimitError = DaytonaRateLimitError
+        module.DaytonaTimeoutError = DaytonaTimeoutError
+        module.DaytonaQueueTimeoutError = DaytonaQueueTimeoutError
         module.Image = FakeImage
         for name in (
             "DaytonaConfig",
@@ -241,13 +309,15 @@ class FakeDaytona:
 
             async def create(self, params, *, timeout, on_snapshot_create_logs=None):
                 sdk.calls.append(("create", params, timeout))
+                if sdk.refuse:
+                    raise sdk.refuse.pop(0)
                 if on_snapshot_create_logs is not None:
                     on_snapshot_create_logs(f"Building {params.image.lines[0]}")
                     if sdk.fail_build is not None:
                         raise sdk.fail_build
                 box = FakeBox(
                     sdk,
-                    f"sb-{len(sdk.boxes)}",
+                    f"sb-{next(ids)}",
                     params.name,
                     {
                         **getattr(params, "labels", {}),
@@ -255,16 +325,36 @@ class FakeDaytona:
                     },
                 )
                 sdk.boxes[box.id] = box
+                if sdk.refuse_after:
+                    error = sdk.refuse_after.pop(0)
+                    if isinstance(error, DaytonaQueueTimeoutError):
+                        del sdk.boxes[box.id]
+                    raise error
+                if sdk.lose_answer:
+                    sdk.lose_answer = False
+                    raise ConnectionResetError("the answer was lost")
                 return box
 
             async def get(self, id_or_name):
+                sdk.calls.append(("get", id_or_name))
+                if sdk.fail_get:
+                    raise sdk.fail_get.pop(0)
                 for box in sdk.boxes.values():
                     if id_or_name in (box.id, box.name):
+                        if box.id in sdk.settle:
+                            sdk.settle[box.id] -= 1
+                            if sdk.settle[box.id] <= 0:
+                                del sdk.settle[box.id]
+                                box.state = "started"
                         return box
                 raise DaytonaNotFoundError(f"sandbox {id_or_name} not found")
 
             async def list(self, query):
                 sdk.calls.append(("list", dict(query.labels)))
+                if sdk.listing == "refused":
+                    raise DaytonaForbiddenError("Forbidden resource")
+                if sdk.listing == "empty":
+                    return
                 for box in list(sdk.boxes.values()):
                     if query.labels.items() <= box.labels.items():
                         yield box
@@ -403,6 +493,7 @@ def test_create_names_labels_and_fences_an_ephemeral_root_sandbox(
         "ephemeral": True,
         "ttl_minutes": 12,
         "auto_stop_interval": 12,
+        "queue_timeout": sandbox_daytona.QUEUE_MIN,
         **network,
     }
     assert timeout == sandbox_daytona.CREATE_SEC
@@ -538,6 +629,398 @@ def test_files_are_uploaded_downloaded_and_streamed(sdk, client, tmp_path):
         ("stream_closed", "/tmp/b"),
         ("stream_closed", "/tmp/stage.tar"),
     ]
+
+
+# -- a key with write:sandboxes only ---------------------------------------------------
+
+
+@pytest.fixture
+def quick(monkeypatch):
+    """No waiting between the reads that prove a stop."""
+    monkeypatch.setattr(sandbox_daytona, "STOP_POLL_SEC", 0)
+    monkeypatch.setattr(sandbox_daytona, "GONE_SEC", 0.2)
+    monkeypatch.setattr(sandbox_daytona, "CAPACITY_RETRY_SEC", (0, 0))
+    monkeypatch.setattr(sandbox_daytona, "LANDED_RETRY_SEC", (0, 0, 0))
+
+
+def ledger_of(tmp_path, run_id="run-1", clock=None):
+    options = {} if clock is None else {"clock": clock}
+    return SandboxLedger(
+        tmp_path / "leases" / f"{run_id}.sandboxes.jsonl", run_id, **options
+    )
+
+
+def bound(sdk, tmp_path, **options):
+    """A client with the run's ledger, its template built, calls cleared."""
+    made = SdkDaytonaClient(KEY, target="us")
+    made.ledger = ledger_of(tmp_path, **options)
+    made.build_template("rsi-snap", "busybox", (1, 1, 1), log=lambda line: None)
+    sdk.calls.clear()
+    return made
+
+
+def other_env(sdk, client, letter):
+    metadata = dict(METADATA, rsi_env_id="e" + letter * 32)
+    return client.create("rsi-snap", timeout=60, metadata=metadata, allow_internet=True)
+
+
+def calls(sdk, *names):
+    return [call for call in sdk.calls if call[0] in names]
+
+
+def test_a_key_that_may_not_delete_stops_and_proves_the_end(sdk, tmp_path, quick):
+    sdk.can_delete = False
+    client = SdkDaytonaClient(KEY, target="us")
+    client.ledger = ledger_of(tmp_path)
+    try:
+        client.build_template("rsi-snap", "busybox", (1, 1, 1), log=lambda line: None)
+        # The template's build sandbox: the refused delete, then a forced
+        # stop, then a read that finds nothing.
+        probe = sdk.calls[0][1].name
+        assert calls(sdk, "delete", "stop") == [
+            ("delete", "sb-0"),
+            ("stop", "sb-0", True),
+        ]
+        assert sdk.calls[-1] == ("get", "sb-0")
+        assert client.template_exists("rsi-snap")
+        assert client.ledger.open_entries() == []
+        sdk.calls.clear()
+        first = sandbox(client)
+        second = other_env(sdk, client, "b")
+        entry = client.ledger.open_entries({"rsi_env_id": ENV_ID})[0]
+        assert (entry.name, entry.sandbox_id) == (f"rsi-{ENV_ID}", first)
+        assert entry.metadata == METADATA
+        # From then on it stops without asking to delete.
+        client.kill(first)
+        client.kill(second)
+        assert calls(sdk, "delete", "stop") == [
+            ("stop", first, True),
+            ("stop", second, True),
+        ]
+        assert client.state(first) is None
+        assert client.ledger.open_entries() == []
+        # Each recorded as it was made and as it ended, beside the lease,
+        # the build sandbox under the run but no env.
+        records = [
+            json.loads(line) for line in client.ledger.path.read_text().splitlines()
+        ]
+        assert [(r["event"], r["name"]) for r in records if "name" in r][:2] == [
+            ("create", probe),
+            ("created", probe),
+        ]
+        assert records[0]["metadata"] == {
+            "rsi_run_id": "run-1",
+            "rsi_role": "template-build",
+        }
+        events = [record["event"] for record in records]
+        assert events.count("create") == 3 and events.count("end") == 3
+        assert KEY not in client.ledger.path.read_text()
+    finally:
+        client.close()
+
+
+def test_a_key_that_may_delete_never_stops_and_keeps_the_ledger_short(
+    sdk, tmp_path, quick
+):
+    client = bound(sdk, tmp_path)
+    try:
+        sandbox_id = sandbox(client)
+        client.kill(sandbox_id)
+        assert calls(sdk, "delete", "stop") == [("delete", sandbox_id)]
+        assert client.ledger.open_entries() == []
+        # The listing alone answers when the key may list.
+        second = other_env(sdk, client, "b")
+        assert client.list({"rsi_run_id": "run-1"}) == [
+            (second, dict(METADATA, rsi_env_id="e" + "b" * 32))
+        ]
+        assert ("get", second) not in sdk.calls
+    finally:
+        client.close()
+
+
+def test_a_sandbox_still_starting_is_waited_for_before_its_stop(sdk, tmp_path, quick):
+    sdk.can_delete = False
+    client = bound(sdk, tmp_path)
+    try:
+        sandbox_id = sandbox(client)
+        sdk.boxes[sandbox_id].state = "pending_build"
+        sdk.settle[sandbox_id] = 3
+        client.kill(sandbox_id)
+        stop = sdk.calls.index(("stop", sandbox_id, True))
+        # Read until it started, and only then stopped.
+        assert sdk.calls[:stop].count(("get", sandbox_id)) >= 3
+        assert sandbox_id not in sdk.boxes
+    finally:
+        client.close()
+
+
+def test_a_sandbox_left_after_its_stop_is_reported_and_stays_in_the_ledger(
+    sdk, tmp_path, quick
+):
+    sdk.can_delete = False
+    client = bound(sdk, tmp_path)
+    sdk.stop_leaves = True
+    try:
+        sandbox_id = sandbox(client)
+        with pytest.raises(InfrastructureError) as left:
+            client.kill(sandbox_id)
+        assert sandbox_id in str(left.value) and "state stopped" in str(left.value)
+        assert KEY not in str(left.value)
+        (entry,) = client.ledger.open_entries()
+        assert (entry.sandbox_id, entry.note) == (sandbox_id, "leftover (stopped)")
+        # Recovery finds it again, from the ledger alone.
+        sdk.listing = "empty"
+        assert client.list({"rsi_run_id": "run-1"}) == [(sandbox_id, METADATA)]
+        # The provider removes it at last: the next read ends its entry.
+        del sdk.boxes[sandbox_id]
+        assert client.list({"rsi_run_id": "run-1"}) == []
+        assert client.ledger.open_entries() == []
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("listing", ["empty", "refused"])
+def test_without_a_listing_recovery_kills_the_runs_sandboxes_from_the_ledger(
+    sdk, tmp_path, quick, listing
+):
+    sdk.can_delete = False
+    sdk.listing = listing
+    engine = bound(sdk, tmp_path)
+    first = sandbox(engine)
+    second = other_env(sdk, engine, "b")
+    # A create whose answer was lost: the ledger has only its name.
+    sdk.lose_answer = True
+    with pytest.raises(InfrastructureError, match="answer was lost"):
+        other_env(sdk, engine, "c")
+    lost = next(box.id for box in sdk.boxes.values() if box.name.endswith("c" * 32))
+    # An env's kill finds an unanswered create by the ledger's name too.
+    assert engine.list({"rsi_env_id": "e" + "c" * 32}) == [
+        (lost, dict(METADATA, rsi_env_id="e" + "c" * 32))
+    ]
+    engine.close()  # the Engine died; another run's sandbox lives beside
+    stranger = SdkDaytonaClient(KEY, target="us")
+    stranger.ledger = ledger_of(tmp_path, "run-2")
+    stranger._templates["rsi-snap"] = ("busybox", (1, 1, 1))
+    theirs = stranger.create(
+        "rsi-snap",
+        timeout=60,
+        metadata=dict(METADATA, rsi_run_id="run-2", rsi_env_id="e" + "d" * 32),
+        allow_internet=True,
+    )
+    stranger.close()
+
+    recovery = SdkDaytonaClient(KEY, target="us")
+    recovery.ledger = ledger_of(tmp_path)
+    try:
+        killed = kill_run_sandboxes(recovery, "run-1", poll=0)
+        assert sorted(killed) == sorted([first, second, lost])
+        assert list(sdk.boxes) == [theirs]
+        assert recovery.ledger.open_entries() == []
+        # A second pass finds nothing and still proves it.
+        assert kill_run_sandboxes(recovery, "run-1", poll=0) == ()
+    finally:
+        recovery.close()
+
+
+def test_a_refused_listing_without_a_ledger_still_fails(sdk, client):
+    sdk.listing = "refused"
+    with pytest.raises(InfrastructureError, match="Forbidden"):
+        client.list({"rsi_run_id": "run-1"})
+
+
+def test_an_unanswered_create_that_never_landed_ends_after_a_while(
+    sdk, tmp_path, quick
+):
+    now = [1000.0]
+    client = bound(sdk, tmp_path, clock=lambda: now[0])
+    try:
+        sdk.listing = "empty"
+        client.ledger.creating("rsi-e" + "f" * 32, METADATA)
+        # Still young: its create may yet land, so it stays open.
+        assert client.list({"rsi_run_id": "run-1"}) == []
+        assert len(client.ledger.open_entries()) == 1
+        now[0] += sandbox_daytona.PENDING_SEC
+        assert client.list({"rsi_run_id": "run-1"}) == []
+        assert client.ledger.open_entries() == []
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        DaytonaRateLimitError("Too Many Requests"),
+        DaytonaForbiddenError("Total CPU limit exceeded. Maximum allowed: 40"),
+        DaytonaForbiddenError(f"Organization quota reached ({KEY})"),
+        DaytonaBadRequestError("Failed to create sandbox: No available runners"),
+    ],
+)
+def test_a_capacity_refusal_is_typed_and_nothing_stays_in_the_ledger(
+    sdk, tmp_path, quick, refusal
+):
+    client = bound(sdk, tmp_path)
+    try:
+        sdk.refuse = [refusal]
+        with pytest.raises(ProviderCapacityError) as refused:
+            sandbox(client)
+        assert "capacity" in str(refused.value) and KEY not in str(refused.value)
+        assert client.ledger.open_entries() == []
+        # Proven by a read of its name that found nothing.
+        assert ("get", f"rsi-{ENV_ID}") in sdk.calls
+        # The next create, with room again, succeeds, and is recorded.
+        assert client.lookup(ENV_ID) is None
+        sandbox_id = sandbox(client)
+        assert sandbox_id in sdk.boxes
+        (entry,) = client.ledger.open_entries()
+        assert entry.sandbox_id == sandbox_id
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize(
+    "refusal",
+    [
+        DaytonaForbiddenError("CPU request 16 exceeds maximum allowed per sandbox (4)"),
+        DaytonaForbiddenError("Forbidden resource"),
+        DaytonaError("Failed to build, reason: quota of layers"),
+        DaytonaForbiddenError("Disk capacity must be at most 10GiB"),
+        DaytonaForbiddenError("Memory exceeds the maximum limit"),
+        DaytonaForbiddenError("Invalid quota value"),
+    ],
+)
+def test_other_refusals_are_not_capacity(sdk, client, refusal):
+    sdk.refuse = [refusal]
+    with pytest.raises(InfrastructureError) as refused:
+        sandbox(client)
+    assert not isinstance(refused.value, ProviderCapacityError)
+
+
+def test_a_refusal_after_the_sandbox_landed_is_no_capacity_and_stays_found(
+    sdk, tmp_path, quick
+):
+    sdk.can_delete = False
+    sdk.listing = "empty"
+    client = bound(sdk, tmp_path)
+    try:
+        # The request made the sandbox, then a poll while it started was
+        # rate limited: the error carries no id, but a read finds it.
+        sdk.refuse_after = [DaytonaRateLimitError("Too Many Requests")]
+        with pytest.raises(InfrastructureError) as refused:
+            sandbox(client)
+        assert not isinstance(refused.value, ProviderCapacityError)
+        ((landed, box),) = sdk.boxes.items()
+        assert landed in str(refused.value) and KEY not in str(refused.value)
+        (entry,) = client.ledger.open_entries()
+        assert (entry.name, entry.sandbox_id) == (box.name, landed)
+        # An env's kill and the run's recovery both find it.
+        assert client.list({"rsi_env_id": ENV_ID}) == [(landed, METADATA)]
+        assert kill_run_sandboxes(client, "run-1", poll=0) == (landed,)
+        assert sdk.boxes == {} and client.ledger.open_entries() == []
+    finally:
+        client.close()
+
+
+def test_a_refusal_whose_landing_cannot_be_read_stays_open(sdk, tmp_path, quick):
+    client = bound(sdk, tmp_path)
+    try:
+        sdk.refuse = [DaytonaRateLimitError("Too Many Requests")]
+        sdk.fail_get = [DaytonaRateLimitError("Too Many Requests")] * 4
+        with pytest.raises(InfrastructureError, match="landed is unknown") as left:
+            sandbox(client)
+        assert not isinstance(left.value, ProviderCapacityError)
+        assert [call for call in sdk.calls if call[0] == "get"] == [
+            ("get", f"rsi-{ENV_ID}")
+        ] * 4
+        # Unproven: the entry stays open for recovery to read again.
+        (entry,) = client.ledger.open_entries()
+        assert (entry.name, entry.sandbox_id) == (f"rsi-{ENV_ID}", None)
+        # A read that recovers on a later try still proves it.
+        sdk.refuse = [DaytonaRateLimitError("Too Many Requests")]
+        sdk.fail_get = [DaytonaRateLimitError("Too Many Requests")] * 2
+        with pytest.raises(ProviderCapacityError):
+            other_env(sdk, client, "b")
+    finally:
+        client.close()
+
+
+def test_a_queue_timeout_is_capacity_and_creates_set_one(sdk, tmp_path, quick):
+    client = bound(sdk, tmp_path)
+    try:
+        sdk.refuse_after = [
+            DaytonaQueueTimeoutError("Sandbox sb-9 was destroyed after waiting")
+        ]
+        with pytest.raises(ProviderCapacityError):
+            sandbox(client)
+        # The API destroyed it: nothing is live, nothing stays open.
+        assert [box for box in sdk.boxes.values() if box.state != "destroyed"] == []
+        assert client.ledger.open_entries() == []
+        params = [call[1] for call in sdk.calls if call[0] == "create"]
+        assert params[0].queue_timeout == sandbox_daytona.QUEUE_MIN
+        assert sandbox_daytona.QUEUE_MIN * 60 < sandbox_daytona.CREATE_SEC
+    finally:
+        client.close()
+
+
+def test_recovery_kills_the_rest_when_one_sandbox_is_left(sdk, tmp_path, quick):
+    sdk.can_delete = False
+    sdk.listing = "empty"
+    client = bound(sdk, tmp_path)
+    try:
+        first = sandbox(client)
+        second = other_env(sdk, client, "b")
+        sdk.stuck = {first}
+        with pytest.raises(InfrastructureError) as left:
+            kill_run_sandboxes(client, "run-1", poll=0, wait_sec=0)
+        assert first in str(left.value) and "still there" in str(left.value)
+        assert second not in str(left.value)
+        # The leftover did not stop the kill of the sandbox after it.
+        assert list(sdk.boxes) == [first]
+        (entry,) = client.ledger.open_entries()
+        assert entry.sandbox_id == first
+    finally:
+        client.close()
+
+
+def test_a_build_sandbox_waits_for_capacity_then_gives_up(
+    sdk, tmp_path, quick, monkeypatch
+):
+    client = bound(sdk, tmp_path)
+    try:
+        lines = []
+        sdk.refuse = [DaytonaRateLimitError("Too Many Requests")] * 2
+        client.build_template("rsi-wait", "busybox", (1, 1, 1), log=lines.append)
+        assert client.template_exists("rsi-wait")
+        assert sum("at capacity" in line for line in lines) == 2
+        monkeypatch.setattr(sandbox_daytona, "CAPACITY_WAIT_SEC", 0)
+        sdk.refuse = [DaytonaRateLimitError("Too Many Requests")]
+        with pytest.raises(ProviderCapacityError):
+            client.build_template("rsi-full", "busybox", (1, 1, 1), log=lines.append)
+        assert not client.template_exists("rsi-full")
+        assert client.ledger.open_entries() == []
+    finally:
+        client.close()
+
+
+def test_a_build_sandbox_without_an_answer_is_recovered_by_its_name(
+    sdk, tmp_path, quick
+):
+    sdk.can_delete = False
+    sdk.listing = "empty"
+    client = bound(sdk, tmp_path)
+    try:
+        sdk.lose_answer = True
+        with pytest.raises(InfrastructureError, match="answer was lost"):
+            client.build_template("rsi-lost", "busybox", (1, 1, 1), log=print)
+        ((lost, box),) = sdk.boxes.items()
+        (entry,) = client.ledger.open_entries()
+        assert (entry.name, entry.sandbox_id) == (box.name, None)
+        # Only the run's recovery finds it (an env's kill does not).
+        assert client.list({"rsi_env_id": ENV_ID}) == []
+        assert kill_run_sandboxes(client, "run-1", poll=0) == (lost,)
+        assert sdk.boxes == {}
+        assert client.ledger.open_entries() == []
+    finally:
+        client.close()
 
 
 # -- the key and the host check --------------------------------------------------------

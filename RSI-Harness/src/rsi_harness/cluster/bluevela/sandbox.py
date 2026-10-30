@@ -45,6 +45,9 @@ class ClusterSandbox:
         if not isinstance(plan.sandbox, SandboxEnvGrant):
             raise SetupError("cluster sandbox requires an environment grant")
         self.grant = plan.sandbox
+        # The run's lease store, on shared storage: the sandbox ledger goes
+        # beside the lease, where recovery from the submit host reads it.
+        self.lease_root = plan.paths.root / "leases"
         self.task_id = plan.task.task_id
         self.run_id = run_id
         self.root = Path(root)
@@ -58,6 +61,7 @@ class ClusterSandbox:
         Work's endpoint. Returns the Work endpoint directory, or None without
         a Work grant."""
         from rsi_harness.runtime.sandbox_remote import (
+            bind_ledger,
             remote_backend,
             remote_env_runtime,
         )
@@ -74,6 +78,7 @@ class ClusterSandbox:
         field = f"sandbox_{host.backend}"
         mutate(lambda lease: lease.model_copy(update={field: settings}))
         client = (self._client_factory or backend.client)(credentials, settings)
+        bind_ledger(client, self.lease_root, self.run_id)
         self.lifecycle.own_transport(client)
         self.root.mkdir(mode=0o700)
         runtime = remote_env_runtime(client, spool_root=self.root / "spool", host=host)

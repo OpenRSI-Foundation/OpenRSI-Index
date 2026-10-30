@@ -15,6 +15,25 @@ outlasts the wall clock), and a stopped one is deleted. There is no
 ``image_build``: a build with a context goes through the SDK's object
 storage upload, which clears the process environment while it runs.
 
+A key with ``write:sandboxes`` only works too. Its delete is refused (403)
+and its listing comes back empty, so every create is recorded in the run's
+sandbox ledger (sandbox_remote_ledger: the name before the request, the id
+after, the end once proven) and ``list`` merges the listing, tolerated
+when empty or refused, with the ledger's open entries, each read again.
+Where a sandbox is deleted (``kill``, a template's build sandbox,
+``state`` of one that cannot run again), a refused delete becomes a stop,
+which removes an ephemeral sandbox: one still starting or building is
+waited for first, and the end is proven by a read that finds nothing. One
+still there afterwards is a leftover, reported with its id and state and
+kept open in the ledger. After the first refusal the client stops without
+asking to delete. A key that may delete and list never reaches any of
+this. A create refused for capacity (429, the organization's quota, or no
+runner within the queue timeout) is a ``ProviderCapacityError`` only once a
+read by name proves nothing landed: the SDK's polls after the request
+(build logs, start) can be refused too, after the sandbox existed. A
+template's build sandbox waits for capacity up to ``CAPACITY_WAIT_SEC``
+first.
+
 Each process is one command of its own session, run by the session's
 shell as a child (``_RUN_SCRIPT``: a top-level ``exec`` would replace the
 shell), its output followed over the toolbox's log websocket. Daytona
@@ -41,6 +60,7 @@ import re
 import secrets
 import shlex
 import threading
+import time
 import weakref
 from collections.abc import Callable, Coroutine, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -48,7 +68,11 @@ from pathlib import Path
 from typing import Any
 
 from rsi_harness.errors import InfrastructureError, SetupError
-from rsi_harness.runtime.sandbox_contracts import EnvDaytonaHost, SandboxError
+from rsi_harness.runtime.sandbox_contracts import (
+    EnvDaytonaHost,
+    ProviderCapacityError,
+    SandboxError,
+)
 from rsi_harness.runtime.sandbox_remote import (
     META_PREFIX,
     ChunkReader,
@@ -57,7 +81,9 @@ from rsi_harness.runtime.sandbox_remote import (
     group_argv,
     read_registry_auth,
     registry_image_config,
+    run_metadata,
 )
+from rsi_harness.runtime.sandbox_remote_ledger import LedgerEntry, SandboxLedger
 
 LOGGER = logging.getLogger(__name__)
 # The ``daytona`` extra's pin.
@@ -68,12 +94,57 @@ DEFAULT_API_URL = "https://app.daytona.io/api"
 # How long a create waits for the sandbox to start.
 CREATE_SEC = 180
 DELETE_SEC = 60
+# A sandbox whose delete was refused is stopped, then read until it is gone
+# for this long, this often; one still starting or building is waited for
+# first, up to CREATE_SEC (a stop sent then does not take effect).
+GONE_SEC = 30.0
+STOP_POLL_SEC = 1.0
+# A create without an answer whose name still finds nothing this long
+# after its request never landed: its ledger entry ends.
+PENDING_SEC = 2 * CREATE_SEC
+# A template's build sandbox refused for capacity is asked for again, for
+# this long in all, backing off from the first wait to the last.
+CAPACITY_WAIT_SEC = 600.0
+CAPACITY_RETRY_SEC = (5.0, 60.0)
+# After a capacity refusal the sandbox is read by name, again after these
+# waits while the read itself fails, to prove that nothing landed.
+LANDED_RETRY_SEC = (1.0, 2.0, 4.0)
+# Minutes a create waits for a runner before Daytona cancels it (destroys
+# the sandbox: a DaytonaQueueTimeoutError, typed as capacity), below
+# CREATE_SEC. Daytona honors it only where the organization enables queue
+# timeouts; otherwise its own default (or none) applies.
+QUEUE_MIN = max(1, CREATE_SEC // 60 - 1)
 # After a command's log ends, its exit code is asked for this many times.
 EXIT_TRIES = 25
 EXIT_POLL_SEC = 0.2
 CLOSE_SEC = 10.0
 # Sandbox states that never run again by themselves.
 _DEAD = frozenset({"error", "build_failed", "stopped", "archived"})
+# On the way to running: a stop waits them out.
+_SETTLING = frozenset(
+    {
+        "creating",
+        "restoring",
+        "starting",
+        "pending_build",
+        "building_snapshot",
+        "pulling_snapshot",
+    }
+)
+# Stopped or on the way out: no stop is sent.
+_ENDING = frozenset({"stopping", "stopped", "destroying", "destroyed", "archived"})
+# A refused create that is the provider's capacity (the organization's
+# quota, its runners), on an API refusal of these statuses: organization
+# wide wording only. A per-sandbox size or a validation refusal is not one,
+# waiting never helps it. The real quota text is not yet captured.
+_CAPACITY_STATUS = frozenset({400, 403, 422, 503})
+_CAPACITY = re.compile(
+    r"quota|total \w+ limit|organi[sz]ation\W+(?:\w+\W+){0,3}limit"
+    r"|insufficient (?:resources|capacity)|(?:at|out of|no) capacity"
+    r"|no (?:available )?runners?",
+    re.IGNORECASE,
+)
+_NOT_CAPACITY = re.compile(r"per sandbox|must be|invalid", re.IGNORECASE)
 # $1 the cwd, then NAME=value pairs and the command, set by ``env`` (which
 # takes any name, as Docker does; ``export`` fails on one that is not a
 # shell name), with stdin closed (an async session command's stdin is a
@@ -258,6 +329,8 @@ class SdkDaytonaClient:
     freeze_spare: tuple[str, ...] = ("init", "caller")
     argv_bytes = None
     build_form = None
+    # The run's sandbox ledger (sandbox_remote.bind_ledger); None: none.
+    ledger: SandboxLedger | None = None
 
     def __init__(
         self,
@@ -285,6 +358,10 @@ class SdkDaytonaClient:
         # (sandbox id, group pid) -> its command, until its exit is seen.
         self._commands: dict[tuple[str, int], _Command] = {}
         self._processes: weakref.WeakSet[_DaytonaProcess] = weakref.WeakSet()
+        # Set at the first refused delete: from then on a sandbox is stopped.
+        self._no_delete = False
+        # Sandbox id -> when a stop was last sent without waiting (state).
+        self._stopped_at: dict[str, float] = {}
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(
             target=self._loop.run_forever, name="rsi-sandbox-daytona", daemon=True
@@ -355,6 +432,44 @@ class SdkDaytonaClient:
                 raise InfrastructureError(f"daytona sandbox {sandbox_id} is gone")
         return box
 
+    def _kinds(self, *names: str) -> tuple[type[BaseException], ...]:
+        """The SDK's error classes of these names (those it has)."""
+        return tuple(
+            kind
+            for kind in (getattr(self._daytona, name, None) for name in names)
+            if isinstance(kind, type)
+        )
+
+    def _forbidden(self, error: BaseException) -> bool:
+        return (
+            isinstance(error, self._kinds("DaytonaForbiddenError"))
+            or getattr(error, "status_code", None) == 403
+        )
+
+    def _capacity(self, error: BaseException) -> bool:
+        """Whether a refused create may be the provider's capacity: a rate
+        limit, the API's queue timeout (it destroyed the sandbox: no runner
+        came), or an API refusal naming a quota or capacity. A failure
+        after the sandbox existed (it carries its id) never is; whether
+        anything landed is proven by ``_create``."""
+        if isinstance(error, self._kinds("DaytonaQueueTimeoutError")):
+            return True
+        if getattr(error, "sandbox_id", None):
+            return False
+        status = getattr(error, "status_code", None)
+        if status == 429 or isinstance(error, self._kinds("DaytonaRateLimitError")):
+            return True
+        refusal = self._kinds(
+            "DaytonaForbiddenError",
+            "DaytonaBadRequestError",
+            "DaytonaUnprocessableEntityError",
+            "DaytonaServiceUnavailableError",
+        )
+        if not (isinstance(error, refusal) or status in _CAPACITY_STATUS):
+            return False
+        text = str(error)
+        return bool(_CAPACITY.search(text)) and not _NOT_CAPACITY.search(text)
+
     def _login(self, reference: str) -> tuple[str, str] | None:
         if self._registry_auth_file is None:
             return None
@@ -383,31 +498,141 @@ class SdkDaytonaClient:
         self, name, image, shape, *, log, steps=(), context=None, force=False
     ):
         assert not steps, "the daytona backend has no image_build"
+
         # A sandbox of the image makes Daytona build and cache it; being
         # ephemeral with a short auto-stop, it goes even if the broker dies.
-        params = self._daytona.CreateSandboxFromImageParams(
-            image=self._image(image),
-            resources=self._resources(shape),
-            name=f"{name}-{secrets.token_hex(4)}",
-            os_user="root",
-            public=False,
-            ephemeral=True,
-            auto_stop_interval=1,
-            network_block_all=True,
-        )
-
-        async def build() -> None:
-            box = await self._sdk.create(
-                params,
-                timeout=0,
-                on_snapshot_create_logs=lambda line: log(line + "\n"),
+        def params() -> Any:
+            return self._daytona.CreateSandboxFromImageParams(
+                image=self._image(image),
+                resources=self._resources(shape),
+                name=f"{name}-{secrets.token_hex(4)}",
+                os_user="root",
+                public=False,
+                ephemeral=True,
+                auto_stop_interval=1,
+                queue_timeout=QUEUE_MIN,
+                network_block_all=True,
             )
-            await self._delete(box)
 
         log(f"daytona builds {image}\n")
-        self._call(build())
+        box = self._build_sandbox(params, image, log)
+        try:
+            self._call(self._remove(box))
+        except InfrastructureError as error:
+            # The image is built; the sandbox stops by itself within a
+            # minute (its auto-stop), and the ledger keeps it for recovery.
+            LOGGER.warning("daytona build sandbox of %s left: %s", image, error)
+            log(f"daytona build sandbox left: {error}\n")
         with self._lock:
             self._templates[name] = (image, shape)
+
+    def _build_sandbox(
+        self, params: Callable[[], Any], image: str, log: Callable[[str], None]
+    ) -> Any:
+        """The template's build sandbox, asked for again while Daytona
+        refuses it for capacity, up to CAPACITY_WAIT_SEC. One whose create
+        failed otherwise stays in the ledger, where recovery finds it."""
+        # In the ledger only: recovery of the run finds it, an env's kill not.
+        metadata = (
+            {}
+            if self.ledger is None
+            else {
+                **run_metadata(self.ledger.run_id),
+                f"{META_PREFIX}role": "template-build",
+            }
+        )
+        deadline = time.monotonic() + CAPACITY_WAIT_SEC
+        wait, longest = CAPACITY_RETRY_SEC
+        while True:
+            try:
+                return self._create(
+                    params(),
+                    timeout=0,
+                    metadata=metadata,
+                    on_snapshot_create_logs=lambda line: log(line + "\n"),
+                )
+            except ProviderCapacityError as error:
+                if time.monotonic() + wait > deadline:
+                    raise
+                log(f"daytona is at capacity; building {image} again in {wait:.0f} s\n")
+                LOGGER.info("daytona build of %s waits for capacity: %s", image, error)
+                time.sleep(wait)
+                wait = min(longest, wait * 2)
+
+    def _create(
+        self,
+        params: Any,
+        *,
+        timeout: float,
+        metadata: Mapping[str, str],
+        **options: Any,
+    ) -> Any:
+        """Create the sandbox ``params`` name, in the ledger by name before
+        the request and by id after. A capacity refusal is a
+        ProviderCapacityError, and its ledger entry ends, only once a read
+        by name finds nothing: the SDK's polls after the request can be
+        refused too. One that landed is recorded and its refusal is a plain
+        InfrastructureError (the caller removes it); one whose read keeps
+        failing stays open in the ledger, for recovery."""
+        ledger = self.ledger
+        if ledger is not None:
+            ledger.creating(params.name, metadata)
+
+        async def create() -> Any:
+            try:
+                return await self._sdk.create(params, timeout=timeout, **options)
+            except Exception as error:
+                if not self._capacity(error):
+                    raise
+                text = self._hide(str(error))[:512]
+                try:
+                    landed = await self._landed(params.name)
+                except Exception as failure:
+                    raise InfrastructureError(
+                        f"daytona refused the sandbox ({text}), and whether "
+                        f"{params.name} landed is unknown: {self._clean(failure)}"
+                    ) from None
+                if landed is not None:
+                    raise _Landed(
+                        landed,
+                        f"daytona sandbox {landed} ({params.name}) was created, "
+                        f"then refused while it started: {text}",
+                    ) from None
+                raise ProviderCapacityError(
+                    f"daytona refused the sandbox for capacity: {text}"
+                ) from None
+
+        try:
+            box = self._call(create())
+        except ProviderCapacityError:
+            if ledger is not None:
+                ledger.ended("refused", name=params.name)
+            raise
+        except _Landed as landed:
+            if ledger is not None:
+                ledger.created(params.name, landed.sandbox_id)
+            raise
+        if ledger is not None:
+            ledger.created(params.name, box.id)
+        return box
+
+    async def _landed(self, name: str) -> str | None:
+        """The id of the sandbox ``name`` if it exists, None if a read proves
+        it does not; a read failing every time raises its error."""
+        failure: BaseException | None = None
+        for wait in (0.0, *LANDED_RETRY_SEC):
+            if wait:
+                await asyncio.sleep(wait)
+            try:
+                box = await self._read(name)
+            except Exception as error:
+                failure = error
+                continue
+            if box is None or _value(box.state) == "destroyed":
+                return None
+            return box.id
+        assert failure is not None
+        raise failure
 
     def _image(self, image: str) -> Any:
         return self._daytona.Image.base(image).entrypoint(["sleep", "infinity"])
@@ -452,9 +677,10 @@ class SdkDaytonaClient:
             ephemeral=True,
             ttl_minutes=minutes,
             auto_stop_interval=minutes,
+            queue_timeout=QUEUE_MIN,
             **network,
         )
-        box = self._call(self._sdk.create(params, timeout=CREATE_SEC))
+        box = self._create(params, timeout=CREATE_SEC, metadata=metadata)
         with self._lock:
             self._boxes[box.id] = box
         return box.id
@@ -468,11 +694,86 @@ class SdkDaytonaClient:
             return None
         return box.id
 
-    async def _delete(self, box: Any) -> None:
+    async def _read(self, id_or_name: str) -> Any:
+        """The sandbox as the API has it now (not cached), or None."""
         try:
-            await box.delete(timeout=DELETE_SEC)
+            return await self._sdk.get(id_or_name)
         except self._daytona.DaytonaNotFoundError:
-            pass
+            return None
+
+    def _ended(self, outcome: str, sandbox_id: str) -> None:
+        self._stopped_at.pop(sandbox_id, None)
+        if self.ledger is not None:
+            self.ledger.ended(outcome, sandbox_id=sandbox_id)
+
+    async def _remove(self, box: Any, *, confirm: bool = True) -> str:
+        """End a sandbox: "deleted" ("gone": it already was). When the key
+        may not delete, a stop removes the ephemeral sandbox: one starting
+        or building is waited for first, then the stop is sent and, with
+        ``confirm``, the sandbox read until it is gone ("stopped"); still
+        there after GONE_SEC, it is a leftover (InfrastructureError). Without
+        ``confirm`` the stop is only sent ("stopping"), once per GONE_SEC."""
+        sandbox_id = box.id
+        if not self._no_delete:
+            try:
+                await box.delete(timeout=DELETE_SEC)
+            except self._daytona.DaytonaNotFoundError:
+                self._ended("gone", sandbox_id)
+                return "gone"
+            except Exception as error:
+                if not self._forbidden(error):
+                    raise
+                LOGGER.info(
+                    "daytona refused deleting sandbox %s (%s): it is stopped "
+                    "instead, which removes an ephemeral sandbox",
+                    sandbox_id,
+                    type(error).__name__,
+                )
+                self._no_delete = True
+            else:
+                self._ended("deleted", sandbox_id)
+                return "deleted"
+        state = _value(box.state)
+        settle = time.monotonic() + CREATE_SEC
+        while state in _SETTLING and time.monotonic() < settle:
+            await asyncio.sleep(STOP_POLL_SEC)
+            fresh = await self._read(sandbox_id)
+            if fresh is None:
+                self._ended("gone", sandbox_id)
+                return "gone"
+            state = _value(fresh.state)
+        failure = ""
+        recent = self._stopped_at.get(sandbox_id)
+        if state not in _ENDING and (
+            confirm or recent is None or time.monotonic() - recent >= GONE_SEC
+        ):
+            self._stopped_at[sandbox_id] = time.monotonic()
+            try:
+                await box.stop(timeout=DELETE_SEC, force=True)
+            except self._daytona.DaytonaNotFoundError:
+                self._ended("stopped", sandbox_id)
+                return "stopped"
+            except Exception as error:
+                failure = f"; its stop failed: {self._clean(error)}"
+        if not confirm:
+            return "stopping"
+        end = time.monotonic() + GONE_SEC
+        while True:
+            fresh = await self._read(sandbox_id)
+            if fresh is None or _value(fresh.state) == "destroyed":
+                self._ended("stopped", sandbox_id)
+                return "stopped"
+            if time.monotonic() >= end:
+                break
+            await asyncio.sleep(STOP_POLL_SEC)
+        state = _value(fresh.state)
+        if self.ledger is not None:
+            self.ledger.noted(sandbox_id, f"leftover ({state})")
+        raise InfrastructureError(
+            f"daytona sandbox {sandbox_id} is still there {GONE_SEC:.0f} s after "
+            f"its stop (state {state}{failure}); the key may not delete it, so "
+            "it holds quota until its TTL: stop or delete it in Daytona"
+        )
 
     def state(self, sandbox_id):
         async def state() -> str | None:
@@ -481,43 +782,82 @@ class SdkDaytonaClient:
             if found in (None, "destroyed"):
                 return None
             if found in _DEAD:
-                # It would linger: delete it, and the caller waits it out.
-                await self._delete(box)
+                # It would linger: remove it, and the caller waits it out.
+                await self._remove(box, confirm=False)
             return "running" if found == "started" else found
 
-        return self._call(state())
+        found = self._call(state())
+        if found is None:
+            self._ended("gone", sandbox_id)
+        return found
 
     def kill(self, sandbox_id):
         async def kill() -> None:
             box = await self._get(sandbox_id)
-            if box is not None and _value(box.state) not in (
-                "destroyed",
-                "destroying",
-            ):
-                await self._delete(box)
+            if box is None or _value(box.state) == "destroyed":
+                self._ended("gone", sandbox_id)
+            elif _value(box.state) != "destroying":
+                await self._remove(box)
 
-        self._call(kill())
-        with self._lock:
-            self._boxes.pop(sandbox_id, None)
+        try:
+            self._call(kill())
+        finally:
+            with self._lock:
+                self._boxes.pop(sandbox_id, None)
 
     def list(self, metadata):
+        """The listing merged with the ledger's open entries of
+        ``metadata``, each read again: one gone (or, unanswered, never
+        landed) ends there. With a ledger, a refused listing counts as
+        empty, as a key that may not list sees it."""
         query = self._daytona.ListSandboxesQuery(labels=dict(metadata))
 
         async def listing() -> list[tuple[str, dict[str, str]]]:
-            return [
-                (
-                    box.id,
-                    {
-                        key: value
-                        for key, value in (box.labels or {}).items()
-                        if key.startswith(META_PREFIX)
-                    },
-                )
-                async for box in self._sdk.list(query)
-                if _value(box.state) != "destroyed"
-            ]
+            try:
+                return [
+                    (
+                        box.id,
+                        {
+                            key: value
+                            for key, value in (box.labels or {}).items()
+                            if key.startswith(META_PREFIX)
+                        },
+                    )
+                    async for box in self._sdk.list(query)
+                    if _value(box.state) != "destroyed"
+                ]
+            except Exception as error:
+                if self.ledger is None or not self._forbidden(error):
+                    raise
+                LOGGER.info("daytona refused the listing: the ledger answers")
+                return []
 
-        return self._call(listing())
+        found = dict(self._call(listing()))
+        if self.ledger is not None:
+            for entry in self.ledger.open_entries(metadata):
+                if entry.sandbox_id in found:
+                    continue
+                sandbox_id = self._confirm(self.ledger, entry)
+                if sandbox_id is not None and sandbox_id not in found:
+                    found[sandbox_id] = {
+                        key: value
+                        for key, value in entry.metadata.items()
+                        if key.startswith(META_PREFIX)
+                    }
+        return list(found.items())
+
+    def _confirm(self, ledger: SandboxLedger, entry: LedgerEntry) -> str | None:
+        """The id of a ledger entry's sandbox if it is still there."""
+        box = self._call(self._read(entry.sandbox_id or entry.name))
+        if box is not None and _value(box.state) != "destroyed":
+            if entry.sandbox_id is None:
+                ledger.created(entry.name, box.id)
+            return box.id
+        if entry.sandbox_id is not None:
+            ledger.ended("gone", sandbox_id=entry.sandbox_id)
+        elif ledger.clock() - entry.created_at >= PENDING_SEC:
+            ledger.ended("absent", name=entry.name)
+        return None
 
     # -- files and processes -------------------------------------------------
 
@@ -661,6 +1001,14 @@ class SdkDaytonaClient:
         self._thread.join(CLOSE_SEC)
         if not self._thread.is_alive():
             self._loop.close()
+
+
+class _Landed(InfrastructureError):
+    """A create refused after its sandbox existed: not capacity."""
+
+    def __init__(self, sandbox_id: str, message: str) -> None:
+        super().__init__(message)
+        self.sandbox_id = sandbox_id
 
 
 def sandbox_shape(cpus: float, memory_mb: int, disk_mb: int) -> tuple[int, int, int]:
