@@ -119,6 +119,8 @@ def test_every_documented_grant_request_and_spec_field_is_the_contracts():
     models = (
         contracts.EnvHostPolicy,
         contracts.EnvE2BHost,
+        contracts.EnvModalHost,
+        contracts.EnvDaytonaHost,
         contracts.EnvToolFile,
         contracts.EnvGrant,
         contracts.EnvBuildGrant,
@@ -292,6 +294,33 @@ def test_the_documented_prune_images_options_are_the_commands():
     options = {option for param in command.params for option in param.opts}
     documented = {item for item in listed("prune-images-options") if item[:2] == "--"}
     assert documented == options
+
+
+@pytest.mark.parametrize(
+    ("backend", "table", "settings"),
+    [
+        ("e2b", "EnvE2BHost", {"api_key_env": "K"}),
+        ("modal", "EnvModalHost", {"api_key_id_env": "I", "api_key_env": "S"}),
+        ("daytona", "EnvDaytonaHost", {"api_key_env": "K", "target": "us"}),
+    ],
+)
+def test_the_documented_remote_install_is_the_checks(
+    monkeypatch, backend, table, settings
+):
+    import importlib
+
+    from rsi_harness.errors import SetupError
+    from rsi_harness.runtime import sandbox_contracts
+
+    module = importlib.import_module(f"rsi_harness.runtime.sandbox_{backend}")
+    tests = importlib.import_module(f"tests.runtime.test_sandbox_{backend}")
+    tests.sdk_installed(monkeypatch, None)
+    with pytest.raises(SetupError) as refused:
+        check = getattr(module, f"check_{backend}_host")
+        check(getattr(sandbox_contracts, table)(**settings))
+    install = str(refused.value).rsplit(": ", 1)[1]
+    assert install.startswith("uv tool install ")
+    assert install in (REFERENCE.parents[1] / "README.md").read_text()
 
 
 def test_the_documented_prepull_example_names_a_manifest_digest():

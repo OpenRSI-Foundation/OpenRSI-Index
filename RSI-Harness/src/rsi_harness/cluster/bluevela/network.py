@@ -326,7 +326,9 @@ class UnixTcpRelay:
 
 
 class AgentNetworkBroker:
-    """Own the two host-side sockets exposed to one no-network Agent."""
+    """Own the host-side sockets exposed to one no-network Agent: the submit
+    relay, and the provider proxy unless the Agent has no provider (Oracle,
+    which only submits)."""
 
     _CONTAINER_ROOT = PurePosixPath("/run/rsi-harness/network")
 
@@ -353,12 +355,15 @@ class AgentNetworkBroker:
         ):
             raise SetupError("Agent submit endpoint must be local HTTP")
         self.root = Path(root)
-        self.provider_socket = self.root / "provider.sock"
+        self.provider_socket: Path | None = (
+            self.root / "provider.sock" if endpoints else None
+        )
         self.submit_socket = self.root / "submit.sock"
         self.submit_port = port
-        self._provider = UnixConnectProxy(
-            self.provider_socket,
-            endpoints=endpoints,
+        self._provider = (
+            None
+            if self.provider_socket is None
+            else UnixConnectProxy(self.provider_socket, endpoints=endpoints)
         )
         self._submit = UnixTcpRelay(
             self.submit_socket,
@@ -371,17 +376,20 @@ class AgentNetworkBroker:
         if self._started:
             raise RuntimeError("Agent network broker is already started")
         self.root.mkdir(parents=True, mode=0o700, exist_ok=False)
-        self._provider.start()
+        if self._provider is not None:
+            self._provider.start()
         try:
             self._submit.start()
         except BaseException:
-            self._provider.stop()
+            if self._provider is not None:
+                self._provider.stop()
             raise
         self._started = True
 
     def stop(self) -> None:
         self._submit.stop()
-        self._provider.stop()
+        if self._provider is not None:
+            self._provider.stop()
         self._started = False
 
     def wrap(
@@ -392,6 +400,8 @@ class AgentNetworkBroker:
     ) -> tuple[str, ...]:
         if not self._started:
             raise RuntimeError("Agent network broker is not started")
+        if self.provider_socket is None:
+            raise RuntimeError("Agent network broker has no provider proxy")
         return (
             "/usr/bin/env",
             "python3",

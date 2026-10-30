@@ -1268,11 +1268,11 @@ class _Compose:
             project_dir=Path(self.project_dir),
         )
         network = self.args.network
+        granted = {}
+        if network is None or self.client.socket_path:
+            granted = self.client.capabilities().get("environments") or {}
         if network is None:
-            granted = (self.client.capabilities().get("environments") or {}).get(
-                "network", ()
-            )
-            network = "public" if "public" in granted else "none"
+            network = "public" if "public" in granted.get("network", ()) else "none"
         return self.module.translate(
             project,
             project_dir=Path(self.project_dir),
@@ -1280,6 +1280,7 @@ class _Compose:
             disk_mb=self.args.disk_mb,
             lifetime_sec=self.args.lifetime,
             profiles=self.args.profile,
+            backend=granted.get("backend"),
         )
 
     def state(self):

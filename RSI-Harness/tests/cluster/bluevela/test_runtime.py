@@ -53,6 +53,9 @@ from rsi_harness.runtime.submissions import SubmissionService
 from tests.factories import make_run_plan
 from tests.fakes import FakeClock
 
+# The last line of a finished isolation probe (initialize's last exec).
+PROBE_END = "isolation probe end\n"
+
 
 class _Runtime:
     def __init__(
@@ -178,7 +181,7 @@ def test_workspace_seed_streams_archive_to_shared_storage(
 
     def fake_run(command, **options):
         calls.append((tuple(command), options))
-        return AgentRunResult(exit_code=0, output="0.149.0\n")
+        return AgentRunResult(exit_code=0, output="0.149.0\n" + PROBE_END)
 
     monkeypatch.setattr(runtime, "_run", fake_run)
 
@@ -352,7 +355,7 @@ def test_final_native_judge_is_registered_after_agent_exit(
         request.verifier_output.write_text("passed\n")
         if judge_rounds == 2 and agent_exit == "before_resume":
             runtime._process = SimpleNamespace(pid=100, poll=lambda: 0)
-        return AgentRunResult(exit_code=0, output="passed\n")
+        return AgentRunResult(exit_code=0, output="passed\n", full_output_captured=True)
 
     def signal_group(_pid, signum):
         if (
@@ -678,11 +681,9 @@ def test_task_runtime_resets_private_controller_umask(
     runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
     command = runtime._base_command(
         devices=(),
-        environment=None,
         extra_binds=(),
         mount_workspace=False,
         mount_agent_home=False,
-        containall=True,
         network_mode="public",
         phase=phase,
     )
@@ -748,7 +749,7 @@ def test_judge_gets_fresh_writable_tmp_without_mutating_preserved_assets(
         ) in options["extra_binds"]
         assert (isolate / "rsi_isolate.py").is_file()
         assert (isolate / "judge_isolation.py").is_file()
-        return AgentRunResult(exit_code=0, output="passed\n")
+        return AgentRunResult(exit_code=0, output="passed\n", full_output_captured=True)
 
     monkeypatch.setattr(runtime, "_run", fake_run)
     trajectory = tmp_path / "judge-trajectory" / "agent-1"
@@ -761,12 +762,16 @@ def test_judge_gets_fresh_writable_tmp_without_mutating_preserved_assets(
     assert not any((node_tmp / "judge").iterdir())
 
 
-@pytest.mark.parametrize("cluster_name", ["bluevela", "slurm"])
+@pytest.mark.parametrize(
+    "cluster_name,agent_name",
+    [("bluevela", "codex"), ("slurm", "codex"), ("slurm", "oracle")],
+)
 @pytest.mark.parametrize("allow_signal_compatibility", [False, True])
 def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
     tmp_path: Path,
     monkeypatch,
     cluster_name,
+    agent_name,
     allow_signal_compatibility,
 ) -> None:
     from rsi_harness.cluster.bluevela import judge_controller
@@ -803,6 +808,15 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
     sif.write_bytes(b"sif")
     checksum.write_text("d" * 64 + "  task.sif\n")
     plan = make_run_plan(tmp_path)
+    plan = plan.model_copy(
+        update={
+            "task": plan.task.model_copy(
+                update={
+                    "agent": plan.task.agent.model_copy(update={"name": agent_name})
+                }
+            )
+        }
+    )
     runtime = ApptainerAgentRuntime(
         SimpleNamespace(
             profile=profile,
@@ -814,6 +828,10 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
         allocated_pools=_multi_pools(),
     )
     runtime.control.mkdir(parents=True)
+    if agent_name == "oracle":
+        runtime._oracle_solution = runtime.control / "oracle-solution"
+        runtime._oracle_solution.mkdir()
+        (runtime._oracle_solution / "solve.sh").write_text("baseline\n")
     runtime.rounds.mkdir(parents=True)
     runtime.judge_tmp_root.mkdir(parents=True)
     snapshot = runtime.rounds / "agent-1/workspace"
@@ -843,6 +861,10 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
         assert binds[(snapshot, plan.workdir)] is True
         assert binds[(plan.task.source_dir / "tests", PurePosixPath("/tests"))] is True
         assert binds[(trajectory, PurePosixPath("/logs/agent"))] is True
+        assert not any(
+            target == PurePosixPath("/solution") or source == runtime._oracle_solution
+            for source, target in binds
+        )
         isolate = runtime.control / "judge-isolate"
         assert binds[(isolate, PurePosixPath("/opt/rsi-isolate"))] is True
         assert (
@@ -855,6 +877,10 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
         # Every Judge node gets the operator's isolation fallback, explicitly.
         assert control.worker.environment["RSI_JUDGE_ISOLATION_FALLBACK"] == "none"
         assert control.environment["RSI_JUDGE_ISOLATION_FALLBACK"] == "none"
+        # Only the head controller runs with --net; remote ranks share the
+        # host's network namespace.
+        assert control.worker.environment["RSI_JUDGE_NETNS"] == "shared"
+        assert control.environment["RSI_JUDGE_NETNS"] == "private"
         signal_env = "RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL"
         expected = "1" if allow_signal_compatibility else "0"
         assert control.worker.environment[signal_env] == expected
@@ -875,7 +901,7 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
         assert all("GPU-work" not in value for value in control.environment.values())
         (verifier_logs / "reward.txt").write_text("1\n")
         output_path.write_text("passed\n")
-        return AgentRunResult(exit_code=0, output="passed\n")
+        return AgentRunResult(exit_code=0, output="passed\n", full_output_captured=True)
 
     monkeypatch.setattr(runtime, "_run_host_controller", controller)
     trajectory = tmp_path / "judge-trajectory" / "agent-1"
@@ -911,11 +937,9 @@ def test_apptainer_commands_use_run_plan_workdir(tmp_path: Path, monkeypatch) ->
 
     command = runtime._base_command(
         devices=(),
-        environment=None,
         extra_binds=(),
         mount_workspace=False,
         mount_agent_home=False,
-        containall=True,
         network_mode="public",
     )
 
@@ -925,11 +949,9 @@ def test_apptainer_commands_use_run_plan_workdir(tmp_path: Path, monkeypatch) ->
         "--bind",
         f"{node_tmp / 'work'}:/tmp",
     ) in tuple(zip(command, command[1:], strict=False))
-    environment = {
-        value.split("=", 1)[0]: value.split("=", 1)[1]
-        for option, value in zip(command, command[1:], strict=False)
-        if option == "--env"
-    }
+    environment = runtime._container_environment(
+        devices=(), environment=None, mount_agent_home=False, declared="public"
+    )
     assert environment["HF_HOME"] == "/rsi-cache/huggingface"
     assert environment["HF_DATASETS_CACHE"] == "/rsi-cache/datasets"
     assert (
@@ -954,11 +976,9 @@ def test_apptainer_commands_use_run_plan_workdir(tmp_path: Path, monkeypatch) ->
 
     judge_command = runtime._base_command(
         devices=(),
-        environment=None,
         extra_binds=(),
         mount_workspace=False,
         mount_agent_home=False,
-        containall=True,
         network_mode="no-network",
         phase="judge",
     )
@@ -1001,17 +1021,16 @@ def test_legacy_single_node_retains_mounts_cache_paths_and_environment(
 
     command = runtime._base_command(
         devices=("GPU-fixture",),
-        environment={"TASK_SETTING": "preserved"},
         extra_binds=(),
         mount_workspace=True,
         mount_agent_home=True,
-        containall=True,
         network_mode=network_mode,
         phase=phase,
     )
     pairs = tuple(zip(command, command[1:], strict=False))
     mounts = {value for option, value in pairs if option == "--bind"}
     expected = {
+        "/etc/resolv.conf:/etc/resolv.conf:ro",
         f"{runtime.work_tmp}:/tmp",
         f"{runtime.workspace}:/workspace",
         f"{runtime.feedback}:/run/rsi-harness/feedback:ro",
@@ -1020,11 +1039,13 @@ def test_legacy_single_node_retains_mounts_cache_paths_and_environment(
     if network_mode == "public":
         expected.add("/shared/project:/shared/project")
     assert mounts == expected
-    environment = {
-        value.split("=", 1)[0]: value.split("=", 1)[1]
-        for option, value in pairs
-        if option == "--env"
-    }
+    environment = runtime._container_environment(
+        devices=("GPU-fixture",),
+        environment={"TASK_SETTING": "preserved"},
+        mount_agent_home=True,
+        declared=network_mode,
+        phase=phase,
+    )
     assert environment["SITE_DATA"] == "/shared/project/data"
     assert environment["TASK_SETTING"] == "preserved"
     assert environment["CUDA_VISIBLE_DEVICES"] == "GPU-fixture"
@@ -1062,11 +1083,9 @@ def test_apptainer_enables_nvidia_only_for_the_phase_devices(
 
     command = runtime._base_command(
         devices=devices,
-        environment={"CUDA_VISIBLE_DEVICES": "GPU-unexpected"},
         extra_binds=(),
         mount_workspace=False,
         mount_agent_home=False,
-        containall=True,
         network_mode=network_mode,
         phase=phase,
     )
@@ -1074,12 +1093,13 @@ def test_apptainer_enables_nvidia_only_for_the_phase_devices(
     assert ("--nv" in command) is bool(devices)
     assert "--containall" in command
     assert "--no-umask" in command
-    pairs = tuple(zip(command, command[1:], strict=False))
-    environment = {
-        value.split("=", 1)[0]: value.split("=", 1)[1]
-        for option, value in pairs
-        if option == "--env"
-    }
+    environment = runtime._container_environment(
+        devices=devices,
+        environment={"CUDA_VISIBLE_DEVICES": "GPU-unexpected"},
+        mount_agent_home=False,
+        declared=network_mode,
+        phase=phase,
+    )
     assert environment["CUDA_VISIBLE_DEVICES"] == ",".join(devices)
     assert ("--net" in command) is (network_mode == "no-network")
 
@@ -1113,11 +1133,9 @@ def test_judge_authority_is_multinode_only_and_never_exposed_to_work(
     single = ApptainerAgentRuntime(payload, plan)
     single_judge = single._base_command(
         devices=(),
-        environment=None,
         extra_binds=(),
         mount_workspace=False,
         mount_agent_home=False,
-        containall=True,
         network_mode="no-network",
         phase="judge",
     )
@@ -1126,21 +1144,17 @@ def test_judge_authority_is_multinode_only_and_never_exposed_to_work(
     multi = ApptainerAgentRuntime(payload, plan, allocated_pools=_multi_pools())
     work = multi._base_command(
         devices=(),
-        environment=None,
         extra_binds=(),
         mount_workspace=False,
         mount_agent_home=False,
-        containall=True,
         network_mode="no-network",
         phase="work",
     )
     judge = multi._base_command(
         devices=(),
-        environment=None,
         extra_binds=(),
         mount_workspace=False,
         mount_agent_home=False,
-        containall=True,
         network_mode="no-network",
         phase="judge",
     )
@@ -1194,7 +1208,9 @@ def test_multinode_work_runtime_injects_only_current_phase_broker(
     monkeypatch.setattr(
         runtime,
         "_run",
-        lambda *_args, **_kwargs: AgentRunResult(exit_code=0, output="0.149.0"),
+        lambda *_args, **_kwargs: AgentRunResult(
+            exit_code=0, output="0.149.0\n" + PROBE_END
+        ),
     )
     runtime.initialize()
     try:
@@ -1230,11 +1246,9 @@ def test_multinode_work_runtime_injects_only_current_phase_broker(
         assert shim.read_text().startswith("#!/usr/bin/env python3\n")
         command = runtime._base_command(
             devices=runtime.work_devices,
-            environment=None,
             extra_binds=(),
             mount_workspace=True,
             mount_agent_home=True,
-            containall=True,
             network_mode="public",
         )
         pairs = tuple(zip(command, command[1:], strict=False))
@@ -1242,11 +1256,12 @@ def test_multinode_work_runtime_injects_only_current_phase_broker(
             "--bind",
             f"{runtime.work_broker.root}:/run/rsi-harness/torchrun",
         ) in pairs
-        environment = {
-            value.split("=", 1)[0]: value.split("=", 1)[1]
-            for option, value in pairs
-            if option == "--env"
-        }
+        environment = runtime._container_environment(
+            devices=runtime.work_devices,
+            environment=None,
+            mount_agent_home=True,
+            declared="public",
+        )
         assert environment["RSI_MULTINODE_ROOT"] == ("/run/rsi-harness/torchrun")
         assert environment["RSI_LOCAL_WORLD_SIZE"] == "4"
         assert environment["PREPEND_PATH"] == "/usr/local/bin"
@@ -1285,7 +1300,7 @@ def test_claude_runtime_mounts_launcher_and_auth_only_from_node_local_storage(
 
     def fake_run(command, **_options):
         commands.append(tuple(command))
-        return AgentRunResult(exit_code=0, output="2.1.246 (Claude Code)\n")
+        return AgentRunResult(exit_code=0, output="2.1.246 (Claude Code)\n" + PROBE_END)
 
     monkeypatch.setattr(runtime, "_run", fake_run)
 
@@ -1293,11 +1308,9 @@ def test_claude_runtime_mounts_launcher_and_auth_only_from_node_local_storage(
 
     command = runtime._base_command(
         devices=(),
-        environment=None,
         extra_binds=(),
         mount_workspace=True,
         mount_agent_home=True,
-        containall=True,
         network_mode="public",
     )
     bind_values = [
@@ -1380,20 +1393,9 @@ def test_claude_apptainer_environment_uses_private_config_directory(
         _claude_plan(tmp_path),
     )
 
-    command = runtime._base_command(
-        devices=(),
-        environment=None,
-        extra_binds=(),
-        mount_workspace=False,
-        mount_agent_home=False,
-        containall=True,
-        network_mode="public",
+    environment = runtime._container_environment(
+        devices=(), environment=None, mount_agent_home=False, declared="public"
     )
-    environment = {
-        value.split("=", 1)[0]: value.split("=", 1)[1]
-        for option, value in zip(command, command[1:], strict=False)
-        if option == "--env"
-    }
 
     assert environment["CLAUDE_CONFIG_DIR"] == "/home/agent/.claude"
 
@@ -1415,11 +1417,9 @@ def test_apptainer_network_policy_is_enforced_fail_closed(
     )
     options = {
         "devices": (),
-        "environment": None,
         "extra_binds": (),
         "mount_workspace": False,
         "mount_agent_home": False,
-        "containall": True,
     }
 
     isolated = runtime._base_command(**options, network_mode="no-network")
@@ -1439,11 +1439,9 @@ def test_apptainer_network_policy_is_enforced_fail_closed(
     public_pairs = tuple(zip(public, public[1:], strict=False))
     assert ("--bind", "/proj:/proj") not in isolated_pairs
     assert ("--bind", "/proj:/proj") not in public_pairs
-    isolated_environment = {
-        value.split("=", 1)[0]: value.split("=", 1)[1]
-        for option, value in isolated_pairs
-        if option == "--env"
-    }
+    isolated_environment = runtime._container_environment(
+        devices=(), environment=None, mount_agent_home=False, declared="no-network"
+    )
     assert isolated_environment["HF_HOME"] == "/tmp/.cache/huggingface"
     assert (
         isolated_environment["HF_DATASETS_CACHE"] == "/tmp/.cache/huggingface/datasets"
@@ -1473,11 +1471,9 @@ def test_no_network_agent_command_uses_private_provider_and_submit_relays(
     try:
         base = runtime._base_command(
             devices=(),
-            environment=None,
             extra_binds=(),
             mount_workspace=True,
             mount_agent_home=True,
-            containall=True,
             network_mode="no-network",
         )
         assert (
@@ -1594,6 +1590,58 @@ def _codex_runtime(tmp_path: Path, monkeypatch, **payload) -> ApptainerAgentRunt
     )
 
 
+@pytest.mark.parametrize(
+    ("exit_code", "output"),
+    [
+        (127, ""),
+        (0, "codex-cli 0.148.0\n"),
+        (0, "codex-cli 0.149.01\n"),
+        (0, "codex-cli 0.149.0-beta.1\n"),
+        (0, "codex-cli 0.149.0\nwrapper 1.2.3\n"),
+        (0, ""),
+    ],
+)
+def test_agent_binary_probe_explains_unusable_container_cli(
+    tmp_path, monkeypatch, exit_code, output
+):
+    binary = tmp_path / "host-wrapper"
+    runtime = _codex_runtime(tmp_path, monkeypatch, agent_binary=binary)
+    calls = []
+
+    def run(command, **options):
+        calls.append((command, options))
+        return AgentRunResult(exit_code=exit_code, output=output)
+
+    monkeypatch.setattr(runtime, "_run", run)
+    with pytest.raises(InfrastructureError) as caught:
+        runtime._smoke_agent()
+    message = str(caught.value)
+    assert str(binary) in message
+    assert f"exited {exit_code}" in message
+    assert "expected '0.149.0'" in message
+    assert "host-only wrappers" in message
+    assert calls[0][0] == ("/usr/local/bin/codex", "--version")
+    assert calls[0][1]["timeout_seconds"] == 60
+
+
+@pytest.mark.parametrize(
+    "output",
+    [
+        "codex-cli 0.149.0\n",
+        "Wrapper starting CLI\ncodex-cli v0.149.0\n",
+        "CLI 0.149.0\nversion 0.149.0\n",
+    ],
+)
+def test_agent_binary_probe_accepts_exact_version_with_banner(
+    tmp_path, monkeypatch, output
+):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        runtime, "_run", lambda *_a, **_kw: AgentRunResult(exit_code=0, output=output)
+    )
+    runtime._smoke_agent()
+
+
 def test_resumed_initialize_reuses_the_run_directories_and_seeds_nothing(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1602,7 +1650,7 @@ def test_resumed_initialize_reuses_the_run_directories_and_seeds_nothing(
 
     def fake_run(command, **_options):
         calls.append(tuple(command))
-        return AgentRunResult(exit_code=0, output="0.149.0\n")
+        return AgentRunResult(exit_code=0, output="0.149.0\n" + PROBE_END)
 
     monkeypatch.setattr(runtime, "_run", fake_run)
     runtime.initialize()
@@ -1619,7 +1667,9 @@ def test_resumed_initialize_reuses_the_run_directories_and_seeds_nothing(
 
     resumed.initialize(resume=True)
 
-    assert calls == [("/usr/local/bin/codex", "--version")]
+    # The smoke check, then the isolation probe; no seed.
+    assert calls[0] == ("/usr/local/bin/codex", "--version")
+    assert [call[:2] for call in calls[1:]] == [("/bin/sh", "-c")]
     assert (resumed.workspace / "answer.py").read_text() == "answer = 42\n"
     assert (resumed.agent_home / ".codex").is_dir()
     assert (resumed.rounds / "agent-1").is_dir()
@@ -1651,7 +1701,7 @@ def test_resumed_initialize_seeds_a_run_that_never_finished_seeding(
 
     def fake_run(command, **_options):
         calls.append(tuple(command))
-        return AgentRunResult(exit_code=0, output="0.149.0\n")
+        return AgentRunResult(exit_code=0, output="0.149.0\n" + PROBE_END)
 
     monkeypatch.setattr(runtime, "_run", fake_run)
 
@@ -1794,3 +1844,357 @@ def test_a_cancelled_run_stops_its_process_group_before_reading_its_output(
     while _process_state(child) not in (None, "Z"):
         assert time.monotonic() < deadline
         time.sleep(0.05)
+
+
+class _RecordingPopen:
+    """Stands in for subprocess.Popen in _run: records argv and environment."""
+
+    calls: list[tuple[tuple[str, ...], dict[str, str]]] = []
+
+    def __init__(self, argv, *, env, **_options) -> None:
+        self.calls.append((tuple(argv), dict(env)))
+        self.stdout = iter(())
+        self.returncode = 0
+        self.pid = 0
+
+    def wait(self, timeout=None) -> int:
+        return 0
+
+
+def test_every_exec_is_contained_and_ignores_inherited_apptainer_settings(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    for name in (
+        "APPTAINER_BINDPATH",
+        "SINGULARITY_BINDPATH",
+        "APPTAINER_NO_MOUNT",
+        "APPTAINERENV_FORGED",
+    ):
+        monkeypatch.setenv(name, "/oak")
+    monkeypatch.setenv("APPTAINER_TMPDIR", "/lscratch/build-tmp")
+    monkeypatch.setenv("APPTAINER_CACHEDIR", "/scratch/cache")
+    monkeypatch.setattr(_RecordingPopen, "calls", [])
+    monkeypatch.setattr(subprocess, "Popen", _RecordingPopen)
+
+    runtime._seed()
+    runtime._run(
+        ("true",),
+        devices=(),
+        network_mode="public",
+        environment={"OPENAI_API_KEY": "sk-never-in-argv", "LIST": "a,b"},
+        timeout_seconds=5,
+    )
+
+    (seed, _), (image_tmp, _), (agent, environment) = _RecordingPopen.calls
+    for argv in (seed, image_tmp, agent):
+        assert argv.count("--containall") == 1
+        pairs = tuple(zip(argv, argv[1:], strict=False))
+        assert ("--bind", "/etc/resolv.conf:/etc/resolv.conf:ro") in pairs
+        no_mount = [value for option, value in pairs if option == "--no-mount"]
+        assert no_mount == (["hostfs,tmp"] if argv is image_tmp else ["hostfs"])
+        assert "--env" not in argv
+    assert not any(bind.endswith(":/tmp") for bind in image_tmp)
+    assert "sk-never-in-argv" not in " ".join(agent)
+    assert environment["APPTAINERENV_OPENAI_API_KEY"] == "sk-never-in-argv"
+    assert environment["APPTAINERENV_LIST"] == "a,b"
+    assert environment["APPTAINER_TMPDIR"] == "/lscratch/build-tmp"
+    assert environment["APPTAINER_CACHEDIR"] == "/scratch/cache"
+    assert (
+        not {
+            "APPTAINER_BIND",
+            "APPTAINER_BINDPATH",
+            "SINGULARITY_BINDPATH",
+            "APPTAINER_NO_MOUNT",
+            "APPTAINERENV_FORGED",
+        }
+        & environment.keys()
+    )
+
+
+def _capture_verbose_codex_result(tmp_path, monkeypatch, *, multiline=True):
+    """Exercise production capture with only the Apptainer launcher replaced."""
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    session = "01a16125-90ff-70a0-8d09-1a36fffb91d0"
+    header = f"OpenAI Codex v0.159.2\nsession id: {session}\nprivate-secret 中文\n"
+    terminal = "ERROR: Selected model is at capacity. Please try a different model.\n"
+    row = "x" * 998 + "🧪" + ("\n" if multiline else "")
+    trailer = "\nprivate-secret END中文\n" + terminal
+    script = (
+        "import sys; "
+        f"sys.stdout.buffer.write({header.encode()!r}); "
+        f"sys.stdout.buffer.write({row.encode()!r} * 16010); "
+        f"sys.stdout.buffer.write({trailer.encode()!r}); sys.exit(1)"
+    )
+    monkeypatch.setattr(
+        runtime, "_base_command", lambda **_options: (sys.executable, "-c", script)
+    )
+    monkeypatch.setattr(runtime, "_network_command", lambda command, **_o: ())
+    output = tmp_path / "complete-output.log"
+    output.write_text("prior attempt\n")
+    streamed = []
+    result = runtime._run(
+        (),
+        devices=(),
+        network_mode="public",
+        timeout_seconds=30,
+        output_path=output,
+        output_redact_values=("private-secret",),
+        output_callback=streamed.append,
+    )
+    expected = header + row * 16010 + trailer
+    from rsi_harness.cluster.bluevela.runtime import _safe_output
+
+    expected = _safe_output(expected, {"private-secret"})
+    return result, output, streamed, expected
+
+
+@pytest.mark.parametrize("multiline", [False, True])
+def test_apptainer_capture_retains_verbose_header_and_terminal_error(
+    tmp_path, monkeypatch, multiline
+):
+    result, output, streamed, expected = _capture_verbose_codex_result(
+        tmp_path, monkeypatch, multiline=multiline
+    )
+    assert len(expected.encode()) > 16_000_000
+    assert result.exit_code == 1
+    assert not result.timed_out
+    assert result.output_truncated
+    # Feedback is bounded, but the complete verifier log is persisted.
+    assert result.full_output_captured
+    assert len(result.output.encode()) <= 16_000_000
+    assert result.output.startswith("OpenAI Codex v0.159.2\nsession id: ")
+    assert result.output.endswith("Please try a different model.\n")
+    assert "中文" in result.output and "END中文" in result.output
+    assert "�" not in result.output
+    assert "private-secret" not in result.output
+    assert output.read_text() == "prior attempt\n" + expected
+    assert "".join(streamed) == expected
+
+
+@pytest.mark.parametrize("directory", [False, True])
+def test_apptainer_copy_to_owns_temporary_sources_and_replaces_prior_copy(
+    tmp_path, monkeypatch, directory
+):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    source = tmp_path / "temporary-source"
+    if directory:
+        source.mkdir()
+        (source / "script.sh").write_text("first\n")
+        (source / "script.sh").chmod(0o750)
+    else:
+        source.write_text("first\n")
+        source.chmod(0o750)
+    target = PurePosixPath("/tmp/copied-input")
+    runtime.copy_to(runtime.work_ref, source, target)
+    staged = runtime._copies[target]
+    original = source / "script.sh" if directory else source
+    copied = staged / "script.sh" if directory else staged
+    original.write_text("source changed\n")
+    assert copied.read_text() == "first\n"
+    assert copied.stat().st_mode & 0o777 == 0o750
+    if directory:
+        import shutil
+
+        shutil.rmtree(source)
+    else:
+        source.unlink()
+    assert copied.read_text() == "first\n"
+    assert staged.is_relative_to(runtime.node_tmp / "copied-inputs")
+    command = runtime._base_command(
+        devices=(),
+        extra_binds=(),
+        mount_workspace=True,
+        mount_agent_home=True,
+        network_mode="public",
+    )
+    assert f"{staged}:{target}:ro" in command
+
+    # A repeated copy may change the source type. It replaces only its own
+    # staged input, leaving no old directory or stale content behind.
+    source.write_text("replacement\n")
+    runtime.copy_to(runtime.work_ref, source, target)
+    assert not staged.exists()
+    assert runtime._copies[target].read_text() == "replacement\n"
+    assert len(list((runtime.node_tmp / "copied-inputs").iterdir())) == 1
+
+
+def test_apptainer_copy_to_failure_preserves_prior_bind_and_builtin_source(
+    tmp_path, monkeypatch
+):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    builtin = tmp_path / "built-in-agent"
+    builtin.write_text("CLI")
+    target = PurePosixPath("/usr/local/bin/agent")
+    runtime._copies[target] = builtin
+    source = tmp_path / "source"
+    source.write_text("replacement")
+    runtime.copy_to(runtime.work_ref, source, target)
+    assert builtin.read_text() == "CLI"
+    staged = runtime._copies[target]
+    with pytest.raises(FileNotFoundError):
+        runtime.copy_to(runtime.work_ref, tmp_path / "missing", target)
+    assert runtime._copies[target] == staged
+    assert staged.read_text() == "replacement"
+    assert len(list((runtime.node_tmp / "copied-inputs").iterdir())) == 1
+
+
+def test_apptainer_copy_to_preserves_directory_symlinks_without_dereferencing_host(
+    tmp_path, monkeypatch
+):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    source = tmp_path / "source-tree"
+    source.mkdir()
+    (source / "local").write_text("local payload")
+    (source / "relative").symlink_to("local")
+    (source / "dangling").symlink_to("container-created-later")
+    outside = tmp_path / "host-only"
+    outside.write_text("host-only bytes")
+    outside.chmod(0o600)
+    (source / "absolute").symlink_to(outside)
+    target = PurePosixPath("/tmp/tree")
+
+    runtime.copy_to(runtime.work_ref, source, target)
+
+    copied = runtime._copies[target]
+    for name in ("relative", "dangling", "absolute"):
+        assert (copied / name).is_symlink()
+        assert (copied / name).readlink() == (source / name).readlink()
+    assert (copied / "local").read_text() == "local payload"
+    assert outside.read_text() == "host-only bytes"
+    assert outside.stat().st_mode & 0o777 == 0o600
+
+
+def test_apptainer_copy_to_cleans_readonly_tree_on_replacement_and_failed_copy(
+    tmp_path, monkeypatch
+):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    source = tmp_path / "read-only-source"
+    nested = source / "nested"
+    nested.mkdir(parents=True)
+    (nested / "file").write_text("payload")
+    nested.chmod(0o555)
+    source.chmod(0o555)
+    target = PurePosixPath("/tmp/tree")
+    runtime.copy_to(runtime.work_ref, source, target)
+    previous = runtime._copies[target]
+    assert previous.stat().st_mode & 0o777 == 0o555
+    runtime.copy_to(runtime.work_ref, source, target)
+    assert not previous.exists()
+    current = runtime._copies[target]
+
+    def fail_after_partial_readonly_copy(_source, destination, **_options):
+        nested = destination / "nested"
+        nested.mkdir(parents=True)
+        (nested / "file").write_text("partial")
+        nested.chmod(0o555)
+        destination.chmod(0o555)
+        raise OSError("copy failed")
+
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.runtime.shutil.copytree",
+        fail_after_partial_readonly_copy,
+    )
+    with pytest.raises(OSError, match="copy failed"):
+        runtime.copy_to(runtime.work_ref, source, target)
+    assert runtime._copies[target] == current
+    assert (current / "nested/file").read_text() == "payload"
+    assert len(list((runtime.node_tmp / "copied-inputs").iterdir())) == 1
+    assert source.stat().st_mode & 0o777 == 0o555
+    assert (source / "nested").stat().st_mode & 0o777 == 0o555
+
+
+def test_host_controller_persists_output_beyond_feedback_limit(tmp_path, monkeypatch):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    output = tmp_path / "controller.log"
+    script = (
+        "import sys; sys.stdout.buffer.write(b'x'*20_000_000 + b'END'); sys.exit(7)"
+    )
+    result = runtime._run_host_controller(
+        (sys.executable, "-c", script), timeout_seconds=20, output_path=output
+    )
+    assert result.exit_code == 7 and not result.timed_out
+    assert result.output_truncated and result.full_output_captured
+    assert len(result.output.encode()) <= 16_000_000
+    assert result.output.endswith("END")
+    assert output.stat().st_size == 20_000_003
+
+
+@pytest.mark.parametrize("stop_failure", ["timeout", "oserror", "nonzero"])
+def test_host_controller_timeout_always_reaps_and_keeps_logs(
+    tmp_path, monkeypatch, stop_failure
+):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    output = tmp_path / "controller.log"
+    pid_file = tmp_path / "pid"
+    script = (
+        "import os, time; from pathlib import Path; "
+        f"Path({str(pid_file)!r}).write_text(str(os.getpid())); "
+        "print('started', flush=True); time.sleep(60)"
+    )
+    from rsi_harness.cluster.bluevela import runtime as module
+
+    monkeypatch.setattr(module, "stop_command", lambda *a, **k: ("stop",))
+
+    def failed_stop(*args, **kwargs):
+        if stop_failure == "timeout":
+            raise subprocess.TimeoutExpired("stop", 20)
+        if stop_failure == "oserror":
+            raise OSError("cannot launch stop")
+        return subprocess.CompletedProcess(args[0], 3)
+
+    monkeypatch.setattr(module.subprocess, "run", failed_stop)
+    result = runtime._run_host_controller(
+        (sys.executable, "-c", script), timeout_seconds=0.5, output_path=output
+    )
+    assert result.timed_out and result.full_output_captured
+    assert result.exit_code == -signal.SIGTERM
+    assert "started" in output.read_text() and "controller stop" in output.read_text()
+    with pytest.raises(ProcessLookupError):
+        os.kill(int(pid_file.read_text()), 0)
+
+
+def test_native_evaluator_does_not_claim_incomplete_logs_are_complete(tmp_path):
+    plan = make_run_plan(tmp_path)
+    writer = RunArtifactWriter(plan, run_id="native-run")
+    writer.start()
+    runtime = _Runtime(tmp_path)
+    original = runtime.run_judge
+
+    def incomplete(*args, **kwargs):
+        original(*args, **kwargs)
+        return AgentRunResult(exit_code=0, output="partial", full_output_captured=False)
+
+    runtime.run_judge = incomplete
+    request = EvaluationRequest(
+        run_plan=plan,
+        work_container=ContainerRef(container_id="work", role="work"),
+        round_id="agent-1",
+        verifier_logs=writer.root / "verifier/agent-1",
+        verifier_output=writer.feedback_root / "agent-1.log",
+    )
+    with pytest.raises(OSError, match="complete verifier output capture"):
+        NativeJudgeEvaluator(runtime, writer).evaluate(request, _Observer())
+    report = json.loads((writer.root / "submissions/agent-1/report.json").read_text())
+    assert report["full_output_captured"] is False
+
+
+def test_host_controller_escalates_a_stubborn_process_to_kill(tmp_path, monkeypatch):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    from rsi_harness.cluster.bluevela import runtime as module
+
+    monkeypatch.setattr(
+        module, "stop_command", lambda *a, **k: (sys.executable, "-c", "pass")
+    )
+    result = runtime._run_host_controller(
+        (
+            sys.executable,
+            "-c",
+            "import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+            "print('ready', flush=True); time.sleep(60)",
+        ),
+        timeout_seconds=0.5,
+        output_path=tmp_path / "controller.log",
+    )
+    assert result.timed_out and result.exit_code == -signal.SIGKILL
+    assert result.full_output_captured and "ready" in result.output

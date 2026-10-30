@@ -104,6 +104,30 @@ if mode == "probe":
     found = {{name: attempt(path, how) for name, (path, how) in probe.items()}}
     with open(os.environ["FAKE_RECORD"], "a") as log:
         log.write(json.dumps({{"probe": found}}) + "\n")
+if mode == "kernel":
+    # What the call's filter refuses, and whether rsi-agent can be traced.
+    import ctypes, socket
+    def attempt(action):
+        try:
+            action().close()
+            return "ok"
+        except OSError as error:
+            return error.strerror
+    libc = ctypes.CDLL(None, use_errno=True)
+    add_key = {{"x86_64": 248, "aarch64": 217}}[os.uname().machine]
+    created = libc.syscall(add_key, b"user", b"rsi", b"x", 1, -4)
+    pid = os.getpid()
+    while b"rsi_agent.py" not in open("/proc/%d/cmdline" % pid, "rb").read():
+        pid = int(open("/proc/%d/stat" % pid).read().rpartition(") ")[2].split()[1])
+    found = {{
+        "inet": attempt(lambda: socket.socket(socket.AF_INET)),
+        "netlink_route": attempt(lambda: socket.socket(16, socket.SOCK_RAW, 0)),
+        "netlink_usersock": attempt(lambda: socket.socket(16, socket.SOCK_RAW, 2)),
+        "add_key": "ok" if created >= 0 else os.strerror(ctypes.get_errno()),
+        "rsi_agent_environ_uid": os.stat("/proc/%d/environ" % pid).st_uid,
+    }}
+    with open(os.environ["FAKE_RECORD"], "a") as log:
+        log.write(json.dumps({{"kernel": found}}) + "\n")
 if mode == "daemon":
     # A double-forked daemon in a new session outlives the Agent's group.
     if os.fork() == 0:
@@ -1536,6 +1560,94 @@ def test_a_confined_call_reads_and_writes_only_its_own(judge, tmp_path):
 
 
 @requires_landlock
+def test_a_confined_call_has_no_keyrings_or_usersock_and_cannot_trace(judge, tmp_path):
+    judge.spec("codex", mode="kernel")
+
+    result, _ = _exec(judge, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    found = next(line["kernel"] for line in judge.calls() if "kernel" in line)
+    denied = "Operation not permitted"
+    assert found == {
+        "inet": "ok",
+        "netlink_route": "ok",
+        "netlink_usersock": denied,
+        "add_key": denied,
+        # Not dumpable: its /proc files belong to root.
+        "rsi_agent_environ_uid": 0,
+    }
+
+
+def test_userns_hides_the_state_logins_and_their_aliases(monkeypatch, tmp_path):
+    shared = _program().isolation
+    program = shared.seccomp_program(
+        no_network=False, truncate_guard=False, namespace_guard=True
+    )
+    monkeypatch.setattr(shared, "mount_aliases", lambda paths: ["/srv/tests-copy"])
+    spec = {
+        "hidden": ["/logs/verifier", "/tests"],
+        "credentials": [{"source": "/store/.codex/auth.json", "target": "a"}],
+        "writable": ["/logs/record.jsonl"],
+    }
+    job = "/run/rsi-agent/jobs/1"
+
+    plan = _program()._userns_plan(spec, "/run/rsi-agent", [job], job, program)
+
+    assert plan == {
+        "hide": [
+            "/logs/verifier",
+            "/tests",
+            "/run/rsi-agent",
+            "/store/.codex/auth.json",
+            "/srv/tests-copy",
+        ],
+        "write": [job, "/logs/record.jsonl"],
+        "cwd": job,
+        "shm": True,
+        "filter": program.hex(),
+    }
+    module = _program()
+    monkeypatch.setattr(module.isolation, "mount_aliases", lambda paths: ["/srv"])
+    with pytest.raises(module.Failure) as refused:
+        module._userns_plan(spec, "/run/rsi-agent", ["/srv/work"], job, program)
+    assert refused.value.code == 2
+
+
+def test_landlock_never_grants_another_mount_of_a_hidden_path(monkeypatch):
+    module = _program()
+    shared = module.isolation
+    seen = []
+
+    class Ruleset:
+        handled = 1
+
+        def __init__(self, *_args, **_options):
+            pass
+
+        def allow(self, path, access):
+            del path, access
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(shared, "Ruleset", Ruleset)
+    monkeypatch.setattr(shared, "allow_devices", lambda ruleset: None)
+    monkeypatch.setattr(
+        shared, "readable_paths", lambda hidden: seen.extend(hidden) or []
+    )
+    monkeypatch.setattr(shared, "mount_aliases", lambda paths: ["/data/verifier"])
+    spec = {"hidden": ["/logs/verifier"]}
+
+    module.call_ruleset(None, 4, spec, "/run/rsi-agent", ["/tmp/job"])
+
+    assert seen == ["/logs/verifier", "/run/rsi-agent", "/data/verifier"]
+    with pytest.raises(module.Failure) as refused:
+        module.call_ruleset(None, 4, spec, "/run/rsi-agent", ["/data"])
+    assert refused.value.code == 2
+    assert "another mount of a hidden path" in refused.value.message
+
+
+@requires_landlock
 def test_a_daemon_the_agent_left_behind_is_killed(judge, tmp_path):
     child = tmp_path / "daemon.pid"
     judge.spec("codex", mode="daemon", FAKE_CHILD=str(child))
@@ -1559,6 +1671,7 @@ def test_without_root_or_landlock_the_call_fails_closed(monkeypatch):
     shared = program.isolation
     monkeypatch.setattr(shared, "landlock_abi", lambda _libc: (0, "ENOSYS"))
     monkeypatch.setattr(shared, "uid_mode_problem", lambda *_args: "euid 1000")
+    monkeypatch.setattr(shared, "userns_problem", lambda: "unshare: EPERM")
     # The Judge's environment never chooses: a task's image can set it.
     monkeypatch.setenv("RSI_JUDGE_ISOLATION_FALLBACK", "same-user")
 
@@ -1568,6 +1681,7 @@ def test_without_root_or_landlock_the_call_fails_closed(monkeypatch):
     assert failure.value.code == 3
     assert "Landlock is unavailable" in failure.value.message
     assert "ENOSYS" in failure.value.detail
+    assert "user namespaces: unshare: EPERM" in failure.value.detail
     # Only the operator's fallback, from the launch spec, allows it.
     fallback = program.isolation_mode({**spec, "isolation_fallback": "same-user"}, libc)
     assert fallback["mode"] == "same_user"
@@ -1599,6 +1713,10 @@ def test_the_same_user_fallback_runs_with_a_warning(judge, tmp_path):
             "def landlock_abi(libc) -> tuple:",
             "def landlock_abi(libc) -> tuple:\n    return 0, 'ENOSYS'\n\n\n"
             "def _unused_landlock_abi(libc) -> tuple:",
+        ).replace(
+            "def userns_problem() -> str | None:",
+            "def userns_problem() -> str | None:\n    return 'off'\n\n\n"
+            "def _unused_userns_problem() -> str | None:",
         )
     )
     spec = judge.spec("codex")

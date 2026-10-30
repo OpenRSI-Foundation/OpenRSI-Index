@@ -15,6 +15,7 @@ import pytest
 from rsi_harness.runtime.sandbox_contracts import SandboxError
 from tests.runtime.test_sandbox import kit as kit
 from tests.runtime.test_sandbox_server import _connect, _wait_for, _wire_request
+from tests.runtime.test_sandbox_server import bounded_send_buffer as bounded_send_buffer
 
 
 @pytest.fixture
@@ -144,7 +145,7 @@ def test_parent_resume_uses_bounded_control_transport(lifecycle, tmp_path):
 
 @pytest.mark.parametrize("read_responses", [False, True])
 def test_immediate_judge_handoff_reclaims_completed_work_transports(
-    lifecycle, kit, monkeypatch, read_responses
+    lifecycle, kit, monkeypatch, read_responses, bounded_send_buffer
 ):
     from rsi_harness.integrations.sandbox_client import ProtocolError, SandboxClient
     from rsi_harness.runtime.sandbox_contracts import SandboxBundleEntry

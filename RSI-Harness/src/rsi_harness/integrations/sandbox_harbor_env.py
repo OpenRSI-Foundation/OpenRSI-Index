@@ -290,8 +290,8 @@ class ManagedSandboxEnvironment(ComposeServiceOpsMixin, BaseEnvironment):
     @override
     def capabilities(self) -> EnvironmentCapabilities:
         allowlist = "allowlist" in self._grant["network"]
-        # The broker resolves exact hostnames; it cannot enforce wildcards,
-        # and env bridges have no IPv6.
+        # Exact hostnames only (the Docker broker resolves them, E2B matches
+        # TLS SNI and HTTP Host): no wildcards, and env bridges have no IPv6.
         return EnvironmentCapabilities(
             docker_compose=True,
             mounted=False,
@@ -500,6 +500,7 @@ class ManagedSandboxEnvironment(ComposeServiceOpsMixin, BaseEnvironment):
                     _SIDECAR_MEMORY_MB, self._limits["memory_mb_per_container"]
                 ),
                 drop_targets=LOG_TARGETS,
+                backend=self._grant.get("backend"),
             )
         except compose.ComposeError as error:
             raise ValueError(f"environment compose: {error}") from None

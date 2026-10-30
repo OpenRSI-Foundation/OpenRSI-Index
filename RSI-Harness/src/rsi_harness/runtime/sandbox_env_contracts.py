@@ -63,7 +63,7 @@ ImageHandle = Annotated[str, Field(pattern=r"^i[0-9a-f]{32}$")]
 BuilderId = Annotated[str, Field(pattern=r"^b[0-9a-f]{32}$")]
 ImageId = Annotated[str, Field(pattern=r"^sha256:[0-9a-f]{64}$")]
 ObjectId = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
-E2BSandboxId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")]
+RemoteSandboxId = Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")]
 Digest = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 ServiceName = Annotated[str, Field(pattern=r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}$")]
 VolumeName = Annotated[str, Field(pattern=r"^[a-z0-9][a-z0-9_.-]{0,62}$")]
@@ -511,8 +511,9 @@ class SandboxEnvServiceLease(SandboxModel):
     image: ImageHandle
     image_id: ImageId
     container_id: ObjectId | None = None
-    # E2B envs (SandboxEnvLease.backend "e2b"): the sandbox, never a container.
-    sandbox_id: E2BSandboxId | None = None
+    # Remote envs (SandboxEnvLease.backend not docker): the sandbox, never a
+    # container.
+    sandbox_id: RemoteSandboxId | None = None
     state: Literal["planned", "created", "running", "paused", "exited", "removed"] = (
         "planned"
     )
@@ -552,8 +553,8 @@ class SandboxEnvLease(SandboxModel):
     owner: SandboxOwner
     env_id: EnvId
     spec_sha256: Digest
-    # Where the services run; "e2b" envs have no bridge, rule or volume.
-    backend: Literal["docker", "e2b"] = "docker"
+    # Where the services run; remote envs have no bridge, rule or volume.
+    backend: Literal["docker", "e2b", "modal", "daytona"] = "docker"
     state: EnvState = "planned"
     reason: EnvReason | None = None
     created_at: Annotated[float, Field(ge=0, allow_inf_nan=False)]
@@ -588,11 +589,13 @@ class SandboxEnvLease(SandboxModel):
             raise ValueError("env network and rule must match env identity")
         if self.network_id is not None and self.network_name is None:
             raise ValueError("env network identity requires a planned bridge")
-        if self.backend == "e2b":
+        if self.backend != "docker":
+            env = f"{'an' if self.backend[0] in 'aeiou' else 'a'} {self.backend} env"
             if self.network_name is not None or self.volumes:
-                raise ValueError("an e2b env has no bridge, rule or volume")
+                raise ValueError(f"{env} has no bridge, rule or volume")
             if any(service.container_id is not None for service in self.services):
-                raise ValueError("an e2b env service is an E2B sandbox")
+                sandbox = "an E2B" if self.backend == "e2b" else f"a {self.backend}"
+                raise ValueError(f"{env} service is {sandbox} sandbox")
         # A "none" env gets an internal bridge only when services must talk;
         # that choice is the broker's, so either shape is recoverable here.
         elif self.network_mode != "none" and self.network_name is None:

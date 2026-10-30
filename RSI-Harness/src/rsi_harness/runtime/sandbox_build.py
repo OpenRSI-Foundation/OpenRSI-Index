@@ -1170,6 +1170,11 @@ class BuildService:
     keeps running across a Work freeze because no caller code runs in it.
     """
 
+    # Contexts keep symlinks (BuildKit resolves them inside the builder);
+    # built images are run-owned records.
+    symlinks = True
+    lease_kind = "built"
+
     def __init__(
         self,
         envs: Any,
@@ -1202,6 +1207,12 @@ class BuildService:
         self._spool.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self._spool, 0o700)
         return self._spool / f"{job_id}.tar"
+
+    def admit(
+        self, staged: BuildInput, path: Path, options: Mapping[str, Any], network: str
+    ) -> None:
+        """Nothing beyond the input's own checks: BuildKit builds any
+        Dockerfile."""
 
     def _record(self, session: Any) -> _SessionBuilder:
         """Under the broker lock."""

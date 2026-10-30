@@ -20,6 +20,26 @@ account = "rsi"
 # constraint = "a100"
 exclusive = true
 poll_seconds = 10.0
+# Sites with TmpDisk=0 can omit the scheduler's --tmp request. Real scratch
+# requirements are still checked inside build and Engine jobs.
+# request_tmp = false
+# Optional per-allocation limit, HH:MM. Single-node research can resume under
+# the same total budget after an early signal drains Judge and closes Work.
+# run_walltime_limit = "12:00"
+# Sites that document only --gpus: request --gpus=N (--gpus-per-node=N on
+# several nodes) instead of --gres=gpu:N.
+# gpu_option = "gpus"
+
+# Image builds can use a different partition/account/QOS/constraint, or request
+# a GPU when the selected build partition rejects GPU-less jobs. CPU and memory
+# still come from [builder]. These settings never change Work/Judge resources.
+# [scheduler.build]
+# partition = "cpu"
+# account = "rsi"
+# qos = "normal"
+# constraint = ""  # clear a run-only constraint
+# gpus = 0
+# exclusive = false
 
 [storage]
 run_root = "/srv/rsi/harness/runs"
@@ -39,6 +59,15 @@ min_tmp_mb = 71680
 rootless_apt_sandbox = true
 faked_binary = "/usr/bin/faked-sysv"
 fakeroot_library = "/usr/lib/x86_64-linux-gnu/libfakeroot/libfakeroot-sysv.so"
+# A Podman that does not find its own helpers, on nodes without rootless
+# overlay or without network/UTS namespaces (max_*_namespaces = 0):
+# conmon = "/opt/podman/bin/conmon"
+# runtime = "/opt/podman/bin/runc"
+# Or, in place of binary, conmon and runtime, the Harness's static Podman,
+# installed into a shared directory before the first build:
+# podman_bundle = "/shared/rsi-harness/podman"
+# storage_driver = "vfs"
+# host_namespaces = ["network", "uts"]
 
 [apptainer]
 mount_policy = "scoped"
@@ -54,6 +83,13 @@ workspace_target = "/testbed"
 temp_root = "/tmp"
 container_python = "/opt/venv/bin/python"
 rdma_binds = ["/dev/infiniband", "/sys/class/infiniband"]
+# Sites without network namespaces (max_net_namespaces = 0): phases without
+# network get a seccomp filter with no IP sockets instead (Apptainer in its
+# non-setuid mode).
+# network_isolation = "seccomp"
+# Sites whose apptainer.conf disables PID namespaces: Work, seed and Judge get
+# their own PID, IPC and mount namespaces from rsi-box (needs container_python).
+# process_namespaces = "harness"
 
 [apptainer.environment]
 RSI_SHARED_DATA_ROOT = "/rsi-data"

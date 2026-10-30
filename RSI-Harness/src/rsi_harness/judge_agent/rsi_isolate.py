@@ -18,14 +18,21 @@ isolation is chosen automatically: when the Judge is root, the command runs
 as its own unprivileged uid (62000 to 62063, one per concurrent call) with
 no supplementary groups, and the write grants are handed to that uid for the
 call, which caps that uid at 4096 processes and threads; otherwise it keeps
-the Judge's uid and is confined by Landlock (Linux 5.13 or later). Landlock
-also confines a root Judge's command where the kernel has it; where it does
-not, the call fails while /tests or /logs/verifier is open to other users.
-Without root or Landlock the call fails, unless the operator set
-RSI_JUDGE_ISOLATION_FALLBACK=same-user. ``--no-network`` adds a seccomp
-filter without internet sockets. When the command ends, or ``--timeout``
-expires, everything it started is killed. ``rsi-isolate isolation`` prints
-the mode as JSON.
+the Judge's uid and is confined by Landlock (Linux 5.13 or later), or else
+(``userns``) runs in its own user, mount, PID and IPC namespaces, where every
+top-level entry but the system paths and the grants is hidden, everything
+but the write grants is read-only, and /proc and /dev/shm are its own.
+Landlock also confines a root Judge's command where the kernel has it; where
+it does not, the call fails while /tests or /logs/verifier is open to other
+users. Without any of them the call fails, unless the operator set
+RSI_JUDGE_ISOLATION_FALLBACK=same-user. In every mode the command gets no
+kernel keyrings and no netlink socket but NETLINK_ROUTE. ``--no-network``
+allows only AF_UNIX and NETLINK_ROUTE sockets; where the Judge shares a
+network namespace (RSI_JUDGE_NETNS is not "private") AF_UNIX sockets too are
+refused unless Landlock scopes abstract sockets (a stream or seqpacket
+socketpair stays). When the command ends, or ``--timeout`` expires,
+everything it started is killed. ``rsi-isolate isolation`` prints the mode
+as JSON.
 
 Exit status: the command's own (128+N when signal N ended it); 123 the
 command cannot be isolated; 124 timeout; 125 a usage error, a refused grant
@@ -72,6 +79,8 @@ ISOLATE_SLOTS = 64
 # The processes and threads one isolated user may run at once.
 ISOLATE_NPROC = 4096
 FALLBACK_ENV = "RSI_JUDGE_ISOLATION_FALLBACK"
+# "private" when the Judge has its own network namespace (set by RSI Harness).
+NETNS_ENV = "RSI_JUDGE_NETNS"
 SLOT_DIRECTORY = "/tmp/.rsi-isolate-slots"
 PRIVATE_PARENT = "/tmp"
 # Always readable (and executable).
@@ -141,7 +150,7 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--no-network",
         action="store_true",
-        help="refuse internet (AF_INET, AF_INET6) sockets",
+        help="allow only AF_UNIX and NETLINK_ROUTE sockets",
     )
     run.add_argument(
         "--timeout",
@@ -174,8 +183,9 @@ def _parser() -> argparse.ArgumentParser:
         help="print how a command would be isolated, as JSON",
         description=(
             "Print {mode, landlock_abi, fallback}, plus landlock_scoped and "
-            "landlock_signal_scope when Landlock is available; exit 123 when "
-            "a command cannot be isolated."
+            "landlock_signal_scope when Landlock is available, or namespaces, "
+            "proc and shm in userns mode; exit 123 when a command cannot be "
+            "isolated."
         ),
     )
     return parser
@@ -209,14 +219,21 @@ def _open_protected() -> str | None:
 
 
 def isolation_mode(libc) -> dict:
-    """``uid`` (a root Judge), ``landlock``, or the operator's ``same_user``."""
+    """``uid`` (a root Judge), ``landlock``, ``userns``, or the operator's
+    ``same_user``."""
     fallback = "same-user" if os.environ.get(FALLBACK_ENV) == "same-user" else "none"
     problem = isolation.uid_mode_problem(ISOLATE_UID, ISOLATE_SLOTS)
     if problem is None:
         problem = _ids_in_use()
     abi, reason = isolation.landlock_abi(libc)
     mode = isolation.choose_mode(
-        problem, abi, reason, fallback, EXIT_UNAVAILABLE, "the command"
+        problem,
+        abi,
+        reason,
+        fallback,
+        EXIT_UNAVAILABLE,
+        "the command",
+        isolation.userns_problem,
     )
     # Without Landlock only file permissions confine the isolated user.
     opened = _open_protected() if mode["mode"] == "uid" and abi < 1 else None
@@ -428,20 +445,21 @@ def _allow_missing_landlock_signal() -> bool:
 
 
 def _ruleset(libc, abi: int, reads, writes, private: str, executable):
+    read = list(SYSTEM_PATHS) + _interpreter_paths() + list(reads)
+    read += [executable] if executable is not None else []
+    write = list(writes) + [private]
+    # A rule on another mount of what is never granted would open it.
+    isolation.hidden_aliases(NEVER_GRANTED, read + write, EXIT_SETUP)
     ruleset = isolation.Ruleset(
         libc, abi, allow_missing_landlock_signal=_allow_missing_landlock_signal()
     )
     try:
-        for path in list(SYSTEM_PATHS) + _interpreter_paths() + list(reads):
+        for path in read:
             ruleset.allow(path, isolation.FS_READ)
-        if executable is not None and not any(
-            _overlaps(executable, item) for item in NEVER_GRANTED
-        ):
-            ruleset.allow(executable, isolation.FS_READ)
         isolation.allow_devices(ruleset)
         if os.path.isdir("/dev/shm") and not os.path.islink("/dev/shm"):
             ruleset.allow("/dev/shm", ruleset.handled)
-        for path in list(writes) + [private]:
+        for path in write:
             ruleset.allow(path, ruleset.handled)
     except BaseException:
         ruleset.close()
@@ -495,6 +513,50 @@ def _remove_shm(uid: int) -> bool:
     return clean
 
 
+def _deny_unix(no_network: bool, ruleset) -> bool:
+    """--no-network refuses AF_UNIX sockets too where abstract sockets reach
+    beyond the Judge: a shared network namespace without Landlock scoping."""
+    if not no_network or os.environ.get(NETNS_ENV) == "private":
+        return False
+    scope = isolation.LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET
+    return ruleset is None or not ruleset.scoped & scope
+
+
+def _top_level(grants, root: str = "/") -> list:
+    """Entries of ``root`` that are no system path, /dev or grant; symlinks
+    are skipped (they lead to a hidden path or a shown one)."""
+    shown = {os.path.basename(path) for path in SYSTEM_PATHS} | {"dev"}
+    hidden = []
+    for name in sorted(os.listdir(root)):
+        path = os.path.join(root, name)
+        if name not in shown and path not in grants and not os.path.islink(path):
+            hidden.append(path)
+    return hidden
+
+
+def _userns_plan(reads, writes, private, cwd, executable, program) -> dict:
+    """The box of a userns call (judge_isolation.box_argv): only the system
+    paths and the grants show; the write grants and HOME are writable; the
+    other mounts of what is never granted are hidden too."""
+    write = list(writes) + [private]
+    granted = SYSTEM_PATHS + tuple(reads) + tuple(write)
+    extra = [
+        path
+        for path in _interpreter_paths() + ([executable] if executable else [])
+        if not any(_within(path, root) for root in granted)
+    ]
+    read = list(reads) + extra
+    aliases = isolation.hidden_aliases(NEVER_GRANTED, read + write, EXIT_SETUP)
+    return {
+        "hide": _top_level(read + write) + aliases,
+        "read": read,
+        "write": write,
+        "cwd": cwd,
+        "shm": True,
+        "filter": program.hex(),
+    }
+
+
 # -- run ------------------------------------------------------------------------
 
 
@@ -525,7 +587,11 @@ def run(options: argparse.Namespace, command: list) -> int:
     libc = isolation.load_libc()
     mode = isolation_mode(libc)
     uid_mode = mode["mode"] == "uid"
+    userns = mode["mode"] == "userns"
     abi = mode["landlock_abi"]
+    if not uid_mode:
+        # The command runs as this user: it may not read or trace this process.
+        libc.prctl(isolation.PR_SET_DUMPABLE, 0, 0, 0, 0)
     if mode["mode"] == "same_user":
         _say(
             "no filesystem isolation: the operator's same-user fallback runs the "
@@ -572,26 +638,36 @@ def run(options: argparse.Namespace, command: list) -> int:
             for path in writes:
                 handovers.append(_Handover(path, owner))
                 handovers[-1].take()
+        executable = _executable(command[0], environment["PATH"], cwd)
+        if executable is not None and any(
+            _overlaps(executable, item) for item in NEVER_GRANTED
+        ):
+            executable = None
         if abi >= 1:
-            executable = _executable(command[0], environment["PATH"], cwd)
             ruleset = _ruleset(libc, abi, reads, writes, private, executable)
         # Landlock below ABI 3 cannot control truncation: seccomp does.
         truncate_guard = ruleset is not None and abi < 3
+        program = isolation.seccomp_program(
+            no_network=options.no_network,
+            truncate_guard=truncate_guard,
+            trace_guard=mode["mode"] in ("same_user", "userns"),
+            namespace_guard=userns,
+            deny_unix=_deny_unix(options.no_network, ruleset),
+        )
+        argv = command
         seccomp = None
-        if options.no_network or truncate_guard:
-            seccomp = isolation.Seccomp(
-                libc,
-                isolation.seccomp_program(
-                    no_network=options.no_network, truncate_guard=truncate_guard
-                ),
-            )
+        if userns:
+            plan = _userns_plan(reads, writes, private, cwd, executable, program)
+            argv = isolation.box_argv(plan, command)
+        else:
+            seccomp = isolation.Seccomp(libc, program)
         if isolation.Stop.signum is not None:
             raise isolation.Failure(
                 isolation.EXIT_TERMINATED, "terminated before the command started"
             )
         try:
             process = subprocess.Popen(
-                command,
+                argv,
                 env=environment,
                 close_fds=True,
                 pass_fds=pass_fds,

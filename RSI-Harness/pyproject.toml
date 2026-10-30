@@ -26,8 +26,23 @@ dependencies = [
 
 [project.optional-dependencies]
 # The E2B env backend ([environments.host] backend = "e2b"): exact pin, the
-# broker calls an SDK-internal envd RPC (runtime/sandbox_e2b.py).
-e2b = ["e2b==2.52.0"]
+# broker calls an SDK-internal envd RPC (runtime/sandbox_e2b.py). The SDK
+# speaks SOCKS itself; the registry probe's httpx needs the socks extra.
+# dockerfile-parse reads image_build's Dockerfiles (sandbox_e2b_dockerfile).
+e2b = ["e2b==2.52.0", "dockerfile-parse>=2.0.1,<3", "httpx[socks]"]
+# The Modal env backend (backend = "modal"): exact pin, the broker hooks the
+# SDK's proxy lookup (runtime/sandbox_modal.py); api-proxy-support carries
+# its HTTP CONNECT and SOCKS clients. The rest as for e2b.
+modal = [
+  "modal[api-proxy-support]==1.6.3",
+  "dockerfile-parse>=2.0.1,<3",
+  "httpx[socks]",
+]
+# The Daytona env backend (backend = "daytona"): exact pin, the broker hands
+# the SDK's shared session its proxy (runtime/sandbox_daytona.py). The SDK
+# brings the registry probe's httpx; no Dockerfile builds, so no
+# dockerfile-parse.
+daytona = ["daytona==0.227.0"]
 
 [project.scripts]
 rsi-sandbox = "rsi_harness.integrations.sandbox_client:main"
@@ -35,6 +50,8 @@ rsi-harness = "rsi_harness.cli:app"
 
 [dependency-groups]
 test = [
+  # sandbox_e2b_dockerfile's tests (the e2b extra's parser).
+  "dockerfile-parse>=2.0.1,<3",
   "httpx",
   "pytest",
   "pytest-asyncio",
@@ -57,6 +74,8 @@ markers = [
 [tool.ruff]
 target-version = "py312"
 extend-exclude = [
+  # Archived run evidence is data, not source to rewrite with a formatter.
+  "logs",
   "src/rsi_loop",
   # Verbatim Terminal-Bench 2 tasks shipped by the harbor-in-judge sample.
   "sample_tasks/harbor-in-judge/tests/tb2-subset",

@@ -19,6 +19,14 @@ fi
 workdir=$1
 solution=$2
 submissions=${RSI_ORACLE_SUBMISSIONS:-1}
+cleanup=${RSI_ORACLE_SOLUTION_CLEANUP:-launcher}
+case "$cleanup" in
+    launcher | submit) ;;
+    *)
+        echo "rsi-oracle: invalid RSI_ORACLE_SOLUTION_CLEANUP" >&2
+        exit 2
+        ;;
+esac
 case "$submissions" in
     '' | *[!0-9]* | 0*)
         echo "rsi-oracle: RSI_ORACLE_SUBMISSIONS must be a positive integer" >&2
@@ -38,10 +46,14 @@ else
 fi
 echo "rsi-oracle: solve.sh exited $status after $((SECONDS - started))s"
 
+# A distributed backend may own removal at submission, after pausing Work
+# and closing its remote workers. Do not delete their shared code early.
 # The Work user owns SOLUTION_DIR's contents. Unless it runs as root it
 # cannot unlink /solution itself from the root-owned /, so an emptied
 # directory is enough: it carries nothing into a Judge snapshot.
-if ! removal=$(rm -rf -- "$solution" 2>&1); then
+if [ "$cleanup" = submit ]; then
+    echo "rsi-oracle: backend will remove $solution before the Judge"
+elif ! removal=$(rm -rf -- "$solution" 2>&1); then
     if [ -d "$solution" ] && [ ! -L "$solution" ] \
         && [ -z "$(ls -A -- "$solution" 2>/dev/null)" ]; then
         echo "rsi-oracle: emptied $solution (its parent is not writable)"

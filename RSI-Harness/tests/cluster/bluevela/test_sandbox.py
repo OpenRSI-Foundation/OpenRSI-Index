@@ -1,7 +1,7 @@
 """E2B env sandboxes on the cluster backends, over the in-process E2B fake.
 
 The broker, lifecycle, journal and endpoint server are the real ones; the
-E2B SDK (tests/e2b_fake.py), the scheduler and Apptainer are faked.
+E2B SDK (tests/remote_fake.py), the scheduler and Apptainer are faked.
 """
 
 from __future__ import annotations
@@ -51,8 +51,8 @@ from tests.cluster.bluevela.test_adapter import (
     _fake_codex_runtime as _fake_codex_runtime,
 )
 from tests.cluster.bluevela.test_engine import _multi_payload, _payload
-from tests.e2b_fake import FakeE2B
 from tests.factories import make_run_plan, write_harbor_task
+from tests.remote_fake import FAKES, RemoteFake
 from tests.runtime.test_sandbox_budget import authority, make_lease
 from tests.runtime.test_sandbox_e2b import (
     KEY_ENV,
@@ -64,6 +64,7 @@ from tests.runtime.test_sandbox_e2b import (
     pull,
     ready,
     sandbox_of,
+    sdk_installed,
 )
 from tests.sandbox_helpers import (
     env_policy_toml,
@@ -139,6 +140,7 @@ def test_the_adapter_freezes_the_e2b_grant_in_the_engine_payload(
     from tests.cluster.slurm.test_adapter import RecordingSlurmScheduler
 
     monkeypatch.setenv(KEY_ENV, KEY)
+    sdk_installed(monkeypatch)
     profile = _profile(tmp_path)
     scheduler = RecordingScheduler()
     if cls is SlurmClusterAdapter:
@@ -166,6 +168,75 @@ def test_the_adapter_freezes_the_e2b_grant_in_the_engine_payload(
     assert grant.environments.host.backend == "e2b"
     assert grant.environments.host.e2b.api_key_env == KEY_ENV
     assert KEY not in payload_path.read_text()
+
+
+@pytest.mark.parametrize("refusal", ["sdk", "variable", "key", "auth"])
+def test_the_submit_host_checks_its_e2b_setup_before_submit(
+    tmp_path, monkeypatch, refusal
+):
+    """The Engine runs the submit host's interpreter and environment."""
+    from tests.cluster.slurm.test_adapter import RecordingSlurmScheduler
+
+    monkeypatch.setenv(KEY_ENV, KEY)
+    if refusal == "sdk":
+        sdk_installed(monkeypatch, None)
+    else:
+        sdk_installed(monkeypatch)
+    if refusal == "variable":
+        monkeypatch.setenv("E2B_SANDBOX_URL", "https://gw.e2b.example")
+    if refusal == "key":
+        monkeypatch.delenv(KEY_ENV)
+    policy = _e2b_policy(tmp_path)
+    if refusal == "auth":
+        auth = tmp_path / "auth.json"
+        auth.write_text("{")
+        text = e2b_policy_text(
+            e2b=f'api_key_env = "{KEY_ENV}"\nregistry_auth_file = "{auth}"'
+        )
+        policy = load_policy_text(tmp_path, text, "e2b-policy.toml")
+    profile = load_cluster_profile("slurm", {"USER": "alice"}).model_copy(
+        update={"storage": _profile(tmp_path).storage}
+    )
+    scheduler = RecordingSlurmScheduler()
+    adapter = SlurmClusterAdapter(profile, scheduler=scheduler)
+    task = _cluster_task(tmp_path)
+    request = _request(tmp_path, dry_run=False).model_copy(
+        update={"task_dir": task, "sandbox_policy": policy}
+    )
+    expected = {
+        "sdk": r"e2b==.*found none",
+        "variable": "E2B_SANDBOX_URL",
+        "auth": "registry_auth_file .* is unreadable",
+    }
+    for dry_run in (False, True):
+        with pytest.raises(SetupError, match=expected.get(refusal, "holds no key")):
+            adapter.run(request.model_copy(update={"dry_run": dry_run}))
+    assert scheduler.events == []
+    assert not profile.storage.run_root.exists()
+
+
+def test_resume_checks_the_submit_hosts_e2b_setup(tmp_path, monkeypatch):
+    from rsi_harness.runtime.recovery import AttemptGrants
+    from tests.cluster.bluevela.test_resume import ResumeScheduler
+
+    monkeypatch.setenv(KEY_ENV, KEY)
+    sdk_installed(monkeypatch)
+    profile = _profile(tmp_path)
+    scheduler = ResumeScheduler()
+    adapter = BlueVelaClusterAdapter(
+        profile, scheduler=scheduler, agent_version_resolver=lambda _: "1"
+    )
+    task = _cluster_task(tmp_path)
+    request = _request(tmp_path, dry_run=False).model_copy(
+        update={"task_dir": task, "sandbox_policy": _e2b_policy(tmp_path)}
+    )
+    run_id = adapter.run(request).run_id
+    submitted = len(scheduler.specs)
+
+    sdk_installed(monkeypatch, None)
+    with pytest.raises(SetupError, match="found none"):
+        adapter.plan_resume(run_id, AttemptGrants(), dry_run=True)
+    assert len(scheduler.specs) == submitted
 
 
 def test_the_adapter_refuses_docker_envs_and_a_multinode_judge_before_submit(
@@ -265,7 +336,10 @@ def test_the_engine_admits_an_e2b_plan_and_refuses_a_multinode_judge(
 
 def _bound(tmp_path, root, monkeypatch, fake):
     monkeypatch.setenv(KEY_ENV, KEY)
-    grant = e2b_grant(tmp_path)
+    monkeypatch.setenv("RSI_TEST_MODAL_ID", "ak-cluster-id")
+    monkeypatch.setenv("RSI_TEST_MODAL_SECRET", KEY)
+    monkeypatch.setenv("RSI_TEST_DAYTONA_KEY", KEY)
+    grant = e2b_grant(tmp_path, backend=fake.name)
     plan = make_run_plan(tmp_path)
     verifier = plan.task.verifier.model_copy(update={"timeout_seconds": 600})
     plan = plan.model_copy(
@@ -277,7 +351,7 @@ def _bound(tmp_path, root, monkeypatch, fake):
     store = LeaseStore(tmp_path / "leases")
     store.write(make_lease("run-1").model_copy(update={"task_id": plan.task.task_id}))
     sandbox = ClusterSandbox(
-        plan, "run-1", root / "sb", client_factory=lambda key, settings: fake
+        plan, "run-1", root / "sb", client_factory=lambda credentials, settings: fake
     )
     work_dir = sandbox.bind(authority(store))
     return sandbox, plan, store, work_dir
@@ -315,7 +389,7 @@ class _Apptainer:
         del workspace, environment, trajectory
         self.events.append("judge")
         # Work's envs are frozen before Work is paused and the round starts.
-        assert sandbox_of(self.kit, self.work_env).state == "paused"
+        assert sandbox_of(self.kit, self.work_env).paused
         assert (sandbox_endpoint.directory / "s").is_socket()
         assert sandbox_endpoint.owner.round_id == request.round_id
         judge = SimpleNamespace(
@@ -329,16 +403,18 @@ class _Apptainer:
         return AgentRunResult(exit_code=0, output="passed\n", full_output_captured=True)
 
 
+@pytest.mark.parametrize("backend", ["e2b", "modal", "daytona"])
 def test_a_judge_round_freezes_work_envs_and_closes_its_own(
-    tmp_path, short_root, monkeypatch
+    tmp_path, short_root, monkeypatch, backend
 ):
-    fake = FakeE2B(tmp_path / "e2b")
+    fake = RemoteFake(tmp_path / backend, **FAKES[backend])
     try:
         sandbox, plan, store, work_dir = _bound(tmp_path, short_root, monkeypatch, fake)
         lifecycle = sandbox.lifecycle
         try:
             # Where the sandboxes are is durable; the key is only a secret.
-            assert store.read("run-1").sandbox_e2b == plan.sandbox.environments.host.e2b
+            host = plan.sandbox.environments.host
+            assert getattr(store.read("run-1"), f"sandbox_{backend}") == host.remote
             assert KEY in sandbox.secrets
             assert (work_dir / "s").is_socket()
             assert work_dir.parent == short_root / "sb"
@@ -390,7 +466,7 @@ def test_busy_work_envs_make_the_submission_retryable_before_any_pause(
 ):
     from rsi_harness.errors import RetryableSubmissionError
 
-    fake = FakeE2B(tmp_path / "e2b")
+    fake = RemoteFake(tmp_path / "e2b")
     try:
         sandbox, plan, _store, _ = _bound(tmp_path, short_root, monkeypatch, fake)
         events = []
@@ -438,11 +514,9 @@ def test_apptainer_mounts_each_phase_endpoint_and_starts_the_work_deadline(
     def binds(phase):
         command = apptainer._base_command(
             devices=(),
-            environment=None,
             extra_binds=(),
             mount_workspace=True,
             mount_agent_home=phase == "work",
-            containall=True,
             network_mode="no-network",
             phase=phase,
         )
@@ -508,20 +582,12 @@ def test_apptainer_puts_the_endpoint_rsi_sandbox_first_on_path(tmp_path, monkeyp
             if broker
             else None
         )
-        command = apptainer._base_command(
+        return apptainer._container_environment(
             devices=(),
             environment=values,
-            extra_binds=(),
-            mount_workspace=phase == "work",
             mount_agent_home=phase == "work",
-            containall=True,
-            network_mode="no-network",
+            declared="no-network",
             phase=phase,
-        )
-        return dict(
-            value.split("=", 1)
-            for option, value in zip(command, command[1:], strict=False)
-            if option == "--env"
         )
 
     assert environment("work", endpoint)["PREPEND_PATH"] == SANDBOX_TARGET
@@ -537,8 +603,9 @@ def test_apptainer_puts_the_endpoint_rsi_sandbox_first_on_path(tmp_path, monkeyp
 # -- recovery -------------------------------------------------------------------
 
 
-def test_cluster_recovery_kills_the_runs_sandboxes_by_metadata(tmp_path):
-    made, lease, other = _crashed_run(tmp_path)
+@pytest.mark.parametrize("backend", ["e2b", "modal", "daytona"])
+def test_cluster_recovery_kills_the_runs_sandboxes_by_metadata(tmp_path, backend):
+    made, lease, other = _crashed_run(tmp_path, backend)
     try:
         run_root = tmp_path / "runs"
         store = LeaseStore(run_root / "run-1" / "leases")
@@ -546,17 +613,21 @@ def test_cluster_recovery_kills_the_runs_sandboxes_by_metadata(tmp_path):
         (run_root / "unrelated").mkdir()
 
         with store.lock("run-1"), pytest.raises(RuntimeError, match="still live"):
-            recover_cluster_sandboxes(run_root, "run-1", e2b_client=lambda _: made.fake)
+            recover_cluster_sandboxes(
+                run_root, "run-1", remote_client=lambda _: made.fake
+            )
         assert len(made.fake.live()) == 3
 
-        recovered = recover_cluster_sandboxes(run_root, e2b_client=lambda _: made.fake)
+        recovered = recover_cluster_sandboxes(
+            run_root, remote_client=lambda _: made.fake
+        )
 
         assert recovered == ("run-1",)
         assert [box.sandbox_id for box in made.fake.live()] == [other]
         assert store.read("run-1").sandbox_envs == ()
         # Nothing left to kill: a second pass is a no-op that still succeeds.
         assert recover_cluster_sandboxes(
-            run_root, "run-1", e2b_client=lambda _: made.fake
+            run_root, "run-1", remote_client=lambda _: made.fake
         ) == ("run-1",)
     finally:
         made.fake.shutdown()
@@ -598,11 +669,16 @@ def test_compute_nodes_may_reach_e2b_through_a_credential_free_proxy():
     for secret in ("http://user:pass@proxy.example:3128", "ftp://proxy.example"):
         with pytest.raises(ValidationError):
             EnvE2BHost(api_key_env=KEY_ENV, proxy=secret)
+    socks = EnvE2BHost(api_key_env=KEY_ENV, proxy="socks5h://127.0.0.1:1080")
     pytest.importorskip("e2b")
+    import httpx
+
     from rsi_harness.runtime.sandbox_e2b import e2b_client
 
     client = e2b_client(settings, KEY)
     assert client._opts["proxy"] == "http://proxy.example:3128"
+    # The extra brings SOCKS to the registry probe's httpx, as to the SDK.
+    httpx.Client(proxy=socks.proxy).close()
 
 
 def test_run_native_engine_wires_the_sandbox_into_the_coordinator(
@@ -613,7 +689,7 @@ def test_run_native_engine_wires_the_sandbox_into_the_coordinator(
     from dataclasses import dataclass
 
     from rsi_harness.cluster.bluevela import runtime
-    from rsi_harness.cluster.bluevela import sandbox as cluster_sandbox
+    from rsi_harness.runtime import sandbox_e2b
 
     @dataclass(frozen=True)
     class Prepared:
@@ -629,10 +705,12 @@ def test_run_native_engine_wires_the_sandbox_into_the_coordinator(
         captured.update(kwargs)
         raise Stop
 
-    fake = FakeE2B(tmp_path / "e2b")
+    fake = RemoteFake(tmp_path / "e2b")
     monkeypatch.setenv(KEY_ENV, KEY)
     monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(short_root))
-    monkeypatch.setattr(cluster_sandbox, "_default_client", lambda *_: fake)
+    # The backend's own client, as the Engine makes it.
+    backend = sandbox_e2b.BACKEND._replace(client=lambda *_: fake)
+    monkeypatch.setattr(sandbox_e2b, "BACKEND", backend)
     monkeypatch.setattr(runtime, "RunCoordinator", coordinator)
     # Provider URLs come from the Agent login, which CI runners do not have.
     monkeypatch.setattr(runtime, "_agent_provider_urls", lambda *a, **k: ())
@@ -722,7 +800,7 @@ def test_cluster_salvage_kills_the_runs_sandboxes_and_closes_the_run(tmp_path):
             store=store,
             backend=None,  # type: ignore[arg-type]
             managed_root=run_dir,
-            e2b_client=lambda _: made.fake,
+            remote_client=lambda _: made.fake,
         )
 
         with store.lock("run-1"):

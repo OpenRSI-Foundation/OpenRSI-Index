@@ -10,8 +10,9 @@ rounds of the sample through the real ``rsi-agent`` program.
 
 Everything here runs without Docker, a GPU, network, root or an Agent login:
 routes run as the current user, ``rsi-agent`` confines its fake Codex CLI
-with Landlock (as it does for a Judge that is not root), and the trajectory
-comes from the Harness's own capture. Root, the uid drop and the Judge
+(the audit) and its Judge model calls (the reviews, to a fake Responses API
+on loopback) with Landlock, as it does for a Judge that is not root, and the
+trajectory comes from the Harness's own capture. Root, the uid drop and the Judge
 container run in the opt-in Docker test
 (tests/integration/test_science_in_judge_sample.py).
 """
@@ -22,11 +23,14 @@ import dataclasses
 import hashlib
 import importlib.util
 import io
+import ipaddress
 import json
 import os
 import re
 import shlex
 import sys
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -42,10 +46,14 @@ from rsi_harness.models import (
     JUDGE_TRAJECTORY_ROOT,
     AgentPlan,
     CompileOptions,
+    JudgeLLMAuth,
+    JudgeLLMRequest,
     NetworkPolicy,
 )
 from rsi_harness.runtime.judge import PUBLIC_JUDGE_TMP
+from rsi_harness.runtime.judge_llm import resolve_judge_llm
 from rsi_harness.runtime.judge_model_access import build_launch_spec
+from rsi_harness.runtime.network import PinnedEndpoint
 from rsi_harness.runtime.trajectory import (
     TRAJECTORY_FILE_LIMIT_BYTES,
     TRAJECTORY_SCHEMA_VERSION,
@@ -60,9 +68,10 @@ SAMPLE = REPO / "sample_tasks" / "science-ising3d"
 TESTS = SAMPLE / "tests"
 STARTER = SAMPLE / "environment" / "starter"
 RSI_AGENT_PROGRAM = REPO / "src" / "rsi_harness" / "judge_agent" / "rsi_agent.py"
-# sha256 of OpenRSI-X science-task-agent assets/science_judge.py, version 3.
-LIBRARY_SHA256 = "48850c287f88bbe75ee104d6141e724d23b1999f290f37128a331bbba5dcd359"
+# sha256 of OpenRSI-X science-task-agent assets/science_judge.py, version 9.4.
+LIBRARY_SHA256 = "5d5bca020962e41b2a0cdafaddd128b2fe9f3aa2ead47f407c70c48a32f30a8e"
 API_KEY = "sk-synthetic-science-sample-key-4b7a"
+JUDGE_KEY = "sk-synthetic-science-judge-model-key-91c0"
 
 
 def _load_judge():
@@ -96,6 +105,10 @@ def test_the_sample_declares_every_public_judge_capability():
     verifier = definition.verifier
     assert verifier.visibility == "public"
     assert verifier.model_access is True
+    assert (verifier.judge_model, verifier.judge_model_effort) == (
+        "gpt-6-astra",
+        "medium",
+    )
     assert IDS == [f"R{n:02d}" for n in range(1, 27)]
     assert definition.gpu_requirement.count == verifier.gpu_count == 0
     # A public Judge reads only Work's WORKDIR: the candidate lives there.
@@ -113,7 +126,7 @@ def test_the_sample_declares_every_public_judge_capability():
 def test_the_judge_is_the_unchanged_library_with_this_tasks_config():
     library = (TESTS / "science_judge.py").read_bytes()
     assert hashlib.sha256(library).hexdigest() == LIBRARY_SHA256
-    assert SJ.__version__ == "3"
+    assert SJ.__version__ == "9.4"
     assert CONFIG.problems() == []
     assert SJ.validate_rules(TESTS) == []
     assert [(route.name, route.timeout_sec) for route in CONFIG.routes] == [
@@ -247,8 +260,8 @@ def test_the_library_fits_the_public_judge_filesystem():
 
 # -- whole rounds through the real rsi-agent ----------------------------------------
 
-# A stand-in Codex CLI for rsi-agent: answers from the schema and the digests
-# in the prompt, as the plan file says per job, and records each call.
+# A stand-in Codex CLI for rsi-agent exec (the audit): answers from the schema
+# and the digests in the prompt, as the plan file says, and records the call.
 FAKE_CODEX = r"""#!{python}
 import json, os, re, sys
 args = sys.argv[1:]
@@ -279,12 +292,86 @@ open(args[args.index("--output-last-message") + 1], "w").write(json.dumps(answer
 """
 
 
+def _answer(job: str, action: str, prompt: str) -> dict:
+    """A rubric review's answer, with the digests the prompt gives."""
+    digests = dict(
+        re.findall(r"^(candidate_digest|rubric_digest): ([0-9a-f]{64})$", prompt, re.M)
+    )
+    result = {
+        "id": job,
+        "status": action,
+        "reason": job + " reviewed",
+        "evidence": ["candidate/theory.md"],
+        "next_step": "none",
+    }
+    return {**digests, "results": [result]}
+
+
+class FakeJudgeModel(BaseHTTPRequestHandler):
+    """The Judge model behind rsi-agent llm: a Responses API that answers each
+    rubric as the plan file says and records each call."""
+
+    def log_message(self, *args) -> None:
+        del args
+
+    def do_POST(self) -> None:  # noqa: N802
+        body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        server = self.server
+        prompt = body["input"][0]["content"][0]["text"]
+        schema = body["text"]["format"]["schema"]
+        job = schema["properties"]["results"]["items"]["properties"]["id"]["enum"][0]
+        action = json.loads(server.plan.read_text()).get(job, "pass")
+        with server.lock:
+            server.seen.append(
+                {
+                    "job": job,
+                    "auth": self.headers.get("Authorization"),
+                    "model": body["model"],
+                    "effort": body["reasoning"]["effort"],
+                    "prompt": prompt,
+                    "schema": schema,
+                }
+            )
+        text = json.dumps(_answer(job, action, prompt))
+        response = {
+            "id": "resp_1",
+            "object": "response",
+            "status": "failed" if action == "crash" else "completed",
+            "error": {"message": "the model refused"} if action == "crash" else None,
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": text}],
+                }
+            ],
+        }
+        data = json.dumps(response).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+
+def _pin(endpoints: tuple[str, ...]) -> tuple[PinnedEndpoint, ...]:
+    return tuple(
+        PinnedEndpoint(
+            hostname="127.0.0.1",
+            port=int(url.rsplit(":", 1)[1].split("/")[0]),
+            addresses=(ipaddress.ip_address("127.0.0.1"),),
+        )
+        for url in endpoints
+    )
+
+
 class Round:
     """A Judge round of the sample, as the current user, with the real
     rsi-agent and the Harness's trajectory capture."""
 
-    def __init__(self, tmp_path: Path) -> None:
+    def __init__(self, tmp_path: Path, model: ThreadingHTTPServer) -> None:
         self.tmp = tmp_path
+        self.model = model
         self.workspace = tmp_path / "workspace"
         (self.workspace / "candidate").mkdir(parents=True)
         for path in STARTER.iterdir():
@@ -300,6 +387,7 @@ class Round:
         self.record = tmp_path / "calls.jsonl"
         self.plan = tmp_path / "plan.json"
         self.plan.write_text("{}")
+        model.plan = self.plan
         # rsi-agent's state root, with the launch spec the Harness writes.
         state = tmp_path / "state"
         (state / "private").mkdir(parents=True)
@@ -321,13 +409,27 @@ class Round:
                 network=NetworkPolicy(mode="public"),
             ),
         )
+        # The Judge model the task declares, with an operator's API key.
+        judge_llm = resolve_judge_llm(
+            HarborTaskCompiler().compile(SAMPLE, CompileOptions()),
+            JudgeLLMRequest(
+                auth=JudgeLLMAuth.API,
+                api_key_env="JUDGE_KEY",
+                base_url=f"http://127.0.0.1:{model.server_address[1]}",
+            ),
+            RSILoopConfig(),
+            None,
+            pin=_pin,
+            environ={"JUDGE_KEY": JUDGE_KEY},
+        )
         launch = json.loads(
             build_launch_spec(
                 oneshot,
                 None,
-                {API_KEY},
+                {API_KEY, *judge_llm.secret_values},
                 visibility="public",
                 allow_missing_landlock_signal=native_signal_compatibility(),
+                llm=judge_llm.spec,
             )
         )
         # The fake CLI's record: the only file outside its job a confined
@@ -366,6 +468,7 @@ class Round:
     def run(self, plan=None, environ=None, **changes):
         self.plan.write_text(json.dumps(plan or {}))
         self.record.write_text("")
+        self.model.seen.clear()
         self.rounds += 1
         self.trajectory = capture_round_trajectory(
             self.run_root, f"agent-{self.rounds}"
@@ -378,6 +481,8 @@ class Round:
                 "RSI_AGENT_NAME": "codex",
                 "RSI_AGENT_MODEL": "gpt-test",
                 "RSI_AGENT_REASONING_EFFORT": "high",
+                "RSI_JUDGE_MODEL": "gpt-6-astra",
+                "RSI_JUDGE_MODEL_EFFORT": "medium",
                 "OMP_NUM_THREADS": "1",
                 **(environ or {}),
             },
@@ -387,9 +492,9 @@ class Round:
         return code, stdout.getvalue()
 
     def calls(self):
-        if not self.record.exists():
-            return []
-        return [json.loads(line) for line in self.record.read_text().splitlines()]
+        """The audit's Agent CLI calls, then the Judge model's calls."""
+        audits = [json.loads(line) for line in self.record.read_text().splitlines()]
+        return audits + list(self.model.seen)
 
     def read(self, name):
         return json.loads((self.logs / name).read_text())
@@ -397,7 +502,14 @@ class Round:
 
 @pytest.fixture
 def judge_round(tmp_path):
-    return Round(tmp_path)
+    model = ThreadingHTTPServer(("127.0.0.1", 0), FakeJudgeModel)
+    model.daemon_threads = True
+    model.seen = []
+    model.lock = threading.Lock()
+    threading.Thread(target=model.serve_forever, daemon=True).start()
+    yield Round(tmp_path, model)
+    model.shutdown()
+    model.server_close()
 
 
 def test_a_clear_round_rewards_the_rubrics_this_candidate_passes(judge_round):
@@ -415,6 +527,10 @@ def test_a_clear_round_rewards_the_rubrics_this_candidate_passes(judge_round):
         "gpt-test",
     )
     assert (review["reasoning_effort"], review["review_workers"]) == ("high", 4)
+    assert (review["judge_model"], review["judge_model_effort"]) == (
+        "gpt-6-astra",
+        "medium",
+    )
     assert review["integrity_status"] == "clear"
     # Both routes ran on the starter; the probe claims nothing.
     diagnostics = judge_round.read("bundle.json")["diagnostics"]
@@ -432,24 +548,29 @@ def test_a_clear_round_rewards_the_rubrics_this_candidate_passes(judge_round):
         1,
         8,
     ]
-    # One audit, then one rsi-agent call per rubric, each running the Agent's
-    # CLI in rsi-agent's private scratch, never in the evidence.
+    # One audit by the Agent's CLI in rsi-agent's private scratch, never in
+    # the evidence; then one Judge model call per rubric, with the operator's
+    # key, the task's model and effort, and the evidence in its prompt.
     calls = judge_round.calls()
     assert [call["job"] for call in calls][0] == "audit"
+    assert "/evidence" not in calls[0]["cwd"]
+    assert "do not search the web" in calls[0]["prompt"].lower()
     assert sorted(call["job"] for call in calls[1:]) == IDS
-    for call in calls:
-        assert "/evidence" not in call["cwd"]
-        assert "do not search the web" in call["prompt"].lower()
+    for call in calls[1:]:
+        assert call["auth"] == f"Bearer {JUDGE_KEY}"
+        assert (call["model"], call["effort"]) == ("gpt-6-astra", "medium")
+        assert "theory.md" in call["prompt"]
     audit = calls[0]["prompt"]
     assert "# Integrity audit" in audit
     assert str(judge_round.trajectory / "agent_output.txt") in audit
     assert "/evidence/candidate/theory.md" in audit
     assert "Rubric R26: unresolved" in feedback
     assert feedback.rstrip().endswith("passed 25 of 26")
-    assert API_KEY not in feedback
-    for path in judge_round.logs.rglob("*"):
-        if path.is_file():
-            assert API_KEY not in path.read_text(errors="replace"), path
+    for key in (API_KEY, JUDGE_KEY):
+        assert key not in feedback
+        for path in judge_round.logs.rglob("*"):
+            if path.is_file():
+                assert key not in path.read_text(errors="replace"), path
 
     # The next round audits what is new since this one and passes all 26.
     with (judge_round.run_root / "agent_output.txt").open("a") as stream:
@@ -527,7 +648,7 @@ def test_work_can_preview_the_judge_recompute(tmp_path):
     assert code == 0, output
     assert "[candidate_reproduction] exit 0" in output
     assert "[public_pressure_probes] exit 0" in output
-    assert "Preview only: no audit, no review, no reward." in output
+    assert "no audit, no review, no reward." in output
 
 
 @pytest.mark.parametrize(
@@ -538,7 +659,7 @@ def test_work_can_preview_the_judge_recompute(tmp_path):
     ],
 )
 def test_a_candidate_file_never_stands_in_for_a_route_output(tmp_path, name, script):
-    # Library version 3: a file the candidate ships at a declared output path
+    # Since library version 3: a file the candidate ships at a declared output path
     # is withheld from the route's copy, so a route that writes nothing, or
     # fails, has no output instead of the candidate's stale file.
     candidate = tmp_path / "candidate"

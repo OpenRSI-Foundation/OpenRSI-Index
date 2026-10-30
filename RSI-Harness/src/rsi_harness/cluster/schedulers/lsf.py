@@ -333,7 +333,13 @@ class LSFScheduler:
 
     def cancel(self, job_id: str) -> None:
         self._require_job_id(job_id)
-        self._runner((self._cancel_binary, job_id))
+        completed = self._runner((self._cancel_binary, job_id))
+        if completed.returncode != 0:
+            detail = completed.stderr.strip() or completed.stdout.strip()
+            raise InfrastructureError(
+                f"cannot cancel LSF job {job_id} "
+                f"(exit {completed.returncode}): {detail}"
+            )
 
     @staticmethod
     def _require_job_id(job_id: str) -> None:

@@ -579,9 +579,12 @@ rsi-isolate isolation
   `/run/rsi-agent`; a write grant that is a top-level directory, overlaps a
   system path, `/dev`, `/tests`, `/logs/agent` or `/run/rsi-harness`, or
   holds a file with other hard links.
-- `--no-network`: no internet sockets (`AF_INET`, `AF_INET6`) and no
-  `io_uring`, by seccomp; Unix sockets still work. Without it the command
-  has the Judge's network.
+- `--no-network`: only Unix and `NETLINK_ROUTE` sockets, and no `io_uring`,
+  by seccomp. Where the Judge shares its network namespace
+  (`RSI_JUDGE_NETNS` is not `private`, as for a `public` Judge on a cluster),
+  `socket(AF_UNIX)` is refused too unless Landlock ABI 6 scopes abstract
+  sockets; a stream or seqpacket `socketpair` and `--pass-fd` still work.
+  Without it the command has the Judge's network.
 - `--timeout SEC`: for the whole call. On expiry the command's process
   group gets `SIGTERM`, then `SIGKILL` after 5 seconds. Whenever the command
   ends, everything it started is killed, even processes that left its group.
@@ -623,11 +626,16 @@ can, and every call fails (exit `123`) while `/tests` or `/logs/verifier`
 is open to other users (a root Judge can `chmod 0700 /tests` first). A
 Landlock-confined command can, below Landlock ABI 6, signal the Judge,
 and at any ABI `chmod` the Judge's files, which can only fail the round.
-Without root or Landlock every call fails (exit `123`) unless the operator
-chose the same-user fallback (see [Judges that are not
-root](#judges-that-are-not-root)). `rsi-isolate isolation` prints `{"mode":
-"uid" | "landlock" | "same_user", "landlock_abi": <int>, "fallback": "none"
-| "same-user"}`, and exits `123` when a command cannot be isolated.
+Without root or Landlock the command runs in its own user, mount, PID and
+IPC namespaces (`userns`): only the system paths and its grants are shown,
+everything but the write grants is read-only, and it sees no other process.
+Where those namespaces are unavailable too, every call fails (exit `123`)
+unless the operator chose the same-user fallback (see [Judges that are not
+root](#judges-that-are-not-root)). In every mode the command gets no kernel
+keyrings and no netlink socket but `NETLINK_ROUTE`. `rsi-isolate isolation`
+prints `{"mode": "uid" | "landlock" | "userns" | "same_user",
+"landlock_abi": <int>, "fallback": "none" | "same-user"}`, and exits `123`
+when a command cannot be isolated.
 
 To run a Judge without RSI Harness, as task validation does, bind RSI
 Harness's `src/rsi_harness/judge_agent` read-only at `/opt/rsi-isolate` and
@@ -636,13 +644,12 @@ its `rsi-isolate` at `/usr/local/bin/rsi-isolate`.
 ## `[metadata.rsi_harness.verifier]`
 
 [`sample_tasks/science-ising3d`](../../sample_tasks/science-ising3d)
-illustrates `visibility` and `model_access`: its Judge, the public science
-Judge library of OpenRSI-X's `science-task-agent` skill with the task's own
-configuration, re-executes the candidate as unprivileged users and reviews it
-with the run's Agent through `rsi-agent`. It is a demonstration, not a
-template to copy. Its copy of the library is an older version that needs a
-root Judge, as on local Docker; a task meant for a cluster copies the current
-library from the skill.
+illustrates `visibility`, `model_access` and `judge_model`: its Judge, the
+public science Judge library of OpenRSI-X's `science-task-agent` skill with
+the task's own configuration, re-executes the candidate isolated, audits it
+with the run's Agent and reviews it with the Judge model, both through
+`rsi-agent`. It is a demonstration, not a template to copy; it runs locally
+and on a cluster.
 
 ### Judges that are not root
 
@@ -650,9 +657,10 @@ A Judge's Verifier user need not be root, and every cluster Judge runs as
 the invoking user. Code in such a Judge that isolates what it runs cannot
 switch to other uids: `rsi-agent` (see [`model_access`](#model_access)) and
 [`rsi-isolate`](#rsi-isolate) confine what they run with Landlock (Linux
-5.13 or later) instead, and a science Judge library a task carries in its
-`tests/` may do the same for the routes it runs. Without root or Landlock,
-isolation fails closed unless the operator set `judge_isolation_fallback = "same-user"` in the `[apptainer]`
+5.13 or later) instead, or else user namespaces (`userns`), and a science
+Judge library a task carries in its `tests/` may do the same for the routes
+it runs. Without any of them, isolation fails closed unless the operator set
+`judge_isolation_fallback = "same-user"` in the `[apptainer]`
 table of the cluster profile, which runs what would be isolated as the
 Judge's user without filesystem confinement.
 
@@ -852,12 +860,14 @@ may write only its own job directory (its `HOME` and `TMPDIR`) and
 call's job, `/logs/verifier` or a hidden Judge's `/tests`; `/tmp` and
 `/logs/agent` stay readable. Below Landlock ABI 6 such an Agent can still
 signal the Judge, and at any ABI it can `chmod` files it cannot read; either
-can only fail the round. Without root or Landlock
-every call fails (exit `3`) unless the operator chose the same-user
-fallback. `rsi-agent isolation` prints how calls are isolated as JSON,
-`{"mode": "uid" | "landlock" | "same_user", "landlock_abi": <int, 0 without
-Landlock>, "fallback": "none" | "same-user"}`, and exits `3` when the Agent
-cannot be isolated.
+can only fail the round. Without root or Landlock the Agent runs in its own
+user, mount, PID and IPC namespaces (`userns`), where those paths are hidden
+and only its job directory and `--workdir` are writable. Where those
+namespaces are unavailable too, every call fails (exit `3`) unless the
+operator chose the same-user fallback. `rsi-agent isolation` prints how
+calls are isolated as JSON, `{"mode": "uid" | "landlock" | "userns" |
+"same_user", "landlock_abi": <int, 0 without Landlock>, "fallback": "none" |
+"same-user"}`, and exits `3` when the Agent cannot be isolated.
 
 The Judge also has:
 

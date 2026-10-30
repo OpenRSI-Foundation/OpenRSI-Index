@@ -1,0 +1,12 @@
+Static Podman bundle for RSI Harness cluster image builds.
+
+Podman with its helpers, all statically linked for x86_64 Linux, built
+from the upstream sources listed in VERSIONS (licenses under licenses/).
+The Harness installs it on its own; it runs from any directory.
+
+bin/            podman, runc, crun, fuse-overlayfs, fusermount3, pasta,
+                passt, slirp4netns
+lib/podman/     conmon, rootlessport, netavark, aardvark-dns, catatonit
+libexec/podman/ quadlet
+etc/containers/ containers.conf, policy.json, registries.conf, storage.conf
+SHA256SUMS      every other file in the bundle

@@ -382,6 +382,20 @@ def test_cluster_run_passes_judge_llm_options_and_prints_the_judge_llm(
     )
 
 
+def test_cluster_console_warns_when_the_agent_is_not_the_pinned_version(
+    cli, capsys: pytest.CaptureFixture[str]
+) -> None:
+    cli_module, _local_services = cli
+    cli_module._ClusterConsole()(
+        "agent_version_mismatch",
+        {"agent": "codex", "version": "0.163.0", "pinned": "0.162.1"},
+    )
+
+    assert capsys.readouterr().out == (
+        "Warning: codex 0.163.0 runs, not the pinned 0.162.1; RUN_INFO records both.\n"
+    )
+
+
 def test_cluster_run_rejects_local_gpu_selectors_before_adapter_creation(
     cli, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1373,23 +1387,32 @@ def test_model_agent_exit_code_ignores_its_own_exit_code(cli, tmp_path: Path) ->
     assert "Oracle check" not in result.output
 
 
-def test_oracle_is_refused_on_a_cluster(cli, tmp_path: Path, monkeypatch) -> None:
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_oracle_routes_to_cluster_validation(cli, tmp_path: Path, monkeypatch, dry_run):
     cli_module, services = cli
     task = tmp_path / "task"
     task.mkdir()
-    monkeypatch.setattr(
-        cli_module,
-        "build_cluster_adapter",
-        lambda *_a, **_k: pytest.fail("cluster adapter built"),
-    )
+    requests = []
 
+    class Adapter:
+        def run(self, request):
+            requests.append(request)
+            return ClusterRunResult(
+                run_id="oracle-cluster", status=RunStatus.COMPLETED, log_dir=tmp_path
+            )
+
+    monkeypatch.setattr(
+        cli_module, "build_cluster_adapter", lambda *_a, **_k: Adapter()
+    )
     result = CliRunner().invoke(
         cli_module.app,
-        ["run", str(task), "--agent", "oracle", "--cluster", "bluevela"],
+        ["run", str(task), "--agent", "oracle", "--cluster", "slurm"]
+        + (["--dry-run"] if dry_run else []),
     )
-
-    assert result.exit_code == 2
-    assert "--agent oracle runs locally only" in result.output
+    assert result.exit_code == 0, result.output
+    assert requests[0].agent_name == "oracle"
+    assert requests[0].dry_run == dry_run
+    assert ("Oracle check passed" in result.output) is not dry_run
     assert services.requests == []
 
 

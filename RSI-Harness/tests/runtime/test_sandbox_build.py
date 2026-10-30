@@ -62,6 +62,7 @@ from tests.sandbox_helpers import (
     BUILDER_IMAGE_ID,
     FakeClock,
     FakeSandboxBackend,
+    bound_socket_send_buffer,
     make_env_task,
 )
 
@@ -333,6 +334,8 @@ class BuilderEngine(FakeEngine):
         import socket as sockets
 
         client, server = sockets.socketpair()
+        if self.script.stall_after is not None:
+            bound_socket_send_buffer(client)
         threading.Thread(target=self._serve_load, args=(server,), daemon=True).start()
         return client
 

@@ -175,6 +175,7 @@ def test_sandbox_endpoint_mount_and_credentials_are_exec_only(tmp_path, clean_im
         "RSI_HARNESS_EXPECTED_GPU_UUIDS": "GPU-c,GPU-d",
         "RSI_JUDGE_ISOLATION_FALLBACK": "none",
         "RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL": "0",
+        "RSI_JUDGE_NETNS": "private",
         **lifecycle.endpoint.environment,
     }
     token = lifecycle.endpoint.environment["RSI_SANDBOX_TOKEN"]

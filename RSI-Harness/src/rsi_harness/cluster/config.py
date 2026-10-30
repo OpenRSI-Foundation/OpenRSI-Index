@@ -20,6 +20,7 @@ from pydantic import (
     model_validator,
 )
 
+from rsi_harness.cluster import podman_bundle
 from rsi_harness.errors import SetupError
 from rsi_harness.models import (
     JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL_ENV,
@@ -78,6 +79,17 @@ class SchedulerProfile(_ProfileModel):
         return value
 
 
+class SlurmBuildProfile(_ProfileModel):
+    """Scheduling overrides for image construction, never Work or Judge."""
+
+    partition: str | None = None
+    account: str | None = None
+    qos: str | None = None
+    constraint: str | None = None
+    gpus: int = Field(default=0, ge=0)
+    exclusive: bool = False
+
+
 class SlurmSchedulerProfile(SchedulerProfile):
     kind: Literal["slurm"]
     submit_binary: str = "sbatch"
@@ -100,6 +112,23 @@ class SlurmSchedulerProfile(SchedulerProfile):
     group: str = Field(default="", validation_alias=AliasChoices("account", "group"))
     qos: str | None = None
     constraint: str | None = None
+    request_tmp: bool = True
+    build: SlurmBuildProfile | None = None
+    # Total research time stays in the task/lease; this limits each allocation.
+    run_walltime_limit: str | None = None
+    # How GPUs are requested: --gres=gpu:N, or --gpus=N (--gpus-per-node=N on
+    # several hosts) at sites that document only the latter.
+    gpu_option: Literal["gres", "gpus"] = "gres"
+
+    @field_validator("run_walltime_limit")
+    @classmethod
+    def _run_walltime_limit(cls, value: str | None) -> str | None:
+        if value is not None and (
+            re.fullmatch(r"\d+:[0-5]\d", value) is None
+            or not int(value.replace(":", ""))
+        ):
+            raise ValueError("run_walltime_limit must be positive HH:MM")
+        return value
 
     @field_validator("accounting_binary", "control_binary")
     @classmethod
@@ -134,6 +163,51 @@ class BuilderProfile(_ProfileModel):
     rootless_apt_sandbox: bool = False
     faked_binary: Path | None = None
     fakeroot_library: Path | None = None
+    # Explicit helpers for a Podman whose own lookup does not find them.
+    conmon: Path | None = None
+    runtime: Path | None = None
+    # Shared directory the Harness installs its static Podman bundle into;
+    # it then supplies binary, conmon and runtime.
+    podman_bundle: Path | None = None
+    # "vfs" where rootless overlay is unavailable (old kernel, no
+    # fuse-overlayfs).
+    storage_driver: Literal["overlay", "vfs"] = "overlay"
+    # Host namespaces build RUN steps share, on nodes that cannot create
+    # their own (max_net_namespaces or max_uts_namespaces is 0).
+    host_namespaces: tuple[Literal["network", "uts"], ...] = ()
+
+    @model_validator(mode="before")
+    @classmethod
+    def _bundle_tools(cls, data: Any) -> Any:
+        if not isinstance(data, Mapping) or data.get("podman_bundle") is None:
+            return data
+        tree = podman_bundle.bundle_dir(Path(data["podman_bundle"]))
+        data = dict(data)
+        for key, relative in (
+            ("binary", podman_bundle.PODMAN),
+            ("conmon", podman_bundle.CONMON),
+            ("runtime", podman_bundle.RUNTIME),
+        ):
+            if data.get(key) is not None and Path(data[key]) != tree / relative:
+                raise ValueError(f"builder {key} comes from podman_bundle; remove it")
+            data[key] = tree / relative
+        return data
+
+    @field_validator("conmon", "runtime", "podman_bundle")
+    @classmethod
+    def _absolute_helper(cls, value: Path | None) -> Path | None:
+        if value is not None and not value.is_absolute():
+            raise ValueError(
+                "builder conmon, runtime and podman_bundle must be absolute paths"
+            )
+        return value
+
+    @field_validator("host_namespaces")
+    @classmethod
+    def _unique_namespaces(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("builder host_namespaces contains a duplicate")
+        return value
 
     @model_validator(mode="after")
     def _paired_fakeroot_tools(self) -> Self:
@@ -197,6 +271,22 @@ class ApptainerProfile(_ProfileModel):
     # Explicit operator consent to the ABI 6 backport missing signal scoping.
     # Filesystem rights and abstract-socket scoping remain mandatory.
     judge_allow_missing_landlock_signal: bool = Field(default=False, strict=True)
+    # How a "no-network" phase is isolated: its own network namespace, or
+    # (sites without one) a seccomp filter with no IP sockets at all. Never
+    # a task setting.
+    network_isolation: Literal["namespace", "seccomp"] = "namespace"
+    # Who gives Work and Judge their own PID and IPC namespaces: Apptainer
+    # (--containall where the site allows them), or a Harness helper inside
+    # the container where the site's apptainer.conf disables them. Never a
+    # task setting.
+    process_namespaces: Literal["apptainer", "harness"] = "apptainer"
+
+    @field_validator("binary")
+    @classmethod
+    def _absolute_binary(cls, value: Path) -> Path:
+        if not value.is_absolute():
+            raise ValueError("apptainer.binary must be an absolute compute-node path")
+        return value
 
     @field_validator("environment", "work_environment", "judge_environment")
     @classmethod
@@ -301,16 +391,22 @@ def _expand(value: Any, environ: Mapping[str, str]) -> Any:
     return value
 
 
+# Packaged profiles by name: portable examples, and site profiles.
+_PACKAGED_PROFILES = {
+    "bluevela": ("rsi_harness.cluster.bluevela", "profile.toml"),
+    "slurm": ("rsi_harness.cluster.slurm", "profile.toml"),
+    "sherlock": ("rsi_harness.cluster.slurm", "sherlock.toml"),
+}
+
+
 def _profile_bytes(name_or_path: str | Path) -> bytes:
     candidate = Path(name_or_path).expanduser()
     if candidate.is_file():
         return candidate.read_bytes()
-    if str(name_or_path) in {"bluevela", "slurm"}:
-        return (
-            resources.files(f"rsi_harness.cluster.{name_or_path}")
-            .joinpath("profile.toml")
-            .read_bytes()
-        )
+    packaged = _PACKAGED_PROFILES.get(str(name_or_path))
+    if packaged is not None:
+        package, filename = packaged
+        return resources.files(package).joinpath(filename).read_bytes()
     raise SetupError(f"unknown cluster or profile path: {name_or_path}")
 
 

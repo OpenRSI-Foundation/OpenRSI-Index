@@ -22,15 +22,16 @@ import pytest
 from rsi_harness.runtime.recovery import LeaseStore
 from rsi_harness.runtime.sandbox import SandboxBroker
 from rsi_harness.runtime.sandbox_budget import SandboxJournal
-from rsi_harness.runtime.sandbox_e2b import (
-    e2b_client,
-    e2b_env_runtime,
-    kill_run_sandboxes,
-    run_metadata,
-)
+from rsi_harness.runtime.sandbox_e2b import e2b_client
 from rsi_harness.runtime.sandbox_lifecycle import SandboxLifecycle
 from rsi_harness.runtime.sandbox_policy import resolve_env_grant
+from rsi_harness.runtime.sandbox_remote import (
+    kill_run_sandboxes,
+    remote_env_runtime,
+    run_metadata,
+)
 from tests.integration.harbor_env_support import TASK, reward, run_trial, use_endpoint
+from tests.integration.test_sandbox_e2b_live import IMAGE as PYTHON
 from tests.integration.test_sandbox_offline_tmux import (
     static_tmux as static_tmux,
 )
@@ -50,8 +51,11 @@ pytestmark = [
 
 
 def e2b_backend(policy: str) -> str:
-    """``policy`` (an operator policy's text) on the e2b backend."""
+    """``policy`` (an operator policy's text) on the e2b backend, with
+    lifetimes within the default one-hour max_sandbox_hours."""
     policy = policy.replace(
+        "max_env_lifetime_sec = 7200", "max_env_lifetime_sec = 3600"
+    ).replace(
         "no_new_privileges = true\n", 'no_new_privileges = true\nbackend = "e2b"\n', 1
     )
     return policy.replace(
@@ -81,7 +85,7 @@ class E2BHarbor:
         self.journal = SandboxJournal(
             authority(LeaseStore(tmp_path / "leases"), self.run_id)
         )
-        runtime = e2b_env_runtime(
+        runtime = remote_env_runtime(
             self.client,
             spool_root=self.data / self.run_id / "spool",
             host=grant.environments.host,
@@ -153,6 +157,40 @@ async def test_tb2_fix_git_on_e2b_scores_oracle_one_and_nop_zero(
     use_endpoint(monkeypatch, harbor.work())
     task = tmp_path / "fix-git"
     shutil.copytree(TB2 / "fix-git", task)
+    await oracle_and_nop(task, tmp_path / "trials")
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not (TB2 / "regex-log").is_dir(), reason="no TB2 regex-log")
+async def test_a_tb2_task_built_from_its_dockerfile_on_e2b(
+    e2b_harbor, monkeypatch, tmp_path
+):
+    """Without docker_image, Harbor builds environment/Dockerfile (on the
+    pinned Python image of test_sandbox_e2b_live, which E2B pulls once)."""
+    policy = e2b_policy_text(e2b=E2B)
+    policy = policy.replace("cpus_per_container = 4\n", "cpus_per_container = 2\n")
+    policy = policy.replace(
+        "memory_mb_per_container = 8192\n", "memory_mb_per_container = 2048\n"
+    )
+    policy = policy.replace("max_disk_mb_live = 8192", "max_disk_mb_live = 16384")
+    harbor = e2b_harbor(
+        policy, TASK.replace("pull = true", "pull = true\nbuild = true", 1)
+    )
+    use_endpoint(monkeypatch, harbor.work())
+    task = tmp_path / "regex-log"
+    shutil.copytree(TB2 / "regex-log", task)
+    toml = task / "task.toml"
+    toml.write_text(
+        "".join(
+            line
+            for line in toml.read_text().splitlines(keepends=True)
+            if not line.startswith("docker_image")
+        )
+    )
+    dockerfile = task / "environment" / "Dockerfile"
+    dockerfile.write_text(
+        dockerfile.read_text().replace("FROM ubuntu:24.04", f"FROM {PYTHON}")
+    )
     await oracle_and_nop(task, tmp_path / "trials")
 
 

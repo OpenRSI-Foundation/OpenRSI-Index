@@ -14,6 +14,7 @@ from rsi_harness.errors import SetupError, UnsupportedTaskError
 from rsi_harness.runtime.sandbox_contracts import (
     BROKER_HEADROOM_MB,
     IMAGE_ID,
+    REMOTE_BACKENDS,
     EnvGrant,
     EnvLimits,
     EnvPolicy,
@@ -36,6 +37,14 @@ def _tuples(value: Any) -> Any:
     if isinstance(value, dict):
         return {key: _tuples(item) for key, item in value.items()}
     return value
+
+
+def strict_sandboxes(plan: dict) -> dict:
+    """Return a RunPlan dict whose sandboxes are tuples, as JSON spells arrays."""
+    for owner in (plan, plan.get("task")):
+        if isinstance(owner, dict) and owner.get("sandbox") is not None:
+            owner["sandbox"] = _tuples(owner["sandbox"])
+    return plan
 
 
 def _normalize(raw: Any) -> Any:
@@ -91,7 +100,7 @@ def validate_sandbox_policy(
     if task is None:
         return None
     if backend == "cluster":
-        _require_cluster_e2b(task, getattr(policy, "environments", None))
+        _require_cluster_remote(task, getattr(policy, "environments", None))
     elif backend != "docker":
         raise SetupError(
             "sandbox requires local Linux Docker; this backend is unsupported"
@@ -136,18 +145,19 @@ def validate_sandbox_policy(
     return task
 
 
-def _require_cluster_e2b(task: Any, environments: Any) -> None:
+def _require_cluster_remote(task: Any, environments: Any) -> None:
     """Clusters have no Docker daemon or root: only environment tasks whose
-    envs the operator's policy sends to E2B (``backend = "e2b"``) run there."""
+    envs the operator's policy sends to a remote backend run there."""
     if not (
         isinstance(task, SandboxEnvTask)
         and environments is not None
-        and environments.host.backend == "e2b"
+        and environments.host.backend in REMOTE_BACKENDS
     ):
+        names = " or ".join(f'"{name}"' for name in REMOTE_BACKENDS)
         raise SetupError(
             "sandbox requires local Linux Docker; on a cluster backend only "
             "environment tasks (version 2) with an operator policy of "
-            '[environments.host] backend = "e2b" are supported'
+            f"[environments.host] backend = {names} are supported"
         )
 
 
@@ -157,13 +167,13 @@ def validate_cluster_sandbox(
     *,
     multi_node: bool,
 ) -> SandboxEnvGrant | None:
-    """The cluster Engine's check of a frozen plan: no sandbox, or an E2B
+    """The cluster Engine's check of a frozen plan: no sandbox, or a remote
     environment grant (resolved on the submit host). A multi-node Judge
     runs on remote hosts the broker's socket does not reach: refused."""
     if task is None and grant is None:
         return None
     environments = grant.environments if isinstance(grant, SandboxEnvGrant) else None
-    _require_cluster_e2b(task, environments)
+    _require_cluster_remote(task, environments)
     assert isinstance(grant, SandboxEnvGrant)
     if multi_node and grant.environments.judge is not None:
         raise SetupError(
@@ -197,10 +207,6 @@ def _effective_environments(task: SandboxEnvTask, policy: SandboxPolicy) -> EnvP
             )
         if requested.pull and not grant.pull:
             raise SetupError(f"{prefix}.pull: image pull not approved by operator")
-        if requested.build and permitted.host.backend == "e2b":
-            raise SetupError(
-                f"{prefix}.build: image_build is unsupported on the e2b backend"
-            )
         if requested.build and grant.build is None:
             raise SetupError(f"{prefix}.build: image build not approved by operator")
         effective = grant.model_dump()
@@ -220,6 +226,13 @@ def _effective_environments(task: SandboxEnvTask, policy: SandboxPolicy) -> EnvP
                 raise SetupError(
                     f"{prefix}.build_network: {', '.join(denied)} not approved "
                     "for builds by operator policy"
+                )
+            backend = permitted.host.backend
+            # Daytona has no image_build: its runtime refuses every build.
+            if backend in ("e2b", "modal") and "public" not in build_network:
+                raise SetupError(
+                    f"{prefix}.build_network: {backend} template builds always "
+                    "reach the internet; include public"
                 )
             effective["build"]["network"] = build_network
         for field in EnvLimits.model_fields:
@@ -364,15 +377,16 @@ def resolve_env_grant(
 
     ``builder_images`` maps a phase with an effective build grant to the local
     ``docker image inspect`` result for its approved builder_image; the broker
-    never pulls the builder.
+    never pulls the builder. A remote backend has no builder: it builds.
     """
     validate_sandbox_policy(task, policy, "docker")
     environments = _effective_environments(task, policy)
     _require_parent(parent_cpus, parent_memory_mb)
+    docker = environments.host.backend == "docker"
     phases: dict[str, EnvGrant | None] = {}
     for phase_name in ("work", "judge"):
         grant = getattr(environments, phase_name)
-        if grant is not None and grant.build is not None:
+        if docker and grant is not None and grant.build is not None:
             image = builder_image_id(
                 f"sandbox.environments.{phase_name}.build.builder_image",
                 grant.build.builder_image,
@@ -382,7 +396,7 @@ def resolve_env_grant(
             grant = grant.model_copy(update={"build": build})
         phases[phase_name] = grant
     active = [grant for grant in phases.values() if grant is not None]
-    builds = [grant.build for grant in active if grant.build is not None]
+    builds = [grant.build for grant in active if docker and grant.build is not None]
     # Same conservative parent envelope as profiles; each builder is reserved
     # in full, and its state fs plus loaded images count against the disk pool.
     cpus = (

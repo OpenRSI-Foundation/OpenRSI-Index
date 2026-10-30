@@ -75,6 +75,8 @@ class FakeBroker:
         self.path = path
         self.network = list(network)
         self.build = build
+        # None answers as Docker does: capabilities name no backend.
+        self.backend = None
         self.allowlist = None
         self.tools = []
         self.limits = dict(LIMITS)
@@ -161,6 +163,7 @@ class FakeBroker:
             "versions": [1, 2],
             "grant": None,
             "environments": {
+                **({} if self.backend is None else {"backend": self.backend}),
                 "network": self.network,
                 "pull": True,
                 "registries": ["docker.io"],
@@ -704,6 +707,57 @@ def test_an_allowlist_the_broker_cannot_enforce_is_refused(
     broker.allowlist = {"max_entries": 3, "patterns": [], "private_cidrs": []}
     with pytest.raises(ValueError, match=match):
         allowlist_env(broker, tmp_path, hosts)
+
+
+def test_e2b_passes_hostname_allowlists_and_refuses_other_ports(broker, tmp_path):
+    broker.network = ["allowlist"]
+    broker.allowlist = {"max_entries": 3, "patterns": [], "private_cidrs": []}
+    broker.backend = "e2b"
+    hosts = ["pypi.org", "example.com:443"]
+    (tmp_path / "ok").mkdir()
+    environment = allowlist_env(broker, tmp_path / "ok", hosts)
+    assert environment.capabilities.network_allowlist_hostnames
+
+    async def scenario():
+        await environment.start(force_build=False)
+        await environment.stop(delete=True)
+
+    run(scenario())
+    spec = broker.meta("env_create")[0]["spec"]
+    assert (spec["network"], spec["allowlist"]) == ("allowlist", hosts)
+    (tmp_path / "port").mkdir()
+    with pytest.raises(
+        ValueError,
+        match=r"spec\.allowlist\.0: an allowlist port is unsupported on the e2b "
+        "backend",
+    ):
+        allowlist_env(broker, tmp_path / "port", ["pypi.org:8443"])
+    assert broker.ops("image_pull") == ["image_pull"]
+
+
+def test_e2b_refuses_what_one_sandbox_cannot_hold_before_any_pull(broker, tmp_path):
+    sidecar = "services: {kv: {image: redis}}"
+    for name in ("sidecar", "one", "docker"):
+        (tmp_path / name).mkdir()
+    broker.backend = "e2b"
+    with pytest.raises(
+        ValueError,
+        match=r"spec\.services: more than one service \(compose\) is unsupported "
+        "on the e2b backend",
+    ):
+        make_env(broker, tmp_path / "sidecar", compose=sidecar)
+    assert broker.ops("image_pull", "image_build", "stage_put", "env_create") == []
+    # One image still runs; Docker keeps its sidecars.
+    environment = make_env(broker, tmp_path / "one")
+
+    async def scenario():
+        await environment.start(force_build=False)
+        await environment.stop(delete=True)
+
+    run(scenario())
+    assert broker.ops("image_pull", "env_create") == ["image_pull", "env_create"]
+    broker.backend = None
+    make_env(broker, tmp_path / "docker", compose=sidecar)
 
 
 def test_only_harbor_log_mounts_are_accepted(broker, tmp_path):

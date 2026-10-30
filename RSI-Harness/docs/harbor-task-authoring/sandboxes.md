@@ -18,8 +18,8 @@ There are two kinds of grant:
   interruptible execs, archive copies and optional egress, run by stock
   Harbor through the injected `rsi_sandbox_harbor` plugin. This is how
   Terminal-Bench-style tasks run inside Work or Judge. Envs run on local
-  Docker, or as E2B sandboxes (see the operator guide's
-  [E2B backend](../sandbox-operator-guide.md#e2b-backend)).
+  Docker, or as E2B, Modal or Daytona sandboxes (see the operator guide's
+  [Remote backends](../sandbox-operator-guide.md#remote-backends)).
 
 Neither kind exposes the Docker socket, the Engine API or Docker-in-Docker
 to Work or Judge. The operator reference for both is
@@ -488,7 +488,14 @@ entries. Private, metadata and host addresses stay blocked unless the
 operator lists them in `private_cidrs`. Hostnames are resolved by the broker
 when the env is created and every `refresh_sec`, so fast-rotating CDNs,
 shared addresses and DNS exfiltration are limits to know about; see
-[Allowlist envs](../sandbox-operator-guide.md#allowlist-envs).
+[Allowlist envs](../sandbox-operator-guide.md#allowlist-envs). On the e2b
+backend a hostname matches only HTTP on port 80 and TLS on port 443 (its port
+is dropped: 80 and 443 both open), an IPv4 address or CIDR takes no port,
+and a list without hostnames has no DNS; on the modal backend a hostname
+matches only TLS on port 443 and an IPv4 address or CIDR takes no port; on
+the daytona backend a list holds hostnames (port 80 or 443) or IPv4
+addresses and CIDRs (at most 10, no port), not both; see
+[Remote backends](../sandbox-operator-guide.md#remote-backends).
 
 ### Builds
 

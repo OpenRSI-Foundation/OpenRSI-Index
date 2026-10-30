@@ -136,7 +136,8 @@ def test_gpu_driver_invokes_native_engine_without_harbor_run(tmp_path: Path) -> 
     assert "required_tmp_kb=$((15360 * 1024))" in script
     assert payload_path == output.with_suffix(".json")
     assert 'test -n "${CUDA_VISIBLE_DEVICES:-}"' in script
-    assert "exec --nv" in script
+    assert "exec --nv --containall --no-mount hostfs" in script
+    assert "--env" not in script
     assert "nvidia-smi" in script
 
 
@@ -202,6 +203,9 @@ def test_cpu_driver_executes_without_nvidia_tools(
         "#!/bin/sh\nset -eu\n"
         'test "${CUDA_VISIBLE_DEVICES-unset}" = unset\n'
         'test -z "$APPTAINERENV_CUDA_VISIBLE_DEVICES"\n'
+        # Only the operator's temp and cache directories pass the scrub.
+        'test "${APPTAINER_BINDPATH-unset}${SINGULARITY_BIND-unset}" = unsetunset\n'
+        'test "$APPTAINER_CACHEDIR" = /scratch/cache\n'
         'test "$1" = -m\n'
         'test "$2" = rsi_harness.cluster.bluevela.engine\n'
         f"printf '{{}}' > {shlex.quote(str(result))}\n"
@@ -223,7 +227,12 @@ def test_cpu_driver_executes_without_nvidia_tools(
     )
     output = tmp_path / "cpu-run.sh"
     render_engine_driver(payload, profile, output)
-    env = dict(os.environ)
+    env = {
+        **os.environ,
+        "APPTAINER_BINDPATH": "/oak",
+        "SINGULARITY_BIND": "/oak",
+        "APPTAINER_CACHEDIR": "/scratch/cache",
+    }
     if inherited_devices is None:
         env.pop("CUDA_VISIBLE_DEVICES", None)
     else:
@@ -277,7 +286,7 @@ def test_a_cancelled_job_waits_for_the_engine_to_close_its_attempt(
     profile = payload.profile.model_copy(
         update={
             "apptainer": payload.profile.apptainer.model_copy(
-                update={"temp_root": tmp_path}
+                update={"temp_root": tmp_path, "binary": Path("/bin/sh")}
             )
         }
     )
@@ -505,3 +514,54 @@ def test_multinode_engine_freezes_pools_before_entering_native_runtime(
     assert AllocatedPools.model_validate_json(frozen.read_text()) == pools
     assert frozen.stat().st_mode & 0o777 == 0o600
     assert not tuple(frozen.parent.glob(".ALLOCATED_POOLS.json.*.tmp"))
+
+
+@pytest.mark.parametrize("compute_side", [False, True])
+def test_payload_keeps_an_older_runtime_loading_it(
+    tmp_path: Path, compute_side: bool
+) -> None:
+    """Submit-host-only keys never reach the payload; compute-side keys only
+    when set, so an older runtime refuses only what it could not honour."""
+    from tests.cluster.legacy_config import ClusterProfile as LegacyProfile
+
+    payload = _cpu_payload(tmp_path)
+    profile = payload.profile
+    profile = profile.model_copy(
+        update={
+            "scheduler": profile.scheduler.model_copy(update={"gpu_option": "gpus"}),
+            "builder": profile.builder.model_copy(
+                update={
+                    "conmon": Path("/opt/podman/bin/conmon"),
+                    "runtime": Path("/opt/podman/bin/runc"),
+                    "storage_driver": "vfs",
+                    "host_namespaces": ("network", "uts"),
+                }
+            ),
+            "apptainer": profile.apptainer.model_copy(
+                update={"network_isolation": "seccomp"} if compute_side else {}
+            ),
+        }
+    )
+    payload = payload.model_copy(update={"profile": profile})
+    output = tmp_path / "run.sh"
+
+    serialized = json.loads(render_engine_driver(payload, profile, output).read_text())
+
+    for section, name in (
+        ("scheduler", "gpu_option"),
+        ("builder", "conmon"),
+        ("builder", "runtime"),
+        ("builder", "storage_driver"),
+        ("builder", "host_namespaces"),
+        ("apptainer", "process_namespaces"),
+    ):
+        assert name not in serialized["profile"][section]
+    loaded = load_engine_payload(output.with_suffix(".json"))
+    assert loaded.profile.apptainer.network_isolation == (
+        "seccomp" if compute_side else "namespace"
+    )
+    if compute_side:
+        with pytest.raises(ValueError, match="network_isolation"):
+            LegacyProfile.model_validate(serialized["profile"])
+    else:
+        LegacyProfile.model_validate(serialized["profile"])

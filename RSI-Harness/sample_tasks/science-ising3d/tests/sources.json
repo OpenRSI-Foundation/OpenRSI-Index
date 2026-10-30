@@ -1,0 +1,56 @@
+{
+  "sources": [
+    {
+      "id": "S01",
+      "kind": "convention",
+      "used": "The finite nearest-neighbour Ising model on periodic volumes and p(K)=lim log Z/N, which exists independently of boundary condition and volume sequence and is convex (science-contract.yaml domain; rubrics R01-R03; coverage.md).",
+      "source": {
+        "url": "https://www.unige.ch/math/folks/velenik/smbook/Ising_Model.pdf",
+        "version": "S. Friedli and Y. Velenik, Statistical Mechanics of Lattice Systems, Chapter 3, revised version of August 22 2017 (Cambridge University Press 2017); PDF sha256 4809d134deb0a97bb37bcc306345d3ace659f7543bbcd8cfedde53c5dbe47045",
+        "locator": "Section 3.1, eq. (3.1) (Hamiltonian over nearest-neighbour pairs {i,j}); Section 3.2, the finite-volume pressure and Theorem 3.6"
+      },
+      "derivation": "Task normalization: K=beta with J=1 and h=0, so p(K)=psi(beta,0); the periodic cube is one of the volume sequences Theorem 3.6 covers.",
+      "check": "Downloaded the PDF on 2026-10-29 and read eq. (3.1), the definition psi_Lambda=(1/|Lambda|) log Z and Theorem 3.6: the limit exists, does not depend on the sequence or the boundary condition, and is convex. This matches the contract's model and pressure definition.",
+      "status": "verified"
+    },
+    {
+      "id": "S02",
+      "kind": "other",
+      "used": "High-temperature anchors p=log(2)+3K^2/2+11K^4/4+O(K^6), e=-3K-11K^3+O(K^5), c=3K^2+33K^4+O(K^6) (rubrics.json R10, R12, R14; reviewer.md; coverage.md).",
+      "source": {
+        "url": "https://www.unige.ch/math/folks/velenik/smbook/Cluster_Expansion.pdf",
+        "version": "S. Friedli and Y. Velenik, Statistical Mechanics of Lattice Systems, Chapter 5, revised version of August 22 2017 (Cambridge University Press 2017); PDF sha256 64c7be4abecdf2bbd7f47841980d1353e92013e090f50d6ef4a6cac94cbac3b1",
+        "locator": "Section 5.7.3, eq. (5.38), Theorem 5.13 and Exercise 5.7"
+      },
+      "derivation": "Eq. (5.38): Z=2^|Lambda| (cosh K)^|E| sum over even edge sets of (tanh K)^|E|. With d=3 there are 3 edges per site and the smallest even sets are the 3 elementary plaquettes per site (4 edges each); clusters of two or more polymers start at order tanh^8. So p=log 2+3 log cosh K+3 tanh^4 K+O(K^6). 3 log cosh K=3K^2/2-K^4/4+O(K^6) and 3 tanh^4 K=3K^4+O(K^6), giving 11K^4/4. Then e=-p' and c=K^2 p'' term by term, valid inside the analyticity disk of Theorem 5.13.",
+      "check": "Downloaded the PDF on 2026-10-29 and read eq. (5.38), Theorem 5.13 (analyticity for small beta) and Exercise 5.7 (expansion of psi-d log cosh beta-log 2 in tanh beta). Recomputed the series above by hand.",
+      "status": "verified"
+    },
+    {
+      "id": "S03",
+      "kind": "other",
+      "used": "Low-temperature anchors p=3K+exp(-12K)+O(exp(-20K)), e=-3+12 exp(-12K)+O(exp(-20K)), c=144K^2 exp(-12K)+O(K^2 exp(-20K)); a flipped spin costs 12J, an adjacent pair 20J (rubrics.json R11, R13, R15; reviewer.md; coverage.md).",
+      "source": {
+        "url": "https://www.unige.ch/math/folks/velenik/smbook/Cluster_Expansion.pdf",
+        "version": "S. Friedli and Y. Velenik, Statistical Mechanics of Lattice Systems, Chapter 5, revised version of August 22 2017 (Cambridge University Press 2017); PDF sha256 64c7be4abecdf2bbd7f47841980d1353e92013e090f50d6ef4a6cac94cbac3b1",
+        "locator": "Section 5.7.4, eqs. (5.39)-(5.41)"
+      },
+      "derivation": "Eq. (5.41): a contour of |gamma| plaquettes has weight exp(-2K|gamma|), and the prefactor exp(K|E|) gives 3K per site. One flipped spin is a closed contour of 6 plaquettes (exp(-12K), one per site); an adjacent flipped pair has 10 (exp(-20K), three per site). So p=3K+exp(-12K)+O(exp(-20K)); e=-p' and c=K^2 p'' follow term by term.",
+      "check": "Downloaded the PDF on 2026-10-29 and read eqs. (5.39)-(5.41) and the contour definition in d>=2. Counted the plaquettes of a unit cube and of two adjacent cubes and recomputed the derivatives by hand.",
+      "status": "verified"
+    },
+    {
+      "id": "S04",
+      "kind": "convention",
+      "used": "The critical decomposition into regular backgrounds and side-dependent singular parts related by differentiation, t=Kc/K-1, and the leading coefficient B(2-alpha)(1-alpha) of c from p_s=B|t|^(2-alpha) (rubrics.json R17-R24; reviewer.md; coverage.md).",
+      "source": {
+        "url": "https://arxiv.org/abs/cond-mat/9706003v1",
+        "version": "M. Hasenbusch and K. Pinn, arXiv:cond-mat/9706003v1 (31 May 1997); PDF sha256 ba4c50fff27414640efa55d8163f8092f0d49fa1656fb189cb2c47f4a4a991f6",
+        "locator": "Introduction, eqs. (1)-(8); Section 1, eqs. (9)-(13); Section 2.2, eqs. (24)-(25)"
+      },
+      "derivation": "Their reduced temperature t'=beta_c/beta-1 (eq. 25) is the task's t=Kc/K-1. With p_s=B|t|^(2-alpha), d/dK=(dt/dK) d/dt and K^2 (dt/dK)^2=Kc^2/K^2 tends to 1 at Kc, so c=K^2 p'' has leading singular term B(2-alpha)(1-alpha)|t|^(-alpha); e has exponent 1-alpha. Their f and E are per link (factor 3 against the task's per-site p and e); only exponents and the structure are used, not their fitted values.",
+      "check": "Downloaded the v1 PDF on 2026-10-29 and read eqs. (6)-(13) (analytic plus singular parts, singular laws by differentiation) and eqs. (24)-(25) (the fit with regular background and side-dependent amplitudes, and t'). Recomputed the coefficient by hand.",
+      "status": "verified"
+    }
+  ]
+}

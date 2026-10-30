@@ -499,6 +499,9 @@ class RSILoopAgentAdapter:
         environment = self._agent_environment(agent, model)
         if getattr(agent, "runs_task_solution", False):
             environment[SUBMISSIONS_ENV] = str(request.max_submissions or 1)
+            # Explicitly override task-image/host values. Only a backend with
+            # a native pre-Judge cleanup barrier may defer solution removal.
+            environment["RSI_ORACLE_SOLUTION_CLEANUP"] = "launcher"
         prepared = PreparedAgent(
             agent_name=agent.name,
             command=(*AGENT_SHELL, command),

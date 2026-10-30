@@ -19,6 +19,7 @@ from rsi_harness.integrations.sandbox_compose import (
     ImagePull,
     interpolate,
     load_project,
+    remote_refusal,
     translate,
     translation_json,
 )
@@ -758,6 +759,161 @@ def test_cli_compose_runs_an_x_rsi_allowlist_project_as_an_allowlist_env(
             assert "need network allowlist" in capsys.readouterr().err
         finally:
             broker.close()
+
+
+def test_cli_compose_config_with_a_network_needs_no_broker(
+    tmp_path, monkeypatch, capsys
+):
+    from rsi_harness.integrations import sandbox_client
+
+    (tmp_path / "compose.yaml").write_text("services: {main: {image: busybox}}\n")
+    monkeypatch.delenv("RSI_SANDBOX_SOCKET", raising=False)
+    monkeypatch.delenv("RSI_SANDBOX_TOKEN", raising=False)
+    base = ["compose", "--project-directory", str(tmp_path)]
+    assert sandbox_client.main([*base, "--network", "none", "config"]) == 0
+    assert json.loads(capsys.readouterr().out)["spec"]["network"] == "none"
+    assert sandbox_client.main([*base, "config"]) == 2
+    assert "not configured" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("text", "options", "field"),
+    [
+        (
+            "services: {main: {image: busybox}, kv: {image: redis}}",
+            {},
+            "spec.services",
+        ),
+        (
+            "services: {main: {image: busybox, volumes: [data:/d]}}\n"
+            "volumes: {data: {}}",
+            {},
+            "spec.volumes",
+        ),
+        (
+            "services: {main: {image: busybox, tmpfs: ['/t']}}",
+            {},
+            "spec.services.main.tmpfs",
+        ),
+        (
+            "services: {main: {image: busybox, read_only: true}}",
+            {},
+            "spec.services.main.read_only",
+        ),
+        (
+            "services: {main: {image: busybox, healthcheck: {test: [CMD, 'true']}}}",
+            {},
+            "spec.services.main.healthcheck",
+        ),
+        (
+            "services: {main: {image: busybox}}",
+            {"network": "allowlist", "allowlist": ["pypi.org", "pypi.org:8443"]},
+            "spec.allowlist.1",
+        ),
+        (
+            "services: {main: {image: busybox}}",
+            {"network": "allowlist", "allowlist": ["1.1.1.1", "8.8.8.8:53"]},
+            "spec.allowlist.1",
+        ),
+    ],
+)
+def test_e2b_refuses_what_one_sandbox_cannot_hold_at_translation(
+    tmp_path, text, options, field
+):
+    assert remote_refusal(translated(tmp_path, text, **options).spec, "e2b")[0] == field
+    with pytest.raises(ComposeError, match="unsupported on the e2b backend") as error:
+        translated(tmp_path, text, backend="e2b", **options)
+    assert str(error.value).startswith(field + ": ")
+    assert not any(entry in str(error.value) for entry in options.get("allowlist", ()))
+
+
+def test_e2b_translates_one_image_and_its_allowlists(tmp_path):
+    text = "services: {main: {image: busybox, healthcheck: {disable: true}}}"
+    spec = translated(tmp_path, text, backend="e2b").spec
+    assert spec["services"]["main"]["healthcheck"] == "none"
+    allowed = translated(
+        tmp_path,
+        text,
+        backend="e2b",
+        network="allowlist",
+        allowlist=["1.1.1.1", "8.8.8.0/24", "pypi.org", "example.com:443"],
+    )
+    assert remote_refusal(allowed.spec, "e2b") is None
+    assert remote_refusal({**allowed.spec, "allowlist": ["2001:db8::1"]}, "e2b") is None
+
+
+def test_modal_holds_hostnames_only_on_443_and_ips_without_ports(tmp_path):
+    text = "services: {main: {image: busybox}}"
+    allowed = translated(
+        tmp_path,
+        text,
+        backend="modal",
+        network="allowlist",
+        allowlist=["1.1.1.1", "8.8.8.0/24", "pypi.org", "example.com:443"],
+    )
+    assert remote_refusal(allowed.spec, "modal") is None
+    for entries in (["pypi.org", "example.com:80"], ["pypi.org", "1.1.1.1:443"]):
+        with pytest.raises(
+            ComposeError,
+            match=r"spec\.allowlist\.1: an allowlist port is unsupported on the "
+            "modal backend",
+        ):
+            translated(
+                tmp_path, text, backend="modal", network="allowlist", allowlist=entries
+            )
+    sidecars = "services: {main: {image: busybox}, kv: {image: redis}}"
+    with pytest.raises(ComposeError, match="unsupported on the modal backend"):
+        translated(tmp_path, sidecars, backend="modal")
+
+
+def test_daytona_holds_hostnames_or_ips_never_both(tmp_path):
+    text = "services: {main: {image: busybox}}"
+    for entries in (["pypi.org", "example.com:80"], ["1.1.1.1", "8.8.8.0/24"]):
+        allowed = translated(
+            tmp_path, text, backend="daytona", network="allowlist", allowlist=entries
+        )
+        assert remote_refusal(allowed.spec, "daytona") is None
+    for entries, refused in (
+        (["pypi.org", "example.com:8443"], r"spec\.allowlist\.1: an allowlist port"),
+        (["pypi.org", "1.1.1.1"], r"spec\.allowlist: hostnames together with IPs"),
+        ([f"10.0.0.{n}" for n in range(11)], r"more than 10 IPs and CIDRs"),
+    ):
+        with pytest.raises(ComposeError, match=refused + ".* on the daytona backend"):
+            translated(
+                tmp_path,
+                text,
+                backend="daytona",
+                network="allowlist",
+                allowlist=entries,
+            )
+
+
+def test_cli_compose_refuses_what_e2b_cannot_hold_before_any_pull(
+    tmp_path, monkeypatch, capsys
+):
+    from rsi_harness.integrations import sandbox_client
+    from tests.integrations.test_harbor_env_plugin import FakeBroker
+
+    (tmp_path / "compose.yaml").write_text(
+        "services: {app: {image: busybox}, kv: {image: redis}}"
+    )
+    monkeypatch.setattr(sandbox_client.tempfile, "gettempdir", lambda: str(tmp_path))
+    with tempfile.TemporaryDirectory(prefix="rsi-cli-") as root:
+        broker = FakeBroker(Path(root) / "s", network=("none",))
+        broker.backend = "e2b"
+        monkeypatch.setenv("RSI_SANDBOX_SOCKET", str(broker.path))
+        monkeypatch.setenv("RSI_SANDBOX_TOKEN", "token")
+        try:
+            base = ["compose", "--project-directory", str(tmp_path)]
+            assert sandbox_client.main([*base, "up"]) == 2
+        finally:
+            broker.close()
+    error = json.loads(capsys.readouterr().err.splitlines()[-1])["error"]
+    assert error["message"] == (
+        "spec.services: more than one service (compose) is unsupported on the "
+        "e2b backend"
+    )
+    assert broker.ops("image_pull", "image_build", "env_create") == []
 
 
 def test_front_end_imports_nothing_from_the_harness():

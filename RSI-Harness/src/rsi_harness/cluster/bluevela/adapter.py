@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 import os
+import platform
 import re
 import secrets
 import shlex
@@ -17,6 +18,8 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Protocol
 
+from rsi_harness.cluster import podman_bundle
+from rsi_harness.cluster.agent_version import parse_agent_version
 from rsi_harness.cluster.base import (
     ClusterAdapter,
     ClusterRunRequest,
@@ -29,7 +32,9 @@ from rsi_harness.cluster.bluevela.image import (
     validate_cached_image,
 )
 from rsi_harness.cluster.bluevela.judge_llm import (
+    _MACHINES,
     ClusterJudgeLLM,
+    _codex_candidates,
     preflight_cluster_judge_llm,
 )
 from rsi_harness.cluster.bluevela.resources import (
@@ -49,6 +54,10 @@ from rsi_harness.cluster.schedulers.lsf import (
     LSFScheduler,
 )
 from rsi_harness.errors import InfrastructureError, SetupError
+from rsi_harness.integrations.rsi_loop import (
+    task_solution_script,
+    validate_agent_reasoning_effort,
+)
 from rsi_harness.models import (
     AssetRequirement,
     GPUAllocation,
@@ -66,14 +75,14 @@ from rsi_harness.models import (
 from rsi_harness.runtime.local_auth import resolve_agent_auth
 from rsi_harness.runtime.redaction import redact_text
 from rsi_harness.runtime.run_request import write_run_request
-from rsi_harness.runtime.sandbox_contracts import SandboxEnvGrant
+from rsi_harness.runtime.sandbox_contracts import SandboxEnvGrant, SandboxGrant
 from rsi_harness.runtime.sandbox_policy import (
     resolve_env_grant,
     validate_cluster_sandbox,
     validate_sandbox_policy,
 )
 from rsi_harness.task.compiler import HarborTaskCompiler
-from rsi_loop.harness.agent import get_agent_class
+from rsi_loop.harness.agent import get_agent_class, versions
 from rsi_loop.harness.config import load_config
 
 if TYPE_CHECKING:
@@ -141,13 +150,13 @@ def _agent_launcher(agent_name: str) -> str:
     return command[0]
 
 
-def require_cluster_agent(agent_name: str) -> None:
+def require_cluster_agent(agent_name: str, *, oracle: bool = False) -> None:
     """Refuse Agents whose Work image needs files a cluster image cannot carry."""
     try:
         agent_class = get_agent_class(agent_name)
     except ValueError as error:
         raise SetupError(str(error)) from error
-    if agent_class.image_files:
+    if agent_class.image_files and not (oracle and agent_name == "oracle"):
         raise SetupError(
             f"Agent {agent_name!r} needs files baked into its Work image (such "
             "as rsi-agent-driver or pi's extension), which cluster images do "
@@ -163,10 +172,43 @@ def _binary_version(executable: Path) -> str:
         text=True,
     )
     output = f"{completed.stdout}\n{completed.stderr}"
-    match = re.search(r"\b(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b", output)
-    if completed.returncode != 0 or match is None:
-        raise SetupError(f"cannot resolve {executable} version from {output.strip()!r}")
-    return match.group(1)
+    if completed.returncode != 0:
+        raise SetupError(
+            f"cannot resolve {executable} version: exited {completed.returncode}"
+        )
+    try:
+        return parse_agent_version(output)
+    except SetupError as error:
+        raise SetupError(f"cannot resolve {executable} version: {error}") from error
+
+
+def _is_script(path: Path) -> bool:
+    with path.open("rb") as stream:
+        return stream.read(2) == b"#!"
+
+
+def _native_agent_binary(agent_name: str, executable: Path) -> Path:
+    """The Agent CLI a job binds alone into Work, which must be a native
+    binary: a ``#!`` launcher (npm's ``codex.js``) needs its package and
+    interpreter. For Codex, the binary npm installed beside it is used."""
+    if not _is_script(executable):
+        return executable
+    if agent_name == "codex":
+        vendor = f"{_MACHINES.get(platform.machine().lower())}-unknown-linux-musl"
+        for candidate in _codex_candidates(executable)[1:]:
+            if candidate.parents[1].name == vendor and not _is_script(candidate):
+                return candidate
+    raise SetupError(
+        f"the cluster Agent CLI {executable} is a script launcher, which cannot "
+        "run inside the task image: install the Agent's native binary on "
+        "shared storage, first on PATH"
+    )
+
+
+def _pinned_agent_version(agent_name: str) -> str | None:
+    return {"codex": versions.CODEX, "claude-code": versions.CLAUDE_CODE}.get(
+        agent_name
+    )
 
 
 def _resolve_agent_version(agent_name: str) -> str | None:
@@ -174,7 +216,58 @@ def _resolve_agent_version(agent_name: str) -> str | None:
     executable = shutil.which(launcher)
     if executable is None:
         raise SetupError(f"cluster agent executable is unavailable: {launcher}")
-    return _binary_version(Path(executable))
+    return _binary_version(_native_agent_binary(agent_name, Path(executable).resolve()))
+
+
+def job_log_detail(stderr_path: Path | None, job_id: str) -> str:
+    """Where a failed job's stderr is, with the last hint the build driver
+    wrote there."""
+    if stderr_path is None:
+        return ""
+    path = Path(str(stderr_path).replace("%J", job_id).replace("%j", job_id))
+    try:
+        lines = path.read_text(errors="replace").splitlines()
+    except OSError:
+        lines = []
+    hints = [line for line in lines if line.startswith("build hint:")]
+    return f"; see {path}" + (f" ({hints[-1]})" if hints else "")
+
+
+def engine_error_detail(plan: Any, run_id: str) -> str:
+    """The Engine's own (redacted) error for a failed run job, if it wrote one."""
+    path = plan.paths.logs / "runs" / run_id / plan.task.task_id / "engine_error.json"
+    try:
+        error = str(json.loads(path.read_text())["error"]).strip()
+    except (OSError, ValueError, KeyError, TypeError):
+        return ""
+    if len(error) > 1000:
+        error = error[:1000] + "..."
+    return f"; Engine: {error}" if error else ""
+
+
+def _record_isolation(manifest: dict[str, Any], plan: Any, run_id: str) -> None:
+    """RUN_INFO's summary of the job's pre-search isolation check, or none
+    when this attempt did not reach it."""
+    from rsi_harness.cluster.bluevela.runtime import ISOLATION_SUMMARY
+
+    path = plan.paths.logs / "runs" / run_id / plan.task.task_id
+    try:
+        report = json.loads((path / "isolation_check.json").read_text())
+    except (OSError, ValueError):
+        manifest.pop("isolation", None)
+        return
+    manifest["isolation"] = {key: report.get(key) for key in ISOLATION_SUMMARY}
+
+
+def _check_remote_host(grant: SandboxGrant | SandboxEnvGrant | None) -> None:
+    """The Engine runs this interpreter with this host's environment: check
+    its remote backend's SDK, variables and credentials before anything is
+    submitted."""
+    host = grant.environments.host if isinstance(grant, SandboxEnvGrant) else None
+    if host is not None and host.remote is not None:
+        from rsi_harness.runtime.sandbox_remote import remote_backend
+
+        remote_backend(host.backend).check_host(host.remote)
 
 
 class BlueVelaClusterAdapter(ClusterAdapter):
@@ -221,9 +314,17 @@ class BlueVelaClusterAdapter(ClusterAdapter):
     def run(self, request: ClusterRunRequest) -> ClusterRunResult:
         definition = self._compile(request)
         resource_plan = derive_resource_plan(definition, self.profile)
+        oracle = definition.agent.name == "oracle"
+        if oracle and resource_plan.multi_node is not None:
+            multi = resource_plan.multi_node
+            if not multi.work.node_count or not multi.verifier.node_count:
+                raise SetupError(
+                    "multi-node Oracle requires nonempty Work and Judge node pools"
+                )
         resources = resource_plan.single_node or resource_plan.multi_node
         assert resources is not None
         from rsi_harness.cluster.bluevela.runtime import (
+            require_cluster_isolation,
             require_cluster_judge_model_access,
         )
 
@@ -231,20 +332,44 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         require_cluster_judge_model_access(
             definition, multi_node=resource_plan.multi_node is not None
         )
+        require_cluster_isolation(
+            definition,
+            self.profile.apptainer,
+            multi_node=resource_plan.multi_node is not None,
+        )
         judge_llm = self._judge_llm(definition, request)
         sandbox = self._sandbox_grant(
             definition, request, multi_node=resource_plan.multi_node is not None
         )
+        _check_remote_host(sandbox)
         build_context = definition.service.build_context
         if build_context is None:
             raise SetupError("Blue Vela cluster runs require a Docker build context")
         self._validate_runtime_inputs(request)
-        agent_version = self.agent_version_resolver(definition.agent.name)
-        agent_launcher = _agent_launcher(definition.agent.name)
-        raw_agent_binary = shutil.which(agent_launcher)
-        agent_binary = (
-            None if raw_agent_binary is None else Path(raw_agent_binary).resolve()
+        agent_version = (
+            None if oracle else self.agent_version_resolver(definition.agent.name)
         )
+        agent_launcher = _agent_launcher(definition.agent.name)
+        raw_agent_binary = None if oracle else shutil.which(agent_launcher)
+        agent_binary = (
+            None
+            if raw_agent_binary is None
+            else _native_agent_binary(
+                definition.agent.name, Path(raw_agent_binary).resolve()
+            )
+        )
+        # Another version than the pin runs, with a warning and a record.
+        pinned = _pinned_agent_version(definition.agent.name)
+        other_pin = pinned if agent_version not in (None, pinned) else None
+        if other_pin is not None:
+            self.event_callback(
+                "agent_version_mismatch",
+                {
+                    "agent": definition.agent.name,
+                    "version": agent_version,
+                    "pinned": other_pin,
+                },
+            )
         agent_companions = ()
         if definition.agent.name == "codex" and agent_binary is not None:
             code_mode_host = agent_binary.parent / "codex-code-mode-host"
@@ -262,7 +387,14 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             run_dir, names["build"], resources, run_dir / "control" / "build.sh"
         )
         run_spec = self._run_spec(
-            run_dir, names["run"], resources, run_dir / "control" / "run.sh"
+            run_dir,
+            names["run"],
+            resources,
+            run_dir / "control" / "run.sh",
+            judge_drain_seconds=math.ceil(
+                definition.verifier.timeout_seconds
+                + self.profile.resources.walltime_margin_seconds
+            ),
         )
         if request.dry_run:
             self.event_callback(
@@ -352,11 +484,19 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             image=image,
             agent_version=agent_version,
         )
+        if other_pin is not None:
+            manifest["agent_pinned_version"] = other_pin
         manifest_path = run_dir / "RUN_INFO.json"
         _atomic_json(manifest_path, manifest)
         job_ids: list[str] = []
         try:
             if not image.cache_hit:
+                bundle = self.profile.builder.podman_bundle
+                if bundle is not None and podman_bundle.ensure_installed(bundle):
+                    self.event_callback(
+                        "podman_installed",
+                        {"path": str(podman_bundle.bundle_dir(bundle))},
+                    )
                 self.scheduler.require_name_available(build_spec.name)
                 build_job_id = self.scheduler.submit(build_spec)
                 job_ids.append(build_job_id)
@@ -373,7 +513,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                         "job_state", {"stage": "build", "state": state}
                     ),
                 )
-                self._require_success("SIF build", build_result)
+                self._require_success("SIF build", build_result, build_spec.stderr_path)
             if not validate_cached_image(image):
                 raise InfrastructureError(
                     "SIF cache is missing or failed SHA256 validation after build"
@@ -454,8 +594,15 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                     "job_state", {"stage": "run", "state": state}
                 ),
             )
-            self._require_success("native Engine run", run_result)
-            log_dir = validate_native_artifacts(run_plan, run_id)
+            _record_isolation(manifest, run_plan, run_id)
+            self._require_success(
+                "native Engine run",
+                run_result,
+                detail=engine_error_detail(run_plan, run_id),
+            )
+            log_dir = validate_native_artifacts(
+                run_plan, run_id, visibility_timeout=60.0
+            )
             manifest["state"] = "completed"
             _atomic_json(manifest_path, manifest)
             return ClusterRunResult(
@@ -480,7 +627,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
 
         Refused while the run's job, or another job of its name, is active,
         or its Engine holds the lease. A run that did not end cleanly is
-        closed first: its E2B sandboxes are killed, a partial round's
+        closed first: its remote sandboxes are killed, a partial round's
         feedback is withheld and its attempt ends at the job's end.
         """
         # Loaded here: the lease and recovery load the Docker SDK.
@@ -501,6 +648,10 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 f"{self.profile.storage.run_root}"
             )
         manifest = json.loads(manifest_path.read_text())
+        if manifest.get("agent") == "oracle":
+            raise SetupError(
+                "Oracle validation cannot resume; start a fresh validation"
+            )
         if manifest.get("multi_node") is not None:
             raise SetupError(f"run {run_id} is multi-node, which cannot resume yet")
         job_id = manifest.get("run_job_id")
@@ -531,6 +682,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 + (", ".join(changed) or "no digests recorded")
             )
         payload = load_engine_payload(control / "run.json")
+        _check_remote_host(payload.run_plan.sandbox)
         # The cache is shared: an evicted or rebuilt SIF is not the run's.
         if not validate_cached_image(
             SIFImagePlan(
@@ -566,7 +718,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         store = LeaseStore(run_dir / "leases")
         recovery = RecoveryManager(
             store=store,
-            backend=None,  # type: ignore[arg-type]  # E2B only: no Docker
+            backend=None,  # type: ignore[arg-type]  # remote only: no Docker
             managed_root=run_dir,
         )
         context = plan_resume(
@@ -588,6 +740,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             retained_images=False,
             # As salvage closes it: an unknown end charges up to the deadline.
             open_attempt_ended_at=math.inf if job_ended_at is None else job_ended_at,
+            validate_before_salvage=self._resume_policy_validator(payload),
         )
         assert payload.resources is not None
         resources = payload.resources.model_copy(
@@ -616,8 +769,23 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                     ),
                 }
             ),
-            spec=self._run_spec(run_dir, name, resources, script),
+            spec=self._run_spec(
+                run_dir,
+                name,
+                resources,
+                script,
+                judge_drain_seconds=math.ceil(
+                    definition.verifier.timeout_seconds
+                    + self.profile.resources.walltime_margin_seconds
+                ),
+            ),
         )
+
+    def _resume_policy_validator(
+        self, payload: EnginePayload
+    ) -> Callable[[ResumeContext], None] | None:
+        """Optional read-only backend check before recovery mutates the run."""
+        return None
 
     def resume(self, plan: ClusterResumePlan) -> ClusterRunResult:
         """Submit the planned attempt under the run's ID and wait for it."""
@@ -654,8 +822,15 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                     "job_state", {"stage": "run", "state": state}
                 ),
             )
-            self._require_success("native Engine run", run_result)
-            log_dir = validate_native_artifacts(payload.run_plan, payload.run_id)
+            _record_isolation(manifest, payload.run_plan, payload.run_id)
+            self._require_success(
+                "native Engine run",
+                run_result,
+                detail=engine_error_detail(payload.run_plan, payload.run_id),
+            )
+            log_dir = validate_native_artifacts(
+                payload.run_plan, payload.run_id, visibility_timeout=60.0
+            )
             manifest["state"] = "completed"
             _atomic_json(manifest_path, manifest)
             return ClusterRunResult(
@@ -674,7 +849,21 @@ class BlueVelaClusterAdapter(ClusterAdapter):
     def _compile(self, request: ClusterRunRequest) -> TaskDefinition:
         definition = self.compiler.compile(request.task_dir, request.options)
         validate_sandbox_policy(definition.sandbox, request.sandbox_policy, "cluster")
-        require_cluster_agent(definition.agent.name)
+        oracle = definition.agent.name == "oracle"
+        if oracle:
+            if self.profile.scheduler.kind != "slurm":
+                raise SetupError("Oracle requires a Slurm allocation")
+            task_solution_script(definition.source_dir)
+            if request.agent_auth is not None:
+                raise SetupError(
+                    "the oracle Agent uses no credential; drop --agent-auth"
+                )
+            validate_agent_reasoning_effort("oracle", request.reasoning_effort)
+            if definition.verifier.model_access:
+                raise SetupError(
+                    "the task's Judge has model_access; oracle has no model"
+                )
+        require_cluster_agent(definition.agent.name, oracle=oracle)
         if definition.gpu_requirement.count == 0 and not self.supports_cpu_work:
             raise SetupError(
                 "Blue Vela cluster runs require Work GPUs; "
@@ -736,10 +925,11 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         *,
         multi_node: bool,
     ) -> SandboxEnvGrant | None:
-        """The E2B env grant the Engine's broker enforces, frozen in the plan.
+        """The remote env grant the Engine's broker enforces, frozen in the
+        plan.
 
         The parent envelope only sizes a host pool reservation, which a
-        cluster run never makes (Work is a job process, its envs are E2B
+        cluster run never makes (Work is a job process, its envs are remote
         sandboxes): a unit parent keeps the host pool out of the way.
         """
         task = definition.sandbox
@@ -765,11 +955,10 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 agent_api_key=None,
             )
         launcher = _agent_launcher(request.agent_name)
-        if shutil.which(launcher) is None:
+        if request.agent_name != "oracle" and shutil.which(launcher) is None:
             raise SetupError(f"cluster agent executable is unavailable: {launcher}")
-        for label, path in (("Apptainer", self.profile.apptainer.binary),):
-            if not path.is_file():
-                raise SetupError(f"{label} binary does not exist: {path}")
+        # Apptainer may only be installed on compute nodes. Both generated
+        # build and Engine drivers check it there before starting their work.
 
     def _run_id(self, task_id: str) -> str:
         timestamp = self.clock().astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -820,6 +1009,8 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         name: str,
         resources: ClusterResources | MultiNodeResources,
         script: Path,
+        *,
+        judge_drain_seconds: int | None = None,
     ) -> LSFJobSpec:
         if isinstance(resources, MultiNodeResources):
             return self._job_spec(
@@ -861,6 +1052,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             script_path=script.resolve(),
             gpu_count=resources.total_gpus,
             local_tmp_mb=resources.local_tmp_mb,
+            exclusive=self.profile.scheduler.exclusive,
             excluded_hosts=self.profile.scheduler.excluded_hosts,
         )
 
@@ -1129,6 +1321,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 else None
             ),
             "agent_version": agent_version,
+            "agent": definition.agent.name,
             "expected_outputs": [
                 str(leaf / "final_result.json"),
                 str(leaf / "agent_output.txt"),
@@ -1154,11 +1347,17 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         return hashes
 
     @staticmethod
-    def _require_success(stage: str, result: LSFJobResult) -> None:
+    def _require_success(
+        stage: str,
+        result: LSFJobResult,
+        stderr_path: Path | None = None,
+        detail: str = "",
+    ) -> None:
         if result.state != "DONE" or result.exit_code != 0:
             raise InfrastructureError(
                 f"{stage} job {result.job_id} ended in {result.state} "
                 f"with exit {result.exit_code}"
+                f"{job_log_detail(stderr_path, result.job_id)}{detail}"
             )
 
 

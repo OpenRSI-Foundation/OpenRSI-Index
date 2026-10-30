@@ -44,7 +44,7 @@ Preview the recompute in Work with
 `python3 /tests/judge.py --recompute /workspace/candidate`.
 It runs no audit or review and writes no reward.
 
-Then the run's own Agent, called inside the Judge through `rsi-agent`, audits the round (20 minutes) and reviews each rubric in its own call, four at a time under one 30-minute deadline. Reviewers read the frozen candidate, the recompute record and your trajectory; they may reason and calculate independently but never execute candidate code and do not search the web. The Judge library (`/tests/science_judge.py`) and this task's configuration (`/tests/judge.py`) are public.
+Then the run's own Agent, called inside the Judge through `rsi-agent`, audits the round and your trajectory (20 minutes). The Judge model reviews each rubric in its own call, four at a time under one 30-minute deadline; each call sees the frozen candidate and the recompute record in its prompt, reasons without tools, never executes candidate code and does not search the web. The Judge library (`/tests/science_judge.py`) and this task's configuration (`/tests/judge.py`) are public.
 
 ## Integrity
 

@@ -29,6 +29,7 @@ from rsi_harness.judge_agent import (
     rsi_isolate,
 )
 from rsi_harness.judge_agent import judge_isolation as isolation
+from tests.judge_agent.test_judge_isolation import _filter as _bpf
 from tests.landlock_helpers import native_signal_compatibility
 
 PROGRAM = Path(__file__).parents[2] / "src/rsi_harness/judge_agent/rsi_isolate.py"
@@ -300,10 +301,22 @@ def test_a_write_grant_with_hard_links_is_refused(tmp_path):
 NETWORK = r"""
 import ctypes, json, os, socket
 found = {}
-for name, family in (("inet", socket.AF_INET), ("inet6", socket.AF_INET6),
-                     ("unix", socket.AF_UNIX)):
+for name, family, kind, protocol in (
+    ("inet", socket.AF_INET, socket.SOCK_STREAM, 0),
+    ("inet6", socket.AF_INET6, socket.SOCK_STREAM, 0),
+    ("unix", socket.AF_UNIX, socket.SOCK_STREAM, 0),
+    ("netlink_route", socket.AF_NETLINK, socket.SOCK_RAW, 0),
+    ("netlink_usersock", socket.AF_NETLINK, socket.SOCK_RAW, 2),
+):
     try:
-        socket.socket(family, socket.SOCK_STREAM).close()
+        socket.socket(family, kind, protocol).close()
+        found[name] = "ok"
+    except OSError as error:
+        found[name] = error.strerror
+pairs = {"socketpair": socket.SOCK_STREAM, "socketpair_dgram": socket.SOCK_DGRAM}
+for name, kind in pairs.items():
+    try:
+        socket.socketpair(socket.AF_UNIX, kind)
         found[name] = "ok"
     except OSError as error:
         found[name] = error.strerror
@@ -318,17 +331,74 @@ print(json.dumps(found))
 
 @requires_landlock
 def test_no_network_refuses_internet_sockets_and_io_uring():
-    result = _run("run", "--no-network", "--", PYTHON, "-I", "-c", NETWORK)
+    private = {"RSI_JUDGE_NETNS": "private"}
+    result = _run("run", "--no-network", "--", PYTHON, "-I", "-c", NETWORK, env=private)
     assert result.returncode == 0, result.stderr
     denied = "Operation not permitted"
     assert json.loads(result.stdout) == {
         "inet": denied,
         "inet6": denied,
         "unix": "ok",
+        "netlink_route": "ok",
+        "netlink_usersock": denied,
+        "socketpair": "ok",
+        "socketpair_dgram": "ok",
         "io_uring": denied,
     }
-    open_network = _run("run", "--", PYTHON, "-I", "-c", NETWORK)
-    assert json.loads(open_network.stdout)["inet"] == "ok"
+    open_network = json.loads(_run("run", "--", PYTHON, "-I", "-c", NETWORK).stdout)
+    assert open_network["inet"] == "ok"
+    # In every mode: no netlink socket but NETLINK_ROUTE.
+    assert open_network["netlink_usersock"] == denied
+
+
+@requires_landlock
+@pytest.mark.parametrize("netns", [None, "shared", "PRIVATE"])
+def test_no_network_in_a_shared_network_namespace_refuses_unix_sockets(netns):
+    """Abstract sockets reach other jobs on the node: AF_UNIX goes too,
+    unless Landlock (ABI 6) scopes them; a stream socketpair stays, a
+    datagram one (it can reach any abstract name) goes too."""
+    result = _run(
+        "run",
+        "--no-network",
+        "--",
+        PYTHON,
+        "-I",
+        "-c",
+        NETWORK,
+        env={"RSI_JUDGE_NETNS": netns},
+    )
+    assert result.returncode == 0, result.stderr
+    found = json.loads(result.stdout)
+    expected = "ok" if LANDLOCK >= 6 else "Operation not permitted"
+    assert (found["unix"], found["socketpair_dgram"]) == (expected, expected)
+    assert found["socketpair"] == "ok"
+    # Without --no-network, AF_UNIX stays.
+    open_network = _run(
+        "run", "--", PYTHON, "-I", "-c", NETWORK, env={"RSI_JUDGE_NETNS": netns}
+    )
+    assert json.loads(open_network.stdout)["unix"] == "ok"
+
+
+def test_unix_sockets_are_refused_only_where_the_judge_shares_a_netns(monkeypatch):
+    class Ruleset:
+        scoped = isolation.LANDLOCK_SCOPE_ABSTRACT_UNIX_SOCKET
+
+    monkeypatch.delenv("RSI_JUDGE_NETNS", raising=False)
+    assert rsi_isolate._deny_unix(True, None)
+    assert not rsi_isolate._deny_unix(False, None)
+    assert not rsi_isolate._deny_unix(True, Ruleset())
+    monkeypatch.setenv("RSI_JUDGE_NETNS", "private")
+    assert not rsi_isolate._deny_unix(True, None)
+
+
+@requires_landlock
+def test_the_command_cannot_read_or_trace_rsi_isolate():
+    """Outside the uid mode the command runs as the Judge's user: rsi-isolate
+    is not dumpable, so its /proc files belong to root."""
+    owner = "import os; print(os.stat('/proc/%d/environ' % os.getppid()).st_uid)"
+    result = _run("run", "--", PYTHON, "-I", "-c", owner)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "0"
 
 
 # A child in the command's group, and a daemon that left it (double fork,
@@ -490,10 +560,16 @@ def _copy(tmp_path: Path, landlock: str) -> Path:
     copy.mkdir()
     shutil.copy(PROGRAM, copy / PROGRAM.name)
     (copy / SHARED.name).write_text(
-        SHARED.read_text().replace(
+        SHARED.read_text()
+        .replace(
             "def landlock_abi(libc) -> tuple:",
             f"def landlock_abi(libc) -> tuple:\n    return {landlock}\n\n\n"
             "def _unused_landlock_abi(libc) -> tuple:",
+        )
+        .replace(
+            "def userns_problem() -> str | None:",
+            "def userns_problem() -> str | None:\n    return 'userns: off'\n\n\n"
+            "def _unused_userns_problem() -> str | None:",
         )
     )
     return copy / PROGRAM.name
@@ -508,6 +584,7 @@ def test_without_landlock_it_fails_closed_unless_the_operator_allows(tmp_path):
         assert refused.returncode == 123, refused.stderr
         assert "cannot isolate the command" in refused.stderr
         assert "ENOSYS" in refused.stderr
+        assert "user namespaces: userns: off" in refused.stderr
     allowed = _run(
         "run",
         "--",
@@ -635,3 +712,118 @@ def test_native_strict_policy_is_not_enabled_by_functional_test_helper(policy):
     else:
         assert result.returncode == 0, result.stderr
         assert json.loads(result.stdout)["landlock_signal_scope"] is (LANDLOCK >= 6)
+
+
+# -- the userns mode -------------------------------------------------------------
+
+
+def test_userns_hides_all_top_level_entries_but_system_paths_and_grants(tmp_path):
+    for name in ("usr", "etc", "dev", "tests", "data", "home", "logs"):
+        (tmp_path / name).mkdir()
+    (tmp_path / ".dockerenv").write_text("")
+    (tmp_path / "bin").symlink_to("usr/bin")
+    (tmp_path / "shortcut").symlink_to("tests")
+
+    hidden = rsi_isolate._top_level([str(tmp_path / "data")], str(tmp_path))
+
+    assert hidden == [
+        str(tmp_path / name) for name in (".dockerenv", "home", "logs", "tests")
+    ]
+
+
+def test_the_userns_plan_grants_reads_writes_and_hides_aliases(monkeypatch):
+    program = isolation.seccomp_program(
+        no_network=True, truncate_guard=False, namespace_guard=True
+    )
+    monkeypatch.setattr(isolation, "mount_aliases", lambda paths: ["/srv/verifier"])
+    monkeypatch.setattr(rsi_isolate, "_interpreter_paths", lambda: ["/usr", "/venv"])
+    monkeypatch.setattr(rsi_isolate, "_top_level", lambda grants: ["/home", "/tmp"])
+
+    plan = rsi_isolate._userns_plan(
+        ["/data/in"],
+        ["/data/out"],
+        "/tmp/rsi-isolate-1",
+        "/data/out",
+        "/home/x/tool",
+        program,
+    )
+
+    assert plan == {
+        "hide": ["/home", "/tmp", "/srv/verifier"],
+        "read": ["/data/in", "/venv", "/home/x/tool"],
+        "write": ["/data/out", "/tmp/rsi-isolate-1"],
+        "cwd": "/data/out",
+        "shm": True,
+        "filter": program.hex(),
+    }
+    # A grant on another mount of /logs/verifier would open it.
+    with pytest.raises(isolation.Failure) as refused:
+        rsi_isolate._userns_plan(
+            ["/srv"], [], "/tmp/rsi-isolate-1", "/srv", None, program
+        )
+    assert refused.value.code == 125
+    assert "another mount of a hidden path" in refused.value.message
+
+
+def test_a_userns_call_runs_the_command_in_the_box(monkeypatch, tmp_path):
+    """The mode as the probe found it; the box itself needs user namespaces."""
+    started = []
+
+    class Process:
+        pid = 2**22 + 1
+        returncode = 0
+
+        def __init__(self, argv, **options):
+            started.append((argv, options))
+
+        def wait(self, timeout=None):
+            return 0
+
+    class Libc:
+        def prctl(self, *args):
+            return 0
+
+    out = tmp_path / "out"
+    out.mkdir()
+    monkeypatch.setattr(isolation, "load_libc", Libc)
+    monkeypatch.setattr(
+        rsi_isolate,
+        "isolation_mode",
+        lambda libc: {"mode": "userns", "landlock_abi": 0, "fallback": "none"},
+    )
+    monkeypatch.setattr(isolation, "mount_aliases", lambda paths: [])
+    monkeypatch.setattr(rsi_isolate.subprocess, "Popen", Process)
+    # Nothing ran: leave this process's own children alone.
+    monkeypatch.setattr(isolation, "end_descendants", lambda: True)
+    options = rsi_isolate._parser().parse_args(["run", "--write", str(out)])
+
+    assert rsi_isolate.run(options, ["true"]) == 0
+
+    ((argv, options),) = started
+    assert argv[:5] == [sys.executable, "-I", "-S", "-B", str(SHARED)]
+    assert argv[-2:] == ["--", "true"]
+    plan = json.loads(argv[argv.index("--plan") + 1])
+    assert plan["write"][0] == str(out)
+    assert plan["cwd"] == plan["write"][1] and plan["shm"] is True
+    assert "/tmp" in plan["hide"] and "/usr" not in plan["hide"]
+    # The namespace and trace guards; the box installs it, not the caller.
+    nr = {"x86_64": (272, 101, 0xC000003E), "aarch64": (97, 117, 0xC00000B7)}
+    unshare, ptrace, arch = nr[os.uname().machine]
+    program = bytes.fromhex(plan["filter"])
+    for number in (unshare, ptrace):
+        assert _bpf(program, number, arch) == 0x00050000 | 1
+
+
+def test_landlock_never_grants_another_mount_of_what_is_never_granted(
+    monkeypatch, tmp_path
+):
+    """A read rule on /data, where /logs/verifier is also mounted, opens it."""
+    monkeypatch.setattr(isolation, "mount_aliases", lambda paths: [str(tmp_path / "v")])
+
+    with pytest.raises(isolation.Failure) as refused:
+        rsi_isolate._ruleset(None, 4, [str(tmp_path)], [], "/tmp/private", None)
+
+    assert refused.value.code == 125
+    assert f"{tmp_path / 'v'} is another mount of a hidden path" in (
+        refused.value.message
+    )

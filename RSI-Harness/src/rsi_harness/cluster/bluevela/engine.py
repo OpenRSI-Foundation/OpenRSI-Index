@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import json
 import os
 import secrets
@@ -20,11 +21,20 @@ from rsi_harness.cluster.bluevela.allocation import (
     parse_lsb_mcpu_hosts,
     probe_and_partition,
 )
+from rsi_harness.cluster.bluevela.apptainer_environment import (
+    OPERATOR_APPTAINER_NAMES,
+)
 from rsi_harness.cluster.bluevela.judge_llm import ClusterJudgeLLM
+from rsi_harness.cluster.bluevela.preflight import apptainer_preflight
 from rsi_harness.cluster.bluevela.resources import MultiNodeResources
-from rsi_harness.cluster.config import ClusterProfile, SlurmSchedulerProfile
+from rsi_harness.cluster.config import (
+    ApptainerProfile,
+    ClusterProfile,
+    SlurmSchedulerProfile,
+)
 from rsi_harness.cluster.slurm.allocation import discover_slurm_inventory
 from rsi_harness.errors import SetupError
+from rsi_harness.judge_agent.judge_isolation import PR_SET_DUMPABLE
 from rsi_harness.models import (
     AgentAuthSource,
     CompileOptions,
@@ -35,7 +45,10 @@ from rsi_harness.models import (
     RunPlan,
 )
 from rsi_harness.runtime.recovery import AttemptGrants
-from rsi_harness.runtime.sandbox_policy import _tuples, validate_cluster_sandbox
+from rsi_harness.runtime.sandbox_policy import (
+    strict_sandboxes,
+    validate_cluster_sandbox,
+)
 
 
 class ClusterResume(PersistedModel):
@@ -106,14 +119,9 @@ def load_engine_payload(path: Path) -> EnginePayload:
         value = json.loads(Path(path).read_text())
     except (OSError, json.JSONDecodeError) as error:
         raise SetupError(f"invalid cluster Engine payload {path}: {error}") from error
-    # The strict sandbox contracts take tuples, which JSON spells as arrays.
     plan = value.get("run_plan") if isinstance(value, dict) else None
     if isinstance(plan, dict):
-        if plan.get("sandbox") is not None:
-            plan["sandbox"] = _tuples(plan["sandbox"])
-        task = plan.get("task")
-        if isinstance(task, dict) and task.get("sandbox") is not None:
-            task["sandbox"] = _tuples(task["sandbox"])
+        strict_sandboxes(plan)
     return EnginePayload.model_validate(value)
 
 
@@ -197,6 +205,16 @@ def _quote(value: str | Path) -> str:
     return shlex.quote(str(value))
 
 
+# Binds, mount options and container variables come from the profile alone,
+# never from the submit shell (Slurm's --export=ALL carries it here).
+_SCRUB_APPTAINER_ENVIRONMENT = f"""for name in $(compgen -e); do
+  case "$name" in
+    {"|".join(OPERATOR_APPTAINER_NAMES)}) ;;
+    APPTAINER*|SINGULARITY*) unset "$name" ;;
+  esac
+done"""
+
+
 def _atomic_model(path: Path, value: PersistedModel) -> None:
     temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
     descriptor = os.open(
@@ -228,7 +246,28 @@ def render_engine_driver(
     """Render a driver that starts the native Engine, never Harbor CLI."""
     output = Path(output_path).resolve()
     payload_path = output.with_suffix(".json")
-    payload_path.write_text(payload.model_dump_json(indent=2))
+    serialized = payload.model_dump(mode="json")
+    # These controls are consumed by the submit host only. Do not send new
+    # profile keys to an older frozen compute runtime when resuming a run.
+    scheduler = serialized["profile"]["scheduler"]
+    for name in ("request_tmp", "build", "run_walltime_limit", "gpu_option"):
+        scheduler.pop(name, None)
+    builder = serialized["profile"]["builder"]
+    for name in (
+        "conmon",
+        "runtime",
+        "storage_driver",
+        "host_namespaces",
+        "podman_bundle",
+    ):
+        builder.pop(name, None)
+    # Keys the compute side reads travel only when set: an older runtime
+    # then refuses only a payload it could not honour.
+    apptainer = serialized["profile"]["apptainer"]
+    for name in ("network_isolation", "process_namespaces"):
+        if apptainer.get(name) == ApptainerProfile.model_fields[name].default:
+            apptainer.pop(name, None)
+    payload_path.write_text(json.dumps(serialized, indent=2))
     leaf = (
         payload.run_plan.paths.logs
         / "runs"
@@ -262,8 +301,7 @@ test -s {_quote(leaf / "final_result.json")}
             device_environment = '''test -n "${CUDA_VISIBLE_DEVICES:-}"
 export APPTAINERENV_CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"'''
             device_preflight = f"""{_quote(profile.apptainer.binary)} \
-  exec --nv --containall --writable-tmpfs \
-  --env "CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES" {bind_args} \
+  exec --nv --containall --no-mount hostfs --writable-tmpfs {bind_args} \
   {_quote(payload.sif_path)} nvidia-smi"""
         else:
             # Discard inherited selectors before binding the empty CPU pool.
@@ -274,8 +312,9 @@ export APPTAINERENV_CUDA_VISIBLE_DEVICES=""'''
 set -euo pipefail
 umask 077
 
+{apptainer_preflight(profile.apptainer.binary)}
+{_SCRUB_APPTAINER_ENVIRONMENT}
 {device_environment}
-export APPTAINER_BIND={_quote(profile.apptainer.dns_bind)}
 export HF_HOME={_quote(profile.storage.hf_home)}
 export HF_DATASETS_CACHE={_quote(profile.storage.hf_datasets_cache)}
 export PYTHONPATH={_quote(payload.source_root / "src")}
@@ -312,8 +351,9 @@ trap cleanup EXIT
 set -euo pipefail
 umask 077
 
+{apptainer_preflight(profile.apptainer.binary)}
 test -n "${{{inventory_variable}:-}}"
-export APPTAINER_BIND={_quote(profile.apptainer.dns_bind)}
+{_SCRUB_APPTAINER_ENVIRONMENT}
 export HF_HOME={_quote(profile.storage.hf_home)}
 export HF_DATASETS_CACHE={_quote(profile.storage.hf_datasets_cache)}
 export PYTHONPATH={_quote(payload.source_root / "src")}
@@ -344,6 +384,10 @@ trap cleanup EXIT
 
 def run_engine_payload(payload: EnginePayload) -> None:
     """Run the native RSI-Harness Engine inside the current scheduler allocation."""
+    if payload.profile.apptainer.process_namespaces == "harness":
+        # Without Apptainer PID namespaces Work may see this process: then
+        # its /proc environ and root still need privilege.
+        ctypes.CDLL(None).prctl(PR_SET_DUMPABLE, 0, 0, 0, 0)
     validate_cluster_sandbox(
         payload.run_plan.task.sandbox,
         payload.run_plan.sandbox,

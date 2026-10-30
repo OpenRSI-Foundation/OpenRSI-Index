@@ -86,6 +86,8 @@ def test_slurm_reuses_build_run_and_artifact_lifecycle(
             "builder": local.builder,
         }
     )
+    # Submission and dry-run must work without compute-node software locally.
+    local.apptainer.binary.unlink()
     scheduler = RecordingSlurmScheduler()
     events = {}
     adapter = SlurmClusterAdapter(
@@ -140,6 +142,32 @@ def test_slurm_reuses_build_run_and_artifact_lifecycle(
         assert manifest["multi_node"]["total_nodes"] == 6
         assert payload.multi_node.work.node_count == 4
         assert payload.multi_node.verifier.node_count == 2
+
+
+def test_the_profile_gpu_option_reaches_the_run_submission(tmp_path):
+    local = _profile(tmp_path)
+    base = load_cluster_profile("slurm", {"USER": "alice"})
+    profile = base.model_copy(
+        update={
+            "scheduler": base.scheduler.model_copy(update={"gpu_option": "gpus"}),
+            "storage": local.storage,
+            "apptainer": local.apptainer,
+            "builder": local.builder,
+        }
+    )
+    events = {}
+    adapter = SlurmClusterAdapter(
+        profile,
+        scheduler=RecordingSlurmScheduler(),
+        event_callback=lambda key, value: events.update({key: value}),
+        agent_version_resolver=lambda _: "0.149.0",
+    )
+
+    adapter.run(_request(tmp_path, dry_run=True))
+
+    argv = events["dry_run"]["run_argv"]
+    assert "--gpus=4" in argv
+    assert not any(arg.startswith("--gres") for arg in argv)
 
 
 @pytest.mark.parametrize("work_gpus,judge_gpus", [(0, 0), (0, 1), (1, 0)])
@@ -225,6 +253,23 @@ def test_failed_slurm_jobs_cannot_pass_artifact_validation(state, code):
         )
 
 
+def test_a_failed_build_names_its_log_and_last_hint(tmp_path):
+    (tmp_path / "slurm.123.err").write_text(
+        "build hint: first\nError: unrelated\nbuild hint: set builder.conmon\n"
+    )
+
+    with pytest.raises(InfrastructureError) as caught:
+        SlurmClusterAdapter._require_success(
+            "SIF build",
+            SlurmJobResult(job_id="123", state="FAILED", exit_code=1),
+            tmp_path / "slurm.%j.err",
+        )
+
+    assert str(caught.value).endswith(
+        f"; see {tmp_path}/slurm.123.err (build hint: set builder.conmon)"
+    )
+
+
 @pytest.mark.parametrize("judge_gpus,disjoint_nodes", [(9, False), (0, True)])
 def test_cpu_work_rejects_multinode_before_scheduling(
     tmp_path,
@@ -253,3 +298,26 @@ def test_cpu_work_rejects_multinode_before_scheduling(
         adapter.run(request)
 
     assert scheduler.events == []
+
+
+@pytest.mark.parametrize("exclusive", [True, False])
+def test_single_node_slurm_exclusive_is_not_silently_ignored(tmp_path, exclusive):
+    local = _profile(tmp_path)
+    base = load_cluster_profile("slurm", {"USER": "alice"})
+    profile = base.model_copy(
+        update={
+            "storage": local.storage,
+            "apptainer": local.apptainer,
+            "builder": local.builder,
+            "scheduler": base.scheduler.model_copy(update={"exclusive": exclusive}),
+        }
+    )
+    events = {}
+    adapter = SlurmClusterAdapter(
+        profile,
+        scheduler=RecordingSlurmScheduler(),
+        event_callback=lambda key, value: events.update({key: value}),
+        agent_version_resolver=lambda _: "0.149.0",
+    )
+    adapter.run(_request(tmp_path, dry_run=True))
+    assert ("--exclusive" in events["dry_run"]["run_argv"]) is exclusive

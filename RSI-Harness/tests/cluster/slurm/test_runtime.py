@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import signal
 import subprocess
 import sys
 from types import SimpleNamespace
@@ -132,15 +133,17 @@ def test_judge_timeout_stops_remote_controller_with_slurm_arguments(
         "--control",
         str(tmp_path / "controller.json"),
     )
-    process = Mock(returncode=-15)
-    process.communicate.side_effect = [
-        subprocess.TimeoutExpired(command, 1),
-        (b"timeout", None),
-    ]
-    cleanup = Mock()
-    monkeypatch.setattr(
-        "rsi_harness.cluster.bluevela.runtime.subprocess.Popen", lambda *a, **k: process
-    )
+    process = Mock(returncode=-15, pid=12345)
+    process.wait.side_effect = [subprocess.TimeoutExpired(command, 1), None, None]
+    cleanup = Mock(return_value=subprocess.CompletedProcess(command, 0))
+    signals = Mock()
+
+    def start(*args, **kwargs):
+        kwargs["stdout"].write(b"timeout")
+        return process
+
+    monkeypatch.setattr("rsi_harness.cluster.bluevela.runtime.subprocess.Popen", start)
+    monkeypatch.setattr("rsi_harness.cluster.bluevela.runtime.os.killpg", signals)
     monkeypatch.setattr("rsi_harness.cluster.bluevela.runtime.subprocess.run", cleanup)
     result = ApptainerAgentRuntime._run_host_controller(
         SimpleNamespace(profile=profile),
@@ -150,4 +153,8 @@ def test_judge_timeout_stops_remote_controller_with_slurm_arguments(
     )
     assert result.timed_out
     assert cleanup.call_args.args[0] == (*command[:-3], "stop", *command[-2:])
-    process.terminate.assert_called_once()
+    assert [call.args for call in signals.call_args_list] == [
+        (12345, signal.SIGTERM),
+        (12345, signal.SIGKILL),
+    ]
+    assert result.full_output_captured and result.output == "timeout"

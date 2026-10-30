@@ -7,15 +7,18 @@ allocation and implements only the Work/Judge ports consumed by RunCoordinator.
 from __future__ import annotations
 
 import contextlib
+import ctypes
 import hashlib
 import json
 import os
+import re
 import secrets
 import shlex
 import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from collections.abc import Callable, Mapping
@@ -24,7 +27,12 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
+from rsi_harness.cluster.agent_version import parse_agent_version
+from rsi_harness.cluster.bluevela import rsi_nonet
 from rsi_harness.cluster.bluevela.allocation import AllocatedPools
+from rsi_harness.cluster.bluevela.apptainer_environment import (
+    isolated_apptainer_environment,
+)
 from rsi_harness.cluster.bluevela.judge_controller import JudgeControllerControl
 from rsi_harness.cluster.bluevela.judge_llm import (
     JUDGE_CODEX_SCRATCH,
@@ -56,6 +64,7 @@ from rsi_harness.errors import (
 from rsi_harness.integrations.rsi_loop import (
     RSILoopAgentAdapter,
     rsi_loop_runtime_secret_values,
+    task_solution_script,
 )
 from rsi_harness.integrations.submit_client import generate_submit_client
 from rsi_harness.judge_agent import (
@@ -63,16 +72,21 @@ from rsi_harness.judge_agent import (
     JUDGE_AGENT_LAUNCHER,
     JUDGE_AGENT_LAUNCHER_TARGET,
     JUDGE_AGENT_STATE_ROOT,
+    JUDGE_BOX_TARGET,
     JUDGE_CODEX_TARGET,
     JUDGE_ISOLATE_CODE_TARGET,
     JUDGE_ISOLATE_LAUNCHER,
     JUDGE_ISOLATE_LAUNCHER_TARGET,
     install_judge_agent,
+    install_judge_box,
     install_judge_isolate,
+    judge_box_command,
 )
+from rsi_harness.judge_agent.judge_isolation import SECCOMP_ARCHES, mounts
 from rsi_harness.models import (
     JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL_ENV,
     JUDGE_ISOLATION_FALLBACK_ENV,
+    JUDGE_NETNS_ENV,
     JUDGE_TRAJECTORY_ROOT,
     AgentHookRequest,
     AgentPrepareRequest,
@@ -127,6 +141,8 @@ from rsi_harness.runtime.local_auth import (
     resolve_agent_auth,
 )
 from rsi_harness.runtime.network import NetworkPolicyEnforcer
+from rsi_harness.runtime.oracle import oracle_failures
+from rsi_harness.runtime.output import BoundedBytes
 from rsi_harness.runtime.recovery import LeaseStore, retained_round_id
 from rsi_harness.runtime.redaction import redact_exact_values, redact_text
 from rsi_harness.runtime.resume import ResumeContext, plan_resume
@@ -141,6 +157,7 @@ from rsi_harness.runtime.trajectory import (
 from rsi_harness.task.compiler import HarborTaskCompiler
 from rsi_harness.task.digest import require_tests_digest
 from rsi_loop.harness.agent import create_agent, get_agent_class
+from rsi_loop.harness.agent import oracle as oracle_module
 from rsi_loop.harness.config import load_config
 
 
@@ -175,6 +192,8 @@ def _agent_provider_urls(
     *,
     auth_resolver: Callable[..., AgentAuthMaterial | None] = resolve_agent_auth,
 ) -> tuple[str, ...]:
+    if plan.task.agent.name == "oracle":
+        return ()
     if config.http_proxy or config.https_proxy:
         raise SetupError(
             "Blue Vela no-network Agent does not support an upstream proxy"
@@ -191,6 +210,229 @@ def _agent_provider_urls(
     if not provider:
         raise SetupError("no-network Agent has no provider endpoint")
     return (provider,)
+
+
+# rsi-box's control signals (judge_isolation.BOX_CONTROL): stop or continue
+# every process in the box.
+_BOX_PAUSE = signal.SIGUSR1
+_BOX_RESUME = signal.SIGUSR2
+_BOX_PAUSE_SECONDS = 10.0
+# The pre-search isolation check, run in Work: raw facts, the host decides.
+# Arguments: the Engine's pid, the container python, the description of the
+# Engine's key in its user keyring (or nothing), the paths to look for (an
+# empty directory, such as an image's own mount point, shows nothing).
+_ISOLATION_PROBE = r"""engine=$1 python=$2 key=$3
+shift 3
+for path do
+  if [ -d "$path" ] && listing=$(ls -A "$path" 2>/dev/null) && [ -z "$listing" ]; then
+    continue
+  fi
+  if [ -e "$path" ] || [ -L "$path" ]; then echo "visible $path"; fi
+done
+if kill -0 "$engine" 2>/dev/null; then echo "engine signal"; fi
+if [ -e "/proc/$engine" ]; then echo "engine proc"; fi
+if [ -x "$python" ]; then
+  "$python" -I -c 'import socket
+try:
+    socket.socket()
+except PermissionError:
+    print("inet denied")
+else:
+    print("inet open")'
+  [ -z "$key" ] || "$python" -I -c 'import ctypes, errno, os, sys
+keyctl = {"x86_64": 250, "aarch64": 219}.get(os.uname().machine)
+libc = ctypes.CDLL(None, use_errno=True)
+key = sys.argv[1].encode()
+if keyctl and libc.syscall(keyctl, 10, -4, b"user", key, 0) >= 0:
+    print("keyring shared")
+elif keyctl and ctypes.get_errno() == errno.ENOKEY:
+    print("keyring private")' "$key"
+fi
+sed -n 's/^Seccomp:[[:space:]]*/seccomp /p' /proc/self/status
+sed -n '3,$s/^ *\([^:]*\):.*/interface \1/p' /proc/net/dev
+sed 's/^/mount /' /proc/self/mountinfo
+echo "isolation probe end"
+"""
+
+
+def _process_table() -> dict[int, tuple[int, str, str]]:
+    """Every visible process by pid: its parent, its threads' states (one
+    letter each) and its command line."""
+    try:
+        result = subprocess.run(
+            ["ps", "-ww", "-eLo", "pid=,ppid=,stat=,args="],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise InfrastructureError(f"process query failed: {error}") from error
+    if result.returncode != 0:
+        raise InfrastructureError(f"process query failed: {result.stderr.strip()}")
+    table: dict[int, tuple[int, str, str]] = {}
+    for row in result.stdout.splitlines():
+        fields = row.split(None, 3)
+        if len(fields) >= 3:
+            pid = int(fields[0])
+            states = table[pid][1] if pid in table else ""
+            table[pid] = (
+                int(fields[1]),
+                states + fields[2][:1],
+                (fields[3:] or [""])[0],
+            )
+    return table
+
+
+def _descendants(table: dict[int, tuple[int, str, str]], roots: set[int]) -> set[int]:
+    """``roots`` and every process below them."""
+    found = set(roots)
+    while (
+        below := {pid for pid, (parent, _, _) in table.items() if parent in found}
+        - found
+    ):
+        found |= below
+    return found
+
+
+def _box_outer(root: int, table: dict[int, tuple[int, str, str]]) -> int | None:
+    """The process box's outer process below ``root`` (Apptainer): the
+    outermost process that runs rsi-box, or None once the box has exited.
+    Work runs inside the box, so it can never be that process."""
+
+    def boxed(pid: int) -> bool:
+        return str(JUDGE_BOX_TARGET) in table[pid][2].split()
+
+    outer = []
+    for pid in _descendants(table, {root}) - {root}:
+        ancestor = table[pid][0]
+        while ancestor != root and not boxed(ancestor):
+            ancestor = table[ancestor][0]
+        if boxed(pid) and ancestor == root:
+            outer.append(pid)
+    if len(outer) > 1:
+        raise InfrastructureError(f"cannot find Work's process box below pid {root}")
+    return outer[0] if outer else None
+
+
+def _site_bind_paths(binary: Path) -> tuple[Path, ...]:
+    """The ``bind path`` sources of the site's apptainer.conf, except the
+    two Apptainer still mounts under --containall."""
+    prefix = Path(binary).resolve().parent.parent
+    for conf in (
+        prefix / "etc/apptainer/apptainer.conf",
+        Path("/etc/apptainer/apptainer.conf"),
+    ):
+        try:
+            text = conf.read_text()
+        except OSError:
+            continue
+        paths = []
+        for line in text.splitlines():
+            key, separator, value = line.partition("=")
+            source = value.strip().split(":")[0]
+            if separator and key.strip() == "bind path" and source.startswith("/"):
+                if source not in ("/etc/hosts", "/etc/localtime"):
+                    paths.append(Path(source))
+        return tuple(paths)
+    return ()
+
+
+def _overlaps(path: PurePosixPath, other: PurePosixPath) -> bool:
+    return path.is_relative_to(other) or other.is_relative_to(path)
+
+
+def _keyring_call(index: int, *args: object) -> int:
+    """add_key (0) or keyctl (2) on this machine; -1 on any other."""
+    numbers = SECCOMP_ARCHES.get(os.uname().machine)
+    if numbers is None:
+        return -1
+    return ctypes.CDLL(None).syscall(numbers["keyring"][index], *args)
+
+
+def isolation_report(
+    output: str,
+    *,
+    planned: tuple[PurePosixPath, ...],
+    forbidden: tuple[Path, ...],
+    network_isolation: str,
+    network_mode: str,
+    boxed: bool,
+    host_mountinfo: str | None = None,
+) -> dict[str, Any]:
+    """The host's verdict on the isolation probe's output.
+
+    It fails on a forbidden path Work sees, on the Engine's process visible
+    from Work, on a box or network filter that is not in place, on a
+    no-network Work with an interface other than loopback (namespace mode),
+    and on a mount, other than a ``planned`` bind, that shows a
+    ``forbidden`` path's files (the same device and an overlapping root).
+    Other unplanned mounts are reported only.
+    """
+    lines = output.splitlines()
+    failures = []
+    if "isolation probe end" not in lines:
+        failures.append("the probe did not finish")
+    failures += [f"Work sees {line[8:]}" for line in lines if line[:8] == "visible "]
+    if "engine signal" in lines or "engine proc" in lines:
+        failures.append(
+            "Work sees the Engine's process: this site gives Apptainer no PID "
+            'namespace; set [apptainer] process_namespaces = "harness"'
+        )
+    seccomp = next((line[8:] for line in lines if line[:8] == "seccomp "), None)
+    keyring = (
+        True
+        if "keyring shared" in lines
+        else False
+        if "keyring private" in lines
+        else "unknown"
+    )
+    if boxed and seccomp != "2":
+        failures.append(f"the process box has no filter (Seccomp: {seccomp})")
+    if network_mode == "no-network" and network_isolation == "seccomp":
+        if seccomp != "2" or "inet denied" not in lines:
+            failures.append("Work without network can create IP sockets")
+    elif network_mode == "no-network":
+        interfaces = {line[10:] for line in lines if line[:10] == "interface "}
+        if interfaces - {"lo"}:
+            failures.append(
+                f"Work without network has interfaces {sorted(interfaces - {'lo'})}"
+            )
+    work = mounts("\n".join(line[6:] for line in lines if line[:6] == "mount "))
+    unplanned = [
+        (device, PurePosixPath(root), point)
+        for device, root, point in work
+        if not any(PurePosixPath(point).is_relative_to(target) for target in planned)
+    ]
+    host = {point: (device, root) for device, root, point in mounts(host_mountinfo)}
+    for path in forbidden:
+        holders = [point for point in host if path.is_relative_to(point)]
+        if not holders:
+            continue
+        holder = max(holders, key=len)
+        device, root = host[holder]
+        inner = PurePosixPath(root) / path.relative_to(holder)
+        failures += [
+            f"Work mounts {path} at {point}"
+            for other, other_root, point in unplanned
+            if other == device and _overlaps(other_root, inner)
+        ]
+    return {
+        "passed": not failures,
+        "seccomp": seccomp,
+        # Record only: whether Work finds the Engine's key in its keyring.
+        "keyring_shared": keyring,
+        "other_mounts": sorted(
+            point
+            for _device, _root, point in unplanned
+            if point != "/"
+            and not any(
+                PurePosixPath(point).is_relative_to(system)
+                for system in ("/proc", "/sys", "/dev")
+            )
+        ),
+        "failures": failures,
+    }
 
 
 class ApptainerAgentRuntime:
@@ -220,6 +462,8 @@ class ApptainerAgentRuntime:
             plan.paths.logs / "runs" / payload.run_id / plan.task.task_id / "feedback"
         )
         self._copies: dict[PurePosixPath, Path] = {}
+        self._copied_inputs: dict[PurePosixPath, tempfile.TemporaryDirectory[str]] = {}
+        self._oracle_solution: Path | None = None
         # The Agent CLI and its companions, also bound into a model-access Judge.
         self._agent_cli_targets: list[PurePosixPath] = []
         self.auth_material: AgentAuthMaterial | None = None
@@ -323,11 +567,31 @@ class ApptainerAgentRuntime:
         the run's workspace, Agent home, task assets and Judge rounds as
         they are, and seeds nothing; one whose run never finished seeding,
         so no Agent ran on it, is seeded again."""
+        # A previous attempt's isolation check does not count for this one.
+        (self.feedback.parent / "isolation_check.json").unlink(missing_ok=True)
+        if self.plan.task.agent.name == "oracle":
+            if self.profile.scheduler.kind != "slurm":
+                raise SetupError("Oracle requires a Slurm allocation")
+            if resume:
+                raise SetupError(
+                    "Oracle validation cannot resume; start a fresh validation"
+                )
+            if self.allocated_pools is not None and (
+                not self.allocated_pools.work or not self.allocated_pools.verifier
+            ):
+                raise SetupError(
+                    "multi-node Oracle requires nonempty Work and Judge node pools"
+                )
         if resume and self.allocated_pools is not None:
             raise SetupError("a multi-node cluster run cannot be resumed yet")
         # The adapter refused these before submitting; check again in the job.
         require_cluster_judge_model_access(
             self.plan.task, multi_node=self.allocated_pools is not None
+        )
+        require_cluster_isolation(
+            self.plan.task,
+            self.profile.apptainer,
+            multi_node=self.allocated_pools is not None,
         )
         # Public tests are read-only in Work: prove them before Work starts.
         self._require_public_tests_digest()
@@ -359,13 +623,27 @@ class ApptainerAgentRuntime:
         submit.write_text(generate_submit_client())
         submit.chmod(0o755)
         self._copies[PurePosixPath("/usr/local/bin/rsi-submit")] = submit
-        if self.payload.agent_binary is None or not self.payload.agent_binary.is_file():
-            raise SetupError("cluster Agent binary is unavailable on shared storage")
         launcher = getattr(self.payload, "agent_launcher", "codex")
-        self._copies[PurePosixPath("/usr/local/bin") / launcher] = (
-            self.payload.agent_binary
+        if self.plan.task.agent.name == "oracle":
+            # The frozen Harness package supplies this script; no installed model
+            # CLI, credential, root operation or image rebuild is needed.
+            source = Path(oracle_module.__file__).with_suffix("") / "rsi-oracle"
+            binary = self.control / "rsi-oracle"
+            shutil.copyfile(source, binary)
+            binary.chmod(0o755)
+        else:
+            if (
+                self.payload.agent_binary is None
+                or not self.payload.agent_binary.is_file()
+            ):
+                raise SetupError("cluster Agent binary does not exist")
+            binary = self.payload.agent_binary
+        self._copies[PurePosixPath("/usr/local/bin") / launcher] = binary
+        self._agent_cli_targets = (
+            []
+            if self.plan.task.agent.name == "oracle"
+            else [PurePosixPath("/usr/local/bin") / launcher]
         )
-        self._agent_cli_targets = [PurePosixPath("/usr/local/bin") / launcher]
         for companion in self.payload.agent_companions:
             if not companion.is_file():
                 raise SetupError(
@@ -381,6 +659,7 @@ class ApptainerAgentRuntime:
         self._copies[PurePosixPath("/usr/local/bin/rsi-netns-relay")] = relay
         if self.allocated_pools is not None:
             self._materialize_multinode_torchrun()
+        self._require_site_isolation()
         if not kept:
             self._seed()
             self._atomic_control(seeded, "")
@@ -390,6 +669,7 @@ class ApptainerAgentRuntime:
         try:
             self._start_work_broker()
             self._smoke_agent()
+            self._check_isolation()
         except BaseException:
             self.close_multinode()
             raise
@@ -416,11 +696,12 @@ class ApptainerAgentRuntime:
             network_mode=self.plan.task.service.network_mode,
             extra_binds=((self.workspace, seed_target, False),),
             mount_workspace=False,
+            box="work",
             timeout_seconds=1800,
         )
         if result.exit_code != 0:
             raise InfrastructureError(
-                f"cannot initialize Apptainer workspace: {result.output}"
+                f"cannot initialize Apptainer workspace: {self._failure(result)}"
             )
         assets_target = PurePosixPath("/run/rsi-harness/task-tmp")
         assets = self._run(
@@ -434,12 +715,187 @@ class ApptainerAgentRuntime:
             extra_binds=((self.task_assets, assets_target, False),),
             mount_workspace=False,
             mount_agent_home=False,
-            containall=False,
+            image_tmp=True,
+            box="work",
             timeout_seconds=600,
         )
         if assets.exit_code != 0:
             raise InfrastructureError(
-                f"cannot preserve task image assets: {assets.output}"
+                f"cannot preserve task image assets: {self._failure(assets)}"
+            )
+
+    def _failure(self, result: AgentRunResult) -> str:
+        """A setup exec's output, with the remedy when Apptainer could not
+        give a phase without network its own network namespace."""
+        return result.output + self._namespace_remedy(result)
+
+    def _namespace_remedy(self, result: AgentRunResult) -> str:
+        if "create network namespace" in result.output and not self._seccomp_network:
+            return (
+                "\nthis site has no network namespaces; set "
+                '[apptainer] network_isolation = "seccomp"'
+            )
+        return ""
+
+    def _require_site_isolation(self) -> None:
+        """Prove the profile's isolation modes on this node before task code
+        runs: the host-side network filter (seccomp mode), and rsi-box and
+        its python (harness mode, or a seccomp-mode Judge)."""
+        apptainer = self.profile.apptainer
+        harness = apptainer.process_namespaces == "harness"
+        options: dict[str, Any] = {
+            "devices": (),
+            "network_mode": "no-network",
+            "mount_workspace": False,
+            "mount_agent_home": False,
+            "timeout_seconds": 120,
+        }
+        if self._seccomp_network:
+            status = "grep '^Seccomp:' /proc/self/status"
+            result = self._run(("/bin/sh", "-c", status), **options)
+            found = re.search(r"^Seccomp:\s*(\d+)", result.output, re.MULTILINE)
+            if result.exit_code != 0 or found is None or found.group(1) != "2":
+                # The filter needs no_new_privs, which disables a setuid starter.
+                setuid = (
+                    "; Apptainer runs with no_new_privs in this mode, so it "
+                    "needs its non-setuid (user namespace) mode"
+                    if "setuid" in result.output
+                    else ""
+                )
+                raise InfrastructureError(
+                    'network_isolation = "seccomp": the network filter did not '
+                    f"reach the container: {result.output.strip()[-500:]}{setuid}"
+                )
+        if not (harness or self._seccomp_network):
+            return
+        needs, remedy = (
+            ('process_namespaces = "harness"', "allow pid ns and allow ipc ns")
+            if harness
+            else ('network_isolation = "seccomp"', "network namespaces")
+        )
+        python = str(apptainer.container_python)
+        check = "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 3)"
+        result = self._run((python, "-c", check), **options)
+        if result.exit_code != 0:
+            raise SetupError(
+                f"{needs} needs python3 3.8 or later at {python} in the task "
+                f"image for rsi-box; add it, or use a site with {remedy}: "
+                f"{self._failure(result).strip()[-500:]}"
+            )
+        box = "work" if harness else "judge"
+        result = self._run((python, "-I", "-c", ""), box=box, **options)
+        if result.exit_code != 0:
+            steps = [line for line in result.output.splitlines() if "rsi-box:" in line]
+            raise InfrastructureError(
+                f"rsi-box cannot run on this node "
+                f"({steps[-1] if steps else f'exit {result.exit_code}'}); {needs} "
+                "needs user, PID, IPC and mount namespaces inside Apptainer, or "
+                f"use a site with {remedy}"
+            )
+
+    def _check_isolation(self) -> None:
+        """Before any Agent time, Work with its exact argv must not see what
+        only the Judge and the Engine may (hidden tests, run state, logs,
+        the image cache, Judge-only binds, site bind paths) or the Engine's
+        process, and must have its declared network. Writes
+        isolation_check.json and RUN_INFO's summary; fails closed, and no
+        setting skips it."""
+        apptainer = self.profile.apptainer
+        storage = self.profile.storage
+        network_mode = self.plan.task.agent.network.mode
+        boxed = self._box_layer("work", network_mode) is not None
+        argv = self._base_command(
+            devices=self.work_devices,
+            extra_binds=(),
+            mount_workspace=True,
+            mount_agent_home=True,
+            network_mode=network_mode,
+            boxed=boxed,
+        )
+        planned = tuple(
+            PurePosixPath(value.split(":")[1])
+            for option, value in zip(argv, argv[1:], strict=False)
+            if option == "--bind"
+        )
+        work_sources = {binding.source for binding in apptainer.work_binds}
+        judge_only = tuple(
+            Path(path)
+            for path in (
+                self.plan.task.source_dir,
+                storage.run_root,
+                storage.logs_root,
+                storage.image_cache,
+                self.node_tmp,
+                getattr(self.payload, "source_root", None),
+                apptainer.judge_authority_root,
+                *(
+                    binding.source
+                    for binding in apptainer.judge_binds
+                    if binding.source not in work_sources
+                ),
+            )
+            if path is not None
+        )
+        # Not at, above or below a bind or the contained $HOME: those are
+        # Work's own, whatever the host has there.
+        mine = (*planned, PurePosixPath(Path.home()))
+        probed = [
+            str(path)
+            for path in judge_only
+            if not any(_overlaps(PurePosixPath(path), target) for target in mine)
+        ]
+        # A key in the Engine's user keyring (@u): does Work find it?
+        description = f"rsi-isolation:{secrets.token_hex(8)}"
+        key = _keyring_call(0, b"user", description.encode(), b"1", 1, -4)
+        try:
+            result = self._run(
+                (
+                    "/bin/sh",
+                    "-c",
+                    _ISOLATION_PROBE,
+                    "rsi-isolation-probe",
+                    str(os.getpid()),
+                    str(apptainer.container_python),
+                    description if key >= 0 else "",
+                    *probed,
+                ),
+                devices=self.work_devices,
+                network_mode=network_mode,
+                box="work",
+                timeout_seconds=120,
+            )
+        finally:
+            if key >= 0:
+                _keyring_call(2, 9, key, -4)  # KEYCTL_UNLINK from @u
+        verdict = isolation_report(
+            result.output,
+            planned=planned,
+            # A site bind path is the image's own under --containall: only a
+            # mount of its files fails.
+            forbidden=(*judge_only, *_site_bind_paths(apptainer.binary)),
+            network_isolation=apptainer.network_isolation,
+            network_mode=network_mode,
+            boxed=boxed,
+        )
+        judge = self._box_layer("judge", self.plan.task.verifier.network.mode)
+        report = {
+            "passed": verdict["passed"],
+            "network_isolation": apptainer.network_isolation,
+            "process_namespaces": apptainer.process_namespaces,
+            "work_network": network_mode,
+            "judge_layer": None if judge is None else " ".join(judge[4:-1]),
+            **verdict,
+            "checked_paths": probed,
+        }
+        self._atomic_control(
+            self.feedback.parent / "isolation_check.json",
+            json.dumps(report, indent=2),
+        )
+        summary = {key: report[key] for key in ISOLATION_SUMMARY}
+        print(f"[rsi-engine] isolation: {json.dumps(summary)}", flush=True)
+        if not report["passed"]:
+            raise InfrastructureError(
+                "pre-search isolation check failed: " + "; ".join(report["failures"])
             )
 
     def _require_judge_python(self) -> None:
@@ -456,7 +912,7 @@ class ApptainerAgentRuntime:
         if result.exit_code != 0:
             raise SetupError(
                 "model_access and judge_model need python3 3.8 or later in the "
-                f"task image for rsi-agent: {result.output.strip()[-500:]}"
+                f"task image for rsi-agent: {self._failure(result)[-500:]}"
             )
 
     def configure_judge_model_access(self, access: JudgeModelAccess | None) -> None:
@@ -573,6 +1029,16 @@ class ApptainerAgentRuntime:
                 read_only=True,
             ),
         ]
+        if self.plan.task.agent.name == "oracle":
+            # The normal Agent hook stages this before solve.sh starts.  Use
+            # shared storage so torchrun entrypoints under /solution exist on
+            # every Work node, with exactly the controller's disposable copy.
+            binds.append(
+                WorkerBind(
+                    source=self._oracle_solution_path(),
+                    target=PurePosixPath("/solution"),
+                )
+            )
         binds.extend(
             WorkerBind(
                 source=binding.source,
@@ -756,6 +1222,8 @@ class ApptainerAgentRuntime:
             broker.stop()
 
     def _smoke_agent(self) -> None:
+        if self.plan.task.agent.name == "oracle":
+            return
         version = self.payload.agent_version
         if not version:
             raise SetupError("cluster Agent runtime requires an exact version")
@@ -765,12 +1233,66 @@ class ApptainerAgentRuntime:
             command,
             devices=self.work_devices,
             network_mode=self.plan.task.agent.network.mode,
+            box="work",
             timeout_seconds=60,
         )
-        if result.exit_code != 0 or version not in result.output:
+        reported = None
+        if result.exit_code == 0:
+            try:
+                reported = parse_agent_version(result.output)
+            except SetupError:
+                pass
+        if reported != version:
             raise InfrastructureError(
-                f"cluster Agent binary smoke failed: {result.output}"
+                "cluster Agent binary smoke failed: "
+                f"{self.payload.agent_binary} as {command[0]} --version "
+                f"exited {result.exit_code}; expected {version!r}, "
+                f"parsed version {reported!r}; "
+                f"output={result.output!r}.{self._namespace_remedy(result)} "
+                "Put a native executable that works inside the task container "
+                "on the submit host's PATH (a Codex npm launcher resolves to "
+                "its bundled binary); host-only wrappers and their dependencies "
+                "are not installed implicitly."
             )
+
+    def _oracle_solution_path(self) -> Path:
+        root = self.control if self.allocated_pools is not None else self.node_tmp
+        return root / "oracle-solution"
+
+    def stage_solution(self) -> None:
+        """Stage a disposable Work-only copy, owned by the Slurm user."""
+        task_solution_script(self.plan.task.source_dir)
+        destination = self._oracle_solution_path()
+        shutil.copytree(
+            self.plan.task.source_dir / "solution", destination, symlinks=True
+        )
+        # The launcher must be able to empty the bind before rsi-submit. Never
+        # chmod through a task symlink into the submit host's filesystem.
+        for root, directories, files in os.walk(destination, followlinks=False):
+            Path(root).chmod(Path(root).stat().st_mode | 0o700)
+            for name in files:
+                path = Path(root) / name
+                if not path.is_symlink():
+                    path.chmod(path.stat().st_mode | 0o600)
+        script = destination / "solve.sh"
+        script.chmod(script.stat().st_mode | 0o100)
+        self._oracle_solution = destination
+
+    def remove_oracle_solution(self) -> None:
+        """After Work pauses and is idle, retire distributed baseline assets.
+
+        The launcher removes the single-node copy itself.  Distributed Work
+        shares this copy, so stop the broker before deleting it: no queued
+        request may start reading /solution during the snapshot or Judge.
+        """
+        if self.allocated_pools is None or self._oracle_solution is None:
+            return
+        broker = self.work_broker
+        if broker is not None:
+            broker.stop()
+            self.work_broker = None
+        shutil.rmtree(self._oracle_solution)
+        self._oracle_solution = None
 
     def copy_to(
         self, container: ContainerRef, source: Path, target: PurePosixPath
@@ -800,7 +1322,29 @@ class ApptainerAgentRuntime:
                 else:
                     shutil.copy2(source, destination)
                 return
-        self._copies[target] = source
+        # Match Docker copy_to's source-lifetime contract: callers may remove
+        # a temporary source immediately after this returns. Keep these
+        # read-only binds under node-owned storage, never a host path derived
+        # from the requested container target.
+        copies = self.node_tmp / "copied-inputs"
+        copies.mkdir(mode=0o700, exist_ok=True)
+        staging = tempfile.TemporaryDirectory(prefix="copy-", dir=copies)
+        destination = Path(staging.name) / "payload"
+        try:
+            if source.is_dir():
+                shutil.copytree(source, destination, symlinks=True)
+            else:
+                shutil.copy2(source, destination)
+        except BaseException:
+            staging.cleanup()
+            raise
+        previous = self._copied_inputs.get(target)
+        self._copied_inputs[target] = staging
+        self._copies[target] = destination
+        # Bound staging space by current targets. Only explicit copy owners are
+        # retired; built-in Agent binaries and shims are never cleanup targets.
+        if previous is not None:
+            previous.cleanup()
 
     def exec(
         self,
@@ -846,6 +1390,7 @@ class ApptainerAgentRuntime:
             output_path=output_path,
             output_redact_values=output_redact_values,
             output_callback=output_callback,
+            box="work",
             timeout_seconds=timeout_seconds,
             track_work=True,
         )
@@ -887,7 +1432,6 @@ class ApptainerAgentRuntime:
             access = self._renew_work_login(access, request.round_id)
         command = tuple(request.run_plan.task.verifier.command)
         network_mode = request.run_plan.task.verifier.network.mode
-        environment = {**environment, **self._judge_isolation_environment()}
         agent_binds: list[tuple[Path, PurePosixPath, bool]] = []
         agent_root: Path | None = None
         provider: JudgeProviderBroker | None = None
@@ -932,6 +1476,11 @@ class ApptainerAgentRuntime:
                         (self._copies[relay], relay, True),
                     ]
                     command = provider.wrap(command, relay_path=relay)
+            # After the task's variables, which can override neither.
+            environment = {
+                **environment,
+                **self._judge_isolation_environment(network_mode),
+            }
             return self._run(
                 command,
                 devices=request.run_plan.gpu_plan.judge.uuids,
@@ -960,6 +1509,7 @@ class ApptainerAgentRuntime:
                 mount_agent_home=False,
                 phase="judge",
                 declared_network_mode=request.run_plan.task.verifier.network.mode,
+                box="judge",
                 output_redact_values=redact,
                 timeout_seconds=request.run_plan.task.verifier.timeout_seconds,
             )
@@ -1034,14 +1584,19 @@ class ApptainerAgentRuntime:
         self.judge_model_access = renewed
         self.auth_secret_values.update(renewed.secret_values)
 
-    def _judge_isolation_environment(self) -> dict[str, str]:
+    def _judge_isolation_environment(
+        self, network_mode: Literal["public", "no-network", "allowlist"]
+    ) -> dict[str, str]:
         """The operator's isolation policies, for a science Judge library.
 
         Always set the fallback and compatibility flag explicitly so an
         ``ENV`` in the task's image, which Apptainer keeps even with
-        ``--cleanenv``, never decides.
+        ``--cleanenv``, never decides. A Judge has a network namespace of
+        its own only without network, and not in seccomp mode.
         """
+        private = network_mode == "no-network" and not self._seccomp_network
         return {
+            JUDGE_NETNS_ENV: "private" if private else "shared",
             JUDGE_ISOLATION_FALLBACK_ENV: (
                 self.profile.apptainer.judge_isolation_fallback
             ),
@@ -1079,7 +1634,15 @@ class ApptainerAgentRuntime:
                     else self.profile.apptainer.judge_environment
                 ),
                 **self._worker_huggingface_environment(network_mode),
-                **(self._judge_isolation_environment() if phase == "judge" else {}),
+                # Remote ranks keep the host's network namespace.
+                **(
+                    {
+                        **self._judge_isolation_environment(network_mode),
+                        JUDGE_NETNS_ENV: "shared",
+                    }
+                    if phase == "judge"
+                    else {}
+                ),
             },
         )
 
@@ -1234,7 +1797,10 @@ class ApptainerAgentRuntime:
             worker=worker,
             broker_root=broker.root,
             command=request.run_plan.task.verifier.command,
-            environment={**environment, **self._judge_isolation_environment()},
+            environment={
+                **environment,
+                **self._judge_isolation_environment(network_mode),
+            },
             local_world_size=pools.gpus_per_node,
         )
         control_path = round_root / "controller.json"
@@ -1291,42 +1857,65 @@ class ApptainerAgentRuntime:
         timeout_seconds: float,
         output_path: Path,
     ) -> AgentRunResult:
-        process = subprocess.Popen(
-            command,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
+        # Persist directly: a controller can emit arbitrarily long verifier logs.
+        # Only the feedback returned to the coordinator is memory bounded.
+        output_path.parent.mkdir(parents=True, exist_ok=True)
         timed_out = False
-        try:
-            output, _stderr = process.communicate(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            timed_out = True
-            stop = stop_command(
+        with output_path.open("wb") as stream:
+            process = subprocess.Popen(
                 command,
-                remote_binary=self.profile.scheduler.remote_binary,
-                remote_host_flag=self.profile.scheduler.remote_host_flag,
-                remote_args=self.profile.scheduler.remote_args,
-                module="rsi_harness.cluster.bluevela.judge_controller",
+                stdin=subprocess.DEVNULL,
+                stdout=stream,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
             )
-            subprocess.run(
-                stop,
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=20,
-            )
-            process.terminate()
-            output, _stderr = process.communicate(timeout=10)
-        bounded = output[:16_000_000]
-        text = bounded.decode(errors="replace")
-        output_path.write_text(text)
+            try:
+                process.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                timed_out = True
+                stop = stop_command(
+                    command,
+                    remote_binary=self.profile.scheduler.remote_binary,
+                    remote_host_flag=self.profile.scheduler.remote_host_flag,
+                    remote_args=self.profile.scheduler.remote_args,
+                    module="rsi_harness.cluster.bluevela.judge_controller",
+                )
+                try:
+                    stopped = subprocess.run(
+                        stop,
+                        check=False,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=20,
+                    )
+                    if stopped.returncode:
+                        stream.write(
+                            f"\ncontroller stop exited {stopped.returncode}\n".encode()
+                        )
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    stream.write(f"\ncontroller stop failed: {error}\n".encode())
+            finally:
+                # Also runs if remote stop fails or the caller is cancelled.
+                # Signal the group even if its leader has already exited.
+                if timed_out or process.returncode is None:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGTERM)
+                    try:
+                        with contextlib.suppress(subprocess.TimeoutExpired):
+                            process.wait(timeout=10)
+                    finally:
+                        with contextlib.suppress(ProcessLookupError):
+                            os.killpg(process.pid, signal.SIGKILL)
+                        process.wait()
+        captured = BoundedBytes(16_000_000)
+        with output_path.open("rb") as stream:
+            while chunk := stream.read(64 * 1024):
+                captured.append(chunk)
         return AgentRunResult(
             exit_code=process.returncode,
-            output=text,
-            output_truncated=len(output) > len(bounded),
-            full_output_captured=len(output) <= len(bounded),
+            output=captured.value.decode(errors="replace"),
+            output_truncated=captured.truncated,
+            full_output_captured=True,
             timed_out=timed_out,
         )
 
@@ -1336,8 +1925,56 @@ class ApptainerAgentRuntime:
             process = self._process
             if process is None or process.poll() is not None:
                 raise InfrastructureError("Agent process is not running at submission")
-            os.killpg(process.pid, signal.SIGSTOP)
+            self._stop_work(process)
             self._paused = True
+
+    def _stop_work(self, process: subprocess.Popen[str]) -> None:
+        """Stop every Work process: its process group, or in the Harness box
+        every thread in the box, which the host then sees stopped twice in a
+        row. A pause that fails continues the box again."""
+        if self.profile.apptainer.process_namespaces != "harness":
+            os.killpg(process.pid, signal.SIGSTOP)
+            return
+        outer = _box_outer(process.pid, _process_table())
+        if outer is None:
+            raise InfrastructureError(
+                f"cannot find Work's process box below pid {process.pid}"
+            )
+        deadline = time.monotonic() + _BOX_PAUSE_SECONDS
+        stopped = False
+        while True:
+            if not stopped:
+                # Again until it holds: a Work process not stopped yet can
+                # continue one that was, or keep its own signal pending at
+                # pid 1, with which this one merges.
+                os.kill(outer, _BOX_PAUSE)
+            time.sleep(0.05)
+            table = _process_table()
+            # pid 1 of the box stays running to resume it.
+            inits = {pid for pid, (parent, _, _) in table.items() if parent == outer}
+            running = sorted(
+                pid
+                for pid in _descendants(table, inits) - inits
+                if set(table[pid][1]) - {"T", "t", "Z"}
+            )
+            if inits and not running and stopped:
+                return
+            stopped = bool(inits) and not running
+            if time.monotonic() >= deadline:
+                with contextlib.suppress(OSError):
+                    os.kill(outer, _BOX_RESUME)
+                raise InfrastructureError(
+                    f"Work did not stop in its process box: running {running}"
+                )
+
+    def _continue_work(self, process: subprocess.Popen[str]) -> None:
+        if self.profile.apptainer.process_namespaces != "harness":
+            os.killpg(process.pid, signal.SIGCONT)
+        elif process.poll() is None:
+            # Once the box has exited, nothing is left in it.
+            outer = _box_outer(process.pid, _process_table())
+            if outer is not None:
+                os.kill(outer, _BOX_RESUME)
 
     def unpause(self, container: ContainerRef) -> None:
         self._require_work(container)
@@ -1350,7 +1987,7 @@ class ApptainerAgentRuntime:
             # valid. pause() stopped the whole group, so continue it even
             # then: members the Agent left behind must not stay frozen.
             try:
-                os.killpg(process.pid, signal.SIGCONT)
+                self._continue_work(process)
             except ProcessLookupError:
                 pass  # the whole group has exited
             self._paused = False
@@ -1366,7 +2003,9 @@ class ApptainerAgentRuntime:
             # behind (possibly stopped by pause()) are terminated too.
             try:
                 if self._paused or process.poll() is not None:
-                    os.killpg(process.pid, signal.SIGCONT)
+                    # Best effort: terminate the group whatever happens here.
+                    with contextlib.suppress(InfrastructureError):
+                        self._continue_work(process)
                 os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass  # the whole group has exited
@@ -1379,7 +2018,7 @@ class ApptainerAgentRuntime:
             if process is None or process.poll() is not None:
                 return WorkQuiescence.STOPPED
             if not self._paused:
-                os.killpg(process.pid, signal.SIGSTOP)
+                self._stop_work(process)
                 self._paused = True
             return WorkQuiescence.PAUSED
 
@@ -1391,15 +2030,15 @@ class ApptainerAgentRuntime:
         self,
         *,
         devices: tuple[str, ...],
-        environment: dict[str, str] | None,
         extra_binds: tuple[tuple[Path, PurePosixPath, bool], ...],
         mount_workspace: bool,
         mount_agent_home: bool,
-        containall: bool,
         network_mode: Literal["public", "no-network", "allowlist"],
         phase: Literal["work", "judge"] = "work",
         declared_network_mode: Literal["public", "no-network", "allowlist"]
         | None = None,
+        image_tmp: bool = False,
+        boxed: bool = False,
     ) -> tuple[str, ...]:
         # The phase's declared mode chooses its binds, caches and HF
         # environment; network_mode only its network (a site-egress Judge
@@ -1409,7 +2048,8 @@ class ApptainerAgentRuntime:
             str(self.profile.apptainer.binary),
             "exec",
         ]
-        if network_mode == "no-network":
+        # In seccomp mode _run's host-side filter isolates it instead.
+        if network_mode == "no-network" and not self._seccomp_network:
             command.extend(("--net", "--network", "none", "--hostname", "localhost"))
         elif network_mode == "allowlist":
             raise SetupError(
@@ -1417,28 +2057,30 @@ class ApptainerAgentRuntime:
             )
         if devices:
             command.append("--nv")
-        command.append("--no-umask")
-        if containall:
-            command.append("--containall")
-        else:
-            # Apptainer otherwise bind-mounts the host /tmp over task assets
-            # baked into the SIF. This read-only setup exec exposes image /tmp.
-            command.extend(("--no-mount", "tmp"))
-        command.extend(("--writable-tmpfs", "--cwd", str(self.plan.workdir)))
-        binds: list[tuple[Path, PurePosixPath, bool]] = list(extra_binds)
-        if (
-            network_mode == "no-network"
-            and mount_agent_home
-            and self._network_broker is not None
-        ):
-            binds.append(
-                (
-                    self._network_broker.root,
-                    PurePosixPath("/run/rsi-harness/network"),
-                    True,
-                )
+        # Every exec is contained: no host home, cwd or environment, and no
+        # site `bind path` or `mount hostfs` mounts. The setup exec that
+        # copies the image's /tmp leaves /tmp unmounted instead.
+        command.extend(
+            (
+                "--no-umask",
+                "--containall",
+                "--no-mount",
+                "hostfs,tmp" if image_tmp else "hostfs",
             )
-        if containall and not any(
+        )
+        command.extend(("--writable-tmpfs", "--cwd", str(self.plan.workdir)))
+        dns = self.profile.apptainer.dns_bind
+        binds: list[tuple[Path, PurePosixPath, bool]] = [
+            (dns, PurePosixPath(str(dns)), True),
+            *extra_binds,
+        ]
+        broker = self._agent_network(network_mode, mount_agent_home)
+        if broker is not None:
+            binds.append((broker.root, PurePosixPath("/run/rsi-harness/network"), True))
+        if boxed:
+            self.control.mkdir(parents=True, mode=0o700, exist_ok=True)
+            binds.append((install_judge_box(self.control), JUDGE_BOX_TARGET, True))
+        if not image_tmp and not any(
             target == PurePosixPath("/tmp") for _source, target, _ro in binds
         ):
             binds.append((self.work_tmp, PurePosixPath("/tmp"), False))
@@ -1456,6 +2098,8 @@ class ApptainerAgentRuntime:
                     )
                 )
         if mount_agent_home:
+            if phase == "work" and self._oracle_solution is not None:
+                binds.append((self._oracle_solution, PurePosixPath("/solution"), False))
             binds.append((self.agent_home, PurePosixPath("/home/agent"), False))
             binds.extend(self._agent_auth_binds)
             binds.extend(
@@ -1496,6 +2140,22 @@ class ApptainerAgentRuntime:
         for source, target, read_only in binds:
             suffix = ":ro" if read_only else ""
             command.extend(("--bind", f"{source}:{target}{suffix}"))
+        command.append(str(self.payload.sif_path))
+        return tuple(command)
+
+    def _container_environment(
+        self,
+        *,
+        devices: tuple[str, ...],
+        environment: dict[str, str] | None,
+        mount_agent_home: bool,
+        declared: Literal["public", "no-network", "allowlist"],
+        phase: Literal["work", "judge"] = "work",
+    ) -> dict[str, str]:
+        """The phase's container variables, which _run passes as
+        APPTAINERENV_* (never argv, and never split at commas)."""
+        multi_node = self.allocated_pools is not None
+        scoped = self.profile.apptainer.mount_policy == "scoped"
         profile_environment = self.profile.apptainer.environment
         if multi_node or scoped:
             phase_environment = (
@@ -1539,15 +2199,27 @@ class ApptainerAgentRuntime:
                     "RSI_LOCAL_WORLD_SIZE": str(self.work_broker.local_world_size),
                 }
             )
+        if mount_agent_home and self.plan.task.agent.name == "oracle":
+            # The native evaluator owns cleanup after the Work idle barrier.
+            values["RSI_ORACLE_SOLUTION_CLEANUP"] = (
+                "submit" if self.allocated_pools is not None else "launcher"
+            )
         if prepend:
             # Ahead of a PREPEND_PATH the cluster profile may set.
             if values.get("PREPEND_PATH"):
                 prepend.append(values["PREPEND_PATH"])
             values["PREPEND_PATH"] = ":".join(prepend)
-        for key, value in values.items():
-            command.extend(("--env", f"{key}={value}"))
-        command.append(str(self.payload.sif_path))
-        return tuple(command)
+        return values
+
+    def _agent_network(
+        self,
+        network_mode: Literal["public", "no-network", "allowlist"],
+        mount_agent_home: bool,
+    ) -> AgentNetworkBroker | None:
+        """The no-network Agent's broker, for a Work exec that gets it."""
+        if network_mode == "no-network" and mount_agent_home:
+            return self._network_broker
+        return None
 
     def _network_command(
         self,
@@ -1556,16 +2228,39 @@ class ApptainerAgentRuntime:
         network_mode: Literal["public", "no-network", "allowlist"],
         mount_agent_home: bool,
     ) -> tuple[str, ...]:
-        if (
-            network_mode == "no-network"
-            and mount_agent_home
-            and self._network_broker is not None
-        ):
-            return self._network_broker.wrap(
+        # Without a provider (Oracle) rsi-submit uses the socket directly.
+        broker = self._agent_network(network_mode, mount_agent_home)
+        if broker is not None and broker.provider_socket is not None:
+            return broker.wrap(
                 command,
                 relay_path=PurePosixPath("/usr/local/bin/rsi-netns-relay"),
             )
         return command
+
+    @property
+    def _seccomp_network(self) -> bool:
+        return self.profile.apptainer.network_isolation == "seccomp"
+
+    def _box_layer(
+        self,
+        box: Literal["work", "judge"] | None,
+        network_mode: Literal["public", "no-network", "allowlist"],
+    ) -> list[str] | None:
+        """The rsi-box arguments for an exec, or None when it runs unboxed.
+
+        With process_namespaces = "harness" the box gives Work and the Judge
+        their own PID and IPC namespaces; in seccomp mode a no-network Judge
+        also runs in it, under a layer without AF_UNIX sockets.
+        """
+        no_unix = (
+            box == "judge" and network_mode == "no-network" and self._seccomp_network
+        )
+        if box is None or not (
+            no_unix or self.profile.apptainer.process_namespaces == "harness"
+        ):
+            return None
+        python = str(self.profile.apptainer.container_python)
+        return judge_box_command(python, box, [], no_unix=no_unix)
 
     def _run(
         self,
@@ -1580,10 +2275,11 @@ class ApptainerAgentRuntime:
         extra_binds: tuple[tuple[Path, PurePosixPath, bool], ...] = (),
         mount_workspace: bool = True,
         mount_agent_home: bool = True,
-        containall: bool = True,
+        image_tmp: bool = False,
         phase: Literal["work", "judge"] = "work",
         declared_network_mode: Literal["public", "no-network", "allowlist"]
         | None = None,
+        box: Literal["work", "judge"] | None = None,
         timeout_seconds: float | None,
         track_work: bool = False,
     ) -> AgentRunResult:
@@ -1592,22 +2288,38 @@ class ApptainerAgentRuntime:
             network_mode=network_mode,
             mount_agent_home=mount_agent_home,
         )
+        layer = self._box_layer(box, network_mode)
         argv = (
             self._base_command(
                 devices=devices,
-                environment=environment,
                 extra_binds=extra_binds,
                 mount_workspace=mount_workspace,
                 mount_agent_home=mount_agent_home,
-                containall=containall,
                 network_mode=network_mode,
                 phase=phase,
                 declared_network_mode=declared_network_mode,
+                image_tmp=image_tmp,
+                boxed=layer is not None,
             )
+            + tuple(layer or ())
             + isolated_command
         )
-        child_env = os.environ.copy()
-        child_env["APPTAINER_BIND"] = str(self.profile.apptainer.dns_bind)
+        if network_mode == "no-network" and self._seccomp_network:
+            # No IP sockets for apptainer and everything it starts; the
+            # wrapper execs it, so the Popen PID stays Apptainer's.
+            argv = tuple(rsi_nonet.command(list(argv)))
+        values = self._container_environment(
+            devices=devices,
+            environment=environment,
+            mount_agent_home=mount_agent_home,
+            declared=declared_network_mode or network_mode,
+            phase=phase,
+        )
+        if self._agent_network(network_mode, mount_agent_home) is not None:
+            values["RSI_SUBMIT_SOCKET"] = "/run/rsi-harness/network/submit.sock"
+        # As on remote workers: inherited APPTAINER*/SINGULARITY* settings
+        # (binds, mount options, container variables) never reach the exec.
+        child_env = isolated_apptainer_environment(values)
         child_env["CUDA_VISIBLE_DEVICES"] = ",".join(devices)
         process = subprocess.Popen(
             argv,
@@ -1626,32 +2338,29 @@ class ApptainerAgentRuntime:
                 self._process = process
                 self._paused = False
         secrets = set(output_redact_values)
-        captured: list[str] = []
-        captured_bytes = 0
-        truncated = False
+        captured = BoundedBytes(16_000_000)
         stream = None
         if output_path is not None:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             # Append: a resumed run's Agent output continues the same file.
-            stream = output_path.open("a")
+            stream = output_path.open("a", encoding="utf-8")
+
+        drain_errors: list[Exception] = []
 
         def drain() -> None:
-            nonlocal captured_bytes, truncated
-            assert process.stdout is not None
-            for raw in process.stdout:
-                safe = _safe_output(raw, secrets)
-                encoded = safe.encode()
-                if captured_bytes < 16_000_000:
-                    remaining = 16_000_000 - captured_bytes
-                    captured.append(encoded[:remaining].decode(errors="ignore"))
-                    captured_bytes += min(len(encoded), remaining)
-                else:
-                    truncated = True
-                if stream is not None:
-                    stream.write(safe)
-                    stream.flush()
-                if output_callback is not None:
-                    output_callback(safe)
+            try:
+                assert process.stdout is not None
+                for raw in process.stdout:
+                    safe = _safe_output(raw, secrets)
+                    encoded = safe.encode()
+                    captured.append(encoded)
+                    if stream is not None:
+                        stream.write(safe)
+                        stream.flush()
+                    if output_callback is not None:
+                        output_callback(safe)
+            except Exception as error:
+                drain_errors.append(error)
 
         thread = threading.Thread(target=drain, name="apptainer-output", daemon=True)
         thread.start()
@@ -1686,11 +2395,59 @@ class ApptainerAgentRuntime:
                     self._paused = False
         return AgentRunResult(
             exit_code=process.returncode,
-            output="".join(captured),
-            output_truncated=truncated,
-            full_output_captured=not truncated,
+            output=captured.value.decode("utf-8", errors="ignore"),
+            output_truncated=captured.truncated,
+            full_output_captured=(
+                not thread.is_alive()
+                and not drain_errors
+                and (output_path is not None or not captured.truncated)
+            ),
             timed_out=timed_out,
         )
+
+
+def require_cluster_isolation(task: Any, apptainer: Any, *, multi_node: bool) -> None:
+    """Refuse what the profile's isolation modes cannot serve.
+
+    The adapter calls this before it submits anything; the runtime repeats
+    it inside the job. Multi-node runs need Apptainer's own PID and network
+    namespaces. In seccomp mode a phase without network has no IP sockets
+    at all and a no-network Judge no AF_UNIX sockets: a no-network Agent
+    other than Oracle (its CLI needs the provider proxy), pinned Judge model
+    egress and a Judge sandbox environment are refused.
+    """
+    seccomp = apptainer.network_isolation == "seccomp"
+    if multi_node and (seccomp or apptainer.process_namespaces == "harness"):
+        raise SetupError(
+            "multi-node runs need Apptainer's PID and network namespaces "
+            '(network_isolation = "namespace", process_namespaces = "apptainer")'
+        )
+    if not seccomp:
+        return
+    instead = (
+        'with network_isolation = "seccomp"; use a public Agent or Verifier '
+        "(site egress), or a site with network namespaces"
+    )
+    if task.agent.network.mode == "no-network" and task.agent.name != "oracle":
+        raise SetupError(f"a no-network Agent cannot reach its model {instead}")
+    if judge_needs_rsi_agent(task.verifier) and cluster_judge_egress(task) == "pinned":
+        raise SetupError(f"pinned Judge model access is unavailable {instead}")
+    environments = getattr(task.sandbox, "environments", None)
+    if getattr(environments, "judge", None) is not None:
+        raise SetupError(
+            f"sandbox.environments.judge (an AF_UNIX endpoint) is unavailable {instead}"
+        )
+
+
+# RUN_INFO.json["isolation"]: these keys of isolation_check.json.
+ISOLATION_SUMMARY = (
+    "passed",
+    "network_isolation",
+    "process_namespaces",
+    "judge_layer",
+    "keyring_shared",
+    "failures",
+)
 
 
 def require_cluster_judge_model_access(task: Any, *, multi_node: bool) -> None:
@@ -1764,6 +2521,8 @@ class NativeJudgeEvaluator:
                 raise RetryableSubmissionError(
                     "active remote Work must finish before submission"
                 ) from error
+            if request.run_plan.task.agent.name == "oracle":
+                self.runtime.remove_oracle_solution()
             request.verifier_logs.mkdir(
                 parents=True,
                 mode=0o700,
@@ -1839,7 +2598,7 @@ class NativeJudgeEvaluator:
                 exit_code=result.exit_code,
                 timed_out=result.timed_out,
                 verifier_output_required=True,
-                full_output_captured=True,
+                full_output_captured=result.full_output_captured,
                 duration_seconds=max(0.0, time.monotonic() - started),
                 error=error,
             )
@@ -1882,6 +2641,14 @@ class NativeJudgeEvaluator:
         return True
 
 
+class _ClusterAgentAdapter(RSILoopAgentAdapter):
+    @staticmethod
+    def _stage_solution(
+        runtime: ApptainerAgentRuntime, request: AgentHookRequest
+    ) -> None:
+        runtime.stage_solution()
+
+
 class NativeEngineComposition:
     def __init__(
         self,
@@ -1904,7 +2671,7 @@ class NativeEngineComposition:
         self.artifacts: RunArtifactWriter | None = None
         config = load_config()
         self.rsi_loop_config = config
-        self.agent = RSILoopAgentAdapter(config, runtime=self.runtime)
+        self.agent = _ClusterAgentAdapter(config, runtime=self.runtime)
         self.provider_urls = (
             _agent_provider_urls(payload, plan, config)
             if plan.task.agent.network.mode == "no-network"
@@ -1913,7 +2680,8 @@ class NativeEngineComposition:
         self.evaluator: NativeJudgeEvaluator | None = None
         self.volume: ManagedWorkdirVolume | None = None
         self.secrets = rsi_loop_runtime_secret_values(config)
-        # E2B envs: the broker runs in this process, its endpoint on node tmp.
+        # Remote envs: the broker runs in this process, its endpoint on node
+        # tmp.
         self.sandbox = (
             None
             if plan.sandbox is None
@@ -2273,26 +3041,38 @@ class NativeEngineComposition:
         print(f"[rsi-engine] {name}: {value}", flush=True)
 
 
-def validate_native_artifacts(plan: RunPlan, run_id: str) -> Path:
+def validate_native_artifacts(
+    plan: RunPlan, run_id: str, *, visibility_timeout: float = 0.0
+) -> Path:
+    """Require native evidence; the submit host may wait for shared-FS visibility.
+
+    Callers must first confirm the scheduler job succeeded. The compute node
+    validates immediately; only the submit host needs the bounded grace period.
+    Missing evidence still fails, and malformed evidence is never retried.
+    """
     root = plan.paths.logs / "runs" / run_id / plan.task.task_id
-    # The first recorded round: agent-1, unless an attempt that was resumed
-    # was interrupted while it was being judged.
-    recorded = recorded_submissions(root)
-    first = recorded[0][0].round_id if recorded else "agent-1"
-    required = (
-        root / "final_result.json",
-        root / "agent_output.txt",
-        root / "run_agent.log",
-        root / "submissions" / first / "report.json",
-        root / "feedback" / f"{first}.log",
-    )
-    missing = tuple(path for path in required if not path.is_file())
-    if missing:
-        raise InfrastructureError(
-            "native Engine run is missing artifacts: "
-            + ", ".join(str(path) for path in missing)
+    deadline = time.monotonic() + visibility_timeout
+    while True:
+        # A resumed attempt may have a different first recorded round.
+        recorded = recorded_submissions(root)
+        first = recorded[0][0].round_id if recorded else "agent-1"
+        required = (
+            root / "final_result.json",
+            root / "agent_output.txt",
+            root / "run_agent.log",
+            root / "submissions" / first / "report.json",
+            root / "feedback" / f"{first}.log",
         )
-    return root
+        missing = tuple(path for path in required if not path.is_file())
+        if not missing:
+            return root
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise InfrastructureError(
+                "native Engine run is missing artifacts: "
+                + ", ".join(str(path) for path in missing)
+            )
+        time.sleep(min(1.0, remaining))
 
 
 def run_native_engine(
@@ -2334,6 +3114,10 @@ def run_native_engine(
     (plan.paths.root / "engine-result.json").write_text(
         result.model_dump_json(indent=2)
     )
+    if plan.task.agent.name == "oracle":
+        failures = oracle_failures(result, payload.options.max_submissions or 1)
+        if failures:
+            raise InfrastructureError("Oracle check failed: " + "; ".join(failures))
     if result.status is not RunStatus.COMPLETED:
         raise InfrastructureError(
             f"native Engine ended in {result.status.value}: "

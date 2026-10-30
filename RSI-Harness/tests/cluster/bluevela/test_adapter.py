@@ -738,6 +738,39 @@ def test_cache_miss_waits_for_build_then_run_and_records_manifest(
     assert "auth.json" not in json.dumps(manifest)
 
 
+def test_a_cache_miss_installs_the_podman_bundle_before_the_build(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    base = _profile(tmp_path)
+    bundle = tmp_path / "podman"
+    profile = base.model_copy(
+        update={"builder": base.builder.model_copy(update={"podman_bundle": bundle})}
+    )
+    scheduler = RecordingScheduler()
+
+    def install(root: Path) -> bool:
+        scheduler.events.append(f"install {root}")
+        return True
+
+    monkeypatch.setattr(adapter_module.podman_bundle, "ensure_installed", install)
+    events: list[tuple[str, object]] = []
+    adapter = BlueVelaClusterAdapter(
+        profile,
+        scheduler=scheduler,
+        clock=lambda: datetime(2026, 8, 23, 12, 0, tzinfo=UTC),
+        agent_version_resolver=lambda _name: "0.149.0",
+        event_callback=lambda name, value: events.append((name, value)),
+    )
+
+    adapter.run(_request(tmp_path, dry_run=False))
+
+    assert scheduler.events[:2] == [f"install {bundle}", "check-build"]
+    assert (
+        "podman_installed",
+        {"path": str(adapter_module.podman_bundle.bundle_dir(bundle))},
+    ) in events
+
+
 @pytest.mark.parametrize("multi_node", (False, True))
 def test_missing_declared_asset_stops_after_cpu_build_before_gpu_submission(
     tmp_path: Path,
@@ -897,3 +930,126 @@ def test_job_names_distinguish_agents_for_concurrent_task_runs(tmp_path: Path) -
     assert codex_name != claude_name
     assert "codex" in codex_name
     assert "claude-code" in claude_name
+
+
+def _npm_codex(root: Path, *, native: bool = True) -> Path:
+    """npm's layout: bin/codex.js, and the native binaries under vendor/."""
+    package = root / "lib/node_modules/@openai/codex"
+    launcher = package / "bin/codex.js"
+    launcher.parent.mkdir(parents=True)
+    launcher.write_text("#!/usr/bin/env node\n")
+    if native:
+        machine = adapter_module._MACHINES[adapter_module.platform.machine().lower()]
+        vendor = package / f"vendor/{machine}-unknown-linux-musl/bin"
+        vendor.mkdir(parents=True)
+        for name in ("codex", "codex-code-mode-host"):
+            (vendor / name).write_bytes(b"\x7fELF native\n")
+    return launcher
+
+
+def test_an_npm_codex_launcher_binds_the_native_binary_and_records_the_pin(
+    tmp_path: Path, monkeypatch
+) -> None:
+    launcher = _npm_codex(tmp_path / "npm")
+    monkeypatch.setattr(adapter_module.shutil, "which", lambda _name: str(launcher))
+    scheduler = RecordingScheduler()
+    events: dict[str, object] = {}
+    adapter = BlueVelaClusterAdapter(
+        _profile(tmp_path),
+        scheduler=scheduler,
+        event_callback=lambda name, value: events.update({name: value}),
+        agent_version_resolver=lambda _name: "0.163.0",
+    )
+
+    adapter.run(_request(tmp_path, dry_run=False))
+
+    payload = load_engine_payload(scheduler.specs[1].script_path.with_suffix(".json"))
+    vendor = launcher.parents[1] / "vendor"
+    assert payload.agent_binary is not None
+    assert payload.agent_binary.is_relative_to(vendor)
+    assert payload.agent_binary.name == "codex"
+    assert payload.agent_companions == (
+        payload.agent_binary.with_name("codex-code-mode-host"),
+    )
+    pinned = adapter_module.versions.CODEX
+    assert events["agent_version_mismatch"] == {
+        "agent": "codex",
+        "version": "0.163.0",
+        "pinned": pinned,
+    }
+    manifest = json.loads((payload.run_plan.paths.root / "RUN_INFO.json").read_text())
+    assert (manifest["agent_version"], manifest["agent_pinned_version"]) == (
+        "0.163.0",
+        pinned,
+    )
+
+
+@pytest.mark.parametrize("agent", ["codex", "claude-code"])
+def test_a_script_launcher_is_refused_before_build(
+    tmp_path: Path, monkeypatch, agent: str
+) -> None:
+    monkeypatch.setattr(adapter_module, "resolve_agent_auth", lambda **kwargs: None)
+    launcher = _npm_codex(tmp_path / "npm", native=False)
+    monkeypatch.setattr(adapter_module.shutil, "which", lambda _name: str(launcher))
+    scheduler = RecordingScheduler()
+    adapter = BlueVelaClusterAdapter(
+        _profile(tmp_path),
+        scheduler=scheduler,
+        agent_version_resolver=lambda _name: "1.0.0",
+    )
+    request = (
+        _request(tmp_path, dry_run=False)
+        if agent == "codex"
+        else _claude_request(tmp_path, dry_run=False)
+    )
+
+    with pytest.raises(SetupError, match="script launcher"):
+        adapter.run(request)
+    with pytest.raises(SetupError, match="script launcher"):
+        adapter_module._resolve_agent_version(agent)
+    assert scheduler.events == []
+
+
+def test_a_failed_run_job_names_the_engine_error(tmp_path):
+    from rsi_harness.cluster.bluevela.adapter import (
+        BlueVelaClusterAdapter,
+        engine_error_detail,
+    )
+    from rsi_harness.cluster.schedulers.lsf import LSFJobResult
+    from rsi_harness.errors import InfrastructureError
+
+    plan = SimpleNamespace(
+        paths=SimpleNamespace(logs=tmp_path),
+        task=SimpleNamespace(task_id="task"),
+    )
+    assert engine_error_detail(plan, "run") == ""
+    root = tmp_path / "runs" / "run" / "task"
+    root.mkdir(parents=True)
+    (root / "engine_error.json").write_text(
+        json.dumps({"error": "no network namespaces; set network_isolation"})
+    )
+    detail = engine_error_detail(plan, "run")
+    assert detail == "; Engine: no network namespaces; set network_isolation"
+    with pytest.raises(InfrastructureError, match="Engine: no network namespaces"):
+        BlueVelaClusterAdapter._require_success(
+            "native Engine run",
+            LSFJobResult(job_id="7", state="EXIT", exit_code=1),
+            detail=detail,
+        )
+
+
+@pytest.mark.parametrize("exclusive", [True, False])
+def test_single_node_honors_declared_exclusive_policy(tmp_path, exclusive):
+    base = _profile(tmp_path)
+    profile = base.model_copy(
+        update={"scheduler": base.scheduler.model_copy(update={"exclusive": exclusive})}
+    )
+    events = []
+    adapter = BlueVelaClusterAdapter(
+        profile,
+        scheduler=RecordingScheduler(),
+        event_callback=lambda name, value: events.append((name, value)),
+        agent_version_resolver=lambda _name: "0.149.0",
+    )
+    adapter.run(_request(tmp_path, dry_run=True))
+    assert ("-x" in dict(events)["dry_run"]["run_argv"]) is exclusive

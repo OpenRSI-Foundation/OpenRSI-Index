@@ -98,6 +98,29 @@ def test_render_multinode_requests_per_node_resources(tmp_path):
     ).issubset(argv)
 
 
+@pytest.mark.parametrize(
+    ("hosts", "expected"), [(1, "--gpus=4"), (2, "--gpus-per-node=4")]
+)
+def test_gpus_option_requests_gpus_per_node_without_gres(tmp_path, hosts, expected):
+    shape = (
+        {}
+        if hosts == 1
+        else {
+            "hosts": 2,
+            "one_host": False,
+            "slots_per_host": 4,
+            "memory_per_host": True,
+        }
+    )
+    argv = SlurmScheduler().render_submit(spec(tmp_path, gpu_option="gpus", **shape))
+
+    assert expected in argv
+    assert not any(arg.startswith("--gres") for arg in argv)
+    no_gpus = spec(tmp_path, gpu_option="gpus", gpu_count=0)
+    argv = SlurmScheduler().render_submit(no_gpus)
+    assert not any(arg.startswith(("--gpus", "--gres")) for arg in argv)
+
+
 def test_build_job_does_not_request_gpus_or_an_implicit_account(tmp_path):
     argv = SlurmScheduler().render_submit(spec(tmp_path, gpu_count=0, group=""))
     assert not any(arg.startswith(("--gres", "--account")) for arg in argv)
@@ -238,13 +261,15 @@ def test_invalid_job_id_never_reaches_scheduler(job_id):
     assert runner.calls == []
 
 
-def test_name_collision_is_exact():
-    scheduler = SlurmScheduler(
-        runner=Runner([completed("task-other\n"), completed("task\n")])
-    )
+def test_name_collision_is_exact(monkeypatch):
+    monkeypatch.setattr("getpass.getuser", lambda: "alice")
+    runner = Runner([completed("task-other\n"), completed("task\n")])
+    scheduler = SlurmScheduler(runner=runner)
     scheduler.require_name_available("task")
     with pytest.raises(InfrastructureError, match="already active"):
         scheduler.require_name_available("task")
+    # Only the submitting user's jobs, never every user's.
+    assert runner.calls[0] == ("squeue", "--noheader", "--user=alice", "--format=%j")
 
 
 def test_finished_is_none_while_the_job_is_queued_or_running():
