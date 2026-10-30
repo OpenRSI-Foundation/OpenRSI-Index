@@ -657,11 +657,9 @@ def _cluster_runtime(tmp_path: Path, monkeypatch, visibility: str, digest=None):
 def _binds(runtime: ApptainerAgentRuntime, *, mount_workspace: bool, phase: str):
     command = runtime._base_command(
         devices=(),
-        environment=None,
         extra_binds=(),
         mount_workspace=mount_workspace,
         mount_agent_home=mount_workspace,
-        containall=True,
         network_mode="no-network",
         phase=phase,
     )

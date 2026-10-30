@@ -4,8 +4,10 @@
 Judge that declares them; ``rsi-isolate`` runs one command isolated, in
 every Judge. Each (``rsi_agent.py`` or ``rsi_isolate.py``, the isolation
 they share in ``judge_isolation.py``, and a launcher) runs inside the Judge
-and imports nothing from RSI Harness. This module holds the host side: where
-they are mounted, and installing a copy for one run.
+and imports nothing from RSI Harness. ``judge_isolation.py`` is also
+``rsi-box``, the process box around Work and the Judge where Apptainer gives
+them no PID namespace. This module holds the host side: where they are
+mounted, and installing a copy for one run.
 """
 
 from __future__ import annotations
@@ -71,6 +73,10 @@ JUDGE_ISOLATE_LAUNCHER_TARGET = PurePosixPath("/usr/local/bin/rsi-isolate")
 JUDGE_ISOLATE_UID = 62000
 JUDGE_ISOLATE_SLOTS = 64
 JUDGE_ISOLATE_UIDS = range(JUDGE_ISOLATE_UID, JUDGE_ISOLATE_UID + JUDGE_ISOLATE_SLOTS)
+# rsi-box: the host directory below the run's artifacts, and in the container
+# the program (``judge_isolation.py``) run by the image's python3.
+JUDGE_BOX_DIRECTORY = "rsi-box"
+JUDGE_BOX_TARGET = PurePosixPath("/usr/local/bin/rsi-box")
 _AGENT_FILES = (
     (JUDGE_AGENT_PROGRAM, 0o644),
     (JUDGE_ISOLATION_MODULE, 0o644),
@@ -100,6 +106,26 @@ def install_judge_isolate(
 ) -> Path:
     """Copy ``rsi-isolate`` below ``run_root`` once and return the directory."""
     return _install(run_root / JUDGE_ISOLATE_DIRECTORY, _ISOLATE_FILES, owner)
+
+
+def install_judge_box(run_root: Path, *, owner: tuple[int, int] | None = None) -> Path:
+    """Copy ``rsi-box`` below ``run_root`` once and return the file to bind
+    read-only at :data:`JUDGE_BOX_TARGET`."""
+    files = ((JUDGE_ISOLATION_MODULE, 0o644),)
+    directory = _install(run_root / JUDGE_BOX_DIRECTORY, files, owner)
+    return directory / JUDGE_ISOLATION_MODULE
+
+
+def judge_box_command(
+    python: str, layer: str, argv: list[str], *, no_unix: bool = False
+) -> list[str]:
+    """``argv`` in the box: ``layer`` is "work" (no new namespaces or mounts)
+    or "judge" (no keyrings; with ``no_unix``, no AF_UNIX sockets either).
+    Exit status 125 when the box cannot be set up."""
+    if layer not in ("work", "judge") or (no_unix and layer != "judge"):
+        raise ValueError(f"no rsi-box layer {layer!r} (no_unix={no_unix})")
+    command = [python, "-I", "-S", "-B", str(JUDGE_BOX_TARGET), f"--{layer}"]
+    return command + (["--no-unix"] if no_unix else []) + ["--", *argv]
 
 
 def _install(directory: Path, files, owner: tuple[int, int] | None) -> Path:
@@ -152,6 +178,8 @@ __all__ = [
     "JUDGE_AGENT_SLOTS",
     "JUDGE_AGENT_UID",
     "JUDGE_AGENT_UIDS",
+    "JUDGE_BOX_DIRECTORY",
+    "JUDGE_BOX_TARGET",
     "JUDGE_CODEX_BINARY",
     "JUDGE_CODEX_CACHE",
     "JUDGE_CODEX_TARGET",
@@ -165,6 +193,8 @@ __all__ = [
     "JUDGE_ISOLATE_UIDS",
     "JUDGE_ISOLATION_MODULE",
     "install_judge_agent",
+    "install_judge_box",
     "install_judge_isolate",
     "judge_agent_source",
+    "judge_box_command",
 ]

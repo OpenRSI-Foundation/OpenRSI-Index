@@ -297,7 +297,10 @@ with socket.create_connection((proxy.hostname, proxy.port), timeout=5) as client
 with socket.socket(socket.AF_UNIX) as client:
     client.settimeout(5)
     client.connect(provider_socket)
-    client.sendall(request)
+    try:
+        client.sendall(request)
+    except BrokenPipeError:
+        pass  # Refused and closed before the request was written.
     report["direct"] = headers(client).decode() or "closed"
 sys.path.insert(0, agent)
 import rsi_agent
@@ -327,10 +330,10 @@ if rsi_agent.landlock_abi(libc)[0] >= 1:
         "with socket.socket(socket.AF_UNIX) as client:\n"
         "    client.settimeout(5)\n"
         "    client.connect(sys.argv[1])\n"
-        "    client.sendall(sys.argv[2].encode())\n"
         "    try:\n"
+        "        client.sendall(sys.argv[2].encode())\n"
         "        out['unix'] = client.recv(64).decode() or 'closed'\n"
-        "    except ConnectionResetError:\n"
+        "    except (BrokenPipeError, ConnectionResetError):\n"
         "        out['unix'] = 'closed'\n"
         "print(json.dumps(out))\n"
     )
@@ -452,3 +455,25 @@ def test_a_judge_provider_proxy_whose_first_peer_has_no_pid_serves_nobody(
     assert [proxy._admit(None) for _ in range(4)] == [False] * 4
     assert proxy.owner_pid == -1
     assert proxy.refused_peers == 3
+
+
+def test_an_agent_without_a_provider_gets_only_the_submit_relay(
+    tmp_path: Path,
+) -> None:
+    from rsi_harness.cluster.bluevela.network import AgentNetworkBroker
+
+    broker = AgentNetworkBroker(
+        tmp_path / "broker", endpoints=(), submit_url="http://127.0.0.1:43123"
+    )
+    broker.start()
+    try:
+        assert broker.provider_socket is None
+        assert [path.name for path in broker.root.iterdir()] == ["submit.sock"]
+        with pytest.raises(RuntimeError, match="no provider proxy"):
+            broker.wrap(
+                ("rsi-oracle",),
+                relay_path=PurePosixPath("/usr/local/bin/rsi-netns-relay"),
+            )
+    finally:
+        broker.stop()
+    assert not broker.submit_socket.exists()

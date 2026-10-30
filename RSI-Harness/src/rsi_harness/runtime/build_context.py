@@ -210,13 +210,17 @@ def prepare_build_input(
     max_bytes: int,
     syntax_frontends: Sequence[str],
     max_entries: int = MAX_ARCHIVE_ENTRIES,
+    symlinks: bool = True,
+    backend: str = "docker",
 ) -> BuildInput:
     """Validate a staged context and write the builder input tar to ``dest``.
 
     ``dest`` must be a real, seekable file (CanonicalTarWriter). The
     Dockerfile is ``dockerfile_inline`` when given, else the regular file
     ``dockerfile`` (default ``Dockerfile``) of the context; it is at most
-    1 MiB. Context content beyond ``max_bytes`` is a quota error.
+    1 MiB. Context content beyond ``max_bytes`` is a quota error. Without
+    ``symlinks`` (a remote ``backend``, whose builds read the context on
+    the host) a symlink is refused.
     """
     if dockerfile is not None and dockerfile_inline is not None:
         raise SandboxError(
@@ -250,6 +254,13 @@ def prepare_build_input(
                 if member.isdir():
                     writer.add_dir(target, mode=member.mode, mtime=member.mtime)
                 elif member.issym():
+                    if not symlinks:
+                        raise SandboxError(
+                            "unsupported",
+                            "stage_id",
+                            "symlinks in a build context are unsupported on "
+                            f"the {backend} backend",
+                        )
                     content.update(member.linkname.encode("utf-8", "surrogateescape"))
                     writer.add_symlink(
                         target, member.linkname, mode=member.mode, mtime=member.mtime

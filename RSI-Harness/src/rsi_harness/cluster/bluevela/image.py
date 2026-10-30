@@ -8,6 +8,8 @@ from pathlib import Path
 
 from pydantic import field_validator
 
+from rsi_harness.cluster import podman_bundle
+from rsi_harness.cluster.bluevela.preflight import apptainer_preflight
 from rsi_harness.cluster.config import ClusterProfile
 from rsi_harness.models import PersistedModel
 from rsi_harness.task.digest import hash_tree
@@ -93,12 +95,47 @@ def render_build_driver(
         and dockerfile.is_file()
         and "apt-get" in dockerfile.read_text(errors="replace")
     )
+    builder = profile.builder
+    podman_options = [
+        f"--storage-driver={builder.storage_driver}",
+        "--storage-opt",
+        # VFS accepts only the prefixed option name.
+        "vfs.ignore_chown_errors=true"
+        if builder.storage_driver == "vfs"
+        else "ignore_chown_errors=true",
+    ]
+    for option, path in (("--conmon", builder.conmon), ("--runtime", builder.runtime)):
+        if path is not None:
+            podman_options += [option, str(path)]
+    podman_text = " ".join(_quote(arg) for arg in podman_options)
+    host_namespaces = "".join(f" --{name}=host" for name in builder.host_namespaces)
+    # Namespaces each RUN step still creates on this node.
+    created_namespaces = " ".join(
+        kernel
+        for name, kernel in (("network", "net"), ("uts", "uts"))
+        if name not in builder.host_namespaces
+    )
+    helpers = " ".join(
+        _quote(path) for path in (builder.conmon, builder.runtime) if path is not None
+    )
+    # The bundle's own configuration, not the node's or the user's.
+    bundle_env = ""
+    signature_policy = ""
+    if builder.podman_bundle is not None:
+        tree = podman_bundle.bundle_dir(builder.podman_bundle)
+        bundle_env = (
+            f"export CONTAINERS_CONF={_quote(tree / podman_bundle.CONTAINERS_CONF)}\n"
+            "export CONTAINERS_STORAGE_CONF="
+            f"{_quote(tree / podman_bundle.STORAGE_CONF)}\n"
+        )
+        signature_policy = f" --signature-policy {_quote(tree / podman_bundle.POLICY)}"
+    build_flags = host_namespaces + signature_policy
     script = f"""#!/usr/bin/env bash
 set -euo pipefail
 umask 077
 
+{apptainer_preflight(profile.apptainer.binary)}
 builder={_quote(profile.builder.binary)}
-apptainer={_quote(profile.apptainer.binary)}
 frozen_context={_quote(Path(frozen_context).resolve())}
 cache_dir={_quote(cache_dir)}
 final_sif={_quote(plan.sif_path)}
@@ -107,6 +144,23 @@ image_name={_quote(image_name)}
 builder_tmp_root={_quote(profile.builder.temp_root)}
 faked={_quote(profile.builder.faked_binary or "")}
 fakeroot_library={_quote(profile.builder.fakeroot_library or "")}
+for tool in "$builder" {helpers}; do
+  if ! command -v -- "$tool" >/dev/null; then
+    echo "compute-node preflight: builder tool is missing or not executable: $tool" >&2
+    exit 1
+  fi
+done
+for ns in {created_namespaces}; do
+  if [[ "$(cat "/proc/sys/user/max_${{ns}}_namespaces" 2>/dev/null)" == 0 ]]; then
+    echo "compute-node preflight: this node cannot create $ns namespaces" \
+      "(max_${{ns}}_namespaces=0); add it to builder.host_namespaces" >&2
+    exit 1
+  fi
+done
+if [[ ! -d "$builder_tmp_root" ]]; then
+  echo "builder temp_root does not exist on this node: $builder_tmp_root" >&2
+  exit 1
+fi
 available_tmp_kb="$(df -Pk -- "$builder_tmp_root" | awk 'NR == 2 {{print $4}}')"
 required_tmp_kb=$(({minimum_tmp_mb} * 1024))
 if [[ ! "$available_tmp_kb" =~ ^[0-9]+$ ]] || \
@@ -127,8 +181,11 @@ if [[ -s "$final_sif" && -s "$final_sha" ]] && \
 fi
 
 local_root="$(mktemp -d {_quote(temp_template)})"
-partial_sif="$cache_dir/.{plan.cache_key}.${{LSB_JOBID:-$$}}.sif.partial"
-partial_sha="$cache_dir/.{plan.cache_key}.${{LSB_JOBID:-$$}}.sha256.partial"
+# Podman 4.x to 5.0 refuse a runroot longer than 50 characters.
+podman_runroot="$(mktemp -d /tmp/rsi-run.XXXXXX)"
+job_tag="${{SLURM_JOB_ID:-${{LSB_JOBID:-$$}}}}"
+partial_sif="$cache_dir/.{plan.cache_key}.$job_tag.sif.partial"
+partial_sha="$cache_dir/.{plan.cache_key}.$job_tag.sha256.partial"
 cleanup() {{
   if [[ -n "${{faked_pid:-}}" ]]; then
     kill "$faked_pid" >/dev/null 2>&1 || true
@@ -136,7 +193,7 @@ cleanup() {{
   if declare -p podman >/dev/null 2>&1; then
     "${{podman[@]}}" system reset --force >/dev/null 2>&1 || true
   fi
-  rm -rf "$local_root"
+  rm -rf "$local_root" "$podman_runroot"
   rm -f "$partial_sif" "$partial_sha"
 }}
 trap cleanup EXIT
@@ -146,10 +203,12 @@ local_archive="$local_root/image.tar"
 local_sif="$local_root/image.sif"
 export XDG_RUNTIME_DIR="$local_root/xdg-runtime"
 export CONTAINERS_REGISTRIES_CONF="$local_root/registries.conf"
+{bundle_env}# Image copies stage under TMPDIR (default /var/tmp).
+export TMPDIR="$local_root/tmp"
 unset DBUS_SESSION_BUS_ADDRESS
 mkdir -p "$local_context" "$local_root/podman-root" \
-  "$local_root/podman-runroot" "$local_root/apptainer-tmp" \
-  "$local_root/apptainer-cache" "$XDG_RUNTIME_DIR"
+  "$local_root/apptainer-tmp" "$local_root/apptainer-cache" \
+  "$XDG_RUNTIME_DIR" "$TMPDIR"
 chmod 0700 "$XDG_RUNTIME_DIR"
 printf '%s\n' \
   'unqualified-search-registries = ["docker.io"]' \
@@ -157,6 +216,7 @@ printf '%s\n' \
 cp -a "$frozen_context"/. "$local_context"/
 
 rootless_build_args=()
+fakeroot_args=()
 if [[ -n "$faked" ]]; then
   export FAKED_MODE=unknown-is-root
   key_pid="$("$faked")"
@@ -166,7 +226,7 @@ if [[ -n "$faked" ]]; then
   fi
   fake_key="${{BASH_REMATCH[1]}}"
   faked_pid="${{BASH_REMATCH[2]}}"
-  rootless_build_args+=(
+  fakeroot_args+=(
     --ipc host
     --volume "$fakeroot_library:/usr/lib/libfakeroot.so:ro"
     --env "LD_PRELOAD=/usr/lib/libfakeroot.so"
@@ -191,16 +251,52 @@ fi
 podman=(
   "$builder"
   --root "$local_root/podman-root"
-  --runroot "$local_root/podman-runroot"
-  --storage-driver=overlay
-  --storage-opt ignore_chown_errors=true
+  --runroot "$podman_runroot"
+  {podman_text}
   --cgroup-manager=cgroupfs
   --events-backend=file
 )
-"${{podman[@]}}" build --isolation rootless --format docker \
-  "${{rootless_build_args[@]}}" \
-  -t "$image_name" "$local_context"
-"${{podman[@]}}" save --format docker-archive -o "$local_archive" "$image_name"
+build_log="$local_root/build.log"
+# ${{a[@]+"${{a[@]}}"}}: bash 4.2 (CentOS 7) treats an empty array as unset.
+build_image() {{
+  "${{podman[@]}}" build --isolation rootless --format docker{build_flags} \\
+    ${{rootless_build_args[@]+"${{rootless_build_args[@]}}"}} "$@" \\
+    -t "$image_name" "$local_context" 2>&1 | tee "$build_log" >&2
+  return "${{PIPESTATUS[0]}}"
+}}
+build_hint() {{
+  local ownership='lchown|error setting ownership|chown.*invalid argument'
+  if grep -qiE "$ownership" "$build_log"; then
+    echo "build hint: the Dockerfile changes file ownership, which needs" \\
+      "/etc/subuid ranges or builder.faked_binary and fakeroot_library" >&2
+  fi
+  if grep -qiE '(unshare|clone).*no space left on device' "$build_log"; then
+    echo "build hint: a namespace limit is 0 on this node;" \\
+      "see builder.host_namespaces" >&2
+  fi
+  if grep -qiE 'mount_program is required|overlay.*not supported' "$build_log"; then
+    echo "build hint: rootless overlay is unavailable;" \\
+      'set builder.storage_driver = "vfs"' >&2
+  fi
+  if grep -qiE 'could not find a working conmon|conmon.*not found' "$build_log"; then
+    echo "build hint: set builder.conmon to the conmon executable" >&2
+  fi
+}}
+if ! build_image ${{fakeroot_args[@]+"${{fakeroot_args[@]}}"}}; then
+  # A glibc libfakeroot does not load in every image (musl, older glibc).
+  # Not Podman's echo of the ENV step that sets LD_PRELOAD to it.
+  if [[ -n "$faked" ]] && grep -v '^STEP [0-9]*/[0-9]*: ' "$build_log" \\
+      | grep -q /usr/lib/libfakeroot.so; then
+    echo "build note: libfakeroot does not load in this image;" \\
+      "rebuilding without it" >&2
+    build_image || {{ build_hint; exit 1; }}
+  else
+    build_hint
+    exit 1
+  fi
+fi
+"${{podman[@]}}" save{signature_policy} --format docker-archive \\
+  -o "$local_archive" "$image_name"
 
 export APPTAINER_BIND={_quote(profile.apptainer.dns_bind)}
 export APPTAINER_TMPDIR="$local_root/apptainer-tmp"

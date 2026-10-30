@@ -561,7 +561,7 @@ class JobRunner:
     # -- pulls -----------------------------------------------------------------
 
     def run_pull(self, job: Job) -> None:
-        # Another backend's images (sandbox_e2b) resolve pulls themselves.
+        # Another backend's images (sandbox_remote) resolve pulls themselves.
         custom = getattr(self._puller, "run_pull", None)
         if custom is not None:
             custom(self, job)

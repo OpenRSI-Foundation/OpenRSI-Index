@@ -63,7 +63,6 @@ from tests.cluster.bluevela.test_adapter import (
 )
 from tests.cluster.bluevela.test_judge_model_access import (
     _binds,
-    _envs,
     _judge,
     _plan,
     _runtime,
@@ -754,7 +753,7 @@ def test_an_api_key_judge_round_gets_rsi_agent_llm_and_never_the_key(
     assert launch["llm"]["model"] == "gpt-judge"
     assert launch["round_ends_at"] > 0
     assert capture.launch_mode == 0o600
-    environment = _envs(capture.argv)
+    environment = capture.environment
     assert environment["RSI_JUDGE_MODEL"] == "gpt-judge"
     assert environment["RSI_JUDGE_MODEL_EFFORT"] == "high"
     assert environment["RSI_JUDGE_ISOLATION_FALLBACK"] == "none"
@@ -985,7 +984,8 @@ def _fake_submit_host(monkeypatch, tmp_path):
     """No Work login, and a pinned Codex CLI where `codex` resolves."""
     monkeypatch.setattr(adapter_module, "load_config", RSILoopConfig)
     monkeypatch.setattr(adapter_module, "resolve_agent_auth", lambda **_kwargs: None)
-    binary = _fake_codex(tmp_path / "submit-bin")
+    # The native binary, which the adapter binds into Work as it is.
+    binary = _fake_codex(tmp_path / "submit-bin", b"\x7fELF codex\n")
     monkeypatch.setattr(
         cluster_judge_llm.shutil,
         "which",

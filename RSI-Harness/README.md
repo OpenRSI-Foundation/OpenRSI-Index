@@ -1,8 +1,8 @@
 # RSI Harness
 
 RSI Harness powers OpenRSI Index for ultra-long-horizon RSI runs, natively
-supporting [Harbor-format tasks](../rsi-tasks/) with or without GPUs on local
-Docker, and GPU tasks on multi-node clusters.
+supporting [Harbor-format tasks](docs/harbor-task-authoring/task-toml.md) on local Docker and
+[supported Slurm/LSF allocations](#run-multi-node-tasks-on-a-cluster).
 
 Agents such as Claude Code, Codex, Qwen Code, Kimi Code, OpenCode, ZCode and
 pi develop solutions in
@@ -91,15 +91,20 @@ switches users itself. See
 
 [`sample_tasks/science-ising3d`](sample_tasks/science-ising3d) combines these
 for open-ended science: a public rubric, a Judge started from the clean task
-image, and a trajectory audit and per-rubric review by the Agent model. Its
-copy of the science Judge library is an older version that needs a root
-Judge (local Docker); a task meant for a cluster copies the current library
-from OpenRSI-X's `science-task-agent` skill.
+image, a trajectory audit by the Agent model and a per-rubric review by the
+Judge model. Its copy of the science Judge library (OpenRSI-X's
+`science-task-agent` skill) runs as root on local Docker and, on a cluster,
+isolates its routes with Landlock or user namespaces.
 
-![RSI Harness workflow: one-time Harbor task preparation starts an agent in a persistent Work container. Each rsi-submit pauses and snapshots Work for a fresh, isolated Judge, which runs private tests and returns feedback. Work resumes for further iterations until the submission or time limit; the best valid submission is selected by its primary reward.](../assets/figures/rsi-harness.png)
+![RSI Harness workflow: one-time Harbor task preparation starts an agent in a persistent Work container. Each rsi-submit pauses and snapshots Work for a fresh, isolated Judge, which runs private tests and returns feedback. Work resumes for further iterations until the submission or time limit; the best valid submission is selected by its primary reward.](https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/assets/figures/rsi-harness.png?raw=true)
 
 
 ## Requirements
+
+An experimental [native macOS controller](docs/macos-docker-desktop.md) uses
+Docker Desktop for CPU-only validation. Its scope and remaining acceptance
+limitations are documented separately. The requirements below describe local
+Linux Docker; Slurm/LSF uses the [cluster prerequisites](#run-multi-node-tasks-on-a-cluster).
 
 - Linux with a working `docker` command
 - for GPU tasks, NVIDIA GPUs, the NVIDIA Container Toolkit, and a working
@@ -116,6 +121,16 @@ Install from a checkout:
 
 ```bash
 uv tool install /path/to/RSI-Harness
+```
+
+For remote envs (`backend = "e2b"`, `"modal"` or `"daytona"` in a sandbox
+policy, the only env backends on a cluster), install that backend's extra
+instead:
+
+```bash
+uv tool install '/path/to/RSI-Harness[e2b]'
+uv tool install '/path/to/RSI-Harness[modal]'
+uv tool install '/path/to/RSI-Harness[daytona]'
 ```
 
 Or build and install the wheel:
@@ -158,6 +173,12 @@ from Engine artifacts. Do not put credentials in the Harbor task directory.
 from logs, while ordinary settings remain unchanged. For credentials with
 nonstandard names, list the variable names in `RSI_AGENT_SECRET_ENV_NAMES`
 (comma-separated).
+
+During a run, an explicit Codex model-capacity error is retried automatically
+in the same session, with waits of 30, 60, 120, 240, then at most 300 seconds.
+Work is not restarted, and waiting counts toward the original Agent timeout.
+This does not retry normal completion, cancellation, or other errors, and
+requires a session ID from Codex. It does not create a new Harness attempt.
 
 ### Agents
 
@@ -314,12 +335,12 @@ sudo -E "$(command -v rsi-harness)" run /absolute/path/to/task \
   read-only, no-network, no-GPU child with bounded tmpfs scratch.
 - **Version 2 brokered environments:** pulled and built images, Compose
   services, long-running execs and copies, used by stock Harbor through an
-  injected plugin. Envs run on local Docker or, with
-  `backend = "e2b"`, as E2B sandboxes.
+  injected plugin. Envs run on local Docker or, with `backend = "e2b"`,
+  `"modal"` or `"daytona"`, as E2B, Modal or Daytona sandboxes.
 
 Docker-backed sandboxes need `rsi-harness run` as root next to a rootful
-Docker daemon; the BlueVela and Slurm backends accept only E2B-backed
-environment grants (see
+Docker daemon; the BlueVela and Slurm backends accept only environment
+grants on a remote backend (see
 [Host requirements](docs/sandbox-operator-guide.md#host-requirements)).
 Task authors start with
 [docs/harbor-task-authoring/sandboxes.md](docs/harbor-task-authoring/sandboxes.md);
@@ -344,7 +365,9 @@ sudo -E "$(command -v rsi-harness)" run /absolute/path/to/task --agent oracle \
 ```
 
 Omit `--gpus` for a CPU task and `--sandbox-policy` for a task without
-sandboxes. Run it as root (`sudo -E`) like every run: the firewall needs it,
+sandboxes. On the supported native macOS backend, omit `sudo -E` and follow
+the [Mac procedure](docs/macos-docker-desktop.md). For local Linux Docker, run
+it as root (`sudo -E`): the firewall needs it,
 and without root the command stops at the firewall probe. (A Harness that
 runs as non-root with a test firewall also cannot read a `reward.json` that
 `test.sh` wrote as root with mode `0600`, and reports a false
@@ -379,12 +402,47 @@ every Agent.
 Setup refuses, before any Docker work, a task without `solution/solve.sh` (a
 regular file) and a Judge with `model_access` (it calls the run's Agent, and
 the oracle has none). A task's `judge_model` needs `--judge-llm-auth`.
-`--cluster`, `--agent-auth` and `--reasoning-effort` are refused.
+`--agent-auth` and `--reasoning-effort` are refused.
+
+### Oracle on a Slurm/Apptainer allocation
+
+No sudo or Docker daemon is needed on the execution host:
+
+```bash
+rsi-harness run /absolute/path/to/task --agent oracle \
+  --cluster /absolute/site.toml --dry-run
+rsi-harness run /absolute/path/to/task --agent oracle \
+  --cluster /absolute/site.toml --timeout 3600 --max-submissions 2
+```
+
+Set the timeout from the baseline Work and Judge costs; 3600 is only an example.
+The native runtime uses the site's SIF build/cache and normal Work/Judge
+isolation; no model CLI or Work login is required. It stages a disposable,
+user-owned `/solution` in Work only and removes it before Judge execution,
+after distributed Work is idle. The source solution is preserved.
+
+Slurm Oracle supports single-node CPU/GPU tasks and the existing multi-node
+GPU-pool execution model. For multi-node tasks, `solve.sh` runs once on the
+controller and uses the Harness's `torchrun` entry point to dispatch Work ranks.
+The disposable `/solution` is available only to Work, including its remote
+ranks; the baseline must wait for its distributed commands before returning.
+The Judge uses the normal separate node pool and frozen candidate. Check the
+resolved Work and Judge pools in `--dry-run`: two Work nodes plus one Judge
+node require three allocated nodes, not two. This does not add arbitrary MPI,
+CPU-only distributed execution or cross-cluster scheduling.
+
+LSF Oracle, Oracle resume and segmented Oracle runs remain unsupported. A site
+using an isolation mode that disallows multi-node execution is still refused;
+Oracle does not bypass the task's networking, isolation or model-access rules.
+Before a full baseline run, validate a short baseline on the intended site's
+full topology; local tests or `--dry-run` alone do not validate cluster execution.
+The [cluster setup and preflight](#run-multi-node-tasks-on-a-cluster) below apply
+to Oracle too. CPU/GPU totals come from the task, including separate Judge GPUs.
 
 The command exits 0 only when the run completed, `solve.sh` exited 0, exactly
 N Judge rounds ran (1 without `--max-submissions`) and every round's status is
-`completed`, whatever its score. Otherwise it prints
-`Oracle check failed: <reasons>` and exits 1. Its summary names the
+`completed`, whatever its score. Otherwise it exits nonzero. Local Docker prints `Oracle check failed: <reasons>`;
+on Slurm this diagnostic is also retained in the Engine job log and the job fails. Its summary names the
 artifacts directory and, per round, the score, `test.sh`'s exit code and the
 round's runtime.
 
@@ -425,6 +483,16 @@ unchanged outside this repository and pass that file with `--cluster`. Profiles
 without `mount_policy` retain the legacy behavior, including single-node mounts,
 cache locations, and environment values.
 
+On Stanford Sherlock use the packaged `sherlock` profile (`--cluster sherlock`).
+It reads `$SCRATCH`, `$OAK` and `$GROUP_HOME`, turns on `network_isolation =
+"seccomp"`, `process_namespaces = "harness"` and a VFS Podman build with host
+network and UTS namespaces, and requests GPUs with `-G`. The Harness installs
+its static Podman in `$GROUP_HOME/rsi-harness/podman` before the first build.
+It needs python3 3.8 or later at `container_python` in the task image. Copy it
+from
+`src/rsi_harness/cluster/slurm/sherlock.toml` to add the task's data binds or
+to use the `gpu` partition.
+
 For a new configuration, start from the portable example:
 
 ```bash
@@ -443,6 +511,74 @@ For Slurm, copy `src/rsi_harness/cluster/slurm/profile.toml` instead and set
 `constraint`. Add the task's Work/Judge data binds to the empty lists. Both
 profiles use `builder.walltime` in **HH:MM**; the Slurm adapter converts it to
 minutes for `sbatch`.
+
+Set `apptainer.binary` to an absolute path on the compute nodes. Profile loading
+rejects relative paths; it does not require the binary to exist on the submit
+host. Build and Engine jobs check its executable permissions on their nodes,
+including when using a cached SIF. The submit host needs scheduler
+commands, task/configuration files, shared staging storage and any Agent
+CLI/credentials to stage; Oracle needs no Work model CLI. A research Agent's CLI
+must also run inside the task container: its `--version` probe runs before model
+calls. Host-only wrappers and undeclared dependencies are not installed for it.
+Both probes run the resolved native binary (see below) and require one distinct
+three-part version in `--version` output (prerelease/build suffixes and
+surrounding banners are allowed). Missing or ambiguous versions are refused; the
+container version must equal the frozen submit-host version, including on
+resume. A version other than the Harness's pin still runs, with an
+`agent_version_mismatch` event and `agent_pinned_version` in `RUN_INFO.json`.
+
+`--dry-run` checks the task and allocation without submitting jobs. Runtime
+validation must exercise the actual image, container/isolation support, Agent
+CLI and Judge on the selected nodes. Arrange a supported image-build route if
+the site cannot build images; cached images still require runtime validation.
+
+`scheduler.exclusive` applies to single-node and multi-node runs (default
+`true`); set it to `false` where shared allocations are required. Build jobs
+use the separate `scheduler.build.exclusive` setting.
+
+Optional Slurm site policies:
+
+- `scheduler.request_tmp = false` omits `sbatch --tmp` on both build and run
+  jobs for sites that report `TmpDisk=0`. It does **not** lower the required
+  scratch space or disable the compute-node free-space checks.
+- `[scheduler.build]` can override `partition`, `account`, `qos`, `constraint`,
+  `gpus` and `exclusive` for image construction only. Unspecified location
+  settings inherit the run settings; empty account/QOS/constraint clears the
+  corresponding request. Build CPU, memory and time still come from the normal
+  build plan. This supports a CPU build partition or a GPU partition that
+  requires a GPU even for builds, without changing Work/Judge allocations.
+- `scheduler.run_walltime_limit = "12:00"` caps each **single-node research**
+  allocation, not the total Agent budget. A capped job requests advance
+  `B:TERM`, reserving Judge timeout, the site margin and Slurm's
+  [up-to-60-second early warning](https://slurm.schedmd.com/sbatch.html#OPT_signal).
+  Plans leaving no Work interval or exceeding the remaining attempt/grant
+  limits are rejected before submission, and on resume before recovery changes
+  retained state. Continue interrupted attempts explicitly as described below.
+- `scheduler.gpu_option = "gpus"` requests `--gpus=N` (`--gpus-per-node=N` on
+  several nodes) instead of `--gres=gpu:N`.
+- `[builder]` `conmon` and `runtime` give Podman explicit helper paths;
+  `podman_bundle` instead names a shared directory where the Harness installs
+  its own static Podman (downloaded and checked against a pinned SHA256 when
+  missing or damaged) and builds with it and its configuration. Concurrent
+  installs and repairs use a persistent per-release lock; the shared filesystem
+  must support cross-node `flock` locks;
+  `storage_driver = "vfs"` replaces rootless overlay; `host_namespaces =
+  ["network", "uts"]` lets build `RUN` steps share the node's namespaces where
+  it cannot create its own. A failed build names its log and the likely cause.
+
+A segmented attempt exits nonzero as an interruption, not completed research.
+After confirming the job is terminal, inspect its artifacts, then run
+`rsi-harness resume RUN_ID --cluster PROFILE --dry-run` and
+`rsi-harness resume RUN_ID --cluster PROFILE`. There is no automatic
+resubmission. Each attempt is capped and charges recorded Agent time against
+the original budget; do not use `--add-time` merely to cross a scheduler boundary.
+Startup delays, repeated Judge work and interruptions can consume extra attempts,
+so resume rechecks capacity and cannot guarantee completion within the planned
+number of jobs. Work files and completed evidence persist; process state is not
+a checkpoint. Interrupted or unverified Judge rounds remain unverified. A sandbox
+Judge interrupted by the signal counts as a submission without a score.
+Oracle, multi-node runs and image builds cannot be segmented; give them a
+sufficiently long allocation. See [Resume](#resume) for recovery details.
 
 Preview the resolved job without submitting it:
 
@@ -482,7 +618,12 @@ Under that policy, both single-node and multi-node runs use
 `source`, a container `target`, and a `read_only` setting (default `true`). The
 sample data mappings retain the logical `/rsi-data` paths used by tasks; changing
 a host location does not require editing task code. Judge data should be listed
-only in `judge_binds`.
+only in `judge_binds`. These binds (or a legacy profile's `extra_binds`) are the
+only way data reaches a phase: the Harness ignores `APPTAINER_*` and
+`SINGULARITY_*` variables in the operator's shell, except `APPTAINER_TMPDIR` and
+`APPTAINER_CACHEDIR`. The cluster Agent CLI must be a native binary on shared
+storage; a script launcher is refused at submit, and an npm-installed Codex
+resolves to its bundled binary.
 
 Enabling `mount_policy = "scoped"` on an existing installation is a separate,
 explicit migration. Remove nonempty `extra_binds` (rejected in scoped mode) and
@@ -504,10 +645,37 @@ as a clean-image Judge does locally: nothing the Agent changed outside the
 workspace reaches it, `clean_image = false` has no effect there, and the run
 plan records `clean_image: true`.
 
+Two operator-only `[apptainer]` keys serve sites whose Apptainer cannot give
+phases namespaces of their own. `network_isolation = "seccomp"` (default
+`"namespace"`) runs a phase without network under a host-side filter with no IP
+sockets, loopback included; a no-network Judge there also gets no `AF_UNIX`
+sockets but a stream or seqpacket `socketpair`, and no keyrings, so a Judge
+that needs them (`forkserver`, NCCL, loopback servers) declares a `"public"`
+Verifier. That mode refuses no-network
+Agents other than Oracle, pinned Judge model access and Judge sandbox
+environments, and runs Apptainer with `no_new_privs`, so it needs Apptainer's
+non-setuid (user namespace) mode. `process_namespaces = "harness"` (default
+`"apptainer"`) runs Work, the seed and the Judge in `rsi-box`, which gives them
+their own PID, IPC and mount namespaces inside the container; Work then cannot
+create namespaces (Chrome needs `--no-sandbox`). Both need `container_python`
+(3.8 or later) in the task image and refuse multi-node runs. A no-network Work
+submits over a Unix socket (`RSI_SUBMIT_SOCKET`), and every Judge gets
+`RSI_JUDGE_NETNS` (`private` or `shared`).
+
+Before the Agent starts, each cluster run checks Work's isolation with Work's
+own command line: the hidden tests, run and log roots, image cache and
+Judge-only binds must not be visible, no mount may show them or a site bind
+path, Work must not see the Engine's process, and the declared network must
+hold. Whether Work finds a key the Engine adds to its user keyring is recorded
+as `keyring_shared`. The result is written to `isolation_check.json` beside
+`run-plan.json` and summarized in `RUN_INFO.json`; any failure stops the run,
+and nothing skips the check.
+
 Cluster Judges run as the invoking user, so `rsi-agent` and `rsi-isolate`
-confine what they run with Landlock instead of a separate uid, and so can a
-science Judge library a task carries for the routes it runs. On a kernel
-without Landlock such a call fails, unless the profile sets
+confine what they run with Landlock instead of a separate uid, or else with
+user, mount, PID and IPC namespaces of its own (`userns`), and so can a
+science Judge library a task carries for the routes it runs. Where neither is
+available such a call fails, unless the profile sets
 `apptainer.judge_isolation_fallback = "same-user"`, which runs it as the
 Judge's user without filesystem confinement. Every Judge gets that choice as
 `RSI_JUDGE_ISOLATION_FALLBACK`, set explicitly (`"none"` by default, and
@@ -518,34 +686,26 @@ through a private proxy to the pinned endpoints for a `"no-network"` Agent
 for a `"public"` Agent, whose egress the site governs, not the Harness. Model
 access on a multi-node Judge is not supported yet.
 
-`rsi-isolate isolation` and `rsi-agent isolation` also try creating the actual
-Landlock ruleset; an ABI query alone does not establish that it can be used.
-For Landlock they report `landlock_scoped` (the selected scope bitmask) and
-`landlock_signal_scope` in addition to the existing fields.
+`rsi-isolate isolation` and `rsi-agent isolation` test creation of the actual
+Landlock ruleset; an ABI query alone is insufficient. They report
+`landlock_scoped` (the scope bitmask) and `landlock_signal_scope`.
 
 Some RHEL 9 kernels report ABI 6 but omit `LANDLOCK_SCOPE_SIGNAL` (see
 [the XZ upstream report](https://github.com/tukaani-project/xz/commit/5630c33a43a28a3d11030aa9d25fa8617e98da91)).
-The default remains fail-closed. Prefer a corrected kernel or another isolation
-backend when the task requires signal confinement. If the task's isolation
-contract explicitly permits missing signal confinement, the operator may set
-`apptainer.judge_allow_missing_landlock_signal = true` in the cluster profile
-(default `false`). This requires no system administrator privileges: the operator
-is the person launching the Harness run, not the task or its research Agent.
-Every Judge gets `RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL` explicitly as `0` or
-`1`; Docker always uses `0`. Image `ENV` values cannot opt in. Task environment
-tables and all Apptainer environment tables reject this setting. `rsi-agent`
-reads the policy only from its Harness-generated private launch spec, ignoring
-its process environment; older launch specs default to `false`.
+The default is fail-closed. Prefer a corrected kernel or another backend when
+signal confinement is required. Only if the task's isolation contract permits
+its absence may the operator set
+`apptainer.judge_allow_missing_landlock_signal = true` (default `false`).
+The operator is the person launching the run; no administrator privileges are
+needed. Tasks, images and ambient environment variables cannot enable it;
+Docker always disables it.
 
-This is an opt-in policy decision, not an equivalent replacement for ABI 6:
-only on reported ABI 6 and `EINVAL` does it retry without the signal scope.
-All filesystem rights and abstract UNIX socket scoping remain required;
-other failures still fail closed. Successful compatibility use prints a warning
-on stderr and reports `landlock_scoped: 1`, `landlock_signal_scope: false`.
-This does not enable the unconfined `same-user` fallback and is not inferred
-from kernel version strings. `rsi-isolate --env` cannot forward this policy to
-its child. The shared ruleset code accepts an explicit policy argument, never
-an ambient environment variable.
+This option retries without signal scope only on reported ABI 6 and `EINVAL`.
+Filesystem rights and abstract UNIX socket scoping remain required; other
+failures still fail closed. Compatibility use warns on stderr and reports
+`landlock_scoped: 1`, `landlock_signal_scope: false`. It is not equivalent to
+full ABI 6, does not enable the unconfined `same-user` fallback, and is never
+inferred from a kernel version string.
 
 A `judge_model` task runs on a cluster too, with the same `--judge-llm-*`
 options, on a single-node Judge with a `"public"` or `"no-network"` Verifier.
@@ -599,18 +759,12 @@ sudo -E "$(command -v rsi-harness)" cleanup RUN_ID \
 
 ### Resume
 
-During a run, an explicit Codex model-capacity error is retried automatically
-in the same session, with waits of 30, 60, 120, 240, then at most 300 seconds.
-Work is not restarted, and waiting counts toward the original Agent timeout.
-This does not retry normal completion, cancellation, or other errors, and
-requires a session ID from Codex. It does not create a new Harness attempt.
-
 `resume` continues a local run as its next attempt, whatever ended it: a
 finished, cancelled, crashed or timed-out run. A run that did not end cleanly
 is recovered first. Work is rebuilt from the retained image and WORKDIR
-volume, so files are kept; background processes and GPU state are not. The
-Agent continues its own session (or, if none is found, a new one with the
-original prompt) and is told what changed.
+volume, so files are kept; background processes, GPU state and sandbox envs
+are not. The Agent continues its own session (or, if none is found, a new one
+with the original prompt) and is told what changed.
 
 ```bash
 sudo -E "$(command -v rsi-harness)" resume RUN_ID --dry-run
@@ -681,7 +835,7 @@ above.
 The default roots are resolved relative to the current working directory.
 `visualize` uses the same roots and listens on `127.0.0.1:8000` by default.
 Both `recover` and `cleanup` also accept `--data-root`, `--logs-root`,
-`--verbose`, and `--cluster NAME` (to kill a cluster run's E2B sandboxes);
+`--verbose`, and `--cluster NAME` (to kill a cluster run's remote sandboxes);
 `resume` accepts the same roots, `--verbose` and `--cluster NAME`.
 `rsi-sandbox` is not a host command: it is the client injected into Work and
 Judge ([Using the broker](docs/harbor-task-authoring/sandboxes.md#using-the-broker)).

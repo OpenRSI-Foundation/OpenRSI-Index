@@ -1,4 +1,5 @@
-"""An in-process fake of the E2B SDK surface sandbox_e2b uses (E2BClient).
+"""An in-process fake of a remote backend's client (a
+sandbox_remote.RemoteClient), by default E2B's (sandbox_e2b.SdkE2BClient).
 
 No network and no account: a sandbox is a directory, and a command runs as
 a real local process with the sandbox's absolute paths mapped under that
@@ -11,6 +12,17 @@ As on E2B, a pause cuts every process stream (the process lives on) and
 ``connect`` follows a process again once the sandbox runs; envd's own
 ``E2B_*`` variables are in every process's environment unless the request
 sets them, and the build step's recording carries the build sandbox's.
+
+``EMULATED`` makes it Modal's (sandbox_modal.SdkModalClient): exact
+shapes, Dockerfile builds as lines, and none of E2B's pids, users and
+pause, so sandbox_remote emulates them; ``DAYTONA`` makes it Daytona's
+(sandbox_daytona.SdkDaytonaClient), emulated the same way, with shapes in
+cores and GiB and no builds. Emulated, commands come through
+``group_argv`` (run for real) and
+``setpriv`` (its user recorded, the prefix dropped: tests run
+unprivileged); SignalFreeze's scripts, which walk /proc, never run: the
+fake stops and continues the sandbox's own process groups instead, and
+cuts no stream. Its processes get the registry config's ENV (no envd).
 """
 
 from __future__ import annotations
@@ -24,6 +36,16 @@ import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from rsi_harness.runtime import sandbox_daytona, sandbox_modal
+from rsi_harness.runtime.sandbox_e2b import RECIPE, recorded_image_env, template_shape
+from rsi_harness.runtime.sandbox_remote import (
+    FREEZE_SCRIPT,
+    THAW_SCRIPT,
+    ChunkReader,
+    config_env,
+    group_argv,
+)
+
 # What envd hands a template build step: the image ENV with E2B's fallback
 # PATH suffix, plus HOME/USER/LOGNAME (sandbox_e2b drops those again).
 IMAGE_ENV = (
@@ -35,30 +57,60 @@ IMAGE_ENV = (
 )
 # What the SDK reports when a pause ends a process stream.
 CUT = "the connection to sandbox {} ended before the stream completed"
-# What the image's registry holds beyond the ENV (FakeE2B.image_configs).
+# What the image's registry holds beyond the ENV (RemoteFake.image_configs).
 IMAGE_CONFIG = {"Env": ["PATH=/usr/local/bin:/usr/bin:/bin", "LANG=C.UTF-8"]}
 PASSWD = b"root:x:0:0:root:/root:/bin/sh\nagent:x:1000:1000::/home/agent:/bin/sh\n"
+# RemoteFake as Modal's client: every gap of it sandbox_remote emulates.
+EMULATED = {
+    "name": "modal",
+    "native_pid": False,
+    "native_user": False,
+    "freeze": "signal",
+}
+# RemoteFake as Daytona's client: emulated as Modal's.
+DAYTONA = {**EMULATED, "name": "daytona"}
+# The fake for each backend name.
+FAKES = {"e2b": {}, "modal": EMULATED, "daytona": DAYTONA}
 
 
 class FakeProcess:
-    def __init__(self, popen: subprocess.Popen, sandbox_id: str = "") -> None:
+    def __init__(
+        self, popen: subprocess.Popen, sandbox_id: str = "", *, wrapped=False
+    ) -> None:
         self.pid = popen.pid
         self.exit_code: int | None = None
-        self._popen = popen
+        self.popen = popen
         self._sandbox_id = sandbox_id
         self._open = 2
         self._queue: queue.Queue = queue.Queue()
+        # A group_argv command's group: its first stdout line.
+        self._group = None if wrapped else popen.pid
+        self._line = b""
+        self._grouped = threading.Event()
+        if not wrapped:
+            self._grouped.set()
         for stream, pipe in ((1, popen.stdout), (2, popen.stderr)):
             threading.Thread(
                 target=self._read, args=(stream, pipe), daemon=True
             ).start()
 
+    def group(self):
+        """The process group to signal (the wrapper's command's)."""
+        self._grouped.wait(2)
+        return self._group or self.pid
+
     def _read(self, stream, pipe):
         try:
             for chunk in iter(lambda: os.read(pipe.fileno(), 65536), b""):
+                if stream == 1 and not self._grouped.is_set():
+                    self._line += chunk
+                    if b"\n" in self._line:
+                        self._group = int(self._line.split(b"\n", 1)[0])
+                        self._grouped.set()
                 self._queue.put((stream, chunk))
         finally:
             pipe.close()
+            self._grouped.set()
             self._queue.put((stream, None))
 
     def cut(self):
@@ -74,7 +126,7 @@ class FakeProcess:
                 self._open -= 1
                 continue
             yield stream, chunk
-        code = self._popen.wait()
+        code = self.popen.wait()
         # As the SDK adapter reports a signal death (shell_exit_code).
         self.exit_code = 128 - code if code < 0 else code
 
@@ -90,35 +142,73 @@ class FakeSandbox:
     metadata: dict
     timeout: int
     allow_internet: bool
+    allow_out: tuple = ()
     state: str | None = "running"
-    pids: list = field(default_factory=list)
     processes: list = field(default_factory=list)
+    # Stopped by SignalFreeze's script: the backend still sees it running.
+    frozen: bool = False
+
+    @property
+    def paused(self):
+        return self.state == "paused" or self.frozen
 
 
-class FakeE2B:
-    """``E2BClient`` over local directories and processes.
+class RemoteFake:
+    """``RemoteClient`` over local directories and processes, sized and
+    named as SdkE2BClient (or, named "modal" or "daytona", SdkModalClient or
+    SdkDaytonaClient) does.
 
     ``build_gate`` (an Event) holds builds; ``build_error`` fails them;
-    ``fail`` maps an operation name to the exception it raises next.
+    ``dockerfile_builds`` records each build's steps, context files and
+    force; ``fail`` maps an operation name to the exception it raises next.
+    ``started`` holds each command as the backend would run it (sandbox,
+    argv, envs, cwd, user): a grouped one as ``("setsid", *argv)`` and as
+    its user, however it came; ``raw`` holds the argv ``start`` got.
     """
 
     def __init__(
-        self, base: Path, *, image_env: bytes = IMAGE_ENV, max_hours: int = 1
+        self,
+        base: Path,
+        *,
+        name: str = "e2b",
+        recorded_env: bytes = IMAGE_ENV,
+        max_hours: int = 1,
+        native_pid: bool = True,
+        native_user: bool = True,
+        freeze: str = "native",
     ) -> None:
+        self.name = name
+        modal = name == "modal"
+        self.recipe = {
+            "modal": sandbox_modal.RECIPE,
+            "daytona": sandbox_daytona.RECIPE,
+        }.get(name, RECIPE)
+        self.build_form = {"modal": "lines", "daytona": None}.get(name, "steps")
+        self.argv_bytes = sandbox_modal.ARGV_BYTES if modal else None
+        self.freeze_spare = ()
+        self.native_pid = native_pid
+        self.native_user = native_user
+        self.freeze = freeze
+        # E2B's envd: its variables and its recording of the image ENV.
+        self.envd = native_pid and native_user and freeze == "native"
         self.base = Path(base)
         # The team's maximum sandbox length: a longer timeout is refused.
         self.max_hours = max_hours
         # "domain/remote:tag" (or @digest) -> its config; default IMAGE_CONFIG.
         self.image_configs: dict[str, dict] = {}
         self.base.mkdir(parents=True, exist_ok=True)
-        self.image_env = image_env
+        self.recorded_env = recorded_env
         self.templates: dict[str, dict] = {}
         self.builds: list[tuple] = []
+        self.dockerfile_builds: list[tuple] = []
         self.build_gate: threading.Event | None = None
         self.build_error: Exception | None = None
         self.sandboxes: dict[str, FakeSandbox] = {}
         self.started: list[tuple] = []
+        self.raw: list[tuple] = []
         self.calls: list[tuple] = []
+        # Bytes each read_stream handed out, one entry per opened stream.
+        self.streamed: list[int] = []
         self.fail: dict[str, Exception] = {}
         self.closed = False
         self._lock = threading.Lock()
@@ -131,17 +221,40 @@ class FakeE2B:
 
     # -- templates ---------------------------------------------------------
 
+    def shape(self, cpus, memory_mb, disk_mb):
+        if self.name == "daytona":
+            return sandbox_daytona.sandbox_shape(cpus, memory_mb, disk_mb)
+        if self.name == "modal":
+            return (float(cpus), int(memory_mb))
+        return template_shape(cpus, memory_mb)
+
     def template_exists(self, name):
         self._hook("template_exists", name)
         return name in self.templates
 
-    def build_template(self, name, image, *, cpu_count, memory_mb, log):
+    def build_template(
+        self, name, image, shape, *, log, steps=(), context=None, force=False
+    ):
         self._hook("build_template", name)
-        if cpu_count != 1 and cpu_count % 2:
+        assert steps == () or self.build_form is not None
+        cpu_count, memory_mb = shape[:2]
+        if self.name == "e2b" and cpu_count != 1 and cpu_count % 2:
             raise RuntimeError("400: CPU count must be 1 or an even number")
-        if memory_mb < 128:
+        if self.name != "daytona" and memory_mb < 128:
             raise RuntimeError("400: Memory must be at least 128 MiB")
         self.builds.append((name, image, cpu_count, memory_mb))
+        # A Dockerfile build's steps, the context files COPY may read, and
+        # whether E2B's cache was skipped (FakeE2B.dockerfile_builds).
+        files = (
+            None
+            if context is None
+            else sorted(
+                str(path.relative_to(context))
+                for path in Path(context).rglob("*")
+                if path.is_file()
+            )
+        )
+        self.dockerfile_builds.append((name, image, tuple(steps), files, force))
         log("Step 1/2: FROM " + image + "\n")
         if self.build_gate is not None:
             self.build_gate.wait(10)
@@ -165,7 +278,7 @@ class FakeE2B:
                 f"400: Timeout cannot be greater than {self.max_hours} hours"
             )
 
-    def create(self, template, *, timeout, metadata, allow_internet):
+    def create(self, template, *, timeout, metadata, allow_internet, allow_out=()):
         self._hook("create", template)
         self._check_timeout(timeout)
         if template not in self.templates:
@@ -174,13 +287,27 @@ class FakeE2B:
         root = self.base / sandbox_id
         for directory in ("etc/rsi-harness", "tmp", "root", "usr/local/bin"):
             (root / directory).mkdir(parents=True)
-        (root / "etc/rsi-harness/image.env").write_bytes(self.image_env)
+        (root / "etc/rsi-harness/image.env").write_bytes(self.recorded_env)
         (root / "etc/passwd").write_bytes(PASSWD)
         with self._lock:
             self.sandboxes[sandbox_id] = FakeSandbox(
-                sandbox_id, root, template, dict(metadata), timeout, allow_internet
+                sandbox_id,
+                root,
+                template,
+                dict(metadata),
+                timeout,
+                allow_internet,
+                tuple(allow_out),
             )
         return sandbox_id
+
+    def image_env(self, sandbox_id, image_env):
+        if self.envd:
+            return recorded_image_env(self, sandbox_id)
+        return config_env(image_env)
+
+    def lookup(self, env_id):
+        return None
 
     def live(self):
         return [box for box in self.sandboxes.values() if box.state is not None]
@@ -192,12 +319,12 @@ class FakeE2B:
 
     def _signal_all(self, box, signum):
         # Only processes not reaped yet: a reused PID is never signalled.
-        for popen in box.pids:
-            if popen.poll() is not None:
+        for process in box.processes:
+            if process.popen.poll() is not None:
                 continue
             for send in (os.killpg, os.kill):
                 try:
-                    send(popen.pid, signum)
+                    send(process.group(), signum)
                     break
                 except (ProcessLookupError, PermissionError):
                     continue
@@ -211,6 +338,7 @@ class FakeE2B:
         box.state = None
 
     def pause(self, sandbox_id):
+        assert self.freeze == "native"
         self._hook("pause", sandbox_id)
         box = self.sandboxes[sandbox_id]
         if box.state == "running":
@@ -221,6 +349,7 @@ class FakeE2B:
                     process.cut()
 
     def resume(self, sandbox_id, *, timeout):
+        assert self.freeze == "native"
         self._hook("resume", sandbox_id)
         self._check_timeout(timeout)
         box = self.sandboxes[sandbox_id]
@@ -266,15 +395,76 @@ class FakeE2B:
             raise FileNotFoundError(path)
         return target.read_bytes()
 
+    def read_stream(self, sandbox_id, path):
+        def chunks(file, index):
+            with file:
+                for chunk in iter(lambda: file.read(65536), b""):
+                    self.streamed[index] += len(chunk)
+                    yield chunk
+
+        def opened():
+            # As the SDK does: the request opens on the first read.
+            self._hook("read_stream", path)
+            file = open(self._map(self._running(sandbox_id).root, path), "rb")
+            self.streamed.append(0)
+            return chunks(file, len(self.streamed) - 1)
+
+        return ChunkReader(opened, lambda error: error)
+
+    def _freeze_script(self, box, script):
+        """SignalFreeze's script, answered for the sandbox's own processes."""
+        self.calls.append(("freeze" if script == FREEZE_SCRIPT else "thaw",))
+        if script == FREEZE_SCRIPT:
+            self._signal_all(box, signal.SIGSTOP)
+            box.frozen = True
+            return ["true"]
+        if not box.frozen:
+            return ["sh", "-c", "echo no freeze record >&2; exit 1"]
+        box.frozen = False
+        self._signal_all(box, signal.SIGCONT)
+        return ["true"]
+
+    def _user_of(self, box, options):
+        uid = next(int(item[8:]) for item in options if item.startswith("--reuid="))
+        for line in (box.root / "etc/passwd").read_text().splitlines():
+            name, _, found, *_ = line.split(":")
+            if int(found) == uid:
+                return name
+        return str(uid)
+
     def start(self, sandbox_id, argv, *, envs, cwd, user):
         self._hook("start", tuple(argv))
         box = self._running(sandbox_id)
-        self.started.append((sandbox_id, tuple(argv), dict(envs), cwd, user))
-        program = 2 if argv[0] == "setsid" else 1
-        mapped = [
-            *argv[:program],
-            *(self._map(box.root, item) for item in argv[program:]),
-        ]
+        self.raw.append(tuple(argv))
+        if not self.native_user:
+            assert user == "root", "a client without native_user runs only root"
+        argv = list(argv)
+        wrapped = argv[:4] == group_argv([])
+        assert not (wrapped and self.native_pid)
+        group = wrapped or argv[0] == "setsid"
+        command = argv[4:] if wrapped else argv[1:] if group else argv
+        if command[0] == "setpriv":
+            assert not self.native_user
+            end = command.index("--")
+            user = self._user_of(box, command[1:end])
+            command = command[end + 1 :]
+        self.started.append(
+            (
+                sandbox_id,
+                ("setsid", *command) if group else tuple(command),
+                dict(envs),
+                cwd,
+                user,
+            )
+        )
+        if command[:2] == ["sh", "-c"] and command[2] in (FREEZE_SCRIPT, THAW_SCRIPT):
+            assert self.freeze == "signal" and not group
+            command = self._freeze_script(box, command[2])
+        mapped = [command[0], *(self._map(box.root, item) for item in command[1:])]
+        if wrapped:
+            mapped = group_argv(mapped)
+        elif group:
+            mapped = ["setsid", *mapped]
         envd = {
             "E2B_SANDBOX": "true",
             "E2B_SANDBOX_ID": sandbox_id,
@@ -283,13 +473,12 @@ class FakeE2B:
         popen = subprocess.Popen(
             mapped,
             cwd=self._map(box.root, cwd),
-            env={**envd, **envs},
+            env={**(envd if self.envd else {}), **envs},
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        box.pids.append(popen)
-        process = FakeProcess(popen, sandbox_id)
+        process = FakeProcess(popen, sandbox_id, wrapped=wrapped)
         box.processes.append(process)
         return process
 

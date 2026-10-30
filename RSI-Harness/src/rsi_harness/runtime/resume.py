@@ -35,6 +35,8 @@ from rsi_harness.runtime.recovery import (
 )
 from rsi_harness.runtime.rootfs_snapshot import rootfs_image_ref
 from rsi_harness.runtime.run_request import RUN_REQUEST_FILE, read_run_request
+from rsi_harness.runtime.sandbox_contracts import SandboxEnvGrant
+from rsi_harness.runtime.sandbox_policy import strict_sandboxes
 from rsi_harness.runtime.trajectory import TRAJECTORY_DIRECTORY, TRAJECTORY_MANIFEST
 
 # Each attempt stacks one more retained image layer, and overlay2 allows
@@ -104,6 +106,7 @@ def plan_resume(
     salvage: Callable[[str], None] | None,
     retained_images: bool = True,
     open_attempt_ended_at: float | None = None,
+    validate_before_salvage: Callable[[ResumeContext], None] | None = None,
 ) -> ResumeContext:
     """Plan attempt k+1 of ``run_id`` under its lock; a live run is refused.
 
@@ -114,7 +117,8 @@ def plan_resume(
     Work state is its shared workspace and Agent home) no Work image is
     needed. An attempt salvage has yet to close is counted up to its pause,
     else ``open_attempt_ended_at`` (when its end is known, as a cluster
-    job's), else now.
+    job's), else now. A backend can validate the read-only plan under this
+    same lock before salvage changes any retained state.
     """
     try:
         recorded = store.path_for(run_id).exists()
@@ -130,6 +134,21 @@ def plan_resume(
             f"run {run_id} is still live (its Engine holds the lease)"
         ) from None
     try:
+        if validate_before_salvage is not None:
+            preview = _plan_locked(
+                run_id,
+                store=store,
+                data_root=data_root,
+                logs_root=logs_root,
+                grants=grants,
+                compile_task=compile_task,
+                salvage=None,
+                retained_images=retained_images,
+                open_attempt_ended_at=open_attempt_ended_at,
+            )
+            validate_before_salvage(preview)
+            if salvage is None or not preview.salvage_pending:
+                return preview
         return _plan_locked(
             run_id,
             store=store,
@@ -208,7 +227,8 @@ def _plan_locked(
         )
     if not (root / "run-plan.json").exists():
         raise SetupError(f"run {run_id} has no run-plan.json in {root}")
-    plan = RunPlan.model_validate(json.loads((root / "run-plan.json").read_text()))
+    raw = json.loads((root / "run-plan.json").read_text())
+    plan = RunPlan.model_validate(strict_sandboxes(raw))
     definition = compile_task(record.request)
     for field in _TASK_DIGESTS:
         if getattr(definition, field) != getattr(plan.task, field):
@@ -329,6 +349,8 @@ def _plan_locked(
             ),
             seconds_left=left,
             submissions_left=None if maximum is None else maximum - charged,
+            work_envs=isinstance(plan.sandbox, SandboxEnvGrant)
+            and plan.sandbox.environments.work is not None,
         ),
     )
 
@@ -402,6 +424,7 @@ def _message(
     interrupted: tuple[str, ...],
     seconds_left: float,
     submissions_left: int | None,
+    work_envs: bool,
 ) -> str:
     lines = [f"rsi-harness: the run stopped and resumes now as attempt {attempt}."]
     lines.extend(
@@ -410,6 +433,11 @@ def _message(
         for round_id in interrupted
     )
     lines.append("Background processes and GPU state are gone; files are kept.")
+    if work_envs:
+        lines.append(
+            "Sandbox envs and image handles are gone, with anything in them; "
+            "pull and start them again."
+        )
     lines.append(f"Agent time left: {seconds_left:.0f} seconds.")
     lines.append(
         "Submissions left: "

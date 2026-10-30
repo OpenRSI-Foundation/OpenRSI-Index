@@ -170,6 +170,8 @@ def build_apptainer_command(
         (
             "--nv",
             "--containall",
+            "--no-mount",
+            "hostfs",
             "--no-umask",
             "--cleanenv",
             "--no-eval",

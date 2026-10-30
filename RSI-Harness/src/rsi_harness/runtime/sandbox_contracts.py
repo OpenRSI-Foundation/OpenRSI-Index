@@ -9,7 +9,7 @@ import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import PurePosixPath
-from typing import Annotated, Literal, Self
+from typing import Annotated, ClassVar, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -381,9 +381,14 @@ def _unique_items(value: tuple[str, ...] | None) -> tuple[str, ...] | None:
 
 
 class EnvBuildGrant(SandboxModel):
-    """Build approval; granting it accepts the documented builder exception."""
+    """Build approval; granting it accepts the documented builder exception.
 
-    builder_image: str
+    The builder fields (builder_image, cpus, memory_mb, pids, disk_mb,
+    state_fs, max_concurrent_builds, max_image_mb, max_images_total_mb)
+    are ignored on a remote backend, which builds templates itself."""
+
+    # Required with backend "docker" (EnvPolicy).
+    builder_image: str | None = None
     network: BuildNetworks
     cpus: PositiveInt
     memory_mb: Annotated[int, Field(strict=True, ge=1024)]
@@ -402,8 +407,8 @@ class EnvBuildGrant(SandboxModel):
 
     @field_validator("builder_image")
     @classmethod
-    def immutable_image(cls, value: str) -> str:
-        if not IMMUTABLE_IMAGE.fullmatch(value):
+    def immutable_image(cls, value: str | None) -> str | None:
+        if value is not None and not IMMUTABLE_IMAGE.fullmatch(value):
             raise ValueError(
                 "builder_image must be an immutable sha256 ID or digest reference"
             )
@@ -520,10 +525,14 @@ class EnvE2BHost(SandboxModel):
         None
     )
     # The account's maximum sandbox length (E2B refuses a longer timeout and
-    # kills a sandbox that has run this long).
+    # kills a sandbox that has run this long); every phase's
+    # max_env_lifetime_sec must fit in it.
     max_sandbox_hours: Annotated[int, Field(strict=True, ge=1, le=24)] = 1
+    # A Docker-style auth file with private registry credentials, read by
+    # the broker on each pull (sandbox_remote.read_registry_auth).
+    registry_auth_file: str | None = None
 
-    @field_validator("api_key_file")
+    @field_validator("api_key_file", "registry_auth_file")
     @classmethod
     def host_path(cls, value: str | None) -> str | None:
         return None if value is None else absolute_path(value)
@@ -533,6 +542,107 @@ class EnvE2BHost(SandboxModel):
         if (self.api_key_file is None) == (self.api_key_env is None):
             raise ValueError("set exactly one of api_key_file and api_key_env")
         return self
+
+
+class EnvModalHost(SandboxModel):
+    """``[environments.host.modal]``: where the broker runs env services when
+    ``backend = "modal"``. Only the broker reads the token (Modal's token id
+    and secret), from ``api_key_file`` (an absolute path to a TOML file with
+    ``token_id`` and ``token_secret``) or from the variables
+    ``api_key_id_env`` (the id) and ``api_key_env`` (the secret); like
+    EnvE2BHost, the record never holds it (and its field names avoid the
+    words a lease refuses)."""
+
+    # Modal images are named by their content: the prefix only names the
+    # broker's own cache entries.
+    template_prefix: ClassVar[str] = "rsi"
+
+    api_key_file: str | None = None
+    api_key_id_env: (
+        Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")] | None
+    ) = None
+    api_key_env: (
+        Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")] | None
+    ) = None
+    # None: the workspace's default environment.
+    environment: (
+        Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")] | None
+    ) = None
+    # The deployed app every sandbox belongs to (made when missing):
+    # recovery lists its sandboxes.
+    app_name: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")] = (
+        "rsi-harness"
+    )
+    # An HTTP or SOCKS5 proxy for every Modal call (as EnvE2BHost's).
+    proxy: Annotated[str, Field(pattern=r"^(http|socks5h?)://[^@/\s]+/?$")] | None = (
+        None
+    )
+    # Modal's maximum sandbox timeout; every phase's max_env_lifetime_sec
+    # must fit in it.
+    max_sandbox_hours: Annotated[int, Field(strict=True, ge=1, le=24)] = 24
+    # As EnvE2BHost's: read by the broker on each pull.
+    registry_auth_file: str | None = None
+
+    @field_validator("api_key_file", "registry_auth_file")
+    @classmethod
+    def host_path(cls, value: str | None) -> str | None:
+        return None if value is None else absolute_path(value)
+
+    @model_validator(mode="after")
+    def one_key_source(self) -> Self:
+        variables = (self.api_key_id_env, self.api_key_env)
+        if None in variables and variables != (None, None):
+            raise ValueError("set both api_key_id_env and api_key_env")
+        if (self.api_key_file is None) == (variables == (None, None)):
+            raise ValueError(
+                "set exactly one of api_key_file and api_key_id_env/api_key_env"
+            )
+        return self
+
+
+class EnvDaytonaHost(SandboxModel):
+    """``[environments.host.daytona]``: where the broker runs env services
+    when ``backend = "daytona"``. Only the broker reads the API key, from
+    ``api_key_file`` or ``api_key_env``, as EnvE2BHost's; the key, ``api_url``
+    and ``target`` always reach the SDK explicitly."""
+
+    # Daytona has no maximum sandbox length: a sandbox lives as long as its
+    # env (its TTL).
+    max_sandbox_hours: ClassVar[float] = math.inf
+
+    api_key_file: str | None = None
+    api_key_env: (
+        Annotated[str, Field(pattern=r"^[A-Za-z_][A-Za-z0-9_]{0,127}$")] | None
+    ) = None
+    # The region every sandbox is made in.
+    target: Annotated[str, Field(pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")]
+    # None: Daytona Cloud (https://app.daytona.io/api); set it for a
+    # self-hosted Daytona. No credentials (it is persisted with the plan).
+    api_url: Annotated[str, Field(pattern=r"^https?://[^@\s]+$")] | None = None
+    # Prefix of the sandbox names the broker makes.
+    template_prefix: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]{0,19}$")] = "rsi"
+    # An HTTP(S) proxy for every Daytona call (as EnvE2BHost's).
+    proxy: Annotated[str, Field(pattern=r"^https?://[^@/\s]+/?$")] | None = None
+    # As EnvE2BHost's, but read only for the image config: Daytona pulls
+    # private images with the registries configured in the organization.
+    registry_auth_file: str | None = None
+
+    @field_validator("api_key_file", "registry_auth_file")
+    @classmethod
+    def host_path(cls, value: str | None) -> str | None:
+        return None if value is None else absolute_path(value)
+
+    @model_validator(mode="after")
+    def one_key_source(self) -> Self:
+        if (self.api_key_file is None) == (self.api_key_env is None):
+            raise ValueError("set exactly one of api_key_file and api_key_env")
+        return self
+
+
+# The remote env backends: every [environments.host] backend but docker. Each
+# has its table below, its lease field (recovery.ResourceLease) and its
+# module (sandbox_remote.BACKENDS).
+REMOTE_BACKENDS = ("e2b", "modal", "daytona")
 
 
 class EnvHostPolicy(SandboxModel):
@@ -546,21 +656,30 @@ class EnvHostPolicy(SandboxModel):
     # The first key of tool_install: a static tmux the broker may copy into
     # an env service whose image has none (offline terminus-2).
     tmux: EnvToolFile | None = None
-    # Where env services run: local Docker, or E2B sandboxes (sandbox_e2b).
-    backend: Literal["docker", "e2b"] = "docker"
+    # Where env services run: local Docker, or a remote backend's sandboxes
+    # (sandbox_remote), configured by the table of its name.
+    backend: Literal["docker", "e2b", "modal", "daytona"] = "docker"
     e2b: EnvE2BHost | None = None
+    modal: EnvModalHost | None = None
+    daytona: EnvDaytonaHost | None = None
 
     @model_validator(mode="after")
     def ordered_floors(self) -> Self:
         if self.disk_hard_floor_mb > self.disk_floor_mb:
             raise ValueError("disk_hard_floor_mb cannot exceed disk_floor_mb")
-        if (self.backend == "e2b") != (self.e2b is not None):
-            raise ValueError('backend = "e2b" and the e2b table go together')
+        for name in REMOTE_BACKENDS:
+            if (self.backend == name) != (getattr(self, name) is not None):
+                raise ValueError(f'backend = "{name}" and the {name} table go together')
         return self
+
+    @property
+    def remote(self) -> EnvE2BHost | EnvModalHost | EnvDaytonaHost | None:
+        """The remote backend's table; None on docker."""
+        return None if self.backend == "docker" else getattr(self, self.backend)
 
 
 class EnvRunLimits(SandboxModel):
-    """Cumulative ceilings over Work plus every Judge round of one run."""
+    """Cumulative ceilings over Work plus every Judge round of one attempt."""
 
     max_envs_created: PositiveInt
     max_operations: PositiveInt
@@ -598,6 +717,20 @@ class EnvPolicy(SandboxModel):
             ):
                 raise ValueError(
                     f"{phase_name}.build.max_builds exceeds run_limits.max_builds"
+                )
+            if (
+                phase.build is not None
+                and phase.build.builder_image is None
+                and self.host.backend == "docker"
+            ):
+                raise ValueError(f"{phase_name}.build.builder_image is required")
+            remote = self.host.remote
+            if remote is not None and (
+                phase.max_env_lifetime_sec > remote.max_sandbox_hours * 3600
+            ):
+                raise ValueError(
+                    f"{phase_name}.max_env_lifetime_sec exceeds "
+                    f"host.{self.host.backend}.max_sandbox_hours"
                 )
         return self
 
@@ -704,7 +837,8 @@ class SandboxEnvGrant(SandboxModel):
             if (
                 phase is not None
                 and phase.build is not None
-                and (not IMAGE_ID.fullmatch(phase.build.builder_image))
+                and self.environments.host.backend == "docker"
+                and not IMAGE_ID.fullmatch(phase.build.builder_image or "")
             ):
                 raise ValueError("resolved builder_image requires an exact image ID")
         return self

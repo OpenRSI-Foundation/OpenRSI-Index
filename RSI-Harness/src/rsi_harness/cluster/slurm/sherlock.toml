@@ -1,0 +1,75 @@
+# Stanford Sherlock (Slurm, Apptainer 1.5 non-setuid, CentOS 7 kernel 3.10),
+# packaged as --cluster sherlock. Copy it to add the task's data binds or to
+# use the gpu partition.
+name = "sherlock"
+adapter = "slurm"
+owner = "${USER}"
+
+[scheduler]
+kind = "slurm"
+# CPU tasks; a copy with partition = "gpu" serves GPU tasks.
+partition = "normal"
+exclusive = false
+poll_seconds = 60.0
+gpu_option = "gpus"
+request_tmp = false
+# Each allocation, HH:MM; keep it within the partition's MaxTime
+# (scontrol show partition normal gpu). Resume continues the run.
+run_walltime_limit = "48:00"
+
+[scheduler.build]
+partition = "normal"
+gpus = 0
+exclusive = false
+
+[storage]
+# $SCRATCH is purged 90 days after a file last changed; logs are evidence.
+run_root = "${SCRATCH}/rsi/runs"
+image_cache = "${SCRATCH}/rsi/images"
+logs_root = "${OAK}/${USER}/rsi/logs"
+hf_home = "${SCRATCH}/rsi/cache/huggingface"
+hf_datasets_cache = "${SCRATCH}/rsi/cache/datasets"
+
+[builder]
+# The Harness installs its static Podman here before the first build.
+podman_bundle = "${GROUP_HOME}/rsi-harness/podman"
+storage_driver = "vfs"
+host_namespaces = ["network", "uts"]
+cpu_slots = 8
+memory_mb = 32768
+walltime = "02:00"
+temp_root = "/lscratch/${USER}"
+min_tmp_mb = 71680
+rootless_apt_sandbox = true
+faked_binary = "/usr/bin/faked-sysv"
+fakeroot_library = "/usr/lib64/libfakeroot/libfakeroot-sysv.so"
+
+[apptainer]
+binary = "/usr/bin/apptainer"
+network_isolation = "seccomp"
+process_namespaces = "harness"
+mount_policy = "scoped"
+dns_bind = "/etc/resolv.conf"
+# The task's data, for example:
+# judge_binds = [
+#   { source = "${OAK}/lab/judge-data", target = "/rsi-data/judge", read_only = true },
+# ]
+work_binds = []
+judge_binds = []
+build_args = []
+temp_root = "/lscratch/${USER}"
+# python3 3.8 or later in every task image, for rsi-box. Official python
+# images have it at /usr/local/bin/python3.
+container_python = "/usr/bin/python3"
+rdma_binds = []
+judge_isolation_fallback = "none"
+
+[apptainer.environment]
+RSI_SHARED_DATA_ROOT = "/rsi-data"
+
+[resources]
+min_cpu_slots = 1
+min_memory_mb = 4096
+min_runtime_tmp_mb = 0
+gpus_per_node = 4
+walltime_margin_seconds = 900

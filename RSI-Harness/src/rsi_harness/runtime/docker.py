@@ -53,6 +53,14 @@ from rsi_harness.models import (
     ManagedNetwork,
     WorkQuiescence,
 )
+from rsi_harness.runtime.desktop import (
+    LOG_TARGET,
+    PRIVATE_LOG_LABEL,
+    PrivateLogContentError,
+    attest_private_log_volume,
+    export_private_logs,
+    is_desktop,
+)
 from rsi_harness.runtime.gpu import (
     NVIDIA_VISIBLE_DEVICES_ENV,
     NVIDIA_VISIBLE_DEVICES_VOID,
@@ -72,6 +80,7 @@ from rsi_harness.runtime.network import (
     NetworkPolicyLease,
     managed_bridge_interface,
 )
+from rsi_harness.runtime.output import BoundedBytes as _BoundedBytes
 from rsi_harness.runtime.redaction import redact_exact_values, redact_text
 from rsi_harness.runtime.trajectory import TRAJECTORY_DIRECTORY
 from rsi_harness.runtime.workdir_volume import DockerWorkdirVolumeBackend
@@ -119,41 +128,6 @@ class _ChunkedReadStream:
 
     def close(self) -> None:
         self._reader.close()
-
-
-class _BoundedBytes:
-    def __init__(self, limit: int) -> None:
-        if limit < 0:
-            raise ValueError("output limit must be non-negative")
-        self.limit = limit
-        self.total = 0
-        self._head_limit = (limit + 1) // 2
-        self._tail_limit = limit - self._head_limit
-        self._head = bytearray()
-        self._tail = bytearray()
-        self._lock = threading.Lock()
-
-    def append(self, chunk: bytes) -> None:
-        with self._lock:
-            self.total += len(chunk)
-            needed = self._head_limit - len(self._head)
-            if needed > 0:
-                self._head.extend(chunk[:needed])
-                chunk = chunk[needed:]
-            if self._tail_limit and chunk:
-                self._tail.extend(chunk)
-                if len(self._tail) > self._tail_limit:
-                    del self._tail[: len(self._tail) - self._tail_limit]
-
-    @property
-    def value(self) -> bytes:
-        with self._lock:
-            return bytes(self._head + self._tail)
-
-    @property
-    def truncated(self) -> bool:
-        with self._lock:
-            return self.total > self.limit
 
 
 class _RedactedOutputWriter:
@@ -509,6 +483,7 @@ class DockerContainerRuntime:
                     "sandbox socket directory is missing or symlinked"
                 ) from error
         self._container_networks: dict[str, str] = {}
+        self._private_log_targets: dict[str, Path] = {}
         self._policy_leases: dict[str, NetworkPolicyLease] = {}
         # Tests staging root for a read-only-rootfs container: its writable
         # /logs/verifier bind, or None when it has none.
@@ -549,6 +524,12 @@ class DockerContainerRuntime:
         for volume_mount in spec.volume_mounts:
             validate_split_workdir_target(volume_mount.target)
         mounts = list(spec.mounts)
+        private_logs = self._role == "judge" and is_desktop(self._client)
+        log_mounts = [m for m in mounts if str(m.target) == LOG_TARGET]
+        if private_logs and (len(log_mounts) != 1 or log_mounts[0].read_only):
+            raise SetupError(
+                "Docker Desktop Judge needs one writable verifier logs destination"
+            )
         if self._staging_dir is not None:
             self._staging_dir.mkdir(parents=True, exist_ok=True)
             mounts.append(
@@ -559,6 +540,13 @@ class DockerContainerRuntime:
                 )
             )
         typed_mounts = [self._mount(mount, workdir=spec.workdir) for mount in mounts]
+        if private_logs:
+            typed_mounts = [m for m in typed_mounts if m["Target"] != LOG_TARGET]
+            # Docker owns the anonymous volume. It survives a container stop,
+            # is never mounted in Work, and remove(v=True) releases it.
+            typed_mounts.append(
+                Mount(target=LOG_TARGET, source=None, type="volume", no_copy=True)
+            )
         typed_mounts.extend(
             self._volume_mount(mount, workdir=spec.workdir)
             for mount in spec.volume_mounts
@@ -568,6 +556,9 @@ class DockerContainerRuntime:
         if conflicts:
             raise SetupError("runtime recovery labels cannot be overridden")
         labels.update(self.recovery_labels)
+        # Explicitly override inherited image labels on every Judge.
+        if self._role == "judge":
+            labels[PRIVATE_LOG_LABEL] = "volume" if private_logs else "bind"
         device_requests: list[DeviceRequest] = []
         if spec.gpu_allocation.devices and not self._omit_gpu_device_requests_for_tests:
             device_requests.append(
@@ -628,6 +619,8 @@ class DockerContainerRuntime:
                 f"failed to create {self._role.title()} container: {error}"
             ) from error
         ref = ContainerRef(container_id=container.id, role=self._role)
+        if private_logs:
+            self._private_log_targets[ref.container_id] = log_mounts[0].source
         if spec.read_only_rootfs:
             self._test_archive_staging_roots[ref.container_id] = next(
                 (
@@ -826,6 +819,46 @@ class DockerContainerRuntime:
             raise InfrastructureError(
                 f"failed to start {self._role.title()} container: {error}"
             ) from error
+        if container.container_id in self._private_log_targets:
+            self._initialize_private_judge_logs(container)
+
+    def _initialize_private_judge_logs(self, container: ContainerRef) -> None:
+        # An empty no-copy Docker volume starts as root:root. Resolve the actual
+        # container user (including named users and explicit groups) before the
+        # trusted controller assigns only this volume to that identity. The
+        # Judge itself and every later command retain their configured identity.
+        attest_private_log_volume(self._client, container.container_id)
+        identity = self.exec(
+            container,
+            ("/bin/sh", "-c", "/usr/bin/id -u && /usr/bin/id -g"),
+            timeout_seconds=10.0,
+        )
+        fields = identity.output.split()
+        if (
+            identity.exit_code != 0
+            or len(fields) != 2
+            or any(not value.isascii() or not value.isdecimal() for value in fields)
+            or any(int(value) >= 2**32 - 1 for value in fields)
+        ):
+            raise InfrastructureError("private Judge log owner could not be resolved")
+        uid, gid = (str(int(value)) for value in fields)
+        secured = self.exec(
+            container,
+            (
+                "/bin/sh",
+                "-c",
+                '[ -d "$1" ] && [ ! -L "$1" ] && '
+                '/bin/chmod 0700 -- "$1" && /bin/chown -- "$2" "$1" && '
+                '/usr/bin/stat -c %a:%u:%g -- "$1"',
+                "rsi-private-judge-logs",
+                LOG_TARGET,
+                f"{uid}:{gid}",
+            ),
+            timeout_seconds=10.0,
+            user="root",
+        )
+        if secured.exit_code != 0 or secured.output.strip() != f"700:{uid}:{gid}":
+            raise InfrastructureError("private Judge log ownership is unproven")
 
     def install_network_policy(
         self, container: ContainerRef, lease: NetworkPolicyLease
@@ -956,9 +989,33 @@ class DockerContainerRuntime:
             )
         return running is False
 
+    def collect_private_judge_logs(self, container: ContainerRef) -> None:
+        targets = self._private_log_targets
+        if container.container_id not in targets:
+            return
+        try:
+            export_private_logs(
+                self._client, container.container_id, targets[container.container_id]
+            )
+        except PrivateLogContentError:
+            # The diagnostic is durable. Retrying identical invalid content cannot
+            # recover a score; let the failed round release its private volume.
+            del targets[container.container_id]
+            raise
+        else:
+            del targets[container.container_id]
+
     def remove(self, container: ContainerRef) -> None:
+        if container.container_id in self._private_log_targets:
+            try:
+                self.collect_private_judge_logs(container)
+            except PrivateLogContentError:
+                # The terminal rejection and any previous evidence are durable.
+                # This path also covers cleanup before the verifier was launched.
+                pass
         try:
             self._container(container).remove(force=True, v=True)
+            self._private_log_targets.pop(container.container_id, None)
         except NotFound:
             return
         except APIError as error:

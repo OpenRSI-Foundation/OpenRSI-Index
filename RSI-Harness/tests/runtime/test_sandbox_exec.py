@@ -11,6 +11,7 @@ import socket
 import stat
 import struct
 import subprocess
+import sys
 import threading
 import time
 from types import SimpleNamespace
@@ -1901,8 +1902,12 @@ def test_pidfd_calls_kill_a_real_process_group_from_its_cgroup(monkeypatch, bran
         while table.targets(leader, group=True):
             assert time.monotonic() < deadline, "a member survived"
             time.sleep(0.01)
+        # Orphaned zombies can retain the group leader's pid and yield EINVAL
+        # on some kernels. Check ESRCH with a separate, fully reaped child.
+        exited = subprocess.Popen([sys.executable, "-c", "pass"])
+        exited.wait(timeout=5)
         with pytest.raises(ProcessLookupError):
-            opened(child.pid)  # reaped: errno ESRCH
+            opened(exited.pid)
     finally:
         if child.poll() is None:
             os.killpg(child.pid, signal.SIGKILL)

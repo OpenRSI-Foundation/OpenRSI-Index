@@ -37,12 +37,18 @@ from rsi_harness.runtime.resume import MAX_ATTEMPTS, plan_resume, same_gpu_shape
 from rsi_harness.runtime.rootfs_snapshot import rootfs_image_ref
 from rsi_harness.runtime.run_request import write_run_request
 from tests.factories import make_run_plan
+from tests.runtime.test_sandbox_e2b import TASK as ENV_TASK
+from tests.runtime.test_sandbox_e2b import e2b_grant
 
 TASK_ID = "minimal-gpu"
 FINAL_REF = rootfs_image_ref(
     run_id="run-1", task_id=TASK_ID, round_id="final", purpose="retained-work"
 )
 FINAL_ID = f"sha256:{'b' * 64}"
+JUDGE_ONLY = (
+    ENV_TASK[: ENV_TASK.index("[metadata.rsi_harness.sandbox.environments.work]")]
+    + ENV_TASK[ENV_TASK.index("[metadata.rsi_harness.sandbox.environments.judge]") :]
+)
 
 
 def closed_attempt(attempt: int = 1, **updates: object) -> RunAttemptLease:
@@ -60,8 +66,18 @@ def closed_attempt(attempt: int = 1, **updates: object) -> RunAttemptLease:
 class Run:
     """One finished run on disk: logs, request.json and its lease."""
 
-    def __init__(self, tmp_path: Path, *, max_submissions: int | None = 8) -> None:
+    def __init__(
+        self,
+        tmp_path: Path,
+        *,
+        max_submissions: int | None = 8,
+        sandbox: str | None = None,
+    ) -> None:
         self.plan = make_run_plan(tmp_path)
+        if sandbox is not None:
+            self.plan = self.plan.model_copy(
+                update={"sandbox": e2b_grant(tmp_path, task=sandbox)}
+            )
         self.data_root = tmp_path / "data"
         self.logs_root = self.plan.paths.logs
         self.store = LeaseStore(self.data_root / "leases")
@@ -378,6 +394,37 @@ def test_a_failed_salvage_is_a_refusal(tmp_path) -> None:
         run.plan_resume(salvage=salvage)
 
 
+def test_backend_validation_precedes_salvage_under_the_run_lock(tmp_path):
+    run = Run(tmp_path)
+    lease = run.write_lease(status=None)
+    before = run.store.path_for("run-1").read_bytes()
+    events = []
+
+    def validate(context):
+        events.append("validate")
+        assert context.salvage_pending
+        assert context.agent_seconds_left == 22.0
+        with pytest.raises(SetupError, match="still live"):
+            run.plan_resume()
+        raise SetupError("backend cannot run this remaining plan")
+
+    def salvage(_run_id):
+        events.append("salvage")
+        run.store.write(lease.model_copy(update={"status": RunStatus.CANCELLED}))
+
+    with pytest.raises(SetupError, match="backend cannot run"):
+        run.plan_resume(salvage=salvage, validate_before_salvage=validate)
+    assert events == ["validate"]
+    assert run.store.path_for("run-1").read_bytes() == before
+
+    context = run.plan_resume(
+        salvage=salvage,
+        validate_before_salvage=lambda context: events.append("accepted"),
+    )
+    assert events == ["validate", "accepted", "salvage"]
+    assert not context.salvage_pending
+
+
 def _no_time(run: Run) -> None:
     run.write_lease(attempts=(closed_attempt(agent_seconds=60.0),))
 
@@ -459,6 +506,22 @@ def test_plan_refuses_a_run_it_cannot_resume(tmp_path, prepare, message) -> None
 
     with pytest.raises(SetupError, match=message):
         run.plan_resume(salvage=lambda _run_id: None)
+
+
+@pytest.mark.parametrize(
+    ("sandbox", "told"),
+    [(ENV_TASK, True), (JUDGE_ONLY, False), (None, False)],
+    ids=["work-envs", "judge-envs-only", "no-sandbox"],
+)
+def test_the_message_says_envs_are_gone_only_to_a_work_with_envs(
+    tmp_path, sandbox, told
+) -> None:
+    run = Run(tmp_path, sandbox=sandbox)
+
+    message = run.plan_resume().message
+
+    assert "files are kept" in message
+    assert ("Sandbox envs and image handles are gone" in message) is told
 
 
 def test_a_grant_lifts_the_refusal_of_an_exhausted_run(tmp_path) -> None:

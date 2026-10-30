@@ -4,7 +4,11 @@ from __future__ import annotations
 
 
 def generate_submit_client() -> str:
-    """Return a synchronous, curl-free client that carries no workspace data."""
+    """Return a synchronous, curl-free client that carries no workspace data.
+
+    With ``RSI_SUBMIT_SOCKET`` set (a Work without network), it speaks HTTP
+    over that Unix socket; ``RSI_JUDGE_URL`` then gives only the path.
+    """
     return r"""#!/bin/sh
 set -eu
 
@@ -41,15 +45,15 @@ if command -v python3 >/dev/null 2>&1; then
 elif command -v python >/dev/null 2>&1; then
     python=python
 elif command -v curl >/dev/null 2>&1; then
-    if [ "$mode" = list ]; then
-        exec curl --fail-with-body --silent --show-error \
-            -H "Authorization: Bearer ${RSI_TOKEN}" \
-            "${base_url}/api/v1/history"
+    set -- --fail-with-body --silent --show-error \
+        -H "Authorization: Bearer ${RSI_TOKEN}"
+    if [ -n "${RSI_SUBMIT_SOCKET:-}" ]; then
+        set -- "$@" --unix-socket "$RSI_SUBMIT_SOCKET"
     fi
-    exec curl --fail-with-body --silent --show-error \
-        -X POST \
-        -H "Authorization: Bearer ${RSI_TOKEN}" \
-        "${base_url}/api/v1/submit"
+    if [ "$mode" = list ]; then
+        exec curl "$@" "${base_url}/api/v1/history"
+    fi
+    exec curl "$@" -X POST "${base_url}/api/v1/submit"
 else
     printf 'rsi-submit requires Python 3 or curl in the task image\n' >&2
     exit 127
@@ -58,6 +62,7 @@ fi
 exec "$python" - "$mode" "$base_url" <<'PY'
 import http.client
 import os
+import socket
 import sys
 import urllib.parse
 
@@ -67,11 +72,19 @@ if parsed.scheme not in {"http", "https"} or not parsed.hostname:
     print("RSI_JUDGE_URL must be an absolute HTTP(S) URL", file=sys.stderr)
     raise SystemExit(2)
 
-connection_type = (
-    http.client.HTTPSConnection
-    if parsed.scheme == "https"
-    else http.client.HTTPConnection
-)
+
+class UnixConnection(http.client.HTTPConnection):
+    def connect(self):
+        self.sock = socket.socket(socket.AF_UNIX)
+        self.sock.connect(os.environ["RSI_SUBMIT_SOCKET"])
+
+
+if os.environ.get("RSI_SUBMIT_SOCKET"):
+    connection_type = UnixConnection
+elif parsed.scheme == "https":
+    connection_type = http.client.HTTPSConnection
+else:
+    connection_type = http.client.HTTPConnection
 connection = connection_type(parsed.hostname, parsed.port)
 suffix = "/api/v1/history" if mode == "list" else "/api/v1/submit"
 path = parsed.path.rstrip("/") + suffix

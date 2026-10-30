@@ -1,12 +1,13 @@
-"""Brokered E2B environments of one cluster run (docs/sandbox-operator-guide.md).
+"""Brokered remote environments of one cluster run
+(docs/sandbox-operator-guide.md).
 
-The local runtime's broker (``SandboxBroker`` over ``e2b_env_runtime``) runs
-inside the compute-node Engine process as the job user: no Docker daemon and
-no root, because every env is an E2B sandbox. Its per-phase endpoint (a Unix
-socket directory) lives under node-local scratch and is bind-mounted
-read-only into Work and the single-node Judge where the local runtime mounts
-it (``/run/rsi-harness/sandbox``). The compute node must reach the E2B API,
-directly or through ``[environments.host.e2b] proxy``.
+The local runtime's broker (``SandboxBroker`` over ``remote_env_runtime``)
+runs inside the compute-node Engine process as the job user: no Docker
+daemon and no root, because every env is a remote backend's sandbox. Its
+per-phase endpoint (a Unix socket directory) lives under node-local scratch
+and is bind-mounted read-only into Work and the single-node Judge where the
+local runtime mounts it (``/run/rsi-harness/sandbox``). The compute node
+must reach the backend's API, directly or through its table's ``proxy``.
 """
 
 from __future__ import annotations
@@ -21,22 +22,16 @@ from rsi_harness.models import RunPlan
 from rsi_harness.runtime.recovery import LeaseStore, RecoveryManager
 from rsi_harness.runtime.sandbox import SandboxBroker
 from rsi_harness.runtime.sandbox_budget import LeaseMutator, SandboxJournal
-from rsi_harness.runtime.sandbox_contracts import EnvE2BHost, SandboxEnvGrant
+from rsi_harness.runtime.sandbox_contracts import SandboxEnvGrant
 from rsi_harness.runtime.sandbox_lifecycle import SandboxLifecycle
 from rsi_harness.runtime.sandbox_tools import check_tools
-
-
-def _default_client(api_key: str, settings: EnvE2BHost) -> Any:
-    from rsi_harness.runtime.sandbox_e2b import e2b_client
-
-    return e2b_client(settings, api_key)
 
 
 class ClusterSandbox:
     """The run's sandbox lifecycle, bound when the coordinator's lease exists.
 
-    ``client_factory`` maps (API key, ``[environments.host.e2b]``) to the E2B
-    client; tests pass a fake.
+    ``client_factory`` maps (credentials, the backend's table) to its client
+    (default: the backend's own, sandbox_remote.BACKENDS); tests pass a fake.
     """
 
     def __init__(
@@ -45,7 +40,7 @@ class ClusterSandbox:
         run_id: str,
         root: Path,
         *,
-        client_factory: Callable[[str, EnvE2BHost], Any] | None = None,
+        client_factory: Callable[[tuple[str, ...], Any], Any] | None = None,
     ) -> None:
         if not isinstance(plan.sandbox, SandboxEnvGrant):
             raise SetupError("cluster sandbox requires an environment grant")
@@ -55,27 +50,33 @@ class ClusterSandbox:
         self.root = Path(root)
         self.lifecycle = SandboxLifecycle()
         self.secrets: set[str] = set()
-        self._client_factory = client_factory or _default_client
+        self._client_factory = client_factory
 
     def bind(self, mutate: LeaseMutator) -> Path | None:
-        """``on_lease_ready``: read the key, journal where the sandboxes are
-        (never the key), start the broker and open Work's endpoint. Returns
-        the Work endpoint directory, or None without a Work grant."""
-        from rsi_harness.runtime.sandbox_e2b import e2b_env_runtime, read_api_key
+        """``on_lease_ready``: read the credentials, journal where the
+        sandboxes are (never the credentials), start the broker and open
+        Work's endpoint. Returns the Work endpoint directory, or None without
+        a Work grant."""
+        from rsi_harness.runtime.sandbox_remote import (
+            remote_backend,
+            remote_env_runtime,
+        )
 
         host = self.grant.environments.host
-        settings = host.e2b
+        settings = host.remote
         assert settings is not None
+        backend = remote_backend(host.backend)
         check_tools(host)
         self.lifecycle.validate_root(self.root)
-        api_key = read_api_key(settings)
-        self.secrets.add(api_key)
+        credentials = backend.credentials(settings)
+        self.secrets.update(credentials)
         # Durable first: a crash after this still lets recovery find them.
-        mutate(lambda lease: lease.model_copy(update={"sandbox_e2b": settings}))
-        client = self._client_factory(api_key, settings)
+        field = f"sandbox_{host.backend}"
+        mutate(lambda lease: lease.model_copy(update={field: settings}))
+        client = (self._client_factory or backend.client)(credentials, settings)
         self.lifecycle.own_transport(client)
         self.root.mkdir(mode=0o700)
-        runtime = e2b_env_runtime(client, spool_root=self.root / "spool", host=host)
+        runtime = remote_env_runtime(client, spool_root=self.root / "spool", host=host)
         broker = SandboxBroker(
             self.grant, None, SandboxJournal(mutate), time.monotonic, envs=runtime
         )
@@ -95,10 +96,11 @@ def recover_cluster_sandboxes(
     run_root: Path,
     run_id: str | None = None,
     *,
-    e2b_client: Callable[[EnvE2BHost], Any] | None = None,
+    remote_client: Callable[[Any], Any] | None = None,
 ) -> tuple[str, ...]:
-    """``rsi-harness recover|cleanup --cluster``: kill the E2B sandboxes of
-    one cluster run (or of every run under ``run_root``) by their metadata.
+    """``rsi-harness recover|cleanup --cluster``: kill the remote sandboxes
+    of one cluster run (or of every run under ``run_root``) by their
+    metadata.
 
     Work and Judge were processes of the scheduler job, which ended them;
     only the sandboxes outlive it. Run this after the job has ended.
@@ -117,12 +119,12 @@ def recover_cluster_sandboxes(
         store = LeaseStore(run_dir / "leases")
         manager = RecoveryManager(
             store=store,
-            backend=None,  # type: ignore[arg-type]  # E2B only: no Docker
+            backend=None,  # type: ignore[arg-type]  # remote only: no Docker
             managed_root=run_dir,
-            e2b_client=e2b_client,
+            remote_client=remote_client,
         )
         for selected in store.list_run_ids():
-            if manager.recover_e2b(selected):
+            if manager.recover_remote(selected):
                 recovered.append(selected)
     return tuple(recovered)
 

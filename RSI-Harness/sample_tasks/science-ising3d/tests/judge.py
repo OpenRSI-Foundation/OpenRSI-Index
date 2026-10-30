@@ -3,9 +3,10 @@
 tests/test.sh runs this file in every Judge; ``python3 /tests/judge.py
 --recompute /workspace/candidate`` previews the routes in Work.
 science_judge.py, the generic public science Judge library (copied unchanged),
-does everything else: it freezes the candidate, recomputes each route as its
-own unprivileged user, audits the round's trajectory and reviews every rubric
-with the run's own Agent through rsi-agent, then writes the reward.
+does everything else: it freezes the candidate, recomputes each route
+isolated, audits the round's trajectory with the run's own Agent and reviews
+every rubric with the Judge model, both through rsi-agent, then writes the
+reward.
 """
 
 import sys

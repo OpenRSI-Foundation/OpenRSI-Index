@@ -162,8 +162,9 @@ prior_results:
 execution:
   environment: >-
     The Python 3.11 image pinned by digest (standard library only) with the starter; every Judge starts from the clean
-    task image, recomputes the routes as unprivileged users and reviews with the run's own Agent, model and
-    reasoning effort through rsi-agent (Judge library science_judge version 3).
+    task image, recomputes the routes isolated, audits with the run's own Agent, model and reasoning effort
+    and reviews each rubric with the Judge model gpt-6-astra (medium effort), both through rsi-agent
+    (Judge library science_judge version 9.4).
   access: >-
     Work has public network access for literature and data. The Judge is offline except the pinned model
     endpoints; routes cannot open internet sockets and get no credentials; reviewers never execute

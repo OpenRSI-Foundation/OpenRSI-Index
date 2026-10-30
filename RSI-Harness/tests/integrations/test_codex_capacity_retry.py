@@ -565,3 +565,33 @@ def test_generated_capacity_resume_shell_runs_with_exact_session_and_prompt(
         assert "retry 1 in 30s" in output
         assert "SAME_SESSION_RECOVERED" in output
     assert output_path.read_text().startswith("old attempt\n")
+
+
+def test_apptainer_verbose_capacity_result_retries_same_session_within_budget(
+    tmp_path, monkeypatch
+):
+    from tests.cluster.bluevela.test_runtime import _capture_verbose_codex_result
+
+    # Produce the >16 MB result through the real Apptainer capture method before
+    # installing the fake retry clock. No model or container is required here.
+    first, complete_log, _, _ = _capture_verbose_codex_result(tmp_path, monkeypatch)
+    assert complete_log.stat().st_size > 16_000_000
+    assert first.output_truncated
+    adapter, runtime, clock, request = make_adapter(
+        tmp_path, monkeypatch, [first, AgentRunResult(exit_code=0, output="resumed\n")]
+    )
+    started = []
+    result = adapter.run(replace(request, on_exec_start=started.append))
+
+    assert result.exit_code == 0
+    assert result.output_truncated
+    assert len(runtime.executions) == 2
+    assert [call["timeout_seconds"] for call in runtime.executions] == [600, 598]
+    assert clock.now == 1034
+    assert started == [1000.0]
+    command = runtime.executions[1]["command"][-1]
+    assert "codex exec resume" in command
+    assert SESSION in command and "--last" not in command
+    assert "sleep 30" in command
+    assert CAPACITY in result.output
+    assert "private-secret" not in result.output

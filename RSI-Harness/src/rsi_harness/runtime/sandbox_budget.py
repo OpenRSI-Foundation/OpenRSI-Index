@@ -286,21 +286,22 @@ class SandboxAdmissionPool:
                 )
 
             host = getattr(getattr(grant, "environments", None), "host", None)
-            e2b = host.e2b if host is not None and host.backend == "e2b" else None
+            remote = None if host is None else host.remote
 
             def reserve(lease: ResourceLease) -> ResourceLease:
                 if lease.run_id != run_id or lease.sandbox_reservation is not None:
                     raise InfrastructureError("sandbox reservation owner changed")
-                return lease.model_copy(
-                    update={
-                        "sandbox_reservation": requested,
-                        # Outlives the reservation: recovery keeps sweeping.
-                        "sandbox_env_authority": lease.sandbox_env_authority
-                        or requested.pool_disk_mb is not None,
-                        # Where the run's E2B sandboxes are (never the key).
-                        "sandbox_e2b": lease.sandbox_e2b or e2b,
-                    }
-                )
+                update = {
+                    "sandbox_reservation": requested,
+                    # Outlives the reservation: recovery keeps sweeping.
+                    "sandbox_env_authority": lease.sandbox_env_authority
+                    or requested.pool_disk_mb is not None,
+                }
+                if remote is not None:
+                    # Where the run's remote sandboxes are (never credentials).
+                    field = f"sandbox_{host.backend}"
+                    update[field] = getattr(lease, field) or remote
+                return lease.model_copy(update=update)
 
             mutate(reserve)
 

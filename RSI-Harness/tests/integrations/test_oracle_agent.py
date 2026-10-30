@@ -181,6 +181,7 @@ def test_prepare_runs_the_launcher_with_the_submission_count(
     )
     environment = dict(prepared.environment)
     assert environment["RSI_ORACLE_SUBMISSIONS"] == count
+    assert environment["RSI_ORACLE_SOLUTION_CLEANUP"] == "launcher"
     assert "sk-must-not-reach-work" not in str(prepared.environment)
     assert "OPENAI_API_KEY" not in environment
     assert "EXTRA" not in environment
@@ -456,6 +457,35 @@ def test_launcher_submits_after_a_failed_solve_and_returns_its_status(
     # A failing rsi-submit does not stop the next submission.
     assert len((tmp_path / "submits").read_text().splitlines()) == 2
     assert "rsi-oracle: rsi-submit exited 3" in completed.stderr
+
+
+def test_launcher_defers_distributed_solution_removal_to_native_submit(
+    tmp_path: Path,
+) -> None:
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    solution = _solve(tmp_path, "echo solved > answer")
+    env = _launcher_env(tmp_path)
+    # The native submit lifecycle checks idle remote workers before removal.
+    submit = tmp_path / "bin/rsi-submit"
+    submit.write_text(
+        "#!/bin/sh\n"
+        f"test -f '{solution}/solve.sh' || exit 4\n"
+        f"rm -rf -- '{solution}'\n"
+        "echo native-cleanup-before-judge\n"
+    )
+    completed = subprocess.run(
+        ["/bin/bash", str(LAUNCHER), str(workdir), str(solution)],
+        env={**env, "RSI_ORACLE_SOLUTION_CLEANUP": "submit"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert (workdir / "answer").read_text() == "solved\n"
+    assert not solution.exists()
+    assert "native-cleanup-before-judge" in completed.stdout
+    assert "rsi-submit exited" not in completed.stderr
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory modes")

@@ -29,6 +29,10 @@ JUDGE_TRAJECTORY_ROOT = PurePosixPath("/logs/agent")
 # never decides how a science Judge library isolates the routes it runs.
 JUDGE_ISOLATION_FALLBACK_ENV = "RSI_JUDGE_ISOLATION_FALLBACK"
 JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL_ENV = "RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL"
+# Set in every Judge after the task's variables: "private" when the Judge has
+# a network namespace of its own, else "shared". Boxed candidate code in a
+# shared one gets no AF_UNIX sockets (abstract sockets reach paused Work).
+JUDGE_NETNS_ENV = "RSI_JUDGE_NETNS"
 MIN_VERIFIER_OUTPUT_LIMIT_BYTES = len(VERIFIER_OUTPUT_TRUNCATION_MARKER.encode("utf-8"))
 
 

@@ -337,3 +337,40 @@ def test_finished_does_not_hide_a_failed_query() -> None:
 
     with pytest.raises(InfrastructureError, match="LSF is down"):
         LSFScheduler(runner=runner).finished("123")
+
+
+@pytest.mark.parametrize(
+    ("stdout", "stderr", "detail"),
+    [
+        ("", "scheduler unavailable", "scheduler unavailable"),
+        ("permission denied", "", "permission denied"),
+        ("", "", "exit 1"),
+    ],
+)
+def test_cancel_failure_is_reported(stdout: str, stderr: str, detail: str) -> None:
+    runner = FakeRunner([_completed(stdout, stderr, returncode=1)])
+    with pytest.raises(
+        InfrastructureError, match="cannot cancel LSF job 678901"
+    ) as exc:
+        LSFScheduler(runner=runner).cancel("678901")
+    assert detail in str(exc.value)
+    assert runner.calls == [("bkill", "678901")]
+
+
+def test_interrupt_reports_failed_cancellation() -> None:
+    runner = FakeRunner(
+        [
+            _completed("RUN -\n"),
+            _completed(stderr="scheduler unavailable", returncode=1),
+        ]
+    )
+
+    def interrupt(_: float) -> None:
+        raise KeyboardInterrupt
+
+    with pytest.raises(
+        InfrastructureError, match="cannot cancel LSF job 678901"
+    ) as exc:
+        LSFScheduler(runner=runner, sleeper=interrupt).wait("678901")
+    assert isinstance(exc.value.__context__, KeyboardInterrupt)
+    assert runner.calls[-1] == ("bkill", "678901")

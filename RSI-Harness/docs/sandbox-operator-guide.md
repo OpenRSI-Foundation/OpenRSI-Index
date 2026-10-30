@@ -40,106 +40,239 @@ through Apptainer as the job user, with no Docker daemon or root component
 to enforce per-env limits and firewalls. Run such tasks on a local Docker
 host.
 
-With `[environments.host] backend = "e2b"` the envs run as E2B sandboxes
-and need neither the firewall nor root (see [E2B backend](#e2b-backend));
-Work and Judge still run under local Docker, or under Apptainer on a
-cluster (see [E2B on a cluster](#e2b-on-a-cluster)).
+With `[environments.host] backend = "e2b"`, `"modal"` or `"daytona"` the
+envs run as remote sandboxes and need neither the firewall nor root (see
+[Remote backends](#remote-backends)); Work and Judge still run under local
+Docker, or under Apptainer on a cluster (see
+[Remote backends on a cluster](#remote-backends-on-a-cluster)).
 
-## E2B backend
+## Remote backends
 
-With `backend = "e2b"` every env of a run is an E2B sandbox instead of local
-containers. Grants, sessions, quotas, the journal, freeze and close
-ordering, the protocol and the Harbor plugin are as on the rest of this
-page, and tasks change nothing. To enable it:
+With `backend = "e2b"`, `"modal"` or `"daytona"` every env of a run is a
+sandbox of that provider instead of local containers. Grants, sessions,
+quotas, the journal, freeze and close ordering, the protocol and the Harbor
+plugin are as on the rest of this page, and tasks change nothing. To enable
+one, install the Harness with the backend's extra (see the README; in a
+checkout, `uv sync --extra e2b`, `--extra modal` or `--extra daytona`),
+which pins its SDK, and give its table in the policy (below). The broker
+reads the credentials once at run setup; the run plan, lease, sandbox
+metadata, capabilities and logs record only where they are, never them.
+`rsi-harness recover` and `cleanup` read them again from there.
 
-1. Install the extra, which pins the SDK: `uv sync --extra e2b`
-   (`e2b==2.52.0`).
-2. Put the API key in a file only the harness user can read, and name it in
-   the policy:
+How it works, on each:
 
-   ```toml
-   [environments.host]
-   backend = "e2b"
-   # pool_disk_mb, disk_floor_mb, ... as for Docker
-
-   [environments.host.e2b]
-   api_key_file = "/home/op/.config/rsi-harness/e2b.key"  # or api_key_env = "E2B_API_KEY"
-   # domain = "e2b.example.com"                           # a self-hosted E2B
-   ```
-
-   The broker reads the key once at run setup; the run plan, lease, sandbox
-   metadata, capabilities and logs record only where the key is, never the
-   key. `rsi-harness recover` and `cleanup` read it again from there.
-
-How it works:
-
-- Templates are made on demand. `image_pull` names a template from the
-  image's digest (or its reference when it names no digest), the phase's
-  `cpus_per_container` and `memory_mb_per_container` rounded up (1 or an
-  even number of vCPUs, and 512 MiB steps) and a recipe version. If E2B has
-  no template of that name, the broker builds it (the image, user root,
-  workdir `/`, and a step that records the image's ENV) and waits; the
-  pull's log shows the build. Later pulls and runs reuse the template; one
-  broker builds a name only once at a time. Nothing is pruned.
-- Each pull also reads the image's config from its registry (anonymously,
-  through `proxy` if set; once per image and broker) for its WORKDIR, USER,
-  ENTRYPOINT and CMD, which the template does not keep. A pull fails if the
-  registry cannot be read.
+- `image_pull` makes the image's template (the provider's own image) on
+  demand, named from the image's digest (or its reference when it names no
+  digest), the phase's `cpus_per_container` and `memory_mb_per_container`
+  and a recipe version, and waits for it; one broker builds a name only once
+  at a time, and nothing is pruned. Each pull also reads the image's config
+  from its registry (through `proxy` if set; once per image and broker) for
+  its WORKDIR, USER, ENTRYPOINT and CMD, which the sandbox does not apply. A
+  pull fails if the registry cannot be read.
+- `image_build` (not on Daytona) takes a single-stage Dockerfile on its
+  base image (whose config is read as for a pull); its WORKDIR, USER,
+  ENTRYPOINT, CMD and VOLUME are applied like an image's. The template is
+  named from the context, the base reference, the steps, the config, the
+  shape and the recipe; an existing one is reused (`no_cache` builds it
+  again). A build cannot be stopped once the provider has it: a cancelled
+  or timed-out build job ends when the provider's build does, and binds
+  nothing.
 - One env is one sandbox running its one service: `env_create` creates the
   sandbox, `env_start` starts the service command. Every sandbox carries the
   metadata `rsi_run_id`, `rsi_task_id`, `rsi_phase`, `rsi_round_id` (Judge),
-  `rsi_env_id`, `rsi_service` and `rsi_role`. Its E2B timeout is the env's
-  remaining lifetime plus 60 s, so E2B kills it if the broker dies, but at
-  most `max_sandbox_hours`: E2B refuses a longer one, and ends an env that
-  outlives it.
-- Network `public` lets the sandbox reach the internet; `none` blocks it
-  (E2B's firewall). Inbound traffic needs a token that nobody gets.
-- Execs run through envd under `setsid`, without a login shell. They get
-  the recorded image ENV, then the service spec's `env`, then the exec's.
-  The cwd is the exec's, the spec's `working_dir`, the image's WORKDIR or
-  `/`. The user is the exec's, the spec's, the image's USER or root;
-  numeric uids map through the image's `/etc/passwd` and 0 is root. The
-  service command is merged with the image's ENTRYPOINT and CMD as Docker
-  does. Output, timeouts, `exec_kill` (to the group, through `kill` as
-  root) and retention are the broker's own.
+  `rsi_env_id`, `rsi_service` and `rsi_role`. Its timeout is the env's
+  remaining lifetime plus 60 s, at most `max_sandbox_hours` (none on
+  Daytona), so the provider kills it if the broker dies.
+- Network `public` lets the sandbox reach the internet and `none` blocks it;
+  nothing reaches the sandbox from outside. Network `allowlist` hands its
+  entries to the provider's firewall, which denies everything else (see each
+  backend for what a hostname matches). An IP or CIDR is allowed on every
+  port and takes none. The broker neither resolves nor refreshes hostnames
+  (`refresh_sec` is unused), so `private_cidrs` bounds only IP and CIDR
+  entries.
+- Execs run without a login shell, in their own process group. They get the
+  image's ENV, then the service spec's `env`, then the exec's. The cwd is the
+  exec's, the spec's `working_dir`, the image's WORKDIR or `/`. The user is
+  the exec's, the spec's, the image's USER or root; numeric uids map through
+  the image's `/etc/passwd` and 0 is root. The service command is merged
+  with the image's ENTRYPOINT and CMD as Docker does. Output, timeouts,
+  `exec_kill` (to the group, through `kill` as root) and retention are the
+  broker's own.
 - `copy_in`, `copy_out` and `path_stat` run `tar` and `stat` as root in the
   sandbox, and `tool_install` uploads tmux the same way.
-- `freeze_work` pauses Work sandboxes (memory kept). `resume_work` resumes
-  them and sets their timeout again. `close_judge` and the run's close kill
-  sandboxes; on E2B a kill is the removal. `rsi-harness recover` and
-  `cleanup` list the run's sandboxes by `rsi_run_id`, running or paused,
-  kill them and check that none is left. When E2B is unreachable they keep
-  the lease for another try.
+- `close_judge` and the run's close kill sandboxes; a kill is the removal.
+  `rsi-harness recover` and `cleanup` list the run's sandboxes by
+  `rsi_run_id`, kill them and check that none is left. When the provider is
+  unreachable they keep the lease for another try.
 
-Refused with `unsupported` ("... unsupported on the e2b backend"): more than
-one service (Compose), volumes and mounts, tmpfs, healthchecks, `read_only`,
-`cap_drop`, `group_add`, `hostname`, `extra_hosts`, network `allowlist`, and
-`image_build` (a task that requests builds fails setup). Not enforced:
-`pids`, `nofile`, `shm_mb`, swap and the soft disk (`disk_mb` is charged but
-not watched).
+Refused with `unsupported` ("... unsupported on the <backend> backend"):
+more than one service (Compose), volumes and mounts, tmpfs, healthchecks,
+`read_only`, `cap_drop`, `group_add`, `hostname`, `extra_hosts`, explicit
+`user:group` identities (including image defaults and exec overrides), and the
+allowlist ports each backend lists. Harbor's plugin and `rsi-sandbox
+compose` refuse these when they translate, before any pull. `image_build`
+refuses, when it is called:
 
-Fidelity and limits:
+- multi-stage Dockerfiles, `FROM scratch` and a platform other than
+  linux/amd64;
+- `COPY --from`, `--parents`, `--exclude` and a non-octal `--chmod`, and
+  `ADD` of a URL, git source or local archive;
+- `RUN` flags, heredocs, `SHELL`, `ONBUILD`, the `escape` directive and
+  `${VAR:...}` modifiers;
+- `USER` with a group;
+- symlinks in the build context;
+- network `none`: template builds always reach the internet, so the
+  phase's build network must include `public`.
 
-- E2B's template build adds packages to the image (systemd, sudo, git, curl
-  and more), changes `/etc/profile`, and resets the image's USER, WORKDIR and
-  ENV. The broker applies the ENV again (without the image's HOME, USER and
-  LOGNAME), and USER and WORKDIR from the registry's image config. The
-  image's healthcheck and stop signal are not applied. Images need a
-  distribution E2B can provision (not scratch or distroless), `sh`,
-  `setsid`, `tar` and `stat`, linux/amd64, and a public registry: no
-  registry credentials are passed.
-- Each sandbox gets the phase's per-container cpus and memory, rounded up,
-  whatever its spec asks; quotas still charge the spec's values.
-- The E2B account's limits apply: concurrent sandboxes, the maximum
-  sandbox length (set `max_sandbox_hours` to it) and template cpus and
-  memory. A paused sandbox never expires on E2B; recovery kills it.
-- Images, seeds, the hidden tests and outputs go to E2B's cloud. A tag is
-  resolved once, when its template is built.
+When the base image's config brings one of these (an `ONBUILD`, an ENV that
+names an `ADD` archive), the build job fails instead. Shell forms run in the
+base image's `SHELL`, as in Docker.
 
-### E2B on a cluster
+Not enforced: `pids`, `nofile`, `shm_mb`, swap and the soft disk (`disk_mb`
+is charged but not watched). The image's healthcheck and stop signal are not
+applied. Images need `sh`, `setsid`, `tar` and `stat` (on Modal also `sleep`,
+`cat` and `mkdir`, on Daytona also `sleep`, `env` and `readlink`), and
+linux/amd64.
+Images, build contexts, seeds, the hidden tests and outputs go to the
+provider's cloud; a tag is resolved once, when its template is made. The
+provider account's limits apply (concurrent sandboxes, sandbox length,
+sizes).
+
+### E2B
+
+```toml
+[environments.host]
+backend = "e2b"
+# pool_disk_mb, disk_floor_mb, ... as for Docker
+
+[environments.host.e2b]
+api_key_file = "/home/op/.config/rsi-harness/e2b.key"  # or api_key_env = "E2B_API_KEY"
+# domain = "e2b.example.com"                           # a self-hosted E2B
+```
+
+<!-- fields: EnvE2BHost -->
+| Field | Meaning |
+|---|---|
+| `domain` | The E2B domain (the API is `api.<domain>`); default E2B Cloud (`e2b.app`); set it for a self-hosted E2B |
+| `api_key_file` | Absolute path of a file holding the API key, read by the broker only |
+| `api_key_env` | Instead of `api_key_file`: the name of an environment variable of the `rsi-harness` process holding the key |
+| `template_prefix` | Prefix of the template names the broker makes (default `rsi`) |
+| `proxy` | An `http`, `https` or `socks5` proxy URL for every E2B call, without credentials (for cluster compute nodes without direct egress) |
+| `max_sandbox_hours` | The account's maximum sandbox length in hours (default 1); a policy whose `max_env_lifetime_sec` exceeds it is refused |
+| `registry_auth_file` | Absolute path of a Docker-style auth file (inline `auths` only, no credential helpers) for private registries, read by the broker on each pull and sent to E2B with template builds |
+
+`domain` is the only endpoint setting: a set `E2B_DOMAIN`, `E2B_API_URL` or
+`E2B_SANDBOX_URL`, or a true `E2B_DEBUG`, is refused. For a private CA,
+export `SSL_CERT_FILE` naming a PEM bundle of the system roots plus that
+CA; the file replaces the system roots, and an empty value fails every E2B
+call.
+
+What E2B does differently:
+
+- A template is an E2B template build of the image (user root, workdir `/`,
+  and a step that records the image's ENV), its cpus and memory rounded up
+  (1 or an even number of vCPUs, and 512 MiB steps); the pull's log shows
+  the build. Each sandbox gets those, whatever its spec asks; quotas still
+  charge the spec's values. The build adds packages to the image (systemd,
+  sudo, git, curl and more) and changes `/etc/profile`; images need a
+  distribution E2B can provision (not scratch or distroless).
+- `image_build` turns the instructions into template steps: ARGs expand as
+  in Docker but never reach the image's ENV; COPY and ADD without `--chown`
+  are owned by root. It also refuses `RUN` as a numeric `USER` other than 0
+  and `--chown` of a user name without a group, which E2B does not resolve
+  as Docker does (also when the base image's USER is numeric). The SDK packs
+  each COPY source in the system temp directory before it uploads it.
+- An allowlist hostname matches only the HTTP Host on port 80 and the TLS
+  SNI on port 443, and E2B resolves that host and connects to it whatever
+  address the sandbox dials. A hostname may name port 80 or 443 (any other
+  is refused), and either way both ports open. A list with hostnames also
+  lets the sandbox reach E2B's resolver (8.8.8.8), so names can leak through
+  DNS; a list without hostnames gives no DNS.
+- Execs run through envd under `setsid`.
+- `freeze_work` pauses Work sandboxes (memory kept); `resume_work` resumes
+  them and sets their timeout again. A paused sandbox never expires on E2B;
+  recovery kills it, running or paused.
+
+### Modal
+
+```toml
+[environments.host]
+backend = "modal"
+
+[environments.host.modal]
+api_key_file = "/home/op/.config/rsi-harness/modal.toml"  # token_id = "...", token_secret = "..."
+# or api_key_id_env = "MODAL_ID" and api_key_env = "MODAL_SECRET"
+```
+
+<!-- fields: EnvModalHost -->
+| Field | Meaning |
+|---|---|
+| `api_key_file` | Absolute path of a TOML file with the token's `token_id` and `token_secret`, read by the broker only |
+| `api_key_id_env` | With `api_key_env`, instead of `api_key_file`: the variable holding the token id |
+| `api_key_env` | The variable holding the token secret |
+| `environment` | The Modal environment; default the workspace's default |
+| `app_name` | The app every sandbox belongs to, created when missing (default `rsi-harness`) |
+| `proxy` | An `http` or `socks5` proxy URL for every Modal call, without credentials |
+| `max_sandbox_hours` | The longest sandbox timeout in hours (default 24, at most 24) |
+| `registry_auth_file` | As for E2B: private registries for pulls and build bases |
+
+The token is always passed explicitly and `~/.modal.toml` is ignored; a set
+`MODAL_SERVER_URL`, `MODAL_ENVIRONMENT` or `MODAL_OVERRIDE_HEADERS` is
+refused.
+
+What Modal does differently:
+
+- Each sandbox gets exactly the phase's per-container cpus and memory.
+- `image_build` hands the Dockerfile's own instructions to Modal's builder,
+  which runs them as Docker does; build args become the ARGs' defaults.
+- An allowlist hostname matches only the TLS SNI on port 443 (`host` or
+  `host:443`; any other port is refused).
+- A non-root user needs `setpriv` in the image.
+- `freeze_work` stops a Work sandbox's processes instead of pausing it:
+  memory stays allocated and the sandbox's timeout keeps running.
+- An exec whose output stream breaks is not followed again: it ends lost.
+  A command's arguments are limited to 64 KiB.
+
+### Daytona
+
+```toml
+[environments.host]
+backend = "daytona"
+
+[environments.host.daytona]
+api_key_file = "/home/op/.config/rsi-harness/daytona.key"  # or api_key_env = "DAYTONA_API_KEY"
+target = "us"
+```
+
+<!-- fields: EnvDaytonaHost -->
+| Field | Meaning |
+|---|---|
+| `api_key_file` | Absolute path of a file holding the API key (sandbox permissions suffice), read by the broker only |
+| `api_key_env` | Instead of `api_key_file`: the variable holding the key |
+| `target` | The region of every sandbox (required) |
+| `api_url` | The API URL; default Daytona Cloud (`https://app.daytona.io/api`); set it for a self-hosted Daytona |
+| `template_prefix` | Prefix of the sandbox names the broker makes (default `rsi`) |
+| `proxy` | An `http` or `https` proxy URL for every Daytona call, without credentials |
+| `registry_auth_file` | As for E2B, but only to read the image config: Daytona pulls private images with the registries set up in the organization |
+
+The key, `api_url` and `target` are always passed explicitly, so neither
+`DAYTONA_*` variables nor `.env` files change them.
+
+What Daytona does differently:
+
+- Daytona builds each image on its first pull and keeps it; each sandbox
+  gets the phase's cpus, memory and disk rounded up to whole cores and GiB.
+- An allowlist holds hostnames (on port 80 or 443; any other is refused) or
+  IPs and CIDRs (at most 10), not both. A self-hosted Daytona may not
+  enforce hostname allowlists. The organization must allow
+  per-sandbox network settings, or its own policy replaces `none` and
+  allowlists.
+- Non-root users and `freeze_work` as on Modal.
+
+### Remote backends on a cluster
 
 The cluster backends (BlueVela/LSF and Slurm) accept an environment task
-(version 2) when the operator's policy selects `backend = "e2b"`; any other
+(version 2) when the operator's policy selects a remote backend; any other
 sandbox request is still refused before anything is submitted:
 
 ```bash
@@ -160,12 +293,17 @@ reopen its endpoint. The run's close kills every sandbox.
 
 Requirements and limits:
 
-- Compute nodes must reach the E2B API and sandboxes over HTTPS. Without
-  direct egress, set `proxy = "http://proxy.example:3128"` in
-  `[environments.host.e2b]` (no credentials in the URL; it is stored with
-  the plan).
-- The key is read on the compute node: use an `api_key_file` on storage the
-  node can read, or an `api_key_env` the scheduler passes to the job.
+- Compute nodes must reach the provider over HTTPS: E2B's API and
+  sandboxes, Modal's API and its sandboxes' command endpoints, or Daytona's
+  API and its toolbox proxy; for builds also the storage that build
+  contexts upload to. Without direct egress, set
+  `proxy = "http://proxy.example:3128"` in the backend's table (no
+  credentials in the URL; it is stored with the plan). Only the broker's
+  calls use it.
+- Before it submits (also for `--dry-run` and `resume`), the submit host
+  checks the SDK version, the endpoint variables, the credentials and any
+  `registry_auth_file`; the compute node reads them again. Use files on
+  storage both can read, or variables the scheduler passes to the job.
 - Stages and exec output spool on node-local scratch, which must keep
   `disk_floor_mb` free.
 - A multi-node run may grant Work envs only: its Judge runs on remote hosts
@@ -176,8 +314,8 @@ Requirements and limits:
   `rsi_run_id` (from the run's lease under the profile's `run_root`) once
   its job has ended; a run whose Engine still holds its lease is refused.
   The scheduler already ended Work and Judge. If nothing recovers a killed
-  job, each sandbox's E2B timeout (its env's lifetime plus 60 s) ends it,
-  except Work sandboxes paused for a Judge round, which only recovery kills.
+  job, each sandbox's timeout (see How it works above) ends it, except E2B
+  Work sandboxes paused for a Judge round, which only recovery kills.
 
 ## Approve once
 
@@ -209,8 +347,10 @@ the hosts an env lists, within the operator's bounds (see
 | `waiters` | Concurrent long-polls (`job_wait`, `exec_wait`, `env_status`), which never hold a slot (default 64, at most 1024); raise it to the execs you expect to be awaited at once |
 | `no_new_privileges` | Service containers run with `no-new-privileges` (default true) |
 | `tmux` | The `[environments.host.tmux]` table: a static tmux the broker may copy into an env service whose image has none (see [tmux for offline envs](#tmux-for-offline-envs)); without it no tool is offered |
-| `backend` | Where env services run: `"docker"` (the default, this page) or `"e2b"` (E2B sandboxes, see [E2B backend](#e2b-backend)) |
-| `e2b` | The `[environments.host.e2b]` table; present exactly with `backend = "e2b"` |
+| `backend` | Where env services run: `"docker"` (the default, this page), `"e2b"`, `"modal"` or `"daytona"` (see [Remote backends](#remote-backends)) |
+| `e2b` | The `[environments.host.e2b]` table (see [E2B](#e2b)); present exactly with `backend = "e2b"` |
+| `modal` | The `[environments.host.modal]` table (see [Modal](#modal)); present exactly with `backend = "modal"` |
+| `daytona` | The `[environments.host.daytona]` table (see [Daytona](#daytona)); present exactly with `backend = "daytona"` |
 
 ### `[environments.host.tmux]`
 
@@ -219,18 +359,6 @@ the hosts an env lists, within the operator's bounds (see
 |---|---|
 | `path` | Absolute host path of the binary, read by the broker only (keep it root-owned and writable by root only) |
 | `sha256` | Its SHA-256 (64 lower-case hex digits); a file that differs is never copied |
-
-### `[environments.host.e2b]`
-
-<!-- fields: EnvE2BHost -->
-| Field | Meaning |
-|---|---|
-| `domain` | The E2B domain; default the SDK's (E2B Cloud, `e2b.app`); set it for a self-hosted E2B |
-| `api_key_file` | Absolute path of a file holding the API key, read by the broker only |
-| `api_key_env` | Instead of `api_key_file`: the name of an environment variable of the `rsi-harness` process holding the key |
-| `template_prefix` | Prefix of the template names the broker makes (default `rsi`) |
-| `proxy` | An `http`, `https` or `socks5` proxy URL for every E2B call, without credentials (for cluster compute nodes without direct egress) |
-| `max_sandbox_hours` | The account's maximum sandbox length in hours (default 1): no sandbox timeout exceeds it |
 
 ### `[environments.work]` and `[environments.judge]`
 
@@ -273,7 +401,7 @@ the Work run, or one Judge round.
 <!-- fields: EnvBuildGrant -->
 | Field | Meaning |
 |---|---|
-| `builder_image` | The BuildKit image by digest or ID (`moby/buildkit:v0.27.1`), pre-pulled by the operator; its entrypoint must be `buildkitd`, and the broker never pulls it |
+| `builder_image` | The BuildKit image by digest or ID (`moby/buildkit:v0.27.1`), pre-pulled by the operator; its entrypoint must be `buildkitd`, and the broker never pulls it. Required on Docker; the e2b backend has no builder and ignores it, `cpus`, `memory_mb`, `pids`, `disk_mb`, `state_fs`, `max_concurrent_builds`, `max_image_mb` and `max_images_total_mb` |
 | `network` | Networks RUN steps may use: `public` and/or `none` (builds have no allowlist: BuildKit pulls bases over the same bridge) |
 | `cpus` | CPUs of the builder (all RUN steps together) |
 | `memory_mb` | Memory of the builder (at least 1024) |
@@ -314,8 +442,9 @@ refresh_sec = 60
 
 ### `[environments.run_limits]`
 
-Cumulative over Work and every Judge round of the run; no phase ceiling may
-exceed its run ceiling.
+Cumulative over Work and every Judge round of one attempt of the run (a
+resumed run counts again from zero); no phase ceiling may exceed its run
+ceiling.
 
 <!-- fields: EnvRunLimits -->
 | Field | Meaning |
@@ -455,6 +584,7 @@ without driver options (`type=none,o=bind` would reach host directories).
 
 ### Allowlist envs
 
+This is the Docker backend; for the others see [Remote backends](#remote-backends).
 An allowlist env gets the public-shaped bridge, but its firewall rule ends
 in REJECT instead of ACCEPT. Ahead of the private-range rejects (after the
 intra-bridge accept and the engine rejects), the rule jumps to a chain of

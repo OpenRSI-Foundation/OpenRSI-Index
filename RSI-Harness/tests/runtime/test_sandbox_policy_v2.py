@@ -299,6 +299,14 @@ def test_operator_policy_rejects_unsafe_or_inconsistent_grants(
         helpers.load_policy_text(tmp_path, _dump_toml(raw))
 
 
+def test_a_docker_build_grant_needs_its_builder_image(tmp_path):
+    # Optional only with backend "e2b", whose builds need no builder.
+    raw = tomllib.loads(helpers.env_policy_toml())
+    del raw["environments"]["judge"]["build"]["builder_image"]
+    with pytest.raises(SetupError, match="judge.build.builder_image is required"):
+        helpers.load_policy_text(tmp_path, _dump_toml(raw))
+
+
 def big_caps_toml():
     raw = tomllib.loads(helpers.env_policy_toml())
     raw["environments"]["host"]["waiters"] = MAX_WAITERS

@@ -9,19 +9,21 @@ description = "Derive the zero-field 3D Ising thermodynamics (pressure, energy, 
 author_name = "Yichen Feng"
 author_email = "yfeng42@uw.edu"
 difficulty_explanation = "The simple-cubic Ising model has no known exact solution; the target asks for a controlled construction over all finite couplings, its transition point and both-sided leading critical laws, which is an open research problem."
-verification_explanation = "Recompute the frozen candidate offline (the optional probe.py and model.py pressure routes) -> audit the round's trajectory -> review 26 public rubrics in separate contexts -> reward = number of rubrics this candidate passes."
+verification_explanation = "Recompute the frozen candidate offline (the optional probe.py and model.py pressure routes) -> audit the round's trajectory -> review 26 public rubrics in separate Judge model calls -> reward = number of rubrics this candidate passes."
 category = "Science"
 subcategory = "Physics"
 tags = ["science", "public-rubrics", "ising", "statistical-mechanics"]
 expert_time_estimate_hours = 2000
 
 # Work sees the Judge and every rubric at /tests, read-only, and every Judge
-# runs from the clean task image; the Judge calls the run's Agent only through
-# rsi-agent, which reaches the Agent's pinned endpoints only.
+# runs from the clean task image; the Judge calls models only through
+# rsi-agent: the run's Agent for the audit, the Judge model for each rubric.
 [metadata.rsi_harness.verifier]
 gpus = 0
 visibility = "public"
 model_access = true
+judge_model = "gpt-6-astra"
+judge_model_effort = "medium"
 
 # The Judge shares Work's resources: one recompute route at a time, then the
 # audit, then four rubric reviews (rsi-agent calls) at once.

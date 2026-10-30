@@ -30,14 +30,16 @@ Each call's Agent is isolated, chosen automatically. When the Judge runs as
 root, it runs as its own unprivileged user, one of a small range of uids that
 no two concurrent calls share, with a fresh private HOME holding copies of
 the Agent's login files. When the Judge is not root, it keeps the Judge's uid
-and is confined by Landlock (Linux 5.13 or later): it may write only its own
-job directory (HOME, TMPDIR, the final message) and ``--workdir``, and may
-not read the launch spec, the credential store, the Judge's outputs, hidden
-tests or another call's job. Without root or Landlock the call fails (exit
-3), unless the Harness operator opted in to a same-user fallback. Either way
-it cannot write the Judge's outputs or read the launch spec, a timeout ends
-its whole process group, and whatever it left running is killed when the
-call ends. The Agent owns ``--workdir`` for the call: it may delete, replace
+and is confined by Landlock (Linux 5.13 or later), or else by its own user,
+mount, PID and IPC namespaces: it may write only its own job directory
+(HOME, TMPDIR, the final message) and ``--workdir``, and may not read the
+launch spec, the credential store, the Judge's outputs, hidden tests (nor
+other mounts of them) or another call's job. Without any of them the call
+fails (exit 3), unless the Harness operator opted in to a same-user
+fallback. Either way it cannot write the Judge's outputs or read the launch
+spec, gets no kernel keyrings and no netlink socket but NETLINK_ROUTE, a
+timeout ends its whole process group, and whatever it left running is killed
+when the call ends. The Agent owns ``--workdir`` for the call: it may delete, replace
 or add entries there, so the output and the log must lie outside it. For
 ``llm`` the isolated child is rsi-agent's own worker, which receives the
 credential on stdin and leaves only the answer for the caller.
@@ -620,10 +622,11 @@ def _read_private(path: str) -> bytes:
 
 
 def isolation_mode(spec: dict, libc) -> dict:
-    """``uid`` (a root Judge), ``landlock``, or the operator's ``same_user``.
+    """``uid`` (a root Judge), ``landlock``, ``userns``, or the operator's
+    ``same_user``.
 
-    Raises exit 3 when the Judge is neither root nor able to use Landlock
-    and the launch spec carries no operator fallback.
+    Raises exit 3 when the Judge is neither root nor able to use Landlock or
+    user namespaces and the launch spec carries no operator fallback.
     """
     problem = isolation.uid_mode_problem(spec["uid"], spec["slots"], spec["gid"])
     abi, reason = isolation.landlock_abi(libc)
@@ -634,37 +637,61 @@ def isolation_mode(spec: dict, libc) -> dict:
         spec.get("isolation_fallback", "none"),
         EXIT_UNAVAILABLE,
         "the Agent",
+        isolation.userns_problem,
     )
+
+
+def _hidden(spec: dict, state_root: str) -> list:
+    """What a confined call never reads: the Harness lists rsi-agent's
+    state, the Judge's outputs and hidden tests; each login file's place is
+    added. /tmp (staged evidence) and the trajectory stay readable."""
+    hidden = [str(item) for item in spec.get("hidden", ["/logs/verifier"])]
+    hidden += [state_root] + [
+        str(entry.get("source"))
+        for entry in spec.get("credentials", [])
+        if isinstance(entry, dict)
+    ]
+    return [os.path.realpath(path) for path in hidden]
 
 
 def call_ruleset(
     libc, abi: int, spec: dict, state_root: str, writable
 ) -> isolation.Ruleset:
-    """One call: read all but the hidden paths, write only its own directories."""
+    """One call: read all but the hidden paths and their other mounts, write
+    only its own directories."""
+    hidden = _hidden(spec, state_root)
+    writable = list(writable) + [str(item) for item in spec.get("writable", [])]
+    hidden += isolation.hidden_aliases(hidden, writable, EXIT_USAGE)
     ruleset = isolation.Ruleset(
         libc,
         abi,
         allow_missing_landlock_signal=spec.get("allow_missing_landlock_signal", False),
     )
     try:
-        # The Harness lists rsi-agent's state, each login file's place, the
-        # Judge's outputs and hidden tests; /tmp (staged evidence) and the
-        # trajectory stay readable.
-        hidden = [str(item) for item in spec.get("hidden", ["/logs/verifier"])]
-        hidden += [state_root] + [
-            str(entry.get("source"))
-            for entry in spec.get("credentials", [])
-            if isinstance(entry, dict)
-        ]
         for path in isolation.readable_paths(hidden):
             ruleset.allow(path, isolation.FS_READ)
         isolation.allow_devices(ruleset)
-        for path in list(writable) + [str(item) for item in spec.get("writable", [])]:
+        for path in writable:
             ruleset.allow(path, ruleset.handled)
     except BaseException:
         ruleset.close()
         raise
     return ruleset
+
+
+def _userns_plan(spec: dict, state_root: str, writable, cwd: str, program) -> dict:
+    """The box of a userns call (judge_isolation.box_argv): the hidden paths
+    and their other mounts covered, its own directories writable, the rest
+    read-only."""
+    hidden = _hidden(spec, state_root)
+    write = list(writable) + [str(item) for item in spec.get("writable", [])]
+    return {
+        "hide": hidden + isolation.hidden_aliases(hidden, write, EXIT_USAGE),
+        "write": write,
+        "cwd": cwd,
+        "shm": True,
+        "filter": program.hex(),
+    }
 
 
 # -- the call -------------------------------------------------------------------
@@ -794,6 +821,10 @@ def _isolated_call(
     mode = isolation_mode(spec, libc)
     isolated = mode["mode"] == "uid"
     confined = mode["mode"] == "landlock"
+    userns = mode["mode"] == "userns"
+    if not isolated:
+        # The child runs as this user: it may not read or trace this process.
+        libc.prctl(isolation.PR_SET_DUMPABLE, 0, 0, 0, 0)
     protected = [str(item) for item in spec.get("protected", []) if item]
     agent_uids = range(spec["uid"], spec["uid"] + spec["slots"])
     if mode["mode"] == "same_user":
@@ -869,11 +900,24 @@ def _isolated_call(
             PATH=os.environ.get("PATH") or DEFAULT_PATH,
             TERM="dumb",
         )
+        writable = [job] + ([work.path] if workdir is not None else [])
         if confined:
-            writable = [job] + ([work.path] if workdir is not None else [])
             ruleset = call_ruleset(
                 libc, mode["landlock_abi"], spec, state_root, writable
             )
+        program = isolation.seccomp_program(
+            no_network=False,
+            truncate_guard=False,
+            trace_guard=userns,
+            namespace_guard=userns,
+        )
+        seccomp = None
+        if userns:
+            argv = isolation.box_argv(
+                _userns_plan(spec, state_root, writable, work.path, program), argv
+            )
+        else:
+            seccomp = isolation.Seccomp(libc, program)
         timed_out = False
         # Python 3.8 has no parenthesized multi-item ``with``.
         streams = [
@@ -896,7 +940,7 @@ def _isolated_call(
                     pass_fds=(work.descriptor,),
                     start_new_session=True,
                     preexec_fn=isolation.preexec(  # noqa: PLW1509
-                        work.descriptor, owner, libc, ruleset, umask=0o077
+                        work.descriptor, owner, libc, ruleset, seccomp, umask=0o077
                     ),
                 )
             except (OSError, subprocess.SubprocessError) as error:

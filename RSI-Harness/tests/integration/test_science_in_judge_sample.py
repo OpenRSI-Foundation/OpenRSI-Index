@@ -2,8 +2,9 @@
 
 Opt-in (RSI_RUN_SCIENCE=1; the task's base image cached, or RSI_ALLOW_PULL=1).
 No real model, key or login: the Agent CLI is a fake that reaches a fake model
-server on the host at the Agent's base URL with the Agent's key; only the
-iptables half of the firewall is faked.
+server on the host at the Agent's base URL with the Agent's key, and the same
+server answers the Judge model's Responses API calls with the operator's key;
+only the iptables half of the firewall is faked.
 
 1. ``tests/test.sh`` runs in a container shaped like a public Judge: root,
    from the task image, a read-only root filesystem with a /tmp tmpfs, the
@@ -11,9 +12,10 @@ iptables half of the firewall is faked.
    real ``rsi-agent`` with its launch spec. The Judge is the public science
    Judge library (tests/science_judge.py). Each route runs on its own copy as
    its own unprivileged user, unable to open an internet socket; then the
-   audit and 26 rubric calls go through rsi-agent to the run's Agent, four at
-   a time, each as the Agent's own user. Twice: with a fake Codex CLI, and
-   with a fake Claude Code CLI.
+   audit goes through rsi-agent exec to the run's Agent, as the Agent's own
+   user, and the 26 rubric reviews through rsi-agent llm to the Judge model,
+   four at a time. Twice: with a fake Codex CLI, and with a fake Claude Code
+   CLI.
 2. A full ``ProductionRuntimeServices`` run of the sample (public /tests and
    Judge image, Judge model access): a scripted Agent reads /tests, previews
    the recompute in Work, alters Work outside its WORKDIR (including its
@@ -46,13 +48,17 @@ from rsi_harness.models import (
     AgentPlan,
     CompileOptions,
     ContainerRef,
+    JudgeLLMAuth,
+    JudgeLLMRequest,
     NetworkPolicy,
     RunRequest,
     RunStatus,
 )
 from rsi_harness.runtime.docker import DockerContainerRuntime
+from rsi_harness.runtime.judge_llm import resolve_judge_llm
 from rsi_harness.runtime.judge_model_access import build_launch_spec
 from rsi_harness.runtime.production import ProductionRuntimeServices
+from rsi_harness.task.compiler import HarborTaskCompiler
 from rsi_loop.harness.agent.codex import CodexAgent
 from rsi_loop.harness.config import RSILoopConfig
 from tests.fakes import FakeFirewallBackend
@@ -66,6 +72,7 @@ IMAGE = re.search(
 ).group(1)
 # Synthetic: accepted only by the fake model server below.
 API_KEY = "sk-synthetic-science-judge-key-7d1e"
+JUDGE_KEY = "sk-synthetic-science-judge-model-key-3f52"
 
 pytestmark = [
     pytest.mark.integration,
@@ -134,8 +141,9 @@ else:
 
 
 class FakeModel(BaseHTTPRequestHandler):
-    """Answers with the prompt's digests: a clear audit, and every rubric passes, except
-    those in ``first_round_failing`` while only one audit (the first
+    """Answers with the prompt's digests: a clear audit (the Agent CLI's
+    calls) and every rubric passes (the Judge model's Responses API calls),
+    except those in ``first_round_failing`` while only one audit (the first
     round's) has been answered."""
 
     seen: list[dict] = []
@@ -148,11 +156,21 @@ class FakeModel(BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
         cls = type(self)
         payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        llm = self.path.endswith("/v1/responses")
+        if llm:
+            payload = {
+                "kind": "llm",
+                "model": payload["model"],
+                "effort": payload["reasoning"]["effort"],
+                "prompt": payload["input"][0]["content"][0]["text"],
+                "schema": payload["text"]["format"]["schema"],
+            }
         with cls.lock:
             cls.running += 1
             cls.peak = max(cls.peak, cls.running)
             cls.seen.append(
                 {
+                    "kind": "cli",
                     "auth": self.headers.get("Authorization"),
                     "path": self.path,
                     **payload,
@@ -160,7 +178,8 @@ class FakeModel(BaseHTTPRequestHandler):
             )
         try:
             time.sleep(0.2)  # long enough for parallel calls to overlap
-            if self.headers.get("Authorization") != f"Bearer {API_KEY}":
+            key = JUDGE_KEY if llm else API_KEY
+            if self.headers.get("Authorization") != f"Bearer {key}":
                 self._reply(401, {"error": "bad key"})
                 return
             properties = payload["schema"]["properties"]
@@ -196,6 +215,17 @@ class FakeModel(BaseHTTPRequestHandler):
                         "next_step": "none",
                     }
                 ]
+            if llm:
+                text = json.dumps(answer)
+                output = {"type": "output_text", "text": text}
+                self._reply(
+                    200,
+                    {
+                        "status": "completed",
+                        "output": [{"type": "message", "content": [output]}],
+                    },
+                )
+                return
             self._reply(200, {"answer": answer})
         finally:
             with cls.lock:
@@ -307,6 +337,19 @@ def test_the_judge_procedure_recomputes_and_reviews_every_rubric(
     fake_bin.mkdir()
     (fake_bin / cli).write_text(FAKE_CLI)
     (fake_bin / cli).chmod(0o755)
+    # The task's Judge model, with an operator's API key at the fake server.
+    judge_llm = resolve_judge_llm(
+        HarborTaskCompiler().compile(SAMPLE, CompileOptions()),
+        JudgeLLMRequest(
+            auth=JudgeLLMAuth.API,
+            api_key_env="JUDGE_KEY",
+            base_url=fake_model.removesuffix("/v1"),
+        ),
+        RSILoopConfig(),
+        None,
+        pin=lambda _targets: (),
+        environ={"JUDGE_KEY": JUDGE_KEY},
+    )
     launch = build_launch_spec(
         rsi_loop_oneshot(
             RSILoopConfig(agent_api_key=API_KEY, agent_api_base_url=fake_model),
@@ -318,7 +361,8 @@ def test_the_judge_procedure_recomputes_and_reviews_every_rubric(
             ),
         ),
         None,
-        {API_KEY},
+        {API_KEY, *judge_llm.secret_values},
+        llm=judge_llm.spec,
     )
     mounts = [
         Mount(
@@ -392,6 +436,8 @@ def test_the_judge_procedure_recomputes_and_reviews_every_rubric(
             "RSI_AGENT_NAME": agent,
             "RSI_AGENT_MODEL": "model-test",
             "RSI_AGENT_REASONING_EFFORT": "high",
+            "RSI_JUDGE_MODEL": "gpt-6-astra",
+            "RSI_JUDGE_MODEL_EFFORT": "medium",
             # The task's [environment.env], as the Harness passes it.
             "OMP_NUM_THREADS": "1",
         },
@@ -429,32 +475,32 @@ def test_the_judge_procedure_recomputes_and_reviews_every_rubric(
     assert pressure["exit_code"] == 0, pressure
     assert pressure["execution_uid"] == 64002
     assert json.loads(pressure["stdout"])["rows"][0]["K"] == 0
-    # The audit, then 26 rubric calls, four at a time, all through rsi-agent
-    # to the Agent's CLI with the Agent's key at its base URL.
-    assert len(FakeModel.seen) == 27
-    assert {item["auth"] for item in FakeModel.seen} == {f"Bearer {API_KEY}"}
+    # The audit through rsi-agent exec to the Agent's CLI with the Agent's key
+    # at its base URL, then 26 rubric calls through rsi-agent llm to the Judge
+    # model with the operator's key, four at a time.
+    [audit_call] = [item for item in FakeModel.seen if item["kind"] == "cli"]
+    reviews = [item for item in FakeModel.seen if item["kind"] == "llm"]
+    assert len(reviews) == 26
+    assert audit_call["auth"] == f"Bearer {API_KEY}"
+    assert {item["auth"] for item in reviews} == {f"Bearer {JUDGE_KEY}"}
+    assert {(item["model"], item["effort"]) for item in reviews} == {
+        ("gpt-6-astra", "medium")
+    }
     assert FakeModel.peak == 4
-    # Concurrent calls never share the Agent's user: four at a time, four uids.
-    assert {item["checks"]["uid"] for item in FakeModel.seen} == set(
-        range(61000, 61004)
-    )
-    workdirs = set()
-    for item in FakeModel.seen:
-        checks = item["checks"]
-        assert checks["cli"] == cli
-        assert checks["home"].startswith("/run/rsi-agent/jobs/")
-        # No --workdir: each Agent works in rsi-agent's private scratch.
-        assert checks["cwd"].startswith("/run/rsi-agent/jobs/"), checks["cwd"]
-        workdirs.add(checks["cwd"])
-        # The Agent reads every evidence file it is given, changes none, and
-        # cannot read the Judge's own outputs.
-        assert checks["evidence"] and all(checks["evidence"].values()), checks
-        assert checks["evidence_writable"] == []
-        assert checks["verifier_denied"] is True
-        effort = checks["argv"][1] if cli == "claude" else " ".join(checks["argv"])
-        assert "high" in effort
-    assert len(workdirs) == 27
-    audit = FakeModel.seen[0]["prompt"]
+    checks = audit_call["checks"]
+    assert checks["cli"] == cli
+    assert checks["uid"] == 61000
+    assert checks["home"].startswith("/run/rsi-agent/jobs/")
+    # No --workdir: the Agent works in rsi-agent's private scratch.
+    assert checks["cwd"].startswith("/run/rsi-agent/jobs/"), checks["cwd"]
+    # The Agent reads every evidence file it is given, changes none, and
+    # cannot read the Judge's own outputs.
+    assert checks["evidence"] and all(checks["evidence"].values()), checks
+    assert checks["evidence_writable"] == []
+    assert checks["verifier_denied"] is True
+    effort = checks["argv"][1] if cli == "claude" else " ".join(checks["argv"])
+    assert "high" in effort
+    audit = audit_call["prompt"]
     assert "/logs/agent/agent_output.txt" in audit
     assert re.search(
         r"/tmp/science-evidence-[^/]+/evidence/candidate/theory\.md", audit
@@ -465,12 +511,17 @@ def test_the_judge_procedure_recomputes_and_reviews_every_rubric(
         "model-test",
         "high",
     )
+    assert (review["judge_model"], review["judge_model_effort"]) == (
+        "gpt-6-astra",
+        "medium",
+    )
     assert "Integrity audit: clear" in output
     assert output.rstrip().endswith("passed 26 of 26")
-    assert API_KEY not in output
-    for path in verifier.rglob("*"):
-        if path.is_file():
-            assert API_KEY not in path.read_text(errors="replace"), path
+    for key in (API_KEY, JUDGE_KEY):
+        assert key not in output
+        for path in verifier.rglob("*"):
+            if path.is_file():
+                assert key not in path.read_text(errors="replace"), path
 
 
 # The Agent reads the public tests, previews the recompute in Work, leaves a
@@ -507,6 +558,7 @@ rsi-submit
 def test_a_scripted_run_reviews_two_candidates_from_the_clean_image(
     tmp_path, fake_model, monkeypatch, request
 ):
+    monkeypatch.setenv("RSI_JUDGE_LLM_API_KEY", JUDGE_KEY)
     client = docker_or_skip(IMAGE)
     request.addfinalizer(client.close)
     task = tmp_path / "task"
@@ -565,6 +617,9 @@ def test_a_scripted_run_reviews_two_candidates_from_the_clean_image(
             agent_name="codex",
             model="gpt-test",
             options=CompileOptions(agent_name="codex", primary_reward="reward"),
+            judge_llm=JudgeLLMRequest(
+                auth=JudgeLLMAuth.API, base_url=fake_model.removesuffix("/v1")
+            ),
         )
     )
 
@@ -581,10 +636,11 @@ def test_a_scripted_run_reviews_two_candidates_from_the_clean_image(
     # Both Judges ran from the clean Work image: no marker, the clean codex.
     assert feedback.count('"agent_marker": false') == 2, feedback[-3000:]
     assert "CLEAN-FAKE-CLI" in feedback and "AGENT-CODEX" not in feedback
-    assert len(FakeModel.seen) == 54
-    assert {item["checks"]["uid"] for item in FakeModel.seen} == set(
-        range(61000, 61004)
-    )
+    audits = [item for item in FakeModel.seen if item["kind"] == "cli"]
+    assert len(audits) == 2
+    assert {item["checks"]["uid"] for item in audits} == {61000}
+    assert sum(item["kind"] == "llm" for item in FakeModel.seen) == 52
     for path in run_root.rglob("*"):
         if path.is_file() and os.access(path, os.R_OK):
-            assert API_KEY not in path.read_text(errors="replace"), path
+            for key in (API_KEY, JUDGE_KEY):
+                assert key not in path.read_text(errors="replace"), path

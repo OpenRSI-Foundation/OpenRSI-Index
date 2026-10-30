@@ -13,6 +13,8 @@ _APPTAINER_CONTROL_PREFIXES = (
     "APPTAINER",
     "SINGULARITY",
 )
+# Operator settings that add no bind and no container variable.
+OPERATOR_APPTAINER_NAMES = ("APPTAINER_TMPDIR", "APPTAINER_CACHEDIR")
 
 
 def isolated_apptainer_environment(
@@ -26,6 +28,7 @@ def isolated_apptainer_environment(
         name: value
         for name, value in source.items()
         if not name.startswith(_APPTAINER_CONTROL_PREFIXES)
+        or name in OPERATOR_APPTAINER_NAMES
     }
     for name, value in values.items():
         if not _ENVIRONMENT_NAME.fullmatch(name):
@@ -36,4 +39,4 @@ def isolated_apptainer_environment(
     return environment
 
 
-__all__ = ["isolated_apptainer_environment"]
+__all__ = ["OPERATOR_APPTAINER_NAMES", "isolated_apptainer_environment"]

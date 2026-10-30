@@ -32,7 +32,10 @@ from rsi_harness.runtime.redaction import redact_structure, redact_text
 from rsi_harness.runtime.rootfs_snapshot import rootfs_image_ref
 from rsi_harness.runtime.sandbox_contracts import (
     MAX_ENV_SERVICES,
+    REMOTE_BACKENDS,
+    EnvDaytonaHost,
     EnvE2BHost,
+    EnvModalHost,
     SandboxLease,
     SandboxOwner,
     SandboxReservation,
@@ -529,15 +532,27 @@ class ResourceLease(PersistedModel):
     # Set with an environment grant's reservation and never cleared: every
     # later recovery still sweeps the run's exact labels for late creates.
     sandbox_env_authority: bool = False
-    # Set when the run's envs are E2B sandboxes: where they are, and where
-    # recovery reads the API key (never the key itself).
+    # Set when the run's envs are a remote backend's sandboxes (one field per
+    # backend, sandbox_<backend>): where they are, and where recovery reads
+    # the credentials (never the credentials themselves).
     sandbox_e2b: EnvE2BHost | None = None
+    sandbox_modal: EnvModalHost | None = None
+    sandbox_daytona: EnvDaytonaHost | None = None
     recovery_required: bool = False
     error: str | None = None
     attempt: int = Field(default=1, strict=True, ge=1)
     # The run's logs directory (runs/<run_id>/<task_id>), for recovery.
     artifact_root: Path | None = None
     attempts: tuple[RunAttemptLease, ...] = ()
+
+    @property
+    def remote_sandboxes(self) -> tuple[str, Any] | None:
+        """The remote backend of the run's envs and its table, if any."""
+        for name in REMOTE_BACKENDS:
+            settings = getattr(self, f"sandbox_{name}")
+            if settings is not None:
+                return name, settings
+        return None
 
     @field_validator("run_id", "task_id")
     @classmethod
@@ -667,6 +682,8 @@ class RecoveryBackend(Protocol):
     def stop_container(self, container_id: str) -> None: ...
 
     def remove_container(self, container_id: str) -> None: ...
+
+    def collect_private_judge_logs(self, container_id: str, target: Path) -> None: ...
 
     def terminate_sandbox(self, child: SandboxLease) -> None: ...
 
@@ -893,13 +910,14 @@ class RecoveryManager:
         store: LeaseStore,
         backend: RecoveryBackend,
         managed_root: Path,
-        e2b_client: Callable[[EnvE2BHost], Any] | None = None,
+        remote_client: Callable[[Any], Any] | None = None,
     ) -> None:
         self._store = store
         self._backend = backend
         self._managed_root = Path(managed_root).resolve()
-        # [environments.host.e2b] -> a client of the run's E2B sandboxes.
-        self._e2b_client = e2b_client
+        # A backend's [environments.host.<backend>] -> a client of the run's
+        # sandboxes there (default: sandbox_remote.remote_client).
+        self._remote_client = remote_client
 
     def recover(self, run_id: str | None = None) -> tuple[str, ...]:
         run_ids = (run_id,) if run_id is not None else self._store.list_run_ids()
@@ -922,14 +940,14 @@ class RecoveryManager:
         """Close a cluster run whose scheduler job has ended, under the lock
         the caller holds, as ``salvage`` does a local one.
 
-        The job's end ended its Work and Judge processes; only its E2B
+        The job's end ended its Work and Judge processes; only its remote
         sandboxes outlive it. The attempt ends at Work's pause, else at the
         job's end (``ended_at``, if the scheduler recorded it), else at the
         Agent deadline.
         """
         lease = self._require_lease(run_id)
-        if lease.sandbox_e2b is not None:
-            lease = self._recover_e2b_envs(lease)
+        if lease.remote_sandboxes is not None:
+            lease = self._recover_remote_envs(lease)
         self._backend_call(
             lease,
             "interrupted Judge output move",
@@ -954,8 +972,8 @@ class RecoveryManager:
             lease, mark_interrupted=lease.status is None or lease.recovery_required
         )
 
-    def recover_e2b(self, run_id: str) -> bool:
-        """Kill only the run's E2B sandboxes (a cluster run, whose Work and
+    def recover_remote(self, run_id: str) -> bool:
+        """Kill only the run's remote sandboxes (a cluster run, whose Work and
         Judge were scheduler-job processes). False when it has none.
         A run whose Engine still holds its lease is refused, not awaited."""
         lock = self._store.lock(run_id, blocking=False)
@@ -967,9 +985,9 @@ class RecoveryManager:
             ) from None
         try:
             lease = self._store.read(run_id)
-            if lease is None or lease.sandbox_e2b is None:
+            if lease is None or lease.remote_sandboxes is None:
                 return False
-            self._recover_e2b_envs(lease)
+            self._recover_remote_envs(lease)
             return True
         finally:
             lock.__exit__(None, None, None)
@@ -1555,8 +1573,8 @@ class RecoveryManager:
             # Durable before any mutation, so the sweep outlives the records.
             lease = lease.model_copy(update={"sandbox_env_authority": True})
             self._store.write(lease)
-        if lease.sandbox_e2b is not None:
-            lease = self._recover_e2b_envs(lease)
+        if lease.remote_sandboxes is not None:
+            lease = self._recover_remote_envs(lease)
         errors: list[Exception] = []
         # From the durable journal, before containment journals any late ID.
         in_flight = {
@@ -1671,30 +1689,38 @@ class RecoveryManager:
             )
         return lease
 
-    def _recover_e2b_envs(self, lease: ResourceLease) -> ResourceLease:
-        """E2B envs: kill every sandbox carrying the run's metadata, running
-        or paused (a paused one never expires on E2B), prove none is left,
-        then journal each env removed. Templates stay: a shared cache."""
-        from rsi_harness.runtime.sandbox_e2b import e2b_client, kill_run_sandboxes
+    def _recover_remote_envs(self, lease: ResourceLease) -> ResourceLease:
+        """Remote envs: kill every sandbox carrying the run's metadata,
+        running or paused (a paused one may never expire), prove none is
+        left, then journal each env removed. Templates stay: a shared
+        cache."""
+        from rsi_harness.runtime.sandbox_remote import (
+            kill_run_sandboxes,
+            remote_client,
+        )
 
-        settings = lease.sandbox_e2b
-        assert settings is not None
+        found = lease.remote_sandboxes
+        assert found is not None
+        name, settings = found
         try:
-            client = (self._e2b_client or e2b_client)(settings)
+            if self._remote_client is not None:
+                client = self._remote_client(settings)
+            else:
+                client = remote_client(name, settings)
             try:
                 killed = kill_run_sandboxes(client, lease.run_id)
             finally:
                 client.close()
         except Exception as error:
             self._fail_closed(
-                lease, f"e2b sandbox cleanup failed: {error}", cause=error
+                lease, f"{name} sandbox cleanup failed: {error}", cause=error
             )
         if killed:
             LOGGER.warning(
-                "killed %d e2b sandboxes of run %s", len(killed), lease.run_id
+                "killed %d %s sandboxes of run %s", len(killed), name, lease.run_id
             )
         for env in lease.sandbox_envs:
-            if env.backend != "e2b" or env.state == "removed":
+            if env.backend != name or env.state == "removed":
                 continue
             removed = env.model_copy(
                 update={
@@ -2926,6 +2952,24 @@ class RecoveryManager:
         )
         if inspected is not None and bool(inspected.get("running", False)):
             self._fail_closed(lease, "Judge containment cannot be proven")
+        if inspected is not None and inspected.get("private_log_volume") is True:
+            round_id = inspected.get("labels", {}).get("rsi-harness.round-id", "")
+            if (
+                lease.artifact_root is None
+                or _SAFE_ID.fullmatch(round_id) is None
+                or lease.artifact_root.parts[-3:]
+                != ("runs", lease.run_id, lease.task_id)
+            ):
+                self._fail_closed(
+                    lease, "private Judge log recovery destination is unproven"
+                )
+            self._backend_call(
+                lease,
+                "private Judge log export",
+                lambda: self._backend.collect_private_judge_logs(
+                    judge_id, lease.artifact_root / "verifier" / round_id
+                ),
+            )
         self._backend_call(
             lease,
             "Judge removal",

@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+import pytest
+
 from rsi_harness.errors import RetryableSubmissionError
 from rsi_harness.integrations.submit_client import generate_submit_client
 from rsi_harness.models import ContainerRef, SubmissionReport, SubmissionStatus
@@ -369,3 +371,75 @@ def test_generated_client_prints_retryable_gpu_release_detail_without_workspace_
 
     assert result.returncode != 0
     assert "release all Work GPU processes before retrying: PID 42" in result.stdout
+
+
+@pytest.mark.parametrize("client", ["python", "curl"])
+def test_generated_client_submits_over_the_unix_socket_without_network(
+    tmp_path: Path, client: str
+) -> None:
+    from rsi_harness.cluster.bluevela.network import UnixTcpRelay
+
+    report = SubmissionReport(
+        round_id="ignored",
+        status=SubmissionStatus.COMPLETED,
+        rewards={"reward": 1.0},
+        score=1.0,
+        output="feedback\n",
+        exit_code=0,
+        duration_seconds=0.25,
+    )
+    evaluator = FakeEvaluator(report)
+    service = SubmissionService(
+        evaluator=evaluator,
+        artifact_writer=FakeArtifactWriter(),
+        clock=FakeClock(),
+    )
+    token = service.register(
+        run_id="client-run",
+        run_plan=make_run_plan(tmp_path / "plan"),
+        work_container=ContainerRef(container_id="work-client", role="work"),
+    )
+    server = EmbeddedJudgeServer(
+        service, bind_host="127.0.0.1", port=0, bridge_gateway="127.0.0.1"
+    )
+    endpoint = server.start()
+    # What a no-network Work reaches: the broker's submit relay.
+    relay = UnixTcpRelay(
+        tmp_path / "submit.sock",
+        target_host="127.0.0.1",
+        target_port=int(endpoint.url.rsplit(":", 1)[1].split("/")[0]),
+    )
+    relay.start()
+    script = tmp_path / "rsi-submit"
+    script.write_text(generate_submit_client())
+    script.chmod(0o755)
+    environment = {
+        **os.environ,
+        # Nothing listens there: only the socket can carry the request.
+        "RSI_JUDGE_URL": "http://127.0.0.1:9",
+        "RSI_TOKEN": token,
+        "RSI_SUBMIT_SOCKET": str(tmp_path / "submit.sock"),
+    }
+    if client == "curl":
+        bin_dir = tmp_path / "bin"
+        bin_dir.mkdir()
+        curl = shutil.which("curl")
+        assert curl is not None
+        bin_dir.joinpath("curl").symlink_to(curl)
+        environment["PATH"] = str(bin_dir)
+    try:
+        result = subprocess.run(
+            (script,),
+            env=environment,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    finally:
+        relay.stop()
+        server.stop()
+
+    assert result.returncode == 0, result.stderr
+    assert "round: agent-1\n" in result.stdout
+    assert evaluator.events == [("evaluate", "agent-1")]

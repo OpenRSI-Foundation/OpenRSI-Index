@@ -5,7 +5,7 @@
 | [`harbor-in-judge`](harbor-in-judge) | A Judge whose fixed procedure runs Harbor over a Terminal-Bench 2 subset, a Compose sidecar and a Dockerfile-built task, each environment through the sandbox broker |
 | [`vllm-in-judge`](vllm-in-judge) | Work leaves a model checkpoint; the Judge serves it with vLLM on its GPU and runs an LLM agent over Harbor tasks in brokered environments |
 | [`swebench-in-judge`](swebench-in-judge) | Three SWE-bench Verified tasks run offline through the sandbox broker |
-| [`science-ising3d`](science-ising3d) | A public Judge for open-ended science: from the clean task image, the Judge re-executes the candidate as unprivileged users, the Agent model audits the trajectory and reviews 26 rubrics in parallel; the reward is the number this candidate passes |
+| [`science-ising3d`](science-ising3d) | A public Judge for open-ended science: from the clean task image, the Judge re-executes the candidate isolated, the Agent model audits the trajectory and the Judge model reviews 26 rubrics in parallel; the reward is the number this candidate passes |
 | [`huggingface__transformers…test_serve…lv1`](huggingface__transformers.e2e8dbed.test_serve.4e7860c7.lv1) | GPU research task: implement `transformers` OpenAI-compatible model serving (2 GPUs) |
 | [`linkedin__liger-kernel…test_fused_neighborhood_attention…lv2`](linkedin__liger-kernel.c856fbab.test_fused_neighborhood_attention.78217be4.lv2) | GPU research task: implement `liger-kernel` fused neighborhood attention (2 GPUs) |
 | [`linkedin__liger-kernel…test_poly_norm…lv1`](linkedin__liger-kernel.c856fbab.test_poly_norm.7b0e3399.lv1) | GPU research task: implement `liger-kernel` polynomial normalization (2 GPUs) |
@@ -27,28 +27,32 @@ has the details. Its `task.toml` uses every public-Judge feature:
   Agent CLI, reaches the programs that judge it.
 - The Judge is the public science Judge library, `tests/science_judge.py`,
   copied unchanged from OpenRSI-X's `science-task-agent` skill, configured by
-  `tests/judge.py`. Running as root, it freezes the candidate and re-executes
-  its optional `probe.py` and `model.py` probes, each on its own copy as its
-  own unprivileged user, with rlimits, a minimal environment, a seccomp filter
-  that denies internet sockets, and a 60-second bound. Work can preview this
+  `tests/judge.py`. It freezes the candidate and re-executes its optional
+  `probe.py` and `model.py` probes, each on its own copy with rlimits, a
+  minimal environment, a seccomp filter that denies internet sockets, and a
+  60-second bound: as its own unprivileged user under a root Judge, with
+  Landlock or user namespaces under a cluster Judge. Work can preview this
   step with `python3 /tests/judge.py --recompute /workspace/candidate`.
 - `model_access = true`: the Judge audits the submission and the trajectory at
-  `/logs/agent` with the run's own Agent, then reviews each rubric in a
-  separate call, four at a time under one shared deadline. Each audit or
-  review is one `rsi-agent exec`, which runs the Agent (Codex, Claude Code, or
-  any Agent the Harness supports) with Work's credentials and settings as its
-  own unprivileged user. The Agent reads a read-only copy of the candidate and
-  the recompute record, and the trajectory at `/logs/agent`; it cannot write
-  the Judge's outputs. The Judge itself never calls a model and never sees a
-  credential.
+  `/logs/agent` with the run's own Agent, in one `rsi-agent exec`, which runs
+  the Agent (Codex, Claude Code, or any Agent the Harness supports) with
+  Work's credentials and settings, isolated from the Judge. The Agent reads a
+  read-only copy of the candidate and the recompute record, and the
+  trajectory; it cannot write the Judge's outputs.
+- `judge_model`: each rubric is then reviewed in a separate `rsi-agent llm`
+  call to the Judge model, four at a time under one shared deadline, with the
+  evidence in its prompt and no tools. The Judge itself never calls a model
+  and never sees a credential.
 - The reward is the number of rubrics this one candidate passes, written only
   after a clear audit and a complete, valid review; anything else is a Verifier
   error, not a score.
 
 Run it as root with the Agent's model and credential, for example
 `sudo -E "$(command -v rsi-harness)" run sample_tasks/science-ising3d --agent
-codex --model MODEL --reasoning-effort EFFORT`. The Judge uses the same Agent,
-model and effort. No operator policy is needed: nothing is brokered.
+codex --model MODEL --reasoning-effort EFFORT`. The audit uses the same Agent,
+model and effort; the reviews use the Judge model, with a Codex Agent's
+credential or `--judge-llm-auth`. No operator policy is needed: nothing is
+brokered.
 
 It replaces OpenRSI-X's RSI-Science layer. The separate science CLI, its
 supervisor epochs, workspace checkpoints, the host-side reviewer and the

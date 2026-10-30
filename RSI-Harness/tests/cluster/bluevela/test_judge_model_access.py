@@ -146,11 +146,6 @@ def _binds(argv: tuple[str, ...]) -> list[str]:
     return [argv[i + 1] for i, item in enumerate(argv) if item == "--bind"]
 
 
-def _envs(argv: tuple[str, ...]) -> dict[str, str]:
-    pairs = [argv[i + 1] for i, item in enumerate(argv) if item == "--env"]
-    return dict(pair.split("=", 1) for pair in pairs)
-
-
 class _Capture:
     """Stands in for _run: builds the real Apptainer argv and inspects the
     per-round files while they exist."""
@@ -158,6 +153,7 @@ class _Capture:
     def __init__(self, runtime: ApptainerAgentRuntime) -> None:
         self.runtime = runtime
         self.argv: tuple[str, ...] = ()
+        self.environment: dict[str, str] = {}
         self.command: tuple[str, ...] = ()
         self.options: dict = {}
         self.launch: dict | None = None
@@ -169,14 +165,20 @@ class _Capture:
         self.options = options
         self.argv = self.runtime._base_command(
             devices=options["devices"],
-            environment=options.get("environment"),
             extra_binds=options.get("extra_binds", ()),
             mount_workspace=options.get("mount_workspace", True),
             mount_agent_home=options.get("mount_agent_home", True),
-            containall=options.get("containall", True),
             network_mode=options["network_mode"],
             phase=options.get("phase", "work"),
             declared_network_mode=options.get("declared_network_mode"),
+            image_tmp=options.get("image_tmp", False),
+        )
+        self.environment = self.runtime._container_environment(
+            devices=options["devices"],
+            environment=options.get("environment"),
+            mount_agent_home=options.get("mount_agent_home", True),
+            declared=options.get("declared_network_mode") or options["network_mode"],
+            phase=options.get("phase", "work"),
         )
         for source, target, _ro in options.get("extra_binds", ()):
             if target == PurePosixPath("/run/rsi-agent"):
@@ -257,7 +259,7 @@ def test_a_model_access_judge_gets_rsi_agent_and_never_the_credentials(
     assert not any(str(runtime.work_tmp) in bind for bind in binds)
     assert not any("rsi-submit" in bind for bind in binds)
     # The procedure sees the Agent's name, never a credential.
-    environment = _envs(capture.argv)
+    environment = capture.environment
     assert environment["RSI_AGENT_NAME"] == "codex"
     assert environment["TASK_VALUE"] == "1"
     # Always explicit, so an ENV in the task's image never decides.
@@ -310,17 +312,15 @@ def test_site_egress_changes_only_the_network(tmp_path, monkeypatch, mount_polic
     binds = _binds(capture.argv)
     assert not any(bind.startswith(f"{extra}:") for bind in binds)
     assert not any("/rsi-cache/" in bind for bind in binds)
-    environment = _envs(capture.argv)
+    environment = capture.environment
     assert environment["HF_HOME"] == "/tmp/.cache/huggingface"
     assert environment["HF_DATASETS_CACHE"] == "/tmp/.cache/huggingface/datasets"
     # The same round, declared public, does get them: the guard is real.
     public = runtime._base_command(
         devices=(),
-        environment=None,
         extra_binds=(),
         mount_workspace=False,
         mount_agent_home=False,
-        containall=True,
         network_mode="public",
         phase="judge",
     )
@@ -413,7 +413,7 @@ def test_the_isolation_fallback_comes_only_from_the_operator(tmp_path, monkeypat
 
     _runtime_, capture, _ = _judge(tmp_path, monkeypatch, plan, None, profile=fallback)
 
-    assert _envs(capture.argv)["RSI_JUDGE_ISOLATION_FALLBACK"] == "same-user"
+    assert capture.environment["RSI_JUDGE_ISOLATION_FALLBACK"] == "same-user"
     # A profile cannot set it through an environment table either.
     with pytest.raises(ValueError, match="judge_isolation_fallback"):
         type(profile.apptainer).model_validate(
@@ -573,7 +573,7 @@ def test_signal_compatibility_is_explicit_in_judge_and_launch_spec(
     assert json.loads(access.launch)["allow_missing_landlock_signal"] is allow
 
     _, capture, _ = _judge(tmp_path, monkeypatch, plan, access, profile=profile)
-    assert _envs(capture.argv)["RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL"] == (
+    assert capture.environment["RSI_JUDGE_ALLOW_MISSING_LANDLOCK_SIGNAL"] == (
         "1" if allow else "0"
     )
     assert capture.launch["allow_missing_landlock_signal"] is allow

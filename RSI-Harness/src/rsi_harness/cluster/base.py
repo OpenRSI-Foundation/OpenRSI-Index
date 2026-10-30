@@ -32,7 +32,7 @@ class ClusterRunRequest(PersistedModel):
     # Where a judge_model task's credential comes from; never the credential.
     judge_llm: JudgeLLMRequest | None = None
     dry_run: bool = False
-    # Only an E2B env policy ([environments.host] backend = "e2b").
+    # Only an env policy with a remote [environments.host] backend.
     sandbox_policy: SandboxPolicy | None = None
 
 

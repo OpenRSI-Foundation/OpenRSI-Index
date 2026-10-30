@@ -15,8 +15,8 @@ unknown, or whose container drifted, is quarantined (every service killed,
 the env kept failed until destroyed); only a journal failure or a removal
 that cannot be proven fails the whole run closed.
 
-Quotas are charged per phase session and, for the cumulative ones, per run
-(``EnvRunLimits``). Live quotas (envs, containers, CPUs, memory, disk,
+Quotas are charged per phase session and, for the cumulative ones, per
+attempt (``EnvRunLimits``). Live quotas (envs, containers, CPUs, memory, disk,
 running execs and jobs) are refunded when their object ends; cumulative ones
 (operations, created envs, bytes) never are.
 
@@ -294,11 +294,13 @@ class EnvRuntime:
 
     ``pump`` builds the exec engine given the broker's settlement callback;
     ``transfer`` builds one archive transfer per session stage store;
-    ``builder`` (a sandbox_build.BuilderBackend) runs image builds, and
-    without it ``image_build`` is unsupported; ``ledger`` (a
+    ``builder`` (a sandbox_build.BuilderBackend) runs image builds, or
+    ``builds`` makes another backend's build service (BuildService's
+    surface) from the broker's SandboxEnvs; without either ``image_build``
+    is unsupported. ``ledger`` (a
     sandbox_ledger.PullLedger) records pulls for ``prune-images``.
     ``backend_name`` names where services run: the Docker composition
-    below, or ``sandbox_e2b.e2b_env_runtime``.
+    below, or ``sandbox_remote.remote_env_runtime``.
     """
 
     backend: Any
@@ -311,6 +313,7 @@ class EnvRuntime:
     # Host floor of the spool filesystem (stages); raises SandboxError quota.
     spool_admit: Callable[[str], None] | None = None
     builder: Any | None = None
+    builds: Callable[[Any], Any] | None = None
     ledger: Any | None = None
     backend_name: str = "docker"
 
@@ -493,13 +496,14 @@ class SandboxEnvs:
         self._run_usage: dict[str, int] = {}
         self._counter = itertools.count(1)
         self._closed = False
-        self.builds = (
-            None
-            if runtime.builder is None
-            else BuildService(
+        if runtime.builds is not None:
+            self.builds = runtime.builds(self)
+        elif runtime.builder is not None:
+            self.builds = BuildService(
                 self, runtime.builder, spool_root=self._spool_root, clock=self._clock
             )
-        )
+        else:
+            self.builds = None
         self.images = JobRunner(self, runtime.images, self.builds, runtime.ledger)
         self.pump = runtime.pump(self._exec_finished)
 
@@ -1856,7 +1860,10 @@ class SandboxEnvs:
                         dockerfile_inline=options["dockerfile_inline"],
                         max_bytes=build.max_context_mb * MIB,
                         syntax_frontends=build.syntax_frontends,
+                        symlinks=self.builds.symlinks,
+                        backend=self._runtime.backend_name,
                     )
+            self.builds.admit(staged, path, options, network)
             key = build_fingerprint(
                 staged.digest,
                 {
@@ -1913,7 +1920,7 @@ class SandboxEnvs:
         lease = SandboxImageLease(
             owner=session.credentials.owner,
             handle=handle,
-            kind="built",
+            kind=self.builds.lease_kind,
             tag=None,
         )
         try:
@@ -1966,10 +1973,11 @@ class SandboxEnvs:
         )
 
     def image_release(self, credential: str, image: object) -> dict:
-        """Pulled: the handle is unbound (the image stays, S9). Built: the
-        handle is unbound first, so no env can take it, then the image is
-        untagged and removed; an rmi conflict keeps it journaled as leaked
-        until the session ends."""
+        """Pulled (and a remote backend's built templates, journaled as pulled): the
+        handle is unbound (the image stays, S9). Built: the handle is
+        unbound first, so no env can take it, then the image is untagged
+        and removed; an rmi conflict keeps it journaled as leaked until the
+        session ends."""
         with self._lock:
             session = self._session(credential, mutation=True)
             record = self._owned_image(session, image, "image")
@@ -1978,7 +1986,7 @@ class SandboxEnvs:
                     "busy", "image", "a live env of this session uses it"
                 )
             self._charge(session, operations=1)
-            if record.kind == "pulled":
+            if record.lease.kind == "pulled":
                 self.images.unbind_pulled(record)
                 return {"ok": True}
             del self.images.images[record.handle]

@@ -26,7 +26,7 @@ import stat
 import tarfile
 import tempfile
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -1429,6 +1429,92 @@ class _Translator:
         )
 
 
+def _allowlist_ports(*ports: str) -> Callable[[Mapping], tuple[str, str] | None]:
+    """A firewall that matches a hostname only on ``ports`` and an IP or
+    CIDR on every port: any other port is refused. IPv6 (more than one
+    colon) is left to the broker."""
+
+    def refusal(spec: Mapping) -> tuple[str, str] | None:
+        for index, text in enumerate(spec.get("allowlist") or ()):
+            text = str(text).strip().lower()
+            if text.count(":") > 1:
+                continue
+            host, _, port = text.partition(":")
+            if port and (
+                re.fullmatch(r"[0-9./]+", host.rstrip(".")) is not None
+                or port not in ports
+            ):
+                return f"spec.allowlist.{index}", "an allowlist port is"
+        return None
+
+    return refusal
+
+
+def _daytona_allowlist(spec: Mapping) -> tuple[str, str] | None:
+    """Daytona's firewall holds hostnames (on 80 or 443) or IPs and CIDRs,
+    never both, and at most 10 IPs and CIDRs (an env spec's 64 entries stay
+    within its 100 hostnames)."""
+    found = _allowlist_ports("80", "443")(spec)
+    if found is not None:
+        return found
+    hosts, networks = set(), set()
+    for text in spec.get("allowlist") or ():
+        text = str(text).strip().lower()
+        if text.count(":") > 1:
+            continue
+        host = text.partition(":")[0].rstrip(".")
+        (networks if re.fullmatch(r"[0-9./]+", host) else hosts).add(host)
+    if hosts and networks:
+        return "spec.allowlist", "hostnames together with IPs or CIDRs are"
+    if len(networks) > 10:
+        return "spec.allowlist", "more than 10 IPs and CIDRs are"
+    return None
+
+
+# Remote backend -> the allowlist entries its firewall cannot hold. E2B
+# matches a hostname by the HTTP Host (port 80) or TLS SNI (443) the sandbox
+# sends and connects to that name; Modal by the TLS SNI (443) alone; Daytona
+# as E2B, in lists of hostnames or of IPs.
+_ALLOWLIST_REFUSALS = {
+    "e2b": _allowlist_ports("80", "443"),
+    "modal": _allowlist_ports("443"),
+    "daytona": _daytona_allowlist,
+}
+
+
+def remote_refusal(spec: Mapping, backend: str) -> tuple[str, str] | None:
+    """What one sandbox of a remote ``backend`` cannot express in an EnvSpec
+    (a JSON dict), as ``(field, what)``; the backend refuses it, never
+    ignores it."""
+    allowlist = _ALLOWLIST_REFUSALS.get(backend)
+    found = None if allowlist is None else allowlist(spec)
+    if found is not None:
+        return found
+    services = spec.get("services") or {}
+    if len(services) != 1:
+        return "spec.services", "more than one service (compose) is"
+    if spec.get("volumes"):
+        return "spec.volumes", "volumes are"
+    for name, service in services.items():
+        where = f"spec.services.{name}"
+        if ":" in (service.get("user") or ""):
+            return f"{where}.user", "an explicit primary group is"
+        for key in (
+            "mounts",
+            "tmpfs",
+            "read_only",
+            "cap_drop",
+            "group_add",
+            "hostname",
+            "extra_hosts",
+        ):
+            if service.get(key):
+                return f"{where}.{key}", f"{key} is"
+        if service.get("healthcheck") not in (None, "none"):
+            return f"{where}.healthcheck", "a healthcheck is"
+    return None
+
+
 def translate(
     project: Mapping,
     *,
@@ -1441,6 +1527,7 @@ def translate(
     profiles: Sequence[str] = (),
     drop_targets: Sequence[str] = (),
     allowlist: Sequence[str] = (),
+    backend: str | None = None,
 ) -> Translation:
     """Translate a loaded project (``load_project``) into one EnvSpec.
 
@@ -1452,7 +1539,8 @@ def translate(
     without limits get ``default_cpus`` and ``default_memory_mb`` (the
     broker requires finite limits). Mounts whose target is in
     ``drop_targets`` (log directories the caller downloads) are dropped with
-    a note.
+    a note. On a remote ``backend`` (any but docker), what one sandbox
+    cannot express (``remote_refusal``) is refused here, before any pull.
     """
     if network not in ("public", "none", "allowlist"):
         raise ComposeError("network: expected public, none or allowlist")
@@ -1474,6 +1562,12 @@ def translate(
     ).run()
     if network == "allowlist":
         translation.spec["allowlist"] = entries
+    remote = backend not in (None, "docker")
+    found = remote_refusal(translation.spec, backend) if remote else None
+    if found is not None:
+        raise ComposeError(
+            f"{found[0]}: {found[1]} unsupported on the {backend} backend"
+        )
     return translation
 
 
@@ -1675,6 +1769,7 @@ __all__ = [
     "parse_duration",
     "lifetime_refusal",
     "read_dotenv",
+    "remote_refusal",
     "start_build",
     "start_env",
     "translate",

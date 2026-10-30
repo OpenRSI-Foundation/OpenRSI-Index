@@ -12,6 +12,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from rsi_harness.cluster.base import ClusterRunRequest
 from rsi_harness.cluster.bluevela import runtime as runtime_module
 from rsi_harness.cluster.bluevela.adapter import BlueVelaClusterAdapter
 from rsi_harness.cluster.bluevela.engine import load_engine_payload
@@ -92,7 +93,7 @@ class ResumeScheduler(RecordingScheduler):
         return LSFJobResult(job_id=job_id, state="DONE", exit_code=0)
 
 
-def _interrupted_run(tmp_path: Path):
+def _interrupted_run(tmp_path: Path, request: ClusterRunRequest | None = None):
     """Attempt 1 recorded agent-1, then its job was killed while agent-2 was
     being judged: Work paused, the round's feedback partly written."""
     profile = _profile(tmp_path)
@@ -103,7 +104,7 @@ def _interrupted_run(tmp_path: Path):
         agent_version_resolver=lambda _name: "0.149.0",
         binary_version=lambda _path: "0.149.0",
     )
-    result = adapter.run(_request(tmp_path, dry_run=False))
+    result = adapter.run(request or _request(tmp_path, dry_run=False))
     run_dir = profile.storage.run_root / result.run_id
     payload = load_engine_payload(run_dir / "control" / "run.json")
     plan = payload.run_plan
