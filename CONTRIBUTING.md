@@ -75,7 +75,8 @@ The generated private repository is a self-contained workspace containing:
 
 - the generated Harbor task in its own directory;
 - the bundled read-only `RSI-Harness`;
-- the repository-local `harbor-task-validator` and `rsi-task-runner` skills.
+- the local `harbor-task-validator` / `rsi-task-runner` Skills and the
+  `cluster-harbor-task-validator` / `cluster-rsi-task-runner` Skills.
 
 The `$...` lines below are skill invocations for your coding agent, not shell
 commands.
@@ -95,7 +96,8 @@ Find this session's complete original trajectory and submit it, together with th
 Keep the local session history until it is uploaded. After the agent reports
 the private repository and upload
 commit SHA, clone that repository on a machine with the required GPU resources
-and follow its README:
+and follow its README. Choose the local pair for Docker, or the cluster pair
+for Slurm/LSF, including single-node allocations:
 
 1. Invoke the bundled validator skill to perform real environment validation:
 
@@ -103,12 +105,18 @@ and follow its README:
    $harbor-task-validator ./<task-name>
    ```
 
+   For Slurm/LSF, invoke `$cluster-harbor-task-validator` instead and provide
+   the task path and site profile.
+
 2. After validation passes, invoke the bundled runner skill to run, monitor,
    and recover the task through `RSI-Harness`:
 
    ```text
    $rsi-task-runner
    ```
+
+   For Slurm/LSF, invoke `$cluster-rsi-task-runner` instead with the validated
+   task and site profile.
 
 3. Upload the separate completed experiment trajectory to the private task
    repository.
