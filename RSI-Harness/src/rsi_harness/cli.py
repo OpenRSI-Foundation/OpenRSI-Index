@@ -187,6 +187,15 @@ class _RunConsole:
                 "Warning: the task declares no judge_model; the --judge-llm-* "
                 "options are ignored."
             )
+        elif (
+            name == "network_policy"
+            and isinstance(value, Mapping)
+            and value.get("backend") == "container-namespace"
+        ):
+            typer.echo(
+                "Network policy: enforced in each container's own namespace "
+                "(non-root controller)"
+            )
         elif name == "images_ready":
             typer.echo("Task images ready; preparing Work container...")
         elif name == "run_started" and isinstance(value, str):

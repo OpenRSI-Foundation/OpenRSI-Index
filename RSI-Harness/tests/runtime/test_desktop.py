@@ -344,8 +344,14 @@ def test_linux_image_label_cannot_enable_private_log_recovery(monkeypatch):
     assert (
         desktop.has_private_log_volume(client, client.containers.get("judge")) is False
     )
-    with pytest.raises(InfrastructureError, match="Desktop backend"):
+    with pytest.raises(InfrastructureError, match="writable Linux volume"):
         desktop.attest_private_log_volume(client, "judge")
+
+
+def test_linux_judge_with_the_logs_volume_takes_the_export_path(monkeypatch):
+    monkeypatch.setattr(desktop, "sys", SimpleNamespace(platform="linux"))
+    client = client_for([])
+    assert desktop.has_private_log_volume(client, client.containers.get("judge"))
 
 
 @pytest.mark.parametrize("uid,gid", [(0, 0), (1001, 1002)])

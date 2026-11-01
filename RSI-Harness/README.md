@@ -110,8 +110,9 @@ Linux Docker; Slurm/LSF uses the [cluster prerequisites](#run-multi-node-tasks-o
 - for GPU tasks, NVIDIA GPUs, the NVIDIA Container Toolkit, and a working
   `nvidia-smi` command
 - Python 3.12 or 3.13
-- permission to manage Docker and the host `DOCKER-USER` and `INPUT` iptables
-  chains (usually by running the command with `sudo -E`)
+- root (`sudo -E`), which lets the Harness manage the host `DOCKER-USER` and
+  `INPUT` iptables chains, or [no root](#run-without-root) with access to
+  the Docker daemon and Docker Engine 26 or later
 - enough Docker storage for the task image and temporary Judge snapshots
 - a supported local Harbor task directory
 
@@ -319,6 +320,37 @@ no GPU allocation or NVIDIA tools are required. Mixed CPU/GPU tasks need a GPU
 partition, and only GPU phases enable NVIDIA passthrough. Blue Vela still
 requires Work GPUs. Multi-node CPU Work is not supported.
 
+### Run without root
+
+On Linux, a user who can use the Docker daemon (for example through the
+`docker` group, which is root-equivalent) can run the same commands without
+`sudo -E`:
+
+```bash
+rsi-harness run /absolute/path/to/task --gpus 0,1
+```
+
+The Harness then leaves the host firewall alone. Each Work and Judge
+container joins the network namespace of a `pause` holder on its managed
+bridge. Before the container starts, a short-lived helper with only
+`CAP_NET_ADMIN`, in that namespace alone, installs the same policy there,
+and the namespace's complete filter tables are checked. Work and Judge never
+hold `CAP_NET_ADMIN`, and the rules disappear with the namespace. Files the
+Harness owns reach the containers as volume copies, not host binds, and the
+Judge's `/logs/verifier` comes back from a volume, so `--data-root`,
+`--logs-root` and `TMPDIR` may be on a root-squashed NFS home. A task with a
+public verifier still binds its `tests/` into Work, so that directory must be
+readable by the Docker daemon. The controller must run on the daemon's host
+(in its network namespace), not inside a container. A host firewall that drops
+incoming traffic by default (ufw, for example) must accept TCP from the Docker
+bridges to the bridge gateway, where Work submits; as root the Harness opens
+that path itself. Recover, clean up and resume a run as the user that started
+it, or as root.
+
+It needs Docker Engine 26 or later and pulls two pinned images
+(`registry.k8s.io/pause` and `registry.k8s.io/build-image/distroless-iptables`).
+Sandbox tasks still need root.
+
 ## Managed child sandboxes
 
 Code in Work or Judge can create bounded child containers without access to
@@ -366,12 +398,9 @@ sudo -E "$(command -v rsi-harness)" run /absolute/path/to/task --agent oracle \
 
 Omit `--gpus` for a CPU task and `--sandbox-policy` for a task without
 sandboxes. On the supported native macOS backend, omit `sudo -E` and follow
-the [Mac procedure](docs/macos-docker-desktop.md). For local Linux Docker, run
-it as root (`sudo -E`): the firewall needs it,
-and without root the command stops at the firewall probe. (A Harness that
-runs as non-root with a test firewall also cannot read a `reward.json` that
-`test.sh` wrote as root with mode `0600`, and reports a false
-`verifier_error`.) With `--max-submissions N`, pass `--timeout` of at least
+the [Mac procedure](docs/macos-docker-desktop.md). On local Linux Docker, run
+it as root (`sudo -E`) or [without root](#run-without-root). With
+`--max-submissions N`, pass `--timeout` of at least
 the solve time plus N times the verifier's `timeout_sec`: the Agent timeout
 is wall-clock and includes the Judge rounds, so a shorter one ends the oracle
 before its last submission. The sandbox samples

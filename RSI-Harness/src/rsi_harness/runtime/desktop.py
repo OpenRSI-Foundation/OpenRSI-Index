@@ -183,9 +183,12 @@ class DesktopHost:
 
 
 def attest_private_log_volume(client: Any, container_id: str) -> Any:
-    """Require the exact writable Linux volume before trusted initialization/export."""
-    if not is_desktop(client):
-        raise InfrastructureError("private Judge volumes require the Desktop backend")
+    """Require the exact writable Linux volume before trusted initialization/export.
+
+    The Harness writes the storage label on every Judge it creates (over any
+    image label), so it selects this path on any platform, including recovery
+    under another identity than the one that started the run.
+    """
     container = client.containers.get(container_id)
     container.reload()
     labels = container.attrs.get("Config", {}).get("Labels") or {}
@@ -211,14 +214,19 @@ def attest_private_log_volume(client: Any, container_id: str) -> Any:
 
 
 def has_private_log_volume(client: Any, container: Any) -> bool:
-    """A task image's label alone never selects the Desktop recovery path."""
-    if not is_desktop(client):
-        return False
+    """Only a Harness-labeled Judge with the exact volume takes the export path."""
     labels = container.attrs.get("Config", {}).get("Labels") or {}
     if (
         labels.get(PRIVATE_LOG_LABEL) != "volume"
         or labels.get("rsi-harness.role") != "judge"
     ):
+        return False
+    if not is_desktop(client) and not any(
+        mount.get("Destination") == LOG_TARGET and mount.get("Type") == "volume"
+        for mount in container.attrs.get("Mounts", [])
+    ):
+        # An older Linux Judge could inherit this label from its image; only
+        # the non-root controller gives a Linux Judge the logs volume.
         return False
     attest_private_log_volume(client, container.id)
     return True

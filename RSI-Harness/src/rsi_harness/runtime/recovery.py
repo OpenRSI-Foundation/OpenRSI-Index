@@ -17,7 +17,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import Field, field_validator, model_validator
 
-from rsi_harness.errors import InfrastructureError
+from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.models import (
     ManagedWorkdirVolume,
     PersistedModel,
@@ -777,6 +777,15 @@ class RecoveryBackend(Protocol):
     ) -> None: ...
 
 
+def _other_identity(path: Path) -> SetupError:
+    # Runs started with and without root keep their leases private to that
+    # identity (root via sudo, or the docker-group user).
+    return SetupError(
+        f"{path} belongs to another user: run this command as the user that "
+        "started the run, or as root"
+    )
+
+
 class LeaseStore:
     """Atomically persist leases and serialize per-run lifecycle operations."""
 
@@ -826,7 +835,10 @@ class LeaseStore:
         path = self.path_for(run_id)
         if not path.exists():
             return None
-        raw = json.loads(path.read_text())
+        try:
+            raw = json.loads(path.read_text())
+        except PermissionError as error:
+            raise _other_identity(path) from error
         if type(raw.get("schema_version")) is int and raw["schema_version"] == 4:
             if raw.get("sandboxes") or raw.get("sandbox_reservation") is not None:
                 raise ValueError("schema 4 cannot carry sandbox authority")
@@ -872,7 +884,10 @@ class LeaseStore:
         self._validate_run_id(run_id)
         durable_mkdir(self.root)
         lock_path = self.root / f"{run_id}.lock"
-        descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            descriptor = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        except PermissionError as error:
+            raise _other_identity(lock_path) from error
         operation = fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB)
         try:
             fcntl.flock(descriptor, operation)
@@ -3060,9 +3075,85 @@ class RecoveryManager:
             detail += f"; cleanup helper containment is unproven: {failures}"
         self._fail_closed(lease, detail, cause=delete_error)
 
+    def _recover_netns_resources(
+        self, lease: ResourceLease, role: Literal["judge", "work"]
+    ) -> None:
+        """Remove a non-root run's holders, helpers and carriers, then its volumes.
+
+        A holder carries its container's policy and keeps the role's network
+        in use; its dependent is already gone when this runs. A carried volume
+        can outlive its holder (a policy rollback removes the holder first),
+        so a recorded namespace rule also selects the volume sweep. A root run
+        has neither and is left untouched here.
+        """
+        netns_role = f"{role}-netns"
+        owned = lease.judge if role == "judge" else lease.work
+        containers = self._find_containers(lease, netns_role)
+        if not containers and not any(
+            rule_id is not None and rule_id.startswith("rsn-")
+            for rule_id in (owned.policy_rule_id, owned.planned_policy_rule_id)
+        ):
+            return
+        for container_id, state in containers:
+            if bool(state.get("running", False)):
+                self._backend_call(
+                    lease,
+                    f"{role} namespace container stop",
+                    lambda container_id=container_id: self._backend.stop_container(
+                        container_id
+                    ),
+                )
+            self._backend_call(
+                lease,
+                f"{role} namespace container removal",
+                lambda container_id=container_id: self._backend.remove_container(
+                    container_id
+                ),
+            )
+            if (
+                self._backend_call(
+                    lease,
+                    f"{role} namespace container post-removal inspection",
+                    lambda container_id=container_id: self._backend.inspect_container(
+                        container_id
+                    ),
+                )
+                is not None
+            ):
+                self._fail_closed(
+                    lease, f"{role} namespace container removal is unproven"
+                )
+        required = self._labels(lease, netns_role)
+        volumes = self._backend_call(
+            lease,
+            f"{role} carried volume listing",
+            lambda: self._backend.list_volumes(labels=required),
+        )
+        for name, state in volumes:
+            labels = state.get("labels") if isinstance(state, Mapping) else None
+            if not isinstance(labels, Mapping) or any(
+                labels.get(key) != value for key, value in required.items()
+            ):
+                continue
+            self._backend_call(
+                lease,
+                f"{role} carried volume removal",
+                lambda name=name: self._backend.remove_volume(name),
+            )
+            if (
+                self._backend_call(
+                    lease,
+                    f"{role} carried volume post-removal inspection",
+                    lambda name=name: self._backend.inspect_volume(name),
+                )
+                is not None
+            ):
+                self._fail_closed(lease, f"{role} carried volume removal is unproven")
+
     def _recover_policies(
         self, lease: ResourceLease, role: Literal["judge", "work"]
     ) -> ResourceLease:
+        self._recover_netns_resources(lease, role)
         owned = lease.judge if role == "judge" else lease.work
         rule_ids = tuple(
             dict.fromkeys(

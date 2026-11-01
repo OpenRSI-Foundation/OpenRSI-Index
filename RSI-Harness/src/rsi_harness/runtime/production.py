@@ -97,6 +97,12 @@ from rsi_harness.runtime.local_auth import (
     AgentAuthMaterial,
     resolve_agent_auth,
 )
+from rsi_harness.runtime.netns_firewall import (
+    ContainerNetnsFirewall,
+    RecoveryFirewall,
+    container_netns_firewall_selected,
+    require_container_netns_support,
+)
 from rsi_harness.runtime.network import (
     DockerIptablesFirewallBackend,
     FirewallRuleNotFound,
@@ -485,6 +491,29 @@ def firewall_commands_running(
 # Long enough for the daemon to finish a create a killed broker already sent;
 # anything later still carries the run's labels for the next sweep.
 ENV_CREATE_SETTLE_SEC = 5.0
+
+
+def run_firewall(client: Any, definition: Any) -> Any:
+    """The host firewall as root; each container's own namespace otherwise."""
+    if not container_netns_firewall_selected():
+        return DockerIptablesFirewallBackend(client)
+    if definition.sandbox is not None:
+        raise SetupError(
+            "sandbox tasks need the host firewall: run rsi-harness as root (sudo -E)"
+        )
+    require_container_netns_support(client)
+    firewall = ContainerNetnsFirewall(client)
+    # Before any run state: the controller shares the daemon host's
+    # namespace, and the host's own addresses are known.
+    firewall.host_destinations()
+    return firewall
+
+
+def recovery_firewall(client: Any) -> RecoveryFirewall:
+    """Recovery may meet rules of either backend, whoever runs it."""
+    return RecoveryFirewall(
+        DockerIptablesFirewallBackend(client), ContainerNetnsFirewall(client)
+    )
 
 
 class ProductionRecoveryBackend:
@@ -1160,6 +1189,7 @@ class _ProductionRunComposition:
         images = DockerImageBuilder(
             self.client,
             rsi_loop_config=self.rsi_loop_config,
+            stream_copies=bool(getattr(self.firewall, "container_netns", False)),
         ).prepare(definition, agent=selected)
         if is_desktop(self.client):
             validate_desktop_images(images)
@@ -2273,7 +2303,11 @@ class ProductionRuntimeServices:
         if is_desktop(client):
             validate_desktop_task(definition, judge_llm)
         snapshot = self.snapshot or OverlaySnapshotBackend(self.data_root)
-        firewall = self.firewall or DockerIptablesFirewallBackend(client)
+        firewall = self.firewall or run_firewall(client, definition)
+        if self.event_callback is not None and getattr(
+            firewall, "container_netns", False
+        ):
+            self.event_callback("network_policy", {"backend": "container-namespace"})
         ports = _ProductionRunComposition(
             client=client,
             data_root=self.data_root,
@@ -2323,7 +2357,7 @@ class ProductionRuntimeServices:
         client = self._client()
         validate_local_daemon(client)
         snapshot = self.snapshot or OverlaySnapshotBackend(self.data_root)
-        firewall = self.firewall or DockerIptablesFirewallBackend(client)
+        firewall = self.firewall or recovery_firewall(client)
         return RecoveryManager(
             store=LeaseStore(self.data_root / "leases"),
             backend=ProductionRecoveryBackend(client, snapshot, firewall),

@@ -1073,6 +1073,11 @@ class JudgeRunner:
                 )
                 try:
                     self._artifact_writer.record_submission(candidate)
+                    # A non-root controller's Work reads feedback from a
+                    # carried copy: publish it before Work runs again.
+                    refresh = getattr(self._work_runtime, "refresh_work_feedback", None)
+                    if refresh is not None:
+                        refresh(request.work_container)
                 except BaseException as error:
                     artifact_error = error
                     self.submission_closed = True

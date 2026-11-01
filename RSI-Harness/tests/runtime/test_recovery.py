@@ -1781,6 +1781,7 @@ def test_recovery_distrusts_stale_ids_and_orders_containment_before_unpause(
         ("list_containers", "judge"),
         ("stop", "judge-real"),
         ("remove", "judge-real"),
+        ("list_containers", "judge-netns"),
         ("inspect_policy", "policy-judge-real"),
         ("remove_policy", "policy-judge-real"),
         ("inspect_policy", "policy-judge-real"),
@@ -1798,6 +1799,7 @@ def test_recovery_distrusts_stale_ids_and_orders_containment_before_unpause(
         ("stop", "work-real"),
         ("commit", "work-real"),
         ("remove", "work-real"),
+        ("list_containers", "work-netns"),
         ("inspect_policy", "policy-work-real"),
         ("remove_policy", "policy-work-real"),
         ("inspect_policy", "policy-work-real"),
@@ -3486,3 +3488,75 @@ def test_a_prior_image_with_other_labels_fails_closed(tmp_path) -> None:
         manager.recover("run-1")
 
     assert RETAINED_IMAGE_ID in backend.images
+
+
+def netns_labels(role: str) -> dict[str, str]:
+    return {
+        "rsi-harness.run-id": "run-1",
+        "rsi-harness.task-id": "task-1",
+        "rsi-harness.role": role,
+    }
+
+
+def test_recovery_removes_namespace_containers_before_their_carried_volumes(
+    tmp_path,
+) -> None:
+    store = LeaseStore(tmp_path / "leases")
+    store.write(lease(tmp_path))
+    backend = RecoveryBackend()
+    # A holder and a carrier left by a killed non-root controller; the
+    # carrier still references the Judge's carried volume.
+    backend.containers["judge-holder"] = {
+        "labels": netns_labels("judge-netns"),
+        "running": True,
+        "paused": False,
+    }
+    backend.containers["judge-carrier"] = {
+        "labels": netns_labels("judge-netns"),
+        "running": False,
+        "paused": False,
+    }
+    backend.volumes["judge-carried"] = {"labels": netns_labels("judge-netns")}
+
+    RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    ).recover("run-1")
+
+    names = [event for event in backend.events if event[1].startswith("judge-")]
+    assert names.index(("remove", "judge-carrier")) < names.index(
+        ("remove_volume", "judge-carried")
+    )
+    assert names.index(("remove", "judge-holder")) < names.index(
+        ("remove_volume", "judge-carried")
+    )
+    assert names.index(("remove", "judge-real")) < names.index(
+        ("remove", "judge-holder")
+    )
+    assert "judge-carried" not in backend.volumes
+    assert not any(key.startswith("judge-") for key in backend.containers)
+
+
+def test_recovery_removes_a_carried_volume_that_outlived_its_holder(tmp_path) -> None:
+    current = lease(tmp_path)
+    current = current.model_copy(
+        update={
+            "work": current.work.model_copy(
+                update={
+                    "planned_policy_rule_id": "rsn-run-1-work-0123456789ab",
+                    "policy_rule_id": "rsn-run-1-work-0123456789ab",
+                }
+            )
+        }
+    )
+    store = LeaseStore(tmp_path / "leases")
+    store.write(current)
+    backend = RecoveryBackend()
+    backend.policies = {"policy-judge-real"}
+    backend.volumes["work-carried"] = {"labels": netns_labels("work-netns")}
+
+    RecoveryManager(
+        store=store, backend=backend, managed_root=tmp_path / "runs"
+    ).recover("run-1")
+
+    assert ("remove_volume", "work-carried") in backend.events
+    assert backend.volumes == {}
