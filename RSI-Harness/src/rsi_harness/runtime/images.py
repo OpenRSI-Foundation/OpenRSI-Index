@@ -294,9 +294,13 @@ class DockerImageBuilder:
         rsi_loop_version: str = DEFAULT_RSI_LOOP_VERSION,
         bootstrap_version: str = DEFAULT_BOOTSTRAP_VERSION,
         rsi_loop_config: RSILoopConfig | None = None,
+        stream_copies: bool = False,
     ) -> None:
         self._client = client
         self._run_id = run_id
+        # Non-root controller: no staging bind, which a root-squashed TMPDIR
+        # would put out of the Docker daemon's reach.
+        self._stream_copies = stream_copies
         self._rsi_loop_version = rsi_loop_version
         self._bootstrap_version = bootstrap_version
         self._rsi_loop_config = rsi_loop_config or RSILoopConfig()
@@ -786,7 +790,6 @@ class DockerImageBuilder:
         try:
             with tempfile.TemporaryDirectory(prefix="rsi-hook-preflight-") as raw_root:
                 root = Path(raw_root)
-                staging = root / "staging"
                 runtime = DockerContainerRuntime(
                     self._client,
                     run_id=self._run_id,
@@ -794,7 +797,7 @@ class DockerImageBuilder:
                     role="work",
                     task_source_dir=task.source_dir,
                     allowed_mount_roots=(root,),
-                    staging_dir=staging,
+                    staging_dir=None if self._stream_copies else root / "staging",
                 )
                 container = runtime.create(
                     ContainerSpec(

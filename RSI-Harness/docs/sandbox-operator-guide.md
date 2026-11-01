@@ -937,9 +937,9 @@ Both scripts print what they would do with `--dry-run`, as any user, and
 act only on the runs they start. Their scratch directory is always new and
 root's own: `mktemp -d` under `/var/tmp` by default, and a `--scratch DIR`
 must not exist yet. A `--only` name that is no check or scenario is refused,
-and a scenario that yields no verdict is a FAIL row. There is no non-root
-production mode: the firewall probe (`iptables --wait -S DOCKER-USER`) needs
-root, and the fake firewall exists only in tests.
+and a scenario that yields no verdict is a FAIL row. Sandbox tasks have no
+non-root mode: brokered bridges need the host firewall (`iptables --wait -S
+DOCKER-USER`), and the fake firewall exists only in tests.
 
 ### Pulled images
 

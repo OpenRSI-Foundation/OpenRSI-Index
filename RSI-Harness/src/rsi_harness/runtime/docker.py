@@ -9,6 +9,7 @@ import shutil
 import socket
 import stat
 import tarfile
+import tempfile
 import threading
 import time
 import uuid
@@ -74,6 +75,12 @@ from rsi_harness.runtime.local_auth import (
 from rsi_harness.runtime.mount_topology import (
     SANDBOX_MOUNT_TARGET,
     validate_split_workdir_target,
+)
+from rsi_harness.runtime.netns_firewall import (
+    HOLDER_IMAGE,
+    NETNS_LABEL,
+    create_holder,
+    netns_role,
 )
 from rsi_harness.runtime.network import (
     NetworkPolicyEnforcer,
@@ -377,6 +384,31 @@ def _receive_exactly(
     return bytes(data)
 
 
+def _add_carried(archive: tarfile.TarFile, source: Path, name: str) -> None:
+    """Add an Engine-owned file or tree as ``name``, root-owned, modes kept."""
+
+    def add(path: Path, arcname: str) -> None:
+        metadata = path.lstat()
+        if not (stat.S_ISREG(metadata.st_mode) or stat.S_ISDIR(metadata.st_mode)):
+            raise SetupError(f"carried mount source is not a plain file tree: {path}")
+        info = archive.gettarinfo(str(path), arcname=arcname)
+        info.uid = info.gid = 0
+        info.uname = info.gname = ""
+        if info.isfile():
+            with path.open("rb") as content:
+                archive.addfile(info, content)
+        else:
+            archive.addfile(info)
+
+    add(source, name)
+    if source.is_dir() and not source.is_symlink():
+        for root, directories, files in os.walk(source):
+            directories.sort()
+            for entry in (*sorted(directories), *sorted(files)):
+                path = Path(root) / entry
+                add(path, f"{name}/{path.relative_to(source).as_posix()}")
+
+
 class DockerContainerRuntime:
     """Create and operate labeled containers without Docker escape hatches."""
 
@@ -485,6 +517,12 @@ class DockerContainerRuntime:
         self._container_networks: dict[str, str] = {}
         self._private_log_targets: dict[str, Path] = {}
         self._policy_leases: dict[str, NetworkPolicyLease] = {}
+        self._netns_holders: dict[str, str] = {}
+        # Non-root controller: a container's carried volume and, per target,
+        # the Engine-owned source and its path inside that volume.
+        self._carriers: dict[
+            str, tuple[str, dict[PurePosixPath, tuple[Path, str]]]
+        ] = {}
         # Tests staging root for a read-only-rootfs container: its writable
         # /logs/verifier bind, or None when it has none.
         self._test_archive_staging_roots: dict[str, PurePosixPath | None] = {}
@@ -524,13 +562,18 @@ class DockerContainerRuntime:
         for volume_mount in spec.volume_mounts:
             validate_split_workdir_target(volume_mount.target)
         mounts = list(spec.mounts)
-        private_logs = self._role == "judge" and is_desktop(self._client)
+        holder_mode = self._network is not None and self._holder_mode()
+        # Without host root, a Judge's root-written logs stay on a volume the
+        # controller exports, never on a host bind it might not read.
+        private_logs = self._role == "judge" and (
+            is_desktop(self._client) or holder_mode
+        )
         log_mounts = [m for m in mounts if str(m.target) == LOG_TARGET]
         if private_logs and (len(log_mounts) != 1 or log_mounts[0].read_only):
             raise SetupError(
-                "Docker Desktop Judge needs one writable verifier logs destination"
+                "a private-log Judge needs one writable verifier logs destination"
             )
-        if self._staging_dir is not None:
+        if self._staging_dir is not None and not holder_mode:
             self._staging_dir.mkdir(parents=True, exist_ok=True)
             mounts.append(
                 ContainerMount(
@@ -539,7 +582,20 @@ class DockerContainerRuntime:
                     read_only=True,
                 )
             )
-        typed_mounts = [self._mount(mount, workdir=spec.workdir) for mount in mounts]
+        typed_mounts: list[Mount] = []
+        carried: dict[PurePosixPath, tuple[Path, str]] = {}
+        for mount in mounts:
+            typed = self._mount(mount, workdir=spec.workdir)
+            if holder_mode and self._carried(typed):
+                # A root-squashed or private host path may be out of the
+                # daemon's reach: the container reads a volume copy instead.
+                subpath = f"m{len(carried)}"
+                carried[mount.target] = (Path(typed["Source"]), subpath)
+                typed = Mount(
+                    target=typed["Target"], source=None, type="volume", read_only=True
+                )
+                typed["VolumeOptions"] = {"Subpath": subpath}
+            typed_mounts.append(typed)
         if private_logs:
             typed_mounts = [m for m in typed_mounts if m["Target"] != LOG_TARGET]
             # Docker owns the anonymous volume. It survives a container stop,
@@ -606,7 +662,38 @@ class DockerContainerRuntime:
             if planned_name != self.planned_container_name(planned_name):
                 raise SetupError("planned container name is not canonical")
             kwargs["name"] = planned_name
-        if self._network is not None:
+        holder = None
+        carrier_volume: str | None = None
+        if self._network is not None and holder_mode:
+            # The holder owns the namespace, its bridge endpoint and resolver
+            # settings; the policy is installed there before this container
+            # can start (Docker refuses to start it while the holder is not).
+            holder = create_holder(
+                self._client,
+                name=None if planned_name is None else f"{planned_name}-netns",
+                labels={
+                    **self.recovery_labels,
+                    "rsi-harness.role": netns_role(self._role),
+                    NETNS_LABEL: "holder",
+                },
+                network=self._network.name,
+                extra_hosts=kwargs.pop("extra_hosts", ()),
+                dns=kwargs.pop("dns", ()),
+            )
+            kwargs["network_mode"] = f"container:{holder.id}"
+            if carried:
+                try:
+                    carrier_volume = self._create_carrier_volume(
+                        planned_name, tuple(carried.values())
+                    )
+                except BaseException:
+                    self._remove_holder(holder.id)
+                    raise
+                for typed in typed_mounts:
+                    if typed["Type"] == "volume" and typed.get("Source") is None:
+                        if "Subpath" in typed.get("VolumeOptions", {}):
+                            typed["Source"] = carrier_volume
+        elif self._network is not None:
             kwargs["network"] = self._network.name
         else:
             kwargs["network_mode"] = "none"
@@ -615,10 +702,18 @@ class DockerContainerRuntime:
                 spec.image, list(spec.command), **kwargs
             )
         except APIError as error:
+            if holder is not None:
+                if carrier_volume is not None:
+                    self._remove_carrier_volume(carrier_volume)
+                self._remove_holder(holder.id)
             raise SetupError(
                 f"failed to create {self._role.title()} container: {error}"
             ) from error
         ref = ContainerRef(container_id=container.id, role=self._role)
+        if holder is not None:
+            self._netns_holders[ref.container_id] = holder.id
+            if carrier_volume is not None:
+                self._carriers[ref.container_id] = (carrier_volume, carried)
         if private_logs:
             self._private_log_targets[ref.container_id] = log_mounts[0].source
         if spec.read_only_rootfs:
@@ -708,12 +803,23 @@ class DockerContainerRuntime:
                 if isinstance(candidate, Mapping)
                 and candidate.get("Destination") == str(WORK_FEEDBACK_ROOT)
             ]
-            exact = (
-                len(at_target) == 1
-                and at_target[0].get("Type") == "bind"
-                and at_target[0].get("Source") == str(self._work_feedback_dir)
-                and at_target[0].get("RW") is False
-            )
+            carrier = self._carriers.get(container.container_id)
+            if carrier is not None and WORK_FEEDBACK_ROOT in carrier[1]:
+                # Non-root controller: the read-only carried copy, refreshed
+                # after every round (refresh_work_feedback).
+                exact = (
+                    len(at_target) == 1
+                    and at_target[0].get("Type") == "volume"
+                    and at_target[0].get("Name") == carrier[0]
+                    and at_target[0].get("RW") is False
+                )
+            else:
+                exact = (
+                    len(at_target) == 1
+                    and at_target[0].get("Type") == "bind"
+                    and at_target[0].get("Source") == str(self._work_feedback_dir)
+                    and at_target[0].get("RW") is False
+                )
         except Exception as error:
             raise InfrastructureError(
                 "recovery_required: Work feedback mount attestation is "
@@ -1017,11 +1123,123 @@ class DockerContainerRuntime:
             self._container(container).remove(force=True, v=True)
             self._private_log_targets.pop(container.container_id, None)
         except NotFound:
-            return
+            pass
         except APIError as error:
             raise InfrastructureError(
                 f"failed to remove {self._role.title()} container "
                 f"{container.container_id}: {error}"
+            ) from error
+        # The holder goes last: recovery finds a carried volume through it.
+        carrier = self._carriers.pop(container.container_id, None)
+        if carrier is not None:
+            self._remove_carrier_volume(carrier[0])
+        holder_id = self._netns_holders.pop(container.container_id, None)
+        if holder_id is not None:
+            self._remove_holder(holder_id)
+
+    def _carried(self, typed: Mount) -> bool:
+        source = Path(typed["Source"])
+        return (
+            bool(typed.get("ReadOnly"))
+            and typed["Target"] not in (LOG_TARGET, str(SANDBOX_MOUNT_TARGET))
+            and any(
+                source == root or root in source.parents
+                for root in self._allowed_mount_roots
+            )
+        )
+
+    def _netns_labels(self, kind: str) -> dict[str, str]:
+        return {
+            **self.recovery_labels,
+            "rsi-harness.role": netns_role(self._role),
+            NETNS_LABEL: kind,
+        }
+
+    def _create_carrier_volume(
+        self, planned_name: str | None, entries: Sequence[tuple[Path, str]]
+    ) -> str:
+        name = (
+            f"{planned_name}-carried"
+            if planned_name is not None
+            else f"rsi-carried-{uuid.uuid4().hex}"
+        )
+        try:
+            volume = self._client.volumes.create(
+                name=name, driver="local", labels=self._netns_labels("carrier")
+            )
+        except APIError as error:
+            raise SetupError(f"failed to create carried volume: {error}") from error
+        try:
+            self._fill_carrier_volume(volume.name, entries)
+        except BaseException:
+            self._remove_carrier_volume(volume.name)
+            raise
+        return volume.name
+
+    def _fill_carrier_volume(
+        self, volume_name: str, entries: Sequence[tuple[Path, str]]
+    ) -> None:
+        """Copy Engine-owned files into a volume through a never-started carrier."""
+        with tempfile.TemporaryFile() as archive_file:
+            with tarfile.open(fileobj=archive_file, mode="w") as archive:
+                for source, subpath in entries:
+                    _add_carried(archive, source, subpath)
+            archive_file.seek(0)
+            try:
+                carrier = self._client.containers.create(
+                    HOLDER_IMAGE,
+                    None,
+                    network_mode="none",
+                    mounts=[
+                        Mount(target="/carrier", source=volume_name, type="volume")
+                    ],
+                    labels=self._netns_labels("carrier"),
+                )
+            except APIError as error:
+                raise SetupError(f"failed to create volume carrier: {error}") from error
+            try:
+                if not carrier.put_archive("/carrier", archive_file):
+                    raise InfrastructureError("carried volume copy was refused")
+            except APIError as error:
+                raise InfrastructureError(
+                    f"carried volume copy failed: {error}"
+                ) from error
+            finally:
+                try:
+                    carrier.remove(force=True)
+                except APIError:
+                    pass  # labeled: recovery removes it before the volume
+
+    def _remove_carrier_volume(self, name: str) -> None:
+        try:
+            self._client.volumes.get(name).remove(force=False)
+        except NotFound:
+            return
+        except APIError as error:
+            raise InfrastructureError(
+                f"recovery_required: failed to remove carried volume {name}: {error}"
+            ) from error
+
+    def refresh_work_feedback(self, container: ContainerRef) -> None:
+        """Copy the feedback directory into Work's carried volume, if it has one."""
+        carrier = self._carriers.get(container.container_id)
+        if carrier is None or WORK_FEEDBACK_ROOT not in carrier[1]:
+            return
+        self._fill_carrier_volume(carrier[0], (carrier[1][WORK_FEEDBACK_ROOT],))
+
+    def _holder_mode(self) -> bool:
+        enforcer = self._network_policy_enforcer
+        return enforcer is not None and enforcer.container_netns
+
+    def _remove_holder(self, holder_id: str) -> None:
+        try:
+            self._client.containers.get(holder_id).remove(force=True)
+        except NotFound:
+            return
+        except APIError as error:
+            raise InfrastructureError(
+                f"recovery_required: failed to remove {self._role.title()} "
+                f"network namespace holder {holder_id}: {error}"
             ) from error
 
     def logs(self, container: ContainerRef, *, tail: int = 1000) -> DockerOutput:
@@ -1359,13 +1577,14 @@ class DockerContainerRuntime:
         source: Path,
         target: PurePosixPath,
     ) -> None:
-        if self._staging_dir is None:
-            raise SetupError("copy_to requires an Engine-owned staging directory")
         if not target.is_absolute():
             raise SetupError("container copy destination must be absolute")
         if ".." in target.parts:
             raise SetupError("container copy destination contains lexical traversal")
         source_path = Path(source).resolve()
+        if self._staging_dir is None or self._holder_mode():
+            self._stream_copy(container, source_path, target)
+            return
         self._staging_dir.mkdir(parents=True, exist_ok=True)
         staged_name = f"{uuid.uuid4().hex}-{source_path.name}"
         staged = self._staging_dir / staged_name
@@ -1397,6 +1616,35 @@ class DockerContainerRuntime:
                 )
         finally:
             staged.unlink(missing_ok=True)
+
+    def _stream_copy(
+        self, container: ContainerRef, source: Path, target: PurePosixPath
+    ) -> None:
+        """Write one Engine-owned file into the container over exec stdin."""
+        command = (
+            "/bin/sh",
+            "-c",
+            'umask 022; /usr/bin/install -d -m 0755 "$2" && '
+            'staged="$(/bin/mktemp "$2/.rsi-copy.XXXXXX")" && '
+            "trap '/bin/rm -f -- \"$staged\"' EXIT && "
+            '/bin/cat > "$staged" && /bin/chmod 0644 "$staged" && '
+            '/bin/mv -f -- "$staged" "$1"',
+            "rsi-copy",
+            str(target),
+            str(target.parent),
+        )
+
+        def chunks() -> Iterable[bytes]:
+            with source.open("rb") as stream:
+                while chunk := stream.read(1 << 20):
+                    yield chunk
+
+        try:
+            written = self._exec_with_stdin(container, command, chunks())
+        except (APIError, KeyError, OSError, TypeError) as error:
+            raise InfrastructureError(f"copy into container failed: {error}") from error
+        if not written:
+            raise InfrastructureError("copy into container failed")
 
     def inject_agent_auth(
         self,
@@ -1726,6 +1974,24 @@ class DockerContainerRuntime:
             str(target),
             f"{mode:o}",
         )
+        try:
+            written = self._exec_with_stdin(container, command, (content,))
+        except (APIError, KeyError, OSError, TypeError) as error:
+            raise InfrastructureError(
+                f"failed to stream local Agent authentication into {self._role.title()}"
+            ) from error
+        if not written:
+            raise InfrastructureError(
+                f"local Agent authentication write failed in {self._role.title()}"
+            )
+
+    def _exec_with_stdin(
+        self,
+        container: ContainerRef,
+        command: Sequence[str],
+        chunks: Iterable[bytes],
+    ) -> bool:
+        """Run ``command`` as root with ``chunks`` on stdin; True when it exits 0."""
         stream: Any | None = None
         response: Any | None = None
         try:
@@ -1751,21 +2017,15 @@ class DockerContainerRuntime:
             if raw_socket is None or response is None:
                 raise TypeError("Docker did not return an owned exec socket")
             raw_socket.settimeout(10.0)
-            raw_socket.sendall(content)
+            for chunk in chunks:
+                raw_socket.sendall(chunk)
             raw_socket.shutdown(socket.SHUT_WR)
             while stream.read(8192):
                 pass
             inspection = self._client.api.exec_inspect(exec_id)
-            if inspection.get("Running") is True or inspection.get("ExitCode") != 0:
-                raise InfrastructureError(
-                    f"local Agent authentication write failed in {self._role.title()}"
-                )
-        except InfrastructureError:
-            raise
-        except (APIError, KeyError, OSError, TypeError) as error:
-            raise InfrastructureError(
-                f"failed to stream local Agent authentication into {self._role.title()}"
-            ) from error
+            return inspection.get("Running") is not True and (
+                inspection.get("ExitCode") == 0
+            )
         finally:
             if response is not None:
                 try:

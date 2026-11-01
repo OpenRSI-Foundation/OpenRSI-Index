@@ -724,6 +724,11 @@ class NetworkPolicyEnforcer:
         self._network_roles: dict[str, str] = {}
         self._issued_leases: dict[str, NetworkPolicyLease] = {}
 
+    @property
+    def container_netns(self) -> bool:
+        """Whether containers join a namespace holder that carries the policy."""
+        return bool(getattr(self._firewall, "container_netns", False))
+
     def plan(
         self,
         container: ContainerRef,
@@ -777,7 +782,9 @@ class NetworkPolicyEnforcer:
         fingerprint = hashlib.sha256(
             repr((network.network_id, rules)).encode("utf-8")
         ).hexdigest()[:12]
-        rule_id = f"rsi-{self._run_id}-{role}-{fingerprint}"
+        # Recovery tells the installing backend apart by this prefix.
+        prefix = getattr(self._firewall, "rule_prefix", "rsi")
+        rule_id = f"{prefix}-{self._run_id}-{role}-{fingerprint}"
         return NetworkPolicyLease(
             rule_id=rule_id,
             network_id=network.network_id,
