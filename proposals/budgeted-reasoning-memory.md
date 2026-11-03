@@ -49,7 +49,11 @@ The selected operator-reviewed Memory run produced 22 scored attempts and one un
 
 A separately authorized reevaluation of the previously unscored candidate returned 76.75% and did not improve the best score. The original attempt remains recorded as unscored; the supplemental evaluation is a separate attempt. The original run stopped because of a VM-handoff SSH-readiness timeout, not because it completed the research budget.
 
-These values summarize prior operator-reviewed private evidence. This PR contains neither the raw trajectory nor candidate artifacts, and the numbers are not independently reproducible from this document. The proposed seeded continuation was cancelled before launch. No complete 24-hour Memory trajectory is claimed.
+The [results supplement](budgeted-reasoning-memory-results/README.md) includes all original attempt scores, per-memory-budget accuracy, plots, and a local plot-reproduction script. It explicitly compares the measured stop after **43,213.354687489 charged Agent seconds (about 12 hours)** with the **unavailable 24-hour endpoint**. The original baseline evaluation is included in the 22 scored attempts; the separate reevaluation is not a resumed session or a 24-hour result.
+
+![Mean accuracy by original Judge attempt, with the separate reevaluation in its own panel.](budgeted-reasoning-memory-results/performance-by-iteration.png)
+
+These values summarize prior operator-reviewed private evidence. This PR contains neither the raw trajectory nor candidate artifacts; the disclosed summaries reproduce the figures, not the model evaluations. The proposed seeded continuation was cancelled before launch. No complete 24-hour Memory trajectory is claimed.
 
 The existing ACE benchmark uses a different adaptation and evaluation protocol. Its published scores cannot be compared directly to Memory's percentages as a ranking or state-of-the-art claim.
 
@@ -65,4 +69,4 @@ The existing ACE benchmark uses a different adaptation and evaluation protocol. 
 
 ## Contribution scope
 
-This PR adds only a proposal document. It does not register Memory in the benchmark task list, replace or modify Witness Planning, change RSI-Harness, publish private credentials or raw logs, or assert that an automated safety flag establishes a vulnerability. It requests review of a separate proposed research direction and an appropriate contribution path.
+This PR adds a proposal document and a preliminary results supplement with aggregate score data and reproducible plots. It does not register Memory in the benchmark task list, replace or modify Witness Planning, change RSI-Harness, publish private credentials or raw logs, or assert that an automated safety flag establishes a vulnerability. It requests review of a separate proposed research direction and an appropriate contribution path.
