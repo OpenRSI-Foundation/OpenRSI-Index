@@ -4,6 +4,10 @@ RSI Harness powers OpenRSI Index for ultra-long-horizon RSI runs, natively
 supporting [Harbor-format tasks](docs/harbor-task-authoring/task-toml.md) on local Docker and
 [supported Slurm/LSF allocations](#run-multi-node-tasks-on-a-cluster).
 
+An experimental [native Modal runner](docs/modal-native.md) supports persistent
+Work and clean, isolated Judges within one GPU allocation, with native artifact
+records and resumable segments for long runs.
+
 Agents such as Claude Code, Codex, Qwen Code, Kimi Code, OpenCode, ZCode and
 pi develop solutions in
 a persistent, isolated Work container and submit them to a fresh Judge for

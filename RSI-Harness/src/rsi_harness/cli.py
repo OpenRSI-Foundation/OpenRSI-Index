@@ -17,6 +17,7 @@ from rsi_harness.cluster.base import ClusterRunRequest, ClusterRunResult
 from rsi_harness.cluster.bluevela.adapter import build_cluster_adapter
 from rsi_harness.config import EngineConfig
 from rsi_harness.errors import HarnessError, SetupError
+from rsi_harness.modal_runtime.cli import app as modal_app
 from rsi_harness.models import (
     AgentAuthSource,
     CompileOptions,
@@ -48,6 +49,7 @@ sandbox_app = typer.Typer(
     help="Operator commands for managed sandboxes.",
 )
 app.add_typer(sandbox_app, name="sandbox")
+app.add_typer(modal_app, name="modal")
 
 
 class RuntimeServicesPort(Protocol):
