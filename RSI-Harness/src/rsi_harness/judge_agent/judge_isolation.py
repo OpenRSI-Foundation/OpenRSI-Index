@@ -359,7 +359,13 @@ class Ruleset:
         except OSError:
             return False
         try:
-            if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            try:
+                mode = os.fstat(descriptor).st_mode
+            except PermissionError:
+                # O_PATH can open an entry whose metadata is inaccessible.
+                # Omit its allow rule; never grant access without knowing type.
+                return False
+            if not stat.S_ISDIR(mode):
                 access &= FS_FILE
             access &= self.handled
             if not access:

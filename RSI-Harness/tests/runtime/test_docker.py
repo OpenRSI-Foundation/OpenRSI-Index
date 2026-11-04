@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import io
 import json
 import logging
@@ -1703,7 +1704,8 @@ def test_exec_start_callback_receives_boundary_deadline_and_waits_remaining_time
         ("create", 100.0),
         ("start", 104.0),
     ]
-    assert join_timeouts[0] == 4.0
+    assert not result.timed_out
+    assert all(0 < value <= 4.0 for value in join_timeouts)
 
 
 def test_exec_explicit_deadline_covers_startup_and_output_wait(tmp_path, monkeypatch):
@@ -1742,7 +1744,8 @@ def test_exec_explicit_deadline_covers_startup_and_output_wait(tmp_path, monkeyp
     )
 
     assert result.exit_code == 0
-    assert join_timeouts[0] == 5.0
+    assert not result.timed_out
+    assert all(0 < value <= 5.0 for value in join_timeouts)
 
 
 def test_exec_create_finishing_after_deadline_never_starts_command(
@@ -2207,7 +2210,7 @@ def test_exec_timeout_does_not_block_on_stuck_output_fsync(tmp_path, monkeypatch
     assert isinstance(errors[0], InfrastructureError)
     assert "recovery_required" in str(errors[0])
     assert "output capture" in str(errors[0])
-    assert "stop" not in client.containers.by_id["judge"].events
+    assert "stop" in client.containers.by_id["judge"].events
     assert not output_path.exists()
     assert not tuple(output_path.parent.glob(".agent-1.log.*"))
 
@@ -2824,3 +2827,38 @@ def test_mount_targets_are_role_specific(tmp_path):
                 ),
             )
         )
+
+
+@pytest.mark.parametrize("role,redact", [("work", True), ("judge", False)])
+@pytest.mark.parametrize("error_number", [errno.ENOSPC, errno.EDQUOT, errno.EIO])
+def test_exec_storage_failure_contains_exact_container(
+    tmp_path, monkeypatch, role, redact, error_number
+):
+    client = FakeDockerClient(chunks=(b"secret output\n",))
+    candidate = FakeDockerContainer("candidate")
+    other = FakeDockerContainer("other")
+    client.containers.by_id.update(candidate=candidate, other=other)
+    runtime = make_runtime(client, tmp_path, role=role)
+    writer = (
+        docker_runtime._RedactedOutputWriter
+        if redact
+        else docker_runtime._RawOutputWriter
+    )
+
+    def fail(*_args):
+        raise OSError(error_number, "private-secret output sink failed")
+
+    monkeypatch.setattr(writer, "append", fail)
+    with pytest.raises(InfrastructureError, match="output capture failed") as caught:
+        runtime.exec(
+            ContainerRef(container_id="candidate", role=role),
+            ("run",),
+            output_path=tmp_path / "engine-root/output.log",
+            redact_output=redact,
+            output_redact_values=("private-secret",),
+            timeout_seconds=60,
+        )
+    assert "private-secret" not in str(caught.value)
+    assert not candidate.attrs["State"]["Running"]
+    assert other.attrs["State"]["Running"]
+    assert not other.events

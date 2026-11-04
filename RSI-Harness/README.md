@@ -674,6 +674,10 @@ as a clean-image Judge does locally: nothing the Agent changed outside the
 workspace reaches it, `clean_image = false` has no effect there, and the run
 plan records `clean_image: true`.
 
+Completed cluster Judge workspace copies are removed after scoring artifacts
+are committed and the Judge has stopped, before Work resumes. Trajectories and
+feedback remain available. See [snapshot lifecycle and failure recovery](docs/cluster-snapshot-lifecycle.md).
+
 Two operator-only `[apptainer]` keys serve sites whose Apptainer cannot give
 phases namespaces of their own. `network_isolation = "seccomp"` (default
 `"namespace"`) runs a phase without network under a host-side filter with no IP

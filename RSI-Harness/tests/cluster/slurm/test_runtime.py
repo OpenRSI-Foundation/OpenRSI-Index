@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import signal
 import subprocess
 import sys
@@ -134,21 +135,28 @@ def test_judge_timeout_stops_remote_controller_with_slurm_arguments(
         str(tmp_path / "controller.json"),
     )
     process = Mock(returncode=-15, pid=12345)
-    process.wait.side_effect = [subprocess.TimeoutExpired(command, 1), None, None]
     cleanup = Mock(return_value=subprocess.CompletedProcess(command, 0))
+    process.stdout = io.BytesIO(b"timeout")
+
+    def wait(timeout=None):
+        if not cleanup.called:
+            raise subprocess.TimeoutExpired(command, timeout)
+        return process.returncode
+
+    process.wait.side_effect = wait
     signals = Mock()
 
     def start(*args, **kwargs):
-        kwargs["stdout"].write(b"timeout")
+        assert kwargs["stdout"] == subprocess.PIPE
         return process
 
     monkeypatch.setattr("rsi_harness.cluster.bluevela.runtime.subprocess.Popen", start)
     monkeypatch.setattr("rsi_harness.cluster.bluevela.runtime.os.killpg", signals)
     monkeypatch.setattr("rsi_harness.cluster.bluevela.runtime.subprocess.run", cleanup)
     result = ApptainerAgentRuntime._run_host_controller(
-        SimpleNamespace(profile=profile),
+        SimpleNamespace(profile=profile, _require_brokers_healthy=lambda: None),
         command,
-        timeout_seconds=1,
+        timeout_seconds=0.01,
         output_path=tmp_path / "output.txt",
     )
     assert result.timed_out

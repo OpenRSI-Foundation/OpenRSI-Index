@@ -640,8 +640,10 @@ def test_rank_runner_does_not_require_descendant_pipe_eof_after_launcher_exit(
     assert output == b""
 
 
+@pytest.mark.parametrize("memory_failure", [False, True])
 def test_broker_cancellation_stops_exact_request_and_releases_subpool(
     tmp_path: Path,
+    memory_failure,
 ) -> None:
     multinode = _module()
     broker = multinode.MultiNodeBroker(
@@ -673,13 +675,21 @@ def test_broker_cancellation_stops_exact_request_and_releases_subpool(
     )
     thread.start()
     assert started.wait(timeout=2)
-    (tmp_path / "client/cancel" / ("b" * 32)).touch()
+    if memory_failure:
+        broker._fail(OSError("cannot persist a cancellation marker"))
+    else:
+        (tmp_path / "client/cancel" / ("b" * 32)).touch()
     thread.join(timeout=3)
 
     assert not thread.is_alive()
     assert result[0].cancelled is True
     assert all(item.returncode == 143 for item in result[0].ranks)
-    broker.require_idle()
+    if memory_failure:
+        with pytest.raises(InfrastructureError, match="persistence failed"):
+            broker.require_idle()
+        assert not (tmp_path / "client/cancel" / ("b" * 32)).exists()
+    else:
+        broker.require_idle()
 
 
 def test_private_file_protocol_runs_without_any_additional_user_cli(
@@ -733,3 +743,66 @@ def test_private_file_protocol_runs_without_any_additional_user_cli(
         broker.require_idle()
     finally:
         broker.stop()
+
+
+def test_broker_output_quota_failure_is_visible_without_writing_a_result(
+    tmp_path, monkeypatch
+):
+    import errno
+
+    multinode = _module()
+    broker = multinode.MultiNodeBroker(
+        phase="work",
+        run_id="run-123",
+        nodes=_nodes("work", 2),
+        pool_digest="c" * 64,
+        root=tmp_path / "client",
+        authority_root=tmp_path / "authority",
+        local_world_size=8,
+        worker_template=_worker(multinode, tmp_path),
+    )
+    broker.initialize()
+    request = _request(multinode)
+    path = broker.authority_root / "claimed" / f"{request.request_id}.json"
+    path.write_text(request.model_dump_json())
+    broker._server_runner = lambda *_args: (0, b"rank output")
+
+    def fail(*_args, **_kwargs):
+        raise OSError(errno.EDQUOT, "quota exhausted")
+
+    monkeypatch.setattr(multinode, "_atomic_bytes", fail)
+    broker._handle_claimed(path)
+    with pytest.raises(InfrastructureError, match="evidence persistence failed"):
+        broker.require_healthy()
+    assert broker._stop_event.is_set()
+    assert not (broker.root / "results" / f"{request.request_id}.json").exists()
+    assert not broker._active
+
+
+def test_rank_output_failure_cancels_siblings_before_waiting_for_results(tmp_path):
+    import errno
+
+    multinode = _module()
+    broker = multinode.MultiNodeBroker(
+        phase="work",
+        run_id="run-123",
+        nodes=_nodes("work", 2),
+        pool_digest="c" * 64,
+        root=tmp_path / "client",
+        authority_root=tmp_path / "authority",
+        local_world_size=8,
+        worker_template=_worker(multinode, tmp_path),
+    )
+    broker.initialize()
+
+    def runner(command, cancelled):
+        if command[-1] == "0":
+            raise OSError(errno.EIO, "rank output read failed")
+        assert cancelled.wait(2), "sibling was left running after output failure"
+        return 143, b"cancelled"
+
+    result = broker.execute(_request(multinode), rank_runner=runner)
+    assert result.cancelled
+    assert [rank.returncode for rank in result.ranks] == [125, 143]
+    with pytest.raises(InfrastructureError, match="evidence persistence failed"):
+        broker.require_healthy()

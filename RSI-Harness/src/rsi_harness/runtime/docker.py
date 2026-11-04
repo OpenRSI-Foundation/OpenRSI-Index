@@ -1470,7 +1470,18 @@ class DockerContainerRuntime:
         wait_timeout = timeout_seconds
         if exec_deadline is not None:
             wait_timeout = max(0.0, exec_deadline - time.monotonic())
-        reader.join(wait_timeout)
+        capture_deadline = (
+            None if wait_timeout is None else time.monotonic() + wait_timeout
+        )
+        while reader.is_alive() and not stream_errors:
+            remaining = (
+                None
+                if capture_deadline is None
+                else capture_deadline - time.monotonic()
+            )
+            if remaining is not None and remaining <= 0:
+                break
+            reader.join(min(0.1, remaining) if remaining is not None else 0.1)
         capture_stalled = reader.is_alive() and stream_drained.is_set()
         deadline_expired = (
             exec_deadline is not None and time.monotonic() >= exec_deadline
@@ -1486,12 +1497,36 @@ class DockerContainerRuntime:
             _close_docker_stream(stream)
             reader.join(self._pause_timeout_seconds)
 
+        def contain_capture_failure() -> None:
+            # Losing the reader must not leave Work/Judge running. This is
+            # daemon-side containment, also when the controller is on macOS.
+            try:
+                failed_container = self._container(container)
+                failed_container.stop(timeout=1)
+                end = time.monotonic() + self._pause_timeout_seconds
+                while True:
+                    failed_container.reload()
+                    if failed_container.attrs.get("State", {}).get("Running") is False:
+                        break
+                    if time.monotonic() >= end:
+                        raise InfrastructureError("output-failure containment unproven")
+                    time.sleep(self._poll_interval_seconds)
+            except Exception as error:
+                raise InfrastructureError(
+                    "recovery_required: cannot confirm output-failure containment"
+                ) from error
+            finally:
+                abort_output_drain()
+
+        if stream_errors:
+            contain_capture_failure()
+            raise InfrastructureError(
+                "recovery_required: complete output capture failed"
+            ) from None
         if capture_stalled:
             reader.join(self._pause_timeout_seconds)
             if reader.is_alive():
-                if output_writer is not None:
-                    output_writer.abort()
-                _close_docker_stream(stream)
+                contain_capture_failure()
                 raise InfrastructureError(
                     "recovery_required: complete Judge output capture did not "
                     "finish within the bounded persistence interval"
@@ -1547,14 +1582,14 @@ class DockerContainerRuntime:
                 )
         _close_docker_stream(stream)
         if stream_errors:
+            contain_capture_failure()
             message = (
                 "recovery_required: complete Judge output capture failed"
                 if isinstance(output_writer, _RawOutputWriter)
                 else "Docker exec output stream failed"
             )
-            raise InfrastructureError(
-                f"{message}: {stream_errors[0]}"
-            ) from stream_errors[0]
+            # Sink/callback exceptions can contain unredacted provider values.
+            raise InfrastructureError(message) from None
         try:
             inspect = {} if timed_out else self._client.api.exec_inspect(exec_id)
         except APIError as error:
