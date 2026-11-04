@@ -1,0 +1,65 @@
+{
+  "run_id": "2de0fa87b1b34b35aed9f12af1d5bea8",
+  "app_id": "ap-1jmFg0utzQVIGHjhFmHqHw",
+  "segments": [
+    {
+      "run_id": "2de0fa87b1b34b35aed9f12af1d5bea8",
+      "segment": 1,
+      "result": {
+        "run_id": "2de0fa87b1b34b35aed9f12af1d5bea8",
+        "status": "completed",
+        "total_rounds": 2,
+        "best_score": 1.0,
+        "best_round": "agent-2",
+        "best_rewards": {
+          "reward": 1.0
+        },
+        "reports": [
+          {
+            "round_id": "agent-1",
+            "status": "completed",
+            "rewards": {
+              "reward": 0.0
+            },
+            "score": 0.0,
+            "output": "{\"fixture_score\": 0.0, \"isolation\": \"passed\"}\nGPU-2117d1d2-3b56-2953-dd05-610802dcfadb, NVIDIA H100 80GB HBM3\n\n{\"cuda_context\": \"passed\", \"gpu_memory_roundtrip\": 2.0, \"physical_gpu_count\": 1}\n",
+            "exit_code": 0,
+            "timed_out": false,
+            "verifier_output_required": true,
+            "full_output_captured": true,
+            "duration_seconds": 0.8576929339999997,
+            "error": null
+          },
+          {
+            "round_id": "agent-2",
+            "status": "completed",
+            "rewards": {
+              "reward": 1.0
+            },
+            "score": 1.0,
+            "output": "{\"fixture_score\": 1.0, \"isolation\": \"passed\"}\nGPU-2117d1d2-3b56-2953-dd05-610802dcfadb, NVIDIA H100 80GB HBM3\n\n{\"cuda_context\": \"passed\", \"gpu_memory_roundtrip\": 2.0, \"physical_gpu_count\": 1}\n",
+            "exit_code": 0,
+            "timed_out": false,
+            "verifier_output_required": true,
+            "full_output_captured": true,
+            "duration_seconds": 0.7033889919999998,
+            "error": null
+          }
+        ],
+        "agent_exit_code": 0,
+        "artifacts_dir": "/__modal/volumes/vo-evK8iV3Fy4ipPoDcK00pVJ/logs/runs/2de0fa87b1b34b35aed9f12af1d5bea8/modal-native"
+      },
+      "deadline": 1793750439.8715317,
+      "reserved_compute_seconds": 179.99999618530273,
+      "segment_boundary": false,
+      "continue": false,
+      "gpu_uuids": [
+        "GPU-2117d1d2-3b56-2953-dd05-610802dcfadb"
+      ],
+      "image_id": "im-SiInBU0o8WBZUZ2UYb4T7z",
+      "state_root": "/__modal/volumes/vo-evK8iV3Fy4ipPoDcK00pVJ",
+      "error": null,
+      "agent_diagnostic": ""
+    }
+  ]
+}
