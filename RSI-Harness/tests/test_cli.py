@@ -892,6 +892,22 @@ def test_run_redacts_service_construction_and_registry_failures(
         assert "run failed; use --verbose" in result.output
 
 
+def test_an_interrupt_message_is_printed_without_verbose(cli, capsys) -> None:
+    cli_module, _services = cli
+
+    with pytest.raises(cli_module.typer.Exit):
+        cli_module._fail(
+            KeyboardInterrupt("interrupted; Kubernetes Job job-a1 cancelled"),
+            verbose=False,
+        )
+    assert "Error: interrupted; Kubernetes Job job-a1 cancelled" in (
+        capsys.readouterr().err
+    )
+    with pytest.raises(cli_module.typer.Exit):
+        cli_module._fail(KeyboardInterrupt(), verbose=False)
+    assert "run failed; use --verbose" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize(
     ("command", "arguments"),
     (

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 import time
@@ -254,7 +255,9 @@ class _ClusterConsole:
             resources = resources if isinstance(resources, Mapping) else {}
             multi_node = details.get("multi_node", {})
             multi_node = multi_node if isinstance(multi_node, Mapping) else {}
-            label = "Slurm" if details.get("adapter") == "slurm" else "Blue Vela"
+            label = {"slurm": "Slurm", "kubernetes": "Kubernetes"}.get(
+                str(details.get("adapter")), "Blue Vela"
+            )
             typer.echo(f"{label} dry-run:")
             typer.echo(_field("Run ID:", details.get("run_id")))
             typer.echo(_field("Run dir:", details.get("run_dir")))
@@ -296,6 +299,11 @@ class _ClusterConsole:
             typer.echo(f"  {shlex.join(tuple(details.get('build_argv', ())))}")
             typer.echo("Run submission:")
             typer.echo(f"  {shlex.join(tuple(details.get('run_argv', ())))}")
+            manifests = details.get("manifests")
+            if isinstance(manifests, Mapping):
+                for stage in ("build", "run"):
+                    typer.echo(f"{stage.capitalize()} Job:")
+                    typer.echo(json.dumps(manifests.get(stage), indent=2))
             binds = tuple(details.get("binds", ()))
             typer.echo(_field("Binds:", ", ".join(str(item) for item in binds)))
             assets = tuple(details.get("assets", ()))
@@ -339,6 +347,9 @@ def _fail(error: BaseException, *, verbose: bool) -> None:
         detail = redact_text(f"{type(error).__name__}: {error}")
     elif isinstance(error, HarnessError):
         detail = f"{error.code.value}: {redact_text(str(error))}"
+    elif isinstance(error, KeyboardInterrupt) and str(error):
+        # What the interrupt left behind, such as a cancelled cluster job.
+        detail = redact_text(str(error))
     else:
         detail = "run failed; use --verbose for diagnostic detail"
     typer.echo(f"Error: {detail}", err=True)
@@ -450,7 +461,10 @@ def run_command(
         str | None,
         typer.Option(
             "--cluster",
-            help="Cluster name (bluevela or slurm) or a cluster profile TOML",
+            help=(
+                "Cluster name (bluevela, slurm, sherlock or kubernetes) or a "
+                "cluster profile TOML"
+            ),
         ),
     ] = None,
     dry_run: Annotated[

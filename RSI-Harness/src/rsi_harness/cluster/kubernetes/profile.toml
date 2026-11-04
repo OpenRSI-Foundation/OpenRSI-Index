@@ -1,0 +1,106 @@
+# Portable example. Copy outside the repository and configure the namespace,
+# runner image, shared volumes, Pod security and node resources for your
+# cluster. Each build and run job is one Pod on one node, with Apptainer.
+name = "kubernetes"
+adapter = "kubernetes"
+owner = "${USER}"
+
+[scheduler]
+kind = "kubernetes"
+kubectl = "kubectl"
+# kubeconfig = "/home/op/.kube/config"
+# context = "research"
+namespace = "rsi"
+# bash, coreutils, util-linux (flock, unshare), tzdata and non-setuid Apptainer.
+image = "registry.example.org/rsi/runner:1"
+image_pull_policy = "IfNotPresent"
+# image_pull_secrets = ["registry"]
+# Apptainer and rsi-box need user namespaces and an unmasked /proc:
+# "userns" (hostUsers: false, ids up to 65535) where the cluster supports it,
+# or "privileged". Privileged Pods see every host device: GPU jobs then need
+# privileged_devices = "allocated" (runtime privileged_without_host_devices).
+pod_security = "userns"
+# privileged_devices = "allocated"
+# Nodes with kernel.apparmor_restrict_unprivileged_userns=1: a Localhost
+# AppArmor profile, loaded on the nodes, that allows user namespaces.
+# apparmor_profile = "rsi-userns"
+# Pods run as the submitting user's uid and gid, never as root.
+# service_account = "rsi-runner"
+# priority_class = "research"
+# A RuntimeClass the Pods need. GPUs: inject them with CDI from a spec without
+# the disable-device-node-modification hook; whatever mounts over /proc (that
+# hook, the NVIDIA runtime hook) stops Apptainer.
+# runtime_class = "rsi"
+node_selector = {}
+tolerations = []
+gpu_resource = "nvidia.com/gpu"
+request_tmp = true
+poll_seconds = 10.0
+ttl_seconds_after_finished = 604800
+# Optional per-Pod limit, HH:MM. Single-node research resumes under the same
+# total budget after the Pod's termination drains Judge and closes Work.
+# run_walltime_limit = "12:00"
+# Paths the image provides at the submit host's paths (for example the
+# Harness virtualenv and its Python), so no volume needs to carry them.
+image_paths = []
+
+# Shared storage, mounted at the paths the submit host uses: storage roots,
+# the Harness virtualenv and Python, the Agent CLI and the task data.
+[[scheduler.volumes]]
+path = "/srv/rsi"
+claim = "rsi-shared"
+# [[scheduler.volumes]]
+# path = "/srv/rsi"
+# nfs_server = "nfs.example.org"
+# nfs_path = "/export/rsi"
+# Node-local scratch for builds and Apptainer:
+[[scheduler.volumes]]
+path = "/scratch"
+empty_dir = true
+
+# Image builds can use another image or nodes. CPU and memory still come
+# from [builder]. These settings never change Work/Judge resources.
+# [scheduler.build]
+# image = "registry.example.org/rsi/builder:1"
+# node_selector = { "node-role.example.org/cpu" = "true" }
+# gpus = 0
+
+[storage]
+run_root = "/srv/rsi/harness/runs"
+image_cache = "/srv/rsi/harness/images"
+logs_root = "/srv/rsi/harness/logs"
+hf_home = "/srv/rsi/cache/huggingface"
+hf_datasets_cache = "/srv/rsi/cache/datasets"
+
+[builder]
+# The Harness installs its static Podman here before the first build.
+podman_bundle = "/srv/rsi/tools/podman"
+storage_driver = "vfs"
+cpu_slots = 16
+memory_mb = 65536
+walltime = "02:00"
+temp_root = "/scratch"
+min_tmp_mb = 71680
+rootless_apt_sandbox = true
+
+[apptainer]
+mount_policy = "scoped"
+binary = "/usr/bin/apptainer"
+dns_bind = "/etc/resolv.conf"
+work_binds = []
+judge_binds = []
+build_args = []
+workspace_target = "/testbed"
+temp_root = "/scratch"
+container_python = "/usr/bin/python3"
+rdma_binds = []
+
+[apptainer.environment]
+RSI_SHARED_DATA_ROOT = "/rsi-data"
+
+[resources]
+min_cpu_slots = 8
+min_memory_mb = 65536
+min_runtime_tmp_mb = 71680
+gpus_per_node = 8
+walltime_margin_seconds = 900

@@ -6,10 +6,13 @@ import argparse
 import ctypes
 import json
 import os
+import re
 import secrets
 import shlex
 import socket
+import subprocess
 import sys
+import tempfile
 from pathlib import Path
 from typing import Self
 
@@ -33,7 +36,7 @@ from rsi_harness.cluster.config import (
     SlurmSchedulerProfile,
 )
 from rsi_harness.cluster.slurm.allocation import discover_slurm_inventory
-from rsi_harness.errors import SetupError
+from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.judge_agent.judge_isolation import PR_SET_DUMPABLE
 from rsi_harness.models import (
     AgentAuthSource,
@@ -303,6 +306,16 @@ export APPTAINERENV_CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"'''
             device_preflight = f"""{_quote(profile.apptainer.binary)} \
   exec --nv --containall --no-mount hostfs --writable-tmpfs {bind_args} \
   {_quote(payload.sif_path)} nvidia-smi"""
+            if profile.scheduler.kind == "kubernetes":
+                # The Pod checked its GPUs; a Pod without /dev/fuse runs the
+                # image only once the Engine has extracted it.
+                device_preflight = device_preflight.replace(
+                    "--containall", "--containall --home /home/rsi", 1
+                )
+                device_preflight = (
+                    f"if [[ -r /dev/fuse && -w /dev/fuse ]]; then\n"
+                    f"  {device_preflight}\nfi"
+                )
         else:
             # Discard inherited selectors before binding the empty CPU pool.
             device_environment = '''unset CUDA_VISIBLE_DEVICES
@@ -382,8 +395,53 @@ trap cleanup EXIT
     return payload_path
 
 
+def _usable_image(payload: EnginePayload) -> EnginePayload:
+    """A Kubernetes Pod without /dev/fuse (a user-namespace Pod, or one whose
+    runtime hides host devices) cannot mount a SIF: extract it once into the
+    job's node-local scratch and run every phase from that sandbox."""
+    if payload.profile.scheduler.kind != "kubernetes" or os.access(
+        "/dev/fuse", os.R_OK | os.W_OK
+    ):
+        return payload
+    scratch = Path(os.environ.get("RSI_HARNESS_NODE_TMP") or tempfile.gettempdir())
+    sandbox = scratch / "image"
+    print(
+        f"kubernetes: no /dev/fuse in this Pod; extracting the image to {sandbox}",
+        file=sys.stderr,
+        flush=True,
+    )
+    (scratch / "apptainer-tmp").mkdir(parents=True, exist_ok=True)
+    completed = subprocess.run(
+        (
+            str(payload.profile.apptainer.binary),
+            "build",
+            "--force",
+            "--sandbox",
+            str(sandbox),
+            str(payload.sif_path),
+        ),
+        env={**os.environ, "APPTAINER_TMPDIR": str(scratch / "apptainer-tmp")},
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    if completed.returncode:
+        text = re.sub(r"\x1b\[[0-9;]*m", "", completed.stderr)
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        cause = next(
+            (line for line in reversed(lines) if line.startswith(("FATAL", "ERROR"))),
+            lines[-1] if lines else "no output",
+        )
+        raise InfrastructureError(
+            f"cannot extract the task image for a Pod without /dev/fuse: {cause}"
+        )
+    return payload.model_copy(update={"sif_path": sandbox})
+
+
 def run_engine_payload(payload: EnginePayload) -> None:
     """Run the native RSI-Harness Engine inside the current scheduler allocation."""
+    payload = _usable_image(payload)
     if payload.profile.apptainer.process_namespaces == "harness":
         # Without Apptainer PID namespaces Work may see this process: then
         # its /proc environ and root still need privilege.

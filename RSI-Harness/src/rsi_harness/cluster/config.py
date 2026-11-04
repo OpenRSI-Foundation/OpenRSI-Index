@@ -79,6 +79,14 @@ class SchedulerProfile(_ProfileModel):
         return value
 
 
+def _walltime_limit(value: str | None) -> str | None:
+    if value is not None and (
+        re.fullmatch(r"\d+:[0-5]\d", value) is None or not int(value.replace(":", ""))
+    ):
+        raise ValueError("run_walltime_limit must be positive HH:MM")
+    return value
+
+
 class SlurmBuildProfile(_ProfileModel):
     """Scheduling overrides for image construction, never Work or Judge."""
 
@@ -123,17 +131,184 @@ class SlurmSchedulerProfile(SchedulerProfile):
     @field_validator("run_walltime_limit")
     @classmethod
     def _run_walltime_limit(cls, value: str | None) -> str | None:
-        if value is not None and (
-            re.fullmatch(r"\d+:[0-5]\d", value) is None
-            or not int(value.replace(":", ""))
-        ):
-            raise ValueError("run_walltime_limit must be positive HH:MM")
-        return value
+        return _walltime_limit(value)
 
     @field_validator("accounting_binary", "control_binary")
     @classmethod
     def _nonempty_slurm_binary(cls, value: str) -> str:
         return cls._nonempty_binary_argument(value)
+
+
+_KUBERNETES_NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+
+
+class KubernetesVolumeProfile(_ProfileModel):
+    """One Pod volume. Shared storage is mounted at its own path, so the
+    paths the submit host writes are the paths the Pod reads."""
+
+    path: PurePosixPath
+    host_path: PurePosixPath | None = None
+    claim: str | None = None
+    sub_path: str | None = None
+    nfs_server: str | None = None
+    nfs_path: PurePosixPath | None = None
+    # Node-local scratch (an emptyDir), for example the Apptainer temp root.
+    empty_dir: bool = False
+    read_only: bool = False
+
+    @field_validator("path", "host_path", "nfs_path")
+    @classmethod
+    def _absolute(cls, value: PurePosixPath | None) -> PurePosixPath | None:
+        if value is not None and (
+            not value.is_absolute() or value == PurePosixPath("/")
+        ):
+            raise ValueError("Kubernetes volume paths must be absolute, not /")
+        return value
+
+    @model_validator(mode="after")
+    def _one_source(self) -> Self:
+        sources = (
+            self.host_path is not None,
+            self.claim is not None,
+            self.nfs_server is not None or self.nfs_path is not None,
+            self.empty_dir,
+        )
+        if sum(sources) != 1:
+            raise ValueError(
+                "a Kubernetes volume needs exactly one of host_path, claim, "
+                "nfs_server/nfs_path or empty_dir"
+            )
+        if (self.nfs_server is None) != (self.nfs_path is None):
+            raise ValueError("nfs_server and nfs_path must be set together")
+        if self.sub_path is not None and self.claim is None:
+            raise ValueError("sub_path applies to a claim")
+        return self
+
+    @property
+    def shared(self) -> bool:
+        """Whether files under ``path`` are the submit host's files."""
+        return not self.empty_dir
+
+
+class KubernetesBuildProfile(_ProfileModel):
+    """Scheduling overrides for image construction, never Work or Judge."""
+
+    image: str | None = None
+    node_selector: dict[str, str] | None = None
+    tolerations: tuple[dict[str, Any], ...] | None = None
+    gpus: int = Field(default=0, ge=0)
+
+
+class KubernetesSchedulerProfile(_ProfileModel):
+    """Run each build and run job as a Kubernetes Job of one Pod, which plays
+    the part of a single-node allocation: the Engine inside it runs Work and
+    Judge with Apptainer, as on LSF and Slurm."""
+
+    kind: Literal["kubernetes"]
+    kubectl: str = "kubectl"
+    kubeconfig: Path | None = None
+    context: str | None = None
+    namespace: str
+    # Carries bash, coreutils, util-linux, tzdata and non-setuid Apptainer.
+    image: str
+    image_pull_policy: Literal["Always", "IfNotPresent", "Never"] = "IfNotPresent"
+    image_pull_secrets: tuple[str, ...] = ()
+    # Path prefixes the image itself provides at the submit host's paths
+    # (for example the Harness virtualenv), so no volume needs to carry them.
+    image_paths: tuple[PurePosixPath, ...] = ()
+    volumes: tuple[KubernetesVolumeProfile, ...] = ()
+    # Apptainer and rsi-box need user namespaces and an unmasked /proc:
+    # "privileged" Pods, or "userns" Pods (hostUsers: false, procMount
+    # Unmasked, unconfined seccomp and AppArmor) where the cluster allows them.
+    pod_security: Literal["privileged", "userns"]
+    # Privileged Pods see every host device unless the container runtime
+    # hides them (privileged_without_host_devices): "host" refuses GPU jobs.
+    privileged_devices: Literal["host", "allocated"] = "host"
+    # A Localhost AppArmor profile, loaded on the nodes, that allows user
+    # namespaces where kernel.apparmor_restrict_unprivileged_userns=1.
+    apparmor_profile: str | None = None
+    # Pods run as the submitting user's uid and gid (the run directory is
+    # theirs), never as root.
+    service_account: str | None = None
+    priority_class: str | None = None
+    # A RuntimeClass, for example "nvidia" where GPU Pods need the NVIDIA
+    # runtime that is not the node's default.
+    runtime_class: str | None = None
+    node_selector: dict[str, str] = Field(default_factory=dict)
+    tolerations: tuple[dict[str, Any], ...] = ()
+    excluded_hosts: tuple[str, ...] = ()
+    gpu_resource: str = "nvidia.com/gpu"
+    # Request node-local disk (ephemeral-storage) for the job's scratch.
+    request_tmp: bool = True
+    environment: dict[str, str] = Field(default_factory=dict)
+    labels: dict[str, str] = Field(default_factory=dict)
+    # The Harness reads a finished Job's end; resume and publication need it.
+    ttl_seconds_after_finished: int | None = Field(default=604800, ge=3600)
+    poll_seconds: float = Field(default=10.0, gt=0.0)
+    build: KubernetesBuildProfile | None = None
+    # Total research time stays in the task/lease; this limits each Pod.
+    run_walltime_limit: str | None = None
+    # Kubernetes has no exclusive-node request; use node_selector/tolerations.
+    exclusive: Literal[False] = False
+
+    @property
+    def queue(self) -> str:
+        return self.namespace
+
+    @property
+    def group(self) -> str:
+        return ""
+
+    @field_validator("kubectl")
+    @classmethod
+    def _nonempty_binary(cls, value: str) -> str:
+        if not value or "\0" in value:
+            raise ValueError("scheduler kubectl must be non-empty")
+        return value
+
+    @field_validator("kubeconfig")
+    @classmethod
+    def _absolute_kubeconfig(cls, value: Path | None) -> Path | None:
+        if value is not None and not value.is_absolute():
+            raise ValueError("scheduler kubeconfig must be an absolute path")
+        return value
+
+    @field_validator("namespace")
+    @classmethod
+    def _namespace(cls, value: str) -> str:
+        if _KUBERNETES_NAME.fullmatch(value) is None:
+            raise ValueError("scheduler namespace must be a DNS-1123 label")
+        return value
+
+    @field_validator("image_paths")
+    @classmethod
+    def _absolute_image_paths(
+        cls, value: tuple[PurePosixPath, ...]
+    ) -> tuple[PurePosixPath, ...]:
+        if any(not path.is_absolute() for path in value):
+            raise ValueError("scheduler image_paths must be absolute")
+        return value
+
+    @field_validator("excluded_hosts")
+    @classmethod
+    def _safe_excluded_hosts(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(value) != len(set(value)):
+            raise ValueError("scheduler excluded_hosts contains a duplicate")
+        if any(_SCHEDULER_HOST.fullmatch(host) is None for host in value):
+            raise ValueError("scheduler excluded_hosts contains an unsafe host")
+        return value
+
+    @field_validator("run_walltime_limit")
+    @classmethod
+    def _run_walltime_limit(cls, value: str | None) -> str | None:
+        return _walltime_limit(value)
+
+    @model_validator(mode="after")
+    def _distinct_mounts(self) -> Self:
+        paths = [volume.path for volume in self.volumes]
+        if len(paths) != len(set(paths)):
+            raise ValueError("scheduler volumes mount two volumes at one path")
+        return self
 
 
 class StorageProfile(_ProfileModel):
@@ -190,7 +365,8 @@ class BuilderProfile(_ProfileModel):
         ):
             if data.get(key) is not None and Path(data[key]) != tree / relative:
                 raise ValueError(f"builder {key} comes from podman_bundle; remove it")
-            data[key] = tree / relative
+            # A string, so JSON validation (an Engine payload) accepts it too.
+            data[key] = str(tree / relative)
         return data
 
     @field_validator("conmon", "runtime", "podman_bundle")
@@ -356,9 +532,11 @@ class ResourceProfile(_ProfileModel):
 
 class ClusterProfile(_ProfileModel):
     name: str
-    adapter: Literal["bluevela", "slurm"]
+    adapter: Literal["bluevela", "slurm", "kubernetes"]
     owner: str
-    scheduler: SchedulerProfile | SlurmSchedulerProfile = Field(discriminator="kind")
+    scheduler: SchedulerProfile | SlurmSchedulerProfile | KubernetesSchedulerProfile = (
+        Field(discriminator="kind")
+    )
     storage: StorageProfile
     builder: BuilderProfile
     apptainer: ApptainerProfile
@@ -366,7 +544,7 @@ class ClusterProfile(_ProfileModel):
 
     @model_validator(mode="after")
     def _matching_scheduler(self) -> Self:
-        expected = "lsf" if self.adapter == "bluevela" else "slurm"
+        expected = {"bluevela": "lsf"}.get(self.adapter, self.adapter)
         if self.scheduler.kind != expected:
             raise ValueError(f"{self.adapter} adapter requires {expected} scheduler")
         return self
@@ -396,6 +574,7 @@ _PACKAGED_PROFILES = {
     "bluevela": ("rsi_harness.cluster.bluevela", "profile.toml"),
     "slurm": ("rsi_harness.cluster.slurm", "profile.toml"),
     "sherlock": ("rsi_harness.cluster.slurm", "sherlock.toml"),
+    "kubernetes": ("rsi_harness.cluster.kubernetes", "profile.toml"),
 }
 
 
