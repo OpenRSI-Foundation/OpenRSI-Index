@@ -1662,7 +1662,7 @@ def test_resumed_initialize_reuses_the_run_directories_and_seeds_nothing(
     monkeypatch.setattr(runtime, "_run", fake_run)
     runtime.initialize()
     (runtime.workspace / "answer.py").write_text("answer = 42\n")
-    (runtime.agent_home / ".codex").mkdir()
+    (runtime.agent_home / ".codex").mkdir(exist_ok=True)
     (runtime.rounds / "agent-1").mkdir()
     # The next attempt's job: a fresh node-local scratch.
     node_tmp = tmp_path / "node-tmp-2"

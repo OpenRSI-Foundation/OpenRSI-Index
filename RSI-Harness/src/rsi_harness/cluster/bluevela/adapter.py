@@ -229,7 +229,13 @@ def job_log_detail(stderr_path: Path | None, job_id: str) -> str:
         lines = path.read_text(errors="replace").splitlines()
     except OSError:
         lines = []
-    hints = [line for line in lines if line.startswith("build hint:")]
+    hints = [
+        line
+        for line in lines
+        if line.startswith(("build hint:", "kubernetes preflight:"))
+        # Podman's own summary of the Dockerfile step that failed.
+        or line.startswith("Error: building at STEP")
+    ]
     return f"; see {path}" + (f" ({hints[-1]})" if hints else "")
 
 
@@ -311,6 +317,17 @@ class BlueVelaClusterAdapter(ClusterAdapter):
     def _job_spec(self, **values: Any) -> LSFJobSpec:
         return LSFJobSpec(**values)
 
+    def _manifests(self, build: LSFJobSpec, run: LSFJobSpec) -> dict[str, Any] | None:
+        """Job objects a dry run shows, for schedulers that submit objects."""
+        render = getattr(self.scheduler, "render_manifest", None)
+        if render is None:
+            return None
+        return {"build": render(build), "run": render(run)}
+
+    def _check_job_paths(self, agent_paths: tuple[Path, ...]) -> None:
+        """Refuse before submission what the job could not see; batch
+        clusters share their filesystem with the submit host."""
+
     def run(self, request: ClusterRunRequest) -> ClusterRunResult:
         definition = self._compile(request)
         resource_plan = derive_resource_plan(definition, self.profile)
@@ -375,6 +392,9 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             code_mode_host = agent_binary.parent / "codex-code-mode-host"
             if code_mode_host.is_file():
                 agent_companions = (code_mode_host.resolve(),)
+        self._check_job_paths(
+            tuple(path for path in (agent_binary, *agent_companions) if path)
+        )
 
         run_id = self._run_id(definition.task_id)
         run_dir = self.profile.storage.run_root / run_id
@@ -422,6 +442,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                     ),
                     "build_argv": self.scheduler.render_submit(build_spec),
                     "run_argv": self.scheduler.render_submit(run_spec),
+                    "manifests": self._manifests(build_spec, run_spec),
                     "binds": (
                         *(
                             f"legacy-public:{path}"
@@ -598,6 +619,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             self._require_success(
                 "native Engine run",
                 run_result,
+                run_spec.stderr_path,
                 detail=engine_error_detail(run_plan, run_id),
             )
             log_dir = validate_native_artifacts(
@@ -826,6 +848,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             self._require_success(
                 "native Engine run",
                 run_result,
+                plan.spec.stderr_path,
                 detail=engine_error_detail(payload.run_plan, payload.run_id),
             )
             log_dir = validate_native_artifacts(
@@ -851,8 +874,8 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         validate_sandbox_policy(definition.sandbox, request.sandbox_policy, "cluster")
         oracle = definition.agent.name == "oracle"
         if oracle:
-            if self.profile.scheduler.kind != "slurm":
-                raise SetupError("Oracle requires a Slurm allocation")
+            if self.profile.scheduler.kind not in _ORACLE_SCHEDULERS:
+                raise SetupError("Oracle requires a Slurm or Kubernetes allocation")
             task_solution_script(definition.source_dir)
             if request.agent_auth is not None:
                 raise SetupError(
@@ -1361,6 +1384,9 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             )
 
 
+_ORACLE_SCHEDULERS = ("slurm", "kubernetes")
+
+
 def build_cluster_adapter(
     name_or_path: str | Path,
     *,
@@ -1371,4 +1397,8 @@ def build_cluster_adapter(
         from rsi_harness.cluster.slurm.adapter import SlurmClusterAdapter
 
         return SlurmClusterAdapter(profile, event_callback=event_callback)
+    if profile.adapter == "kubernetes":
+        from rsi_harness.cluster.kubernetes.adapter import KubernetesClusterAdapter
+
+        return KubernetesClusterAdapter(profile, event_callback=event_callback)
     return BlueVelaClusterAdapter(profile, event_callback=event_callback)

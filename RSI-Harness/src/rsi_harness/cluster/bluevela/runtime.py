@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import grp
 import hashlib
 import json
 import os
+import pwd
 import re
 import secrets
 import shlex
@@ -213,6 +215,96 @@ def _agent_provider_urls(
     return (provider,)
 
 
+# The contained $HOME of every Apptainer exec in a Kubernetes Pod.
+KUBERNETES_CONTAINED_HOME = PurePosixPath("/home/rsi")
+
+
+def _in_user_namespace() -> bool:
+    try:
+        first = Path("/proc/self/uid_map").read_text().split()
+    except OSError:
+        return False
+    return first[:3] != ["0", "0", "4294967295"]
+
+
+def _image_accounts(
+    image: Path, apptainer: Path, shells: tuple[str, ...]
+) -> tuple[str, str, str | None]:
+    """An image's passwd, group and first of ``shells`` it has."""
+    if image.is_dir():
+
+        def text(relative: str) -> str:
+            try:
+                return (image / relative).read_text()
+            except OSError:
+                return ""
+
+        shell = next(
+            (shell for shell in shells if (image / shell.lstrip("/")).is_file()),
+            None,
+        )
+        return text("etc/passwd"), text("etc/group"), shell
+    script = (
+        "cat /etc/passwd; echo @@; cat /etc/group; echo @@; "
+        'for shell; do [ -x "$shell" ] && echo "$shell" && break; done; true'
+    )
+    try:
+        result = subprocess.run(
+            [str(apptainer), "exec", "--contain", "--no-home", str(image)]
+            + ["/bin/sh", "-c", script, "sh", *shells],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=120,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "", "", None
+    parts = result.stdout.split("@@\n") if result.returncode == 0 else []
+    if len(parts) != 3:
+        return "", "", None
+    return parts[0], parts[1], parts[2].strip() or None
+
+
+def kubernetes_accounts(
+    image: Path, destination: Path, *, apptainer: Path = Path("apptainer")
+) -> tuple[Path, Path]:
+    """The image's passwd and group with the Engine's user added, with the
+    user's own shell where the image has it.
+
+    Apptainer adds the user to a container's passwd only when it can resolve
+    the user's host id, which a user-namespace Pod hides."""
+    uid, gid = os.getuid(), os.getgid()
+    try:
+        entry = pwd.getpwuid(uid)
+        name, own_shell = entry.pw_name, entry.pw_shell
+    except KeyError:
+        name, own_shell = "rsi", ""
+    shells = tuple(dict.fromkeys(s for s in (own_shell, "/bin/bash") if s))
+    passwd_text, group_text, shell = _image_accounts(image, apptainer, shells)
+    try:
+        group_name = grp.getgrgid(gid).gr_name
+    except KeyError:
+        group_name = name
+    destination.mkdir(parents=True, exist_ok=True)
+
+    passwd = [
+        line
+        for line in passwd_text.splitlines()
+        if line and line.split(":")[0] != name and line.split(":")[2:3] != [str(uid)]
+    ]
+    passwd.append(
+        f"{name}:x:{uid}:{gid}:{name}:{KUBERNETES_CONTAINED_HOME}:{shell or '/bin/sh'}"
+    )
+    group = [line for line in group_text.splitlines() if line]
+    if not any(line.split(":")[2:3] == [str(gid)] for line in group):
+        group.append(f"{group_name}:x:{gid}:{name}")
+    paths = (destination / "passwd", destination / "group")
+    for path, content in zip(paths, (passwd, group), strict=True):
+        path.write_text("\n".join(content) + "\n")
+        path.chmod(0o644)
+    return paths
+
+
 # rsi-box's control signals (judge_isolation.BOX_CONTROL): stop or continue
 # every process in the box.
 _BOX_PAUSE = signal.SIGUSR1
@@ -230,8 +322,16 @@ for path do
   fi
   if [ -e "$path" ] || [ -L "$path" ]; then echo "visible $path"; fi
 done
-if kill -0 "$engine" 2>/dev/null; then echo "engine signal"; fi
-if [ -e "/proc/$engine" ]; then echo "engine proc"; fi
+# The Engine is "pid:start time": a process of Work's own PID namespace may
+# reuse the number (small pids in a container), never the start time.
+engine_pid=${engine%%:*} engine_start=${engine#*:} started=
+if [ -r "/proc/$engine_pid/stat" ] && read -r stat < "/proc/$engine_pid/stat"; then
+  started=$(printf '%s\n' "${stat##*) }" | cut -d' ' -f20)
+fi
+if [ "$started" = "$engine_start" ]; then echo "engine proc"; fi
+if [ -z "$started" ] || [ "$started" = "$engine_start" ]; then
+  if kill -0 "$engine_pid" 2>/dev/null; then echo "engine signal"; fi
+fi
 if [ -x "$python" ]; then
   "$python" -I -c 'import socket
 try:
@@ -254,6 +354,14 @@ sed -n '3,$s/^ *\([^:]*\):.*/interface \1/p' /proc/net/dev
 sed 's/^/mount /' /proc/self/mountinfo
 echo "isolation probe end"
 """
+
+
+def engine_identity(pid: int | None = None) -> str:
+    """``pid:start time`` (clock ticks since boot, /proc/<pid>/stat field 22),
+    which no other process shares."""
+    pid = os.getpid() if pid is None else pid
+    stat = Path(f"/proc/{pid}/stat").read_text()
+    return f"{pid}:{stat.rsplit(')', 1)[1].split()[19]}"
 
 
 def _process_table() -> dict[int, tuple[int, str, str]]:
@@ -457,6 +565,7 @@ class ApptainerAgentRuntime:
         if not raw_node_tmp or not Path(raw_node_tmp).is_absolute():
             raise SetupError("RSI_HARNESS_NODE_TMP must be an absolute path")
         self.node_tmp = Path(raw_node_tmp)
+        self._accounts: tuple[Path, Path] | None = None
         self.work_tmp = self.node_tmp / "work"
         self.judge_tmp_root = self.node_tmp / "judge"
         self.feedback = (
@@ -572,8 +681,8 @@ class ApptainerAgentRuntime:
         # A previous attempt's isolation check does not count for this one.
         (self.feedback.parent / "isolation_check.json").unlink(missing_ok=True)
         if self.plan.task.agent.name == "oracle":
-            if self.profile.scheduler.kind != "slurm":
-                raise SetupError("Oracle requires a Slurm allocation")
+            if self.profile.scheduler.kind not in ("slurm", "kubernetes"):
+                raise SetupError("Oracle requires a Slurm or Kubernetes allocation")
             if resume:
                 raise SetupError(
                     "Oracle validation cannot resume; start a fresh validation"
@@ -619,6 +728,10 @@ class ApptainerAgentRuntime:
                 directory.mkdir(parents=True, mode=0o700, exist_ok=resume)
             if resume and (not directory.is_dir() or directory.is_symlink()):
                 raise SetupError(f"resumed run directory is missing: {directory}")
+        # CODEX_HOME and CLAUDE_CONFIG_DIR name these, with or without a
+        # stop hook (which used to be the only thing creating them).
+        for name in (".codex", ".claude"):
+            (self.agent_home / name).mkdir(mode=0o700, exist_ok=True)
         self.work_tmp.mkdir(mode=0o700)
         self.judge_tmp_root.mkdir(mode=0o700)
         submit = self.control / "rsi-submit"
@@ -840,7 +953,12 @@ class ApptainerAgentRuntime:
         )
         # Not at, above or below a bind or the contained $HOME: those are
         # Work's own, whatever the host has there.
-        mine = (*planned, PurePosixPath(Path.home()))
+        home = (
+            KUBERNETES_CONTAINED_HOME
+            if self.profile.scheduler.kind == "kubernetes"
+            else PurePosixPath(Path.home())
+        )
+        mine = (*planned, home)
         probed = [
             str(path)
             for path in judge_only
@@ -856,7 +974,7 @@ class ApptainerAgentRuntime:
                     "-c",
                     _ISOLATION_PROBE,
                     "rsi-isolation-probe",
-                    str(os.getpid()),
+                    engine_identity(),
                     str(apptainer.container_python),
                     description if key >= 0 else "",
                     *probed,
@@ -2102,6 +2220,22 @@ class ApptainerAgentRuntime:
         if container != self.work_ref:
             raise SetupError("Apptainer operation targets an unknown Work process")
 
+    def _account_binds(self) -> tuple[tuple[Path, PurePosixPath, bool], ...]:
+        """In a user-namespace Pod, the user's passwd and group entries."""
+        if self.profile.scheduler.kind != "kubernetes" or not _in_user_namespace():
+            return ()
+        if self._accounts is None:
+            self._accounts = kubernetes_accounts(
+                self.payload.sif_path,
+                self.node_tmp / "accounts",
+                apptainer=self.profile.apptainer.binary,
+            )
+        passwd, group = self._accounts
+        return (
+            (passwd, PurePosixPath("/etc/passwd"), True),
+            (group, PurePosixPath("/etc/group"), True),
+        )
+
     def _base_command(
         self,
         *,
@@ -2144,10 +2278,15 @@ class ApptainerAgentRuntime:
                 "hostfs,tmp" if image_tmp else "hostfs",
             )
         )
+        if self.profile.scheduler.kind == "kubernetes":
+            # A Pod's uid has no host home Apptainer can find (none at all in
+            # a user-namespace Pod): name the contained one.
+            command.extend(("--home", str(KUBERNETES_CONTAINED_HOME)))
         command.extend(("--writable-tmpfs", "--cwd", str(self.plan.workdir)))
         dns = self.profile.apptainer.dns_bind
         binds: list[tuple[Path, PurePosixPath, bool]] = [
             (dns, PurePosixPath(str(dns)), True),
+            *self._account_binds(),
             *extra_binds,
         ]
         broker = self._agent_network(network_mode, mount_agent_home)

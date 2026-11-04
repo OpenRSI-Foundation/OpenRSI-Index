@@ -433,7 +433,7 @@ regular file) and a Judge with `model_access` (it calls the run's Agent, and
 the oracle has none). A task's `judge_model` needs `--judge-llm-auth`.
 `--agent-auth` and `--reasoning-effort` are refused.
 
-### Oracle on a Slurm/Apptainer allocation
+### Oracle on a Slurm or Kubernetes allocation
 
 No sudo or Docker daemon is needed on the execution host:
 
@@ -750,6 +750,84 @@ network, credential and Codex CLI details.
 Cluster mode preserves the native RSI-Harness run and log format. Harbor only
 compiles the task format; the adapter never invokes `harbor run`.
 
+
+### Kubernetes
+
+The `kubernetes` adapter runs each build and run job as a Kubernetes Job of
+one Pod. The Pod plays the part of a single-node allocation: the same Engine
+runs Work and Judge in it with Apptainer, with the same image build, isolation
+checks, Oracle, segmented runs and `resume` as on Slurm. Multi-node tasks are
+refused. Start from `src/rsi_harness/cluster/kubernetes/profile.toml`:
+
+- Run jobs get the submit host's environment, as Slurm forwards it: export the
+  Agent's API key and other credentials there. It travels in a 0600 file in
+  the run directory, not in the Job; `scheduler.environment` is written into
+  the Job, so keep secrets out of it. `--agent-auth local` is refused, since a
+  Pod has no home with the login.
+- Pods without `/dev/fuse` (user-namespace Pods, or a runtime that hides host
+  devices) cannot mount the image: the Engine extracts it once into the job's
+  scratch (`apptainer.temp_root`, so size that for the unpacked image).
+- `scheduler.namespace`, and `kubectl`, `kubeconfig` and `context` for the
+  submit host's access. The Harness creates, gets, lists and patches Jobs, and
+  gets and lists Pods and Events; it deletes nothing. Pods get no service
+  account token, but public-network Work can still reach the cluster network
+  (the API server, other Pods); restrict that with a NetworkPolicy for Pods
+  labelled `app.kubernetes.io/managed-by=rsi-harness`.
+- `scheduler.image`: bash, coreutils, util-linux (`flock`, `unshare`), tzdata
+  and non-setuid Apptainer; Podman too unless `builder.podman_bundle` installs
+  it.
+- `[[scheduler.volumes]]`: shared storage (`claim`, `nfs_server`/`nfs_path` or
+  `host_path`) mounted at the path the submit host uses, plus node-local
+  scratch (`empty_dir`). Storage roots, the Harness's Python environment, the
+  Agent CLI and the task data must be under a shared volume or in
+  `scheduler.image_paths`; submission is refused otherwise.
+- `scheduler.pod_security`: Apptainer and rsi-box need user namespaces and an
+  unmasked `/proc`, so Pods are `"userns"` (`hostUsers: false`, where the
+  cluster supports user-namespace Pods; ids up to 65535) or `"privileged"`.
+  Pods run as the submitting user's uid and gid (the run directory is theirs;
+  submitting as root is refused), and the Harness mounts passwd and group
+  entries for that uid. Privileged Pods see every host device, so GPU jobs
+  need `"userns"`, or
+  `privileged_devices = "allocated"` where the container runtime hides host
+  devices (`privileged_without_host_devices`). The Pod uses the device
+  plugin's GPU UUIDs (`NVIDIA_VISIBLE_DEVICES`), or else its own GPUs, and
+  stops unless it holds exactly the GPUs it requested. Apptainer must mount a
+  fresh `/proc` in the Pod, which anything mounted over `/proc` prevents: the
+  NVIDIA runtime hook, and the CDI hook `disable-device-node-modification`
+  that newer NVIDIA specs carry. Inject GPUs with CDI (for example the device
+  plugin's `DEVICE_LIST_STRATEGY=cdi-cri`) from a spec without that hook
+  (`nvidia-ctk cdi generate --disable-hook disable-device-node-modification`);
+  the Pod preflight names the problem otherwise. Work and Judge share the
+  Pod's GPU devices; `CUDA_VISIBLE_DEVICES` gives each phase its own.
+- Nodes with `kernel.apparmor_restrict_unprivileged_userns=1` (Ubuntu 23.10
+  and later) need `scheduler.apparmor_profile`: a Localhost AppArmor profile
+  loaded on every node the Pods can run on, such as
+  `abi <abi/4.0>, profile rsi-userns flags=(unconfined) { userns, }`. A Pod
+  that cannot create a user namespace stops at once and says so; a profile
+  missing on the node makes the kubelet reject the Pod, and the error names it.
+- GPUs are requested as `scheduler.gpu_resource` (default `nvidia.com/gpu`);
+  CPU and memory requests equal their limits; `request_tmp` requests the job's
+  scratch as `ephemeral-storage`. `node_selector`, `tolerations`,
+  `excluded_hosts`, `priority_class`, `runtime_class` (for example `nvidia`) and
+  `image_pull_secrets` place the Pod;
+  `[scheduler.build]` overrides image, placement and GPUs for builds only.
+- A Pod's walltime is its `activeDeadlineSeconds`, counted from its start.
+  With `run_walltime_limit`, the Pod is terminated before its limit and the
+  grace period that follows is the Judge drain reserve.
+
+`--dry-run` prints both Job manifests; a submission writes its manifest (and
+the account files) to `<run_dir>/build/<job>/` or `<run_dir>/run/<job>/`.
+Interrupting the submit command suspends the Job (annotated
+`rsi-harness.io/cancelled`): its Pod gets SIGTERM and its grace period, and the
+Job keeps its end time; delete cancelled Jobs once the run is done. A Pod of a
+cancelled Job that starts anyway stops before the payload, and the credentials
+file is removed once the Pod has read it or the Job is cancelled. A Pod that
+cannot be created or started (admission, mounts, image, configuration) is
+cancelled the same way, naming the reason; an unschedulable Pod, a quota wait
+or a queue's suspension waits like a queued job. The Kubernetes API may be
+unreachable for up to 15 minutes before a wait fails. Finished Jobs stay for
+`ttl_seconds_after_finished` (default a week, at least an hour); `resume`
+reads the Job's end while it exists.
 
 ## View results
 

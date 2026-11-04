@@ -731,7 +731,7 @@ def test_initialize_fails_closed_before_the_agent_and_records_why(
         runtime.initialize()
 
     probe = calls[-1]
-    assert probe[4] == str(os.getpid())
+    assert probe[4] == runtime_module.engine_identity()
     assert "/srv/rsi/harness/runs" in probe[7:]
     # At, above or below a bind (here /tmp), or the contained $HOME: never
     # probed.
@@ -940,7 +940,7 @@ def test_the_probe_reports_what_this_host_shows(tmp_path):
     full.mkdir()
     (full / "secret").write_text("x")
     probe = ["/bin/sh", "-c", runtime_module._ISOLATION_PROBE, "probe"]
-    probe += [str(os.getpid()), sys.executable]
+    probe += [runtime_module.engine_identity(), sys.executable]
     description = f"rsi-isolation-test:{os.getpid()}"
     key = runtime_module._keyring_call(0, b"user", description.encode(), b"1", 1, -4)
     assert key >= 0
@@ -971,6 +971,20 @@ def test_the_probe_reports_what_this_host_shows(tmp_path):
     report = _report(result.stdout, host_mountinfo=None)
     assert report["passed"] is False
     assert any(f"Work sees {full}" == item for item in report["failures"])
+
+
+def test_a_process_reusing_the_engine_pid_is_not_the_engine():
+    """In a container's PID namespace a Work process may hold the number the
+    Engine has outside it; only the start time tells them apart."""
+    probe = ["/bin/sh", "-c", runtime_module._ISOLATION_PROBE, "probe"]
+    pid, started = runtime_module.engine_identity().split(":")
+    lines = subprocess.run(
+        [*probe, f"{pid}:{int(started) + 1}", sys.executable, ""],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    assert "engine proc" not in lines and "engine signal" not in lines
 
 
 def test_initialize_proves_the_box_before_any_task_code(tmp_path, monkeypatch):

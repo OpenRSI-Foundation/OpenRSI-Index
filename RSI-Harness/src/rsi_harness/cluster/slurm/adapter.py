@@ -40,6 +40,7 @@ class SlurmClusterAdapter(BlueVelaClusterAdapter):
 
     scheduler_log_pattern = "slurm.%j"
     supports_cpu_work = True
+    scheduler_label = "Slurm"
 
     def _compile(self, request: ClusterRunRequest) -> TaskDefinition:
         definition = super()._compile(request)
@@ -47,7 +48,9 @@ class SlurmClusterAdapter(BlueVelaClusterAdapter):
             definition.require_disjoint_phase_nodes
             or definition.verifier.gpu_count > self.profile.resources.gpus_per_node
         ):
-            raise SetupError("CPU Work requires a single-node Slurm allocation")
+            raise SetupError(
+                f"CPU Work requires a single-node {self.scheduler_label} allocation"
+            )
         resources = derive_resource_plan(definition, self.profile)
         self._validate_segment_budget(
             definition,
@@ -92,8 +95,8 @@ class SlurmClusterAdapter(BlueVelaClusterAdapter):
         if definition.agent.name == "oracle":
             raise SetupError(
                 "run exceeds run_walltime_limit; Oracle cannot use segmented "
-                "Slurm runs. Use a partition with enough walltime or "
-                "explicitly revise the task's budget."
+                f"{self.scheduler_label} runs. Use a partition with enough "
+                "walltime or explicitly revise the task's budget."
             )
         if multi_node:
             raise SetupError(
@@ -111,7 +114,8 @@ class SlurmClusterAdapter(BlueVelaClusterAdapter):
         needed = 1 + math.ceil((agent_seconds - final_capacity) / segment_capacity)
         if needed > attempts_left:
             raise SetupError(
-                f"remaining Agent budget needs {needed} planned Slurm allocations "
+                f"remaining Agent budget needs {needed} planned "
+                f"{self.scheduler_label} allocations "
                 f"but only {attempts_left} of {MAX_ATTEMPTS} attempts remain; "
                 "use a longer run_walltime_limit or explicitly revise the budget"
             )
@@ -188,7 +192,7 @@ class SlurmClusterAdapter(BlueVelaClusterAdapter):
                 "drain reserve and Slurm signal margin (or reserve is unavailable); "
                 "use a longer allocation or a fresh task plan"
             )
-        return SlurmJobSpec.model_validate(
+        return type(spec).model_validate(
             {**spec.model_dump(), "walltime": limit, "signal_seconds": reserve}
         )
 
