@@ -1,5 +1,6 @@
 """Offline contracts. Cloud acceptance uses fixtures/tasks/modal-native."""
 
+import re
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -114,14 +115,22 @@ def test_snapshot_digest_tracks_content_and_executable_bit(tmp_path):
     assert (tmp_path / "a/candidate").read_text() == "v1"
 
 
-def test_cli_exposes_modal_without_importing_sdk():
+@pytest.mark.parametrize("color", [False, True])
+def test_cli_exposes_modal_without_importing_sdk(monkeypatch, color):
+    from typer import rich_utils
     from typer.testing import CliRunner
 
     from rsi_harness.cli import app
 
-    result = CliRunner().invoke(app, ["modal", "run", "--help"])
+    monkeypatch.setenv("TERM", "xterm")
+    monkeypatch.setattr(rich_utils, "FORCE_TERMINAL", color)
+    result = CliRunner().invoke(app, ["modal", "run", "--help"], color=color)
     assert result.exit_code == 0, result.output
-    assert "--max-submissions" in result.output
+    if color:
+        assert "\x1b[" in result.output
+    # Rich can insert ANSI styling inside an option name on CI terminals.
+    plain_output = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result.output)
+    assert "--max-submissions" in plain_output
 
 
 def test_volume_artifacts_preserve_full_bytes_without_hardlinks(tmp_path):
