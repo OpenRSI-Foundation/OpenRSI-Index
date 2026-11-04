@@ -8,7 +8,7 @@ The tested implementation is commit `4c4c2cb` on `codex/modal-native-runtime`.
 The receipt records each immutable Modal image ID, physical GPU UUID (when
 applicable), run ID, native result, and unchanged run deadline. Files below
 `native/` were downloaded directly from the run's Modal Volume without editing.
-The later evidence-only commit does not change the tested implementation.
+Later commits add evidence and format fixture sources without changing runner logic.
 
 | Check | Observed result | Evidence |
 | --- | --- | --- |
