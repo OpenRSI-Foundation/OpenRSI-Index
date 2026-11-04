@@ -628,6 +628,12 @@ class EnvDaytonaHost(SandboxModel):
     # As EnvE2BHost's, but read only for the image config: Daytona pulls
     # private images with the registries configured in the organization.
     registry_auth_file: str | None = None
+    # Minutes a create waits for a runner before Daytona cancels it: "auto"
+    # sets the backend's own and stops once the organization refuses it (it
+    # has no queue timeouts), "off" never sets one, a number always sets it.
+    queue_timeout: Literal["auto", "off"] | Annotated[int, Field(strict=True, ge=1)] = (
+        "auto"
+    )
 
     @field_validator("api_key_file", "registry_auth_file")
     @classmethod

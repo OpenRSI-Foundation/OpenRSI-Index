@@ -9,7 +9,9 @@ Daytona's flags runs in tests/runtime/test_sandbox_e2b.py's generic tests.
 ``FakeDaytona.can_delete`` and ``listing`` make the key one with
 ``write:sandboxes`` only, as measured on 2026-10-30: a delete is refused
 (403), the listing comes back empty (or refused), and a stop removes an
-ephemeral sandbox.
+ephemeral sandbox. ``queue_timeouts`` off makes the organization one
+without queue timeouts, as measured on 2026-11-04: a create that sets one
+is refused (403), the same create without it works.
 """
 
 from __future__ import annotations
@@ -19,8 +21,10 @@ import importlib.metadata
 import io
 import itertools
 import json
+import logging
 import os
 import sys
+import threading
 import tomllib
 import types
 from pathlib import Path
@@ -38,6 +42,7 @@ from rsi_harness.runtime.sandbox_daytona import (
     SDK_VERSION,
     SdkDaytonaClient,
     check_daytona_host,
+    daytona_client,
     read_api_key,
     sandbox_shape,
 )
@@ -93,6 +98,9 @@ class DaytonaQueueTimeoutError(DaytonaTimeoutError):
 
 
 DENIED = "Failed to remove sandbox: Access denied"
+UNQUEUED = (
+    "Failed to create sandbox: Queue timeout is not enabled for this organization"
+)
 
 
 def model(name):
@@ -279,6 +287,8 @@ class FakeDaytona:
         self.fail_get = []
         # Sandbox ids a stop leaves in place (``stop_leaves`` for all).
         self.stuck = set()
+        # Whether the organization enables queue timeouts.
+        self.queue_timeouts = True
         self.lose_answer = False
         # Sandbox id -> reads before a starting one has started.
         self.settle = {}
@@ -309,6 +319,8 @@ class FakeDaytona:
 
             async def create(self, params, *, timeout, on_snapshot_create_logs=None):
                 sdk.calls.append(("create", params, timeout))
+                if not sdk.queue_timeouts and getattr(params, "queue_timeout", None):
+                    raise DaytonaForbiddenError(UNQUEUED)
                 if sdk.refuse:
                     raise sdk.refuse.pop(0)
                 if on_snapshot_create_logs is not None:
@@ -329,6 +341,8 @@ class FakeDaytona:
                     error = sdk.refuse_after.pop(0)
                     if isinstance(error, DaytonaQueueTimeoutError):
                         del sdk.boxes[box.id]
+                    elif isinstance(error, DaytonaTimeoutError):
+                        error.sandbox_id = box.id  # as the SDK attaches it
                     raise error
                 if sdk.lose_answer:
                     sdk.lose_answer = False
@@ -1018,6 +1032,265 @@ def test_a_build_sandbox_without_an_answer_is_recovered_by_its_name(
         assert client.list({"rsi_env_id": ENV_ID}) == []
         assert kill_run_sandboxes(client, "run-1", poll=0) == (lost,)
         assert sdk.boxes == {}
+        assert client.ledger.open_entries() == []
+    finally:
+        client.close()
+
+
+# -- the queue timeout -----------------------------------------------------------------
+
+
+def creates(sdk):
+    """Each create's params and timeout, in order."""
+    return [(params, timeout) for _, params, timeout in calls(sdk, "create")]
+
+
+def events(client):
+    """Each record of the client's ledger: its event and outcome, in order."""
+    lines = client.ledger.path.read_text().splitlines()
+    return [
+        (record["event"], record.get("outcome")) for record in map(json.loads, lines)
+    ]
+
+
+def ends(client):
+    return [outcome for event, outcome in events(client) if event == "end"]
+
+
+def test_the_policys_queue_timeout_is_auto_off_or_whole_minutes():
+    table = {"api_key_env": "K", "target": "us"}
+    assert EnvDaytonaHost(**table).queue_timeout == "auto"
+    for value in ("off", 1, 30):
+        assert EnvDaytonaHost(**table, queue_timeout=value).queue_timeout == value
+    for value in ("on", "5", 0, 2.5, True):
+        with pytest.raises(ValueError):
+            EnvDaytonaHost(**table, queue_timeout=value)
+
+
+@pytest.mark.parametrize(
+    ("setting", "minutes", "build_wait"),
+    [
+        ("auto", sandbox_daytona.QUEUE_MIN, 0),
+        ("off", None, sandbox_daytona.UNQUEUED_BUILD_SEC),
+        (5, 5, 0),
+    ],
+)
+def test_every_create_sets_the_policys_queue_timeout(
+    sdk, monkeypatch, setting, minutes, build_wait
+):
+    monkeypatch.setenv("RSI_T_DAYTONA", KEY)
+    client = daytona_client(
+        EnvDaytonaHost(api_key_env="RSI_T_DAYTONA", target="us", queue_timeout=setting)
+    )
+    try:
+        client.build_template("rsi-snap", "busybox", (1, 1, 1), log=lambda line: None)
+        sandbox(client)
+        other_env(sdk, client, "b")
+        made = creates(sdk)
+        # An organization with queue timeouts gets the setting every time.
+        assert [vars(params).get("queue_timeout") for params, _ in made] == [
+            minutes
+        ] * 3
+        # Without one a build sandbox's wait is bounded; an env's always is.
+        assert [timeout for _, timeout in made] == [
+            build_wait,
+            sandbox_daytona.CREATE_SEC,
+            sandbox_daytona.CREATE_SEC,
+        ]
+    finally:
+        client.close()
+
+
+def test_an_organization_without_queue_timeouts_gets_the_create_again_without_one(
+    sdk, tmp_path, quick, caplog
+):
+    caplog.set_level(logging.WARNING, logger=sandbox_daytona.__name__)
+    sdk.queue_timeouts = False
+    client = SdkDaytonaClient(KEY, target="us")
+    client.ledger = ledger_of(tmp_path)
+    client._templates["rsi-snap"] = ("busybox", (1, 1, 1))
+    try:
+        sandbox_id = sandbox(client)
+        # Refused, proven absent by a read of its name, asked once more.
+        assert [call[0] for call in sdk.calls] == ["create", "get", "create"]
+        assert ("get", f"rsi-{ENV_ID}") in sdk.calls
+        (refused, _), (again, timeout) = creates(sdk)
+        assert refused.queue_timeout == sandbox_daytona.QUEUE_MIN
+        assert "queue_timeout" not in vars(again)
+        assert again.name == refused.name and timeout == sandbox_daytona.CREATE_SEC
+        # The refused request ended, the second one is the sandbox's.
+        assert events(client) == [
+            ("create", None),
+            ("end", "refused"),
+            ("create", None),
+            ("created", None),
+        ]
+        (entry,) = client.ledger.open_entries()
+        assert entry.sandbox_id == sandbox_id
+        # Later creates set none, and a build sandbox's wait is bounded.
+        sdk.calls.clear()
+        other_env(sdk, client, "b")
+        client.build_template("rsi-img", "busybox", (1, 1, 1), log=lambda line: None)
+        assert [("queue_timeout" in vars(p), wait) for p, wait in creates(sdk)] == [
+            (False, sandbox_daytona.CREATE_SEC),
+            (False, sandbox_daytona.UNQUEUED_BUILD_SEC),
+        ]
+        # Said once, without the key.
+        (warning,) = [
+            record for record in caplog.records if "queue timeout" in record.message
+        ]
+        assert warning.levelno == logging.WARNING and "not enabled" in warning.message
+        assert KEY not in caplog.text
+    finally:
+        client.close()
+
+
+def test_creates_refused_together_are_each_asked_again_once(
+    sdk, tmp_path, quick, caplog
+):
+    caplog.set_level(logging.WARNING, logger=sandbox_daytona.__name__)
+    sdk.queue_timeouts = False
+    client = SdkDaytonaClient(KEY, target="us")
+    client.ledger = ledger_of(tmp_path)
+    client._templates["rsi-snap"] = ("busybox", (1, 1, 1))
+    first, second = f"rsi-e{'b' * 32}", f"rsi-e{'c' * 32}"
+    request, seen = client._sdk.create, []
+
+    async def until(check):
+        for _ in range(1000):
+            if check():
+                return
+            await asyncio.sleep(0.01)
+
+    async def create(params, **options):
+        # Both requests set the option; the second is refused only once the
+        # first was asked again without it (the client no longer sets it).
+        queued = getattr(params, "queue_timeout", None) is not None
+        seen.append((params.name, queued))
+        if queued and params.name == first:
+            await until(lambda: (second, True) in seen)
+        elif queued:
+            await until(lambda: (first, False) in seen)
+        return await request(params, **options)
+
+    client._sdk.create = create
+    made = {}
+
+    def env(letter):
+        made[letter] = other_env(sdk, client, letter)
+
+    threads = [threading.Thread(target=env, args=(letter,)) for letter in "bc"]
+    try:
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
+        # Each refused once and asked once more without it: one sandbox each.
+        assert sorted(made) == ["b", "c"] and set(made.values()) == set(sdk.boxes)
+        asked = [
+            (params.name, "queue_timeout" in vars(params)) for params, _ in creates(sdk)
+        ]
+        assert sorted(asked) == [
+            (first, False),
+            (first, True),
+            (second, False),
+            (second, True),
+        ]
+        assert ends(client) == ["refused", "refused"]
+        open_ids = {entry.sandbox_id for entry in client.ledger.open_entries()}
+        assert open_ids == set(made.values())
+        # Said once.
+        assert sum("queue timeout" in record.message for record in caplog.records) == 1
+    finally:
+        client.close()
+
+
+def test_a_build_sandbox_refused_for_its_queue_timeout_is_asked_again_by_a_new_name(
+    sdk, tmp_path, quick
+):
+    sdk.queue_timeouts = False
+    client = SdkDaytonaClient(KEY, target="us")
+    client.ledger = ledger_of(tmp_path)
+    try:
+        client.build_template("rsi-snap", "busybox", (1, 1, 1), log=lambda line: None)
+        assert client.template_exists("rsi-snap")
+        (refused, wait), (again, bounded) = creates(sdk)
+        assert (refused.queue_timeout, wait) == (sandbox_daytona.QUEUE_MIN, 0)
+        assert "queue_timeout" not in vars(again)
+        assert bounded == sandbox_daytona.UNQUEUED_BUILD_SEC
+        assert again.name != refused.name
+        assert ends(client) == ["refused", "deleted"]
+        assert client.ledger.open_entries() == []
+    finally:
+        client.close()
+
+
+def test_a_queue_timeout_the_policy_sets_is_never_dropped(sdk, tmp_path, quick):
+    sdk.queue_timeouts = False
+    client = SdkDaytonaClient(KEY, target="us", queue_timeout=5)
+    client.ledger = ledger_of(tmp_path)
+    client._templates["rsi-snap"] = ("busybox", (1, 1, 1))
+    try:
+        for _ in range(2):
+            with pytest.raises(InfrastructureError) as refused:
+                sandbox(client)
+            assert not isinstance(refused.value, ProviderCapacityError)
+            message = str(refused.value)
+            assert "queue_timeout = 5 ([environments.host.daytona])" in message
+            assert "not enabled" in message and KEY not in message
+        # Asked with it each time, never again without it.
+        assert [params.queue_timeout for params, _ in creates(sdk)] == [5, 5]
+        assert ends(client) == ["refused", "refused"]
+        assert client.ledger.open_entries() == []
+    finally:
+        client.close()
+
+
+def test_a_quota_refusal_keeps_the_queue_timeout(sdk, tmp_path, quick):
+    client = bound(sdk, tmp_path)
+    try:
+        sdk.refuse = [DaytonaForbiddenError("Total CPU limit exceeded. Maximum: 40")]
+        with pytest.raises(ProviderCapacityError):
+            sandbox(client)
+        # Not asked again by itself, and the next create still sets it.
+        assert len(creates(sdk)) == 1
+        sandbox(client)
+        assert [params.queue_timeout for params, _ in creates(sdk)] == [
+            sandbox_daytona.QUEUE_MIN
+        ] * 2
+        assert ends(client)[-1] == "refused"
+    finally:
+        client.close()
+
+
+@pytest.mark.parametrize("landed", [True, False])
+def test_a_build_sandbox_without_a_queue_timeout_gives_up_as_capacity(
+    sdk, tmp_path, quick, monkeypatch, landed
+):
+    # Its wait outlasts the capacity wait: by then that is spent.
+    assert sandbox_daytona.UNQUEUED_BUILD_SEC > sandbox_daytona.CAPACITY_WAIT_SEC
+    monkeypatch.setattr(sandbox_daytona, "CAPACITY_WAIT_SEC", 0)
+    client = SdkDaytonaClient(KEY, target="us", queue_timeout="off")
+    client.ledger = ledger_of(tmp_path)
+    try:
+        # The SDK's deadline, after the sandbox was made or before.
+        late = DaytonaTimeoutError("Function 'create' exceeded timeout of 1800 s.")
+        if landed:
+            sdk.refuse_after = [late]
+        else:
+            sdk.refuse = [late]
+        lines = []
+        with pytest.raises(ProviderCapacityError, match="without a queue timeout"):
+            client.build_template("rsi-img", "busybox", (1, 1, 1), log=lines.append)
+        assert not client.template_exists("rsi-img")
+        assert not any("at capacity" in line for line in lines)
+        ((params, wait),) = creates(sdk)
+        assert "queue_timeout" not in vars(params)
+        assert wait == sandbox_daytona.UNQUEUED_BUILD_SEC
+        # What landed was removed; nothing is live or open.
+        assert calls(sdk, "delete") == ([("delete", "sb-0")] if landed else [])
+        assert [box for box in sdk.boxes.values() if box.state != "destroyed"] == []
+        assert ends(client) == ["deleted" if landed else "refused"]
         assert client.ledger.open_entries() == []
     finally:
         client.close()

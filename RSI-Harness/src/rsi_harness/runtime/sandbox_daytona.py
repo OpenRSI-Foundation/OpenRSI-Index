@@ -34,6 +34,14 @@ read by name proves nothing landed: the SDK's polls after the request
 template's build sandbox waits for capacity up to ``CAPACITY_WAIT_SEC``
 first.
 
+Each create sets the policy's ``queue_timeout`` (by default "auto",
+``QUEUE_MIN`` minutes). An organization without queue timeouts refuses
+such a create (403); under "auto", once a read by name proves nothing
+landed, the create is made again without it, as is every later one. A
+number set in the policy is never dropped: the create fails naming it.
+Without a queue timeout a build sandbox is given up after
+``UNQUEUED_BUILD_SEC`` as a capacity refusal, what landed removed.
+
 Each process is one command of its own session, run by the session's
 shell as a child (``_RUN_SCRIPT``: a top-level ``exec`` would replace the
 shell), its output followed over the toolbox's log websocket. Daytona
@@ -111,9 +119,16 @@ CAPACITY_RETRY_SEC = (5.0, 60.0)
 LANDED_RETRY_SEC = (1.0, 2.0, 4.0)
 # Minutes a create waits for a runner before Daytona cancels it (destroys
 # the sandbox: a DaytonaQueueTimeoutError, typed as capacity), below
-# CREATE_SEC. Daytona honors it only where the organization enables queue
-# timeouts; otherwise its own default (or none) applies.
+# CREATE_SEC: the policy's queue_timeout "auto". An organization without
+# queue timeouts does not ignore it: it refuses the whole create (403,
+# "Queue timeout is not enabled for this organization", measured on
+# 2026-11-04 with daytona==0.227.0), and the same create without it works.
 QUEUE_MIN = max(1, CREATE_SEC // 60 - 1)
+# Without a queue timeout, a template's build sandbox (otherwise waited for
+# however long its build takes) is given up this long after its request:
+# what landed is removed, and it is a capacity refusal, past
+# CAPACITY_WAIT_SEC (so not asked for again: the pull fails).
+UNQUEUED_BUILD_SEC = 30 * 60.0
 # After a command's log ends, its exit code is asked for this many times.
 EXIT_TRIES = 25
 EXIT_POLL_SEC = 0.2
@@ -145,6 +160,8 @@ _CAPACITY = re.compile(
     re.IGNORECASE,
 )
 _NOT_CAPACITY = re.compile(r"per sandbox|must be|invalid", re.IGNORECASE)
+# A create refused for its queue_timeout (403): the organization has none.
+_UNQUEUED = re.compile(r"queue timeout is not enabled", re.IGNORECASE)
 # $1 the cwd, then NAME=value pairs and the command, set by ``env`` (which
 # takes any name, as Docker does; ``export`` fails on one that is not a
 # shell name), with stdin closed (an async session command's stdin is a
@@ -341,6 +358,7 @@ class SdkDaytonaClient:
         template_prefix: str = "rsi",
         proxy: str | None = None,
         registry_auth_file: str | None = None,
+        queue_timeout: str | int = "auto",
     ) -> None:
         import daytona
 
@@ -350,6 +368,16 @@ class SdkDaytonaClient:
         self._prefix = template_prefix
         self._proxy = proxy
         self._registry_auth_file = registry_auth_file
+        # The policy's queue_timeout, and the minutes a create sets (None:
+        # none), which "auto" drops at the organization's first refusal.
+        self._queue_setting = queue_timeout
+        self._queue_min: int | None = (
+            QUEUE_MIN
+            if queue_timeout == "auto"
+            else None
+            if queue_timeout == "off"
+            else int(queue_timeout)
+        )
         self._lock = threading.Lock()
         self._closed = False
         self._boxes: dict[str, Any] = {}
@@ -470,6 +498,38 @@ class SdkDaytonaClient:
         text = str(error)
         return bool(_CAPACITY.search(text)) and not _NOT_CAPACITY.search(text)
 
+    def _timed_out(self, error: BaseException) -> bool:
+        """Whether the SDK's own deadline of a create passed: not the API's
+        queue timeout, not a connection's."""
+        return isinstance(error, self._kinds("DaytonaTimeoutError")) and not (
+            isinstance(
+                error, self._kinds("DaytonaQueueTimeoutError", "DaytonaConnectionError")
+            )
+        )
+
+    def _queue_option(self) -> dict[str, int]:
+        """A create's queue_timeout, while it sets one."""
+        with self._lock:
+            minutes = self._queue_min
+        return {} if minutes is None else {"queue_timeout": minutes}
+
+    def _drop_queue_timeout(self, refusal: InfrastructureError) -> None:
+        """The organization refused the queue timeout: under "auto" no
+        create sets it from now on; a number in the policy fails, named."""
+        if self._queue_setting != "auto":
+            raise InfrastructureError(
+                f"{refusal}; the policy sets queue_timeout = {self._queue_setting} "
+                '([environments.host.daytona]): set it to "auto" or "off"'
+            ) from None
+        with self._lock:
+            first, self._queue_min = self._queue_min is not None, None
+        if first:
+            LOGGER.warning(
+                "%s: sandboxes are created without one from now on "
+                '(queue_timeout = "off" skips the refused request)',
+                refusal,
+            )
+
     def _login(self, reference: str) -> tuple[str, str] | None:
         if self._registry_auth_file is None:
             return None
@@ -510,8 +570,8 @@ class SdkDaytonaClient:
                 public=False,
                 ephemeral=True,
                 auto_stop_interval=1,
-                queue_timeout=QUEUE_MIN,
                 network_block_all=True,
+                **self._queue_option(),
             )
 
         log(f"daytona builds {image}\n")
@@ -546,7 +606,7 @@ class SdkDaytonaClient:
         while True:
             try:
                 return self._create(
-                    params(),
+                    params,
                     timeout=0,
                     metadata=metadata,
                     on_snapshot_create_logs=lambda line: log(line + "\n"),
@@ -561,28 +621,45 @@ class SdkDaytonaClient:
 
     def _create(
         self,
-        params: Any,
+        make_params: Callable[[], Any],
         *,
         timeout: float,
         metadata: Mapping[str, str],
         **options: Any,
     ) -> Any:
-        """Create the sandbox ``params`` name, in the ledger by name before
-        the request and by id after. A capacity refusal is a
+        """Create the sandbox ``make_params()`` names, in the ledger by name
+        before the request and by id after. A capacity refusal is a
         ProviderCapacityError, and its ledger entry ends, only once a read
         by name finds nothing: the SDK's polls after the request can be
         refused too. One that landed is recorded and its refusal is a plain
         InfrastructureError (the caller removes it); one whose read keeps
-        failing stays open in the ledger, for recovery."""
+        failing stays open in the ledger, for recovery. A refused queue
+        timeout ends its entry the same way; under "auto" the create is made
+        once more, from new params that set none. ``timeout`` 0 (none, a
+        build sandbox's) is UNQUEUED_BUILD_SEC for params that set none:
+        then the SDK's deadline is a capacity refusal, and what landed goes."""
         ledger = self.ledger
+        params = make_params()
         if ledger is not None:
             ledger.creating(params.name, metadata)
+        queued = getattr(params, "queue_timeout", None) is not None
+        bounded = not timeout and not queued
 
         async def create() -> Any:
             try:
-                return await self._sdk.create(params, timeout=timeout, **options)
+                return await self._sdk.create(
+                    params,
+                    timeout=UNQUEUED_BUILD_SEC if bounded else timeout,
+                    **options,
+                )
             except Exception as error:
-                if not self._capacity(error):
+                unqueued = (
+                    queued
+                    and self._forbidden(error)
+                    and bool(_UNQUEUED.search(str(error)))
+                )
+                late = bounded and self._timed_out(error)
+                if not (unqueued or late or self._capacity(error)):
                     raise
                 text = self._hide(str(error))[:512]
                 try:
@@ -592,11 +669,25 @@ class SdkDaytonaClient:
                         f"daytona refused the sandbox ({text}), and whether "
                         f"{params.name} landed is unknown: {self._clean(failure)}"
                     ) from None
-                if landed is not None:
+                if landed is not None and late:
+                    # Still waiting for a runner (or its build): it goes.
+                    if ledger is not None:
+                        ledger.created(params.name, landed.id)
+                    await self._remove(landed)
+                elif landed is not None:
                     raise _Landed(
-                        landed,
-                        f"daytona sandbox {landed} ({params.name}) was created, "
+                        landed.id,
+                        f"daytona sandbox {landed.id} ({params.name}) was created, "
                         f"then refused while it started: {text}",
+                    ) from None
+                if unqueued:
+                    raise _Unqueued(
+                        f"daytona refused the queue timeout: {text}"
+                    ) from None
+                if late:
+                    raise ProviderCapacityError(
+                        f"daytona started no sandbox within {UNQUEUED_BUILD_SEC:.0f} "
+                        f"s without a queue timeout: {text}"
                     ) from None
                 raise ProviderCapacityError(
                     f"daytona refused the sandbox for capacity: {text}"
@@ -608,6 +699,14 @@ class SdkDaytonaClient:
             if ledger is not None:
                 ledger.ended("refused", name=params.name)
             raise
+        except _Unqueued as refused:
+            if ledger is not None:
+                ledger.ended("refused", name=params.name)
+            self._drop_queue_timeout(refused)
+            # New params set no queue timeout: this is never refused again.
+            return self._create(
+                make_params, timeout=timeout, metadata=metadata, **options
+            )
         except _Landed as landed:
             if ledger is not None:
                 ledger.created(params.name, landed.sandbox_id)
@@ -616,9 +715,9 @@ class SdkDaytonaClient:
             ledger.created(params.name, box.id)
         return box
 
-    async def _landed(self, name: str) -> str | None:
-        """The id of the sandbox ``name`` if it exists, None if a read proves
-        it does not; a read failing every time raises its error."""
+    async def _landed(self, name: str) -> Any:
+        """The sandbox ``name`` if it exists, None if a read proves it does
+        not; a read failing every time raises its error."""
         failure: BaseException | None = None
         for wait in (0.0, *LANDED_RETRY_SEC):
             if wait:
@@ -630,7 +729,7 @@ class SdkDaytonaClient:
                 continue
             if box is None or _value(box.state) == "destroyed":
                 return None
-            return box.id
+            return box
         assert failure is not None
         raise failure
 
@@ -667,19 +766,22 @@ class SdkDaytonaClient:
         minutes = math.ceil(timeout / 60)
         with self._lock:
             image, shape = self._templates[template]
-        params = self._daytona.CreateSandboxFromImageParams(
-            image=self._image(image),
-            resources=self._resources(shape),
-            name=self._name(metadata[f"{META_PREFIX}env_id"]),
-            os_user="root",
-            labels=dict(metadata),
-            public=False,
-            ephemeral=True,
-            ttl_minutes=minutes,
-            auto_stop_interval=minutes,
-            queue_timeout=QUEUE_MIN,
-            **network,
-        )
+
+        def params() -> Any:
+            return self._daytona.CreateSandboxFromImageParams(
+                image=self._image(image),
+                resources=self._resources(shape),
+                name=self._name(metadata[f"{META_PREFIX}env_id"]),
+                os_user="root",
+                labels=dict(metadata),
+                public=False,
+                ephemeral=True,
+                ttl_minutes=minutes,
+                auto_stop_interval=minutes,
+                **self._queue_option(),
+                **network,
+            )
+
         box = self._create(params, timeout=CREATE_SEC, metadata=metadata)
         with self._lock:
             self._boxes[box.id] = box
@@ -1011,6 +1113,11 @@ class _Landed(InfrastructureError):
         self.sandbox_id = sandbox_id
 
 
+class _Unqueued(InfrastructureError):
+    """A create the organization refused for its queue timeout (it has
+    none), proven not to have landed."""
+
+
 def sandbox_shape(cpus: float, memory_mb: int, disk_mb: int) -> tuple[int, int, int]:
     """Daytona sizes a sandbox in whole cores and GiB: round up."""
     return (
@@ -1041,6 +1148,7 @@ def daytona_client(
         template_prefix=settings.template_prefix,
         proxy=settings.proxy,
         registry_auth_file=settings.registry_auth_file,
+        queue_timeout=settings.queue_timeout,
     )
 
 
