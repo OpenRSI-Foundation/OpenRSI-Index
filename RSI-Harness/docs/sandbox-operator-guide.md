@@ -265,6 +265,7 @@ target = "us"
 | `template_prefix` | Prefix of the sandbox names the broker makes (default `rsi`) |
 | `proxy` | An `http` or `https` proxy URL for every Daytona call, without credentials |
 | `registry_auth_file` | As for E2B, but only to read the image config: Daytona pulls private images with the registries set up in the organization |
+| `queue_timeout` | Minutes a create waits for a runner before Daytona cancels it: `"auto"` (the default) asks for 2 and stops asking once the organization refuses it, `"off"` never asks, a number always asks for that many (see below) |
 
 The key, `api_url` and `target` are always passed explicitly, so neither
 `DAYTONA_*` variables nor `.env` files change them.
@@ -299,9 +300,21 @@ What Daytona does differently:
   and names every leftover. Until then a leftover holds quota until its
   TTL. A key that may delete and list works as before.
 - Each create asks Daytona to cancel it after 2 minutes without a runner
-  (`queue_timeout`, below the 180 s create timeout); Daytona honors that only
-  where the organization enables queue timeouts. A cancelled create is a
-  capacity refusal.
+  (`queue_timeout`, below the 180 s create timeout). A cancelled create is a
+  capacity refusal. An organization that does not enable queue timeouts
+  refuses every create that asks (403, "Queue timeout is not enabled for
+  this organization"). With `"auto"` the broker proves by a read of the
+  name that nothing landed, logs a warning once, creates the sandbox again
+  without the option and leaves it out of every later create; `"off"` skips
+  that first refused request. With a number the create fails, naming the
+  field. An env create gives up after 180 s in every case, so a number
+  above 2 lengthens only a build sandbox's wait for a runner; without a
+  queue timeout, or with a number above 2, an env create that no runner
+  took within those 180 s is an ordinary failed create, not a capacity
+  refusal. Without a queue timeout a template's build sandbox, which
+  otherwise waits however long its build takes, gives up after 30
+  minutes: whatever landed is removed, and the pull fails as a capacity
+  refusal (the 10 minutes below are spent by then).
 - A template's build sandbox that Daytona refuses for capacity is asked for
   again, backing off from 5 to 60 s, for at most 10 minutes; then the pull
   fails.
