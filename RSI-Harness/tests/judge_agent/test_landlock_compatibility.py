@@ -235,3 +235,29 @@ def test_native_functional_policy_does_not_hide_other_failures(
     monkeypatch.setattr(isolation, "landlock_abi", lambda _: (abi, ""))
     with pytest.raises(isolation.Failure):
         native_signal_compatibility.__wrapped__()
+
+
+@pytest.mark.skipif(not hasattr(os, "O_PATH"), reason="Linux O_PATH required")
+@pytest.mark.parametrize("error_number", [errno.EACCES, errno.EPERM, errno.EIO])
+def test_inaccessible_metadata_never_adds_rule(monkeypatch, tmp_path, error_number):
+    ruleset = object.__new__(isolation.Ruleset)
+    descriptor = os.open(tmp_path, os.O_RDONLY)
+    real_fstat = os.fstat
+    added = []
+    monkeypatch.setattr(isolation.os, "open", lambda *_: descriptor)
+
+    def denied(_descriptor):
+        raise OSError(error_number, "injected metadata failure")
+
+    monkeypatch.setattr(isolation.os, "fstat", denied)
+    monkeypatch.setattr(isolation, "syscall", lambda *args: added.append(args))
+    if error_number in (errno.EACCES, errno.EPERM):
+        assert ruleset.allow(str(tmp_path), isolation.FS_READ) is False
+    else:
+        with pytest.raises(OSError) as caught:
+            ruleset.allow(str(tmp_path), isolation.FS_READ)
+        assert caught.value.errno == errno.EIO
+    assert added == []
+    with pytest.raises(OSError) as closed:
+        real_fstat(descriptor)
+    assert closed.value.errno == errno.EBADF

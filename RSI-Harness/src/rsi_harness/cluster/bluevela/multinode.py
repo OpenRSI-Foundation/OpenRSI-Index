@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
 import secrets
+import signal
 import subprocess
 import sys
 import threading
@@ -290,6 +292,7 @@ class MultiNodeBroker:
         self._stop_event = threading.Event()
         self._server_thread: threading.Thread | None = None
         self._server_runner: RankRunner | None = None
+        self._failure: BaseException | None = None
 
     def initialize(self) -> None:
         with self._lock:
@@ -430,7 +433,22 @@ class MultiNodeBroker:
             self.allocator.release(reserved.lease.lease_id)
             del self._active[request_id]
 
+    def require_healthy(self) -> None:
+        with self._lock:
+            if self._failure is not None:
+                raise InfrastructureError(
+                    "recovery_required: multi-node broker evidence persistence failed"
+                ) from None
+
+    def _fail(self, error: BaseException) -> None:
+        # No filesystem writes: the same quota failure may prevent both a
+        # terminal result and the cancellation marker from being persisted.
+        with self._lock:
+            self._failure = error
+            self._stop_event.set()
+
     def require_idle(self) -> None:
+        self.require_healthy()
         with self._lock:
             if self._active:
                 raise InfrastructureError(
@@ -464,7 +482,10 @@ class MultiNodeBroker:
             self._stop_event.set()
             active = tuple(self._active)
         for request_id in active:
-            (self.root / "cancel" / request_id).touch(mode=0o600, exist_ok=True)
+            try:
+                (self.root / "cancel" / request_id).touch(mode=0o600, exist_ok=True)
+            except OSError as error:
+                self._fail(error)
         thread.join(timeout=60)
         if thread.is_alive():
             raise InfrastructureError("multi-node broker did not stop")
@@ -478,18 +499,22 @@ class MultiNodeBroker:
             thread_name_prefix=f"{self.phase}-request",
         ) as executor:
             futures = set()
-            while not self._stop_event.is_set():
-                for request_path in sorted((self.root / "requests").glob("*.json")):
-                    claimed = self.authority_root / "claimed" / request_path.name
-                    try:
-                        request_path.replace(claimed)
-                    except FileNotFoundError:
-                        continue
-                    futures.add(executor.submit(self._handle_claimed, claimed))
-                futures = {future for future in futures if not future.done()}
-                time.sleep(0.01)
-            for request_id in tuple(self._active):
-                (self.root / "cancel" / request_id).touch(mode=0o600, exist_ok=True)
+            try:
+                self._serve_requests(executor, futures)
+            except BaseException as error:
+                self._fail(error)
+
+    def _serve_requests(self, executor, futures) -> None:
+        while not self._stop_event.is_set():
+            for request_path in sorted((self.root / "requests").glob("*.json")):
+                claimed = self.authority_root / "claimed" / request_path.name
+                try:
+                    request_path.replace(claimed)
+                except FileNotFoundError:
+                    continue
+                futures.add(executor.submit(self._handle_claimed, claimed))
+            futures = {future for future in futures if not future.done()}
+            time.sleep(0.01)
 
     def _handle_claimed(self, path: Path) -> None:
         request_id = path.stem
@@ -500,12 +525,20 @@ class MultiNodeBroker:
                     "multi-node request filename differs from its identity"
                 )
             self.execute(request, rank_runner=self._server_runner)
+        except OSError as error:
+            self._fail(error)
         except Exception:
             if _valid_request_id(request_id):
                 failure = MultiNodeResult(request_id=request_id, ranks=())
-                _atomic_json(self.root / "results" / f"{request_id}.json", failure)
+                try:
+                    _atomic_json(self.root / "results" / f"{request_id}.json", failure)
+                except OSError as error:
+                    self._fail(error)
         finally:
-            path.unlink(missing_ok=True)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError as error:
+                self._fail(error)
 
     def _default_rank_runner(
         self,
@@ -547,37 +580,65 @@ class MultiNodeBroker:
                 else:
                     truncated = True
 
-        cleanup_started = False
-        while process.poll() is None:
-            drain_available()
-            if cancelled.is_set() and not cleanup_started:
-                cleanup_started = True
-                try:
-                    subprocess.run(
-                        stop_command(
-                            command,
-                            remote_binary=self.remote_binary,
-                            remote_host_flag=self.remote_host_flag,
-                            remote_args=self.remote_args,
-                        ),
-                        check=False,
-                        stdin=subprocess.DEVNULL,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=20,
-                    )
-                except subprocess.TimeoutExpired:
-                    pass
-                process.terminate()
-            time.sleep(_OUTPUT_POLL_SECONDS)
-        deadline = time.monotonic() + _OUTPUT_DRAIN_GRACE_SECONDS
-        while not eof:
-            read_any = drain_available()
-            if eof or time.monotonic() >= deadline:
-                break
-            if not read_any:
+        try:
+            cleanup_started = False
+            terminate_at = None
+            while process.poll() is None:
+                drain_available()
+                if cancelled.is_set() and not cleanup_started:
+                    cleanup_started = True
+                    try:
+                        subprocess.run(
+                            stop_command(
+                                command,
+                                remote_binary=self.remote_binary,
+                                remote_host_flag=self.remote_host_flag,
+                                remote_args=self.remote_args,
+                            ),
+                            check=False,
+                            stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=20,
+                        )
+                    except subprocess.TimeoutExpired:
+                        pass
+                    process.terminate()
+                    terminate_at = time.monotonic() + 5
+                if terminate_at is not None and time.monotonic() >= terminate_at:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
                 time.sleep(_OUTPUT_POLL_SECONDS)
-        process.stdout.close()
+            deadline = time.monotonic() + _OUTPUT_DRAIN_GRACE_SECONDS
+            while not eof:
+                read_any = drain_available()
+                if eof or time.monotonic() >= deadline:
+                    break
+                if not read_any:
+                    time.sleep(_OUTPUT_POLL_SECONDS)
+        except BaseException:
+            try:
+                subprocess.run(
+                    stop_command(
+                        command,
+                        remote_binary=self.remote_binary,
+                        remote_host_flag=self.remote_host_flag,
+                        remote_args=self.remote_args,
+                    ),
+                    check=False,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=20,
+                )
+            finally:
+                with contextlib.suppress(ProcessLookupError):
+                    os.killpg(process.pid, signal.SIGKILL)
+                process.wait()
+            raise
+        finally:
+            process.stdout.close()
         if truncated:
             captured.extend(b"\n...[remote rank output truncated]...\n")
         assert process.returncode is not None
@@ -606,7 +667,14 @@ class MultiNodeBroker:
                     for node_rank, command in enumerate(reserved.commands)
                 }
                 while not all(future.done() for future in futures.values()):
-                    if cancel_path.exists():
+                    if (
+                        self._stop_event.is_set()
+                        or cancel_path.exists()
+                        or any(
+                            future.done() and future.exception() is not None
+                            for future in futures.values()
+                        )
+                    ):
                         cancelled.set()
                     time.sleep(0.01)
                 for node_rank in sorted(futures):
@@ -615,6 +683,8 @@ class MultiNodeBroker:
                         returncode, output = futures[node_rank].result()
                     except Exception as error:
                         cancelled.set()
+                        if isinstance(error, OSError):
+                            self._fail(error)
                         returncode = 125
                         output = f"remote rank infrastructure error: {error}\n".encode()
                     results.append(

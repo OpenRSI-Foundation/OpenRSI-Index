@@ -5,7 +5,10 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
@@ -83,6 +86,10 @@ class _Runtime:
 
     def unpause(self, _work: ContainerRef) -> None:
         self.events.append("unpause")
+
+    def fail_work(self, message: str) -> None:
+        self.events.append("fail")
+        self.failure = message
 
     def require_work_idle(self) -> None:
         self.events.append("idle")
@@ -2144,11 +2151,10 @@ def test_host_controller_timeout_always_reaps_and_keeps_logs(
         return subprocess.CompletedProcess(args[0], 3)
 
     monkeypatch.setattr(module.subprocess, "run", failed_stop)
-    result = runtime._run_host_controller(
-        (sys.executable, "-c", script), timeout_seconds=0.5, output_path=output
-    )
-    assert result.timed_out and result.full_output_captured
-    assert result.exit_code == -signal.SIGTERM
+    with pytest.raises(InfrastructureError, match="teardown unproven"):
+        runtime._run_host_controller(
+            (sys.executable, "-c", script), timeout_seconds=0.5, output_path=output
+        )
     assert "started" in output.read_text() and "controller stop" in output.read_text()
     with pytest.raises(ProcessLookupError):
         os.kill(int(pid_file.read_text()), 0)
@@ -2198,3 +2204,206 @@ def test_host_controller_escalates_a_stubborn_process_to_kill(tmp_path, monkeypa
     )
     assert result.timed_out and result.exit_code == -signal.SIGKILL
     assert result.full_output_captured and "ready" in result.output
+
+
+def test_controller_failure_ends_paused_work_without_resuming(tmp_path, monkeypatch):
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    ready = threading.Event()
+    monkeypatch.setattr(
+        runtime,
+        "_base_command",
+        lambda **_o: (
+            sys.executable,
+            "-c",
+            "import time; print('ready', flush=True); time.sleep(120)",
+        ),
+    )
+    monkeypatch.setattr(runtime, "_network_command", lambda *_a, **_o: ())
+    original_killpg = os.killpg
+    signals = []
+
+    def killpg(pid, sig):
+        signals.append(sig)
+        original_killpg(pid, sig)
+
+    monkeypatch.setattr(os, "killpg", killpg)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        work = pool.submit(
+            runtime._run,
+            (),
+            devices=(),
+            network_mode="public",
+            timeout_seconds=120,
+            track_work=True,
+            output_callback=lambda _: ready.set(),
+        )
+        assert ready.wait(10)
+        process = runtime._process
+        os.killpg(process.pid, signal.SIGSTOP)
+        runtime._paused = True
+        started = time.monotonic()
+        runtime.fail_work("recovery_required: storage unavailable")
+        with pytest.raises(InfrastructureError, match="storage unavailable"):
+            work.result(timeout=15)
+        assert time.monotonic() - started < 15
+    assert signal.SIGCONT not in signals
+    assert process.poll() is not None
+
+
+@pytest.mark.parametrize(
+    "outcome", ["success", "verifier-error", "timeout", "bad-reward"]
+)
+def test_completed_judge_releases_copy_but_preserves_all_feedback(
+    tmp_path, monkeypatch, outcome
+):
+    plan = make_run_plan(tmp_path)
+    writer = RunArtifactWriter(plan, run_id="native-run")
+    writer.start()
+    raw = writer.root / "agent_output.txt"
+    raw.write_text("original trajectory\n")
+    runtime = _Runtime(tmp_path)
+    judge = runtime.run_judge
+
+    def run(workspace, request, environment, **kwargs):
+        assert workspace.is_dir()
+        result = judge(workspace, request, environment, **kwargs)
+        if outcome == "bad-reward":
+            (request.verifier_logs / "reward.txt").write_text("invalid")
+        return replace(
+            result,
+            exit_code=1 if outcome == "verifier-error" else 0,
+            timed_out=outcome == "timeout",
+        )
+
+    monkeypatch.setattr(runtime, "run_judge", run)
+    for n in range(1, 4):
+        name = f"agent-{n}"
+        observer = _Observer()
+        NativeJudgeEvaluator(runtime, writer).evaluate(
+            EvaluationRequest(
+                run_plan=plan,
+                work_container=ContainerRef(container_id="work", role="work"),
+                round_id=name,
+                verifier_logs=writer.root / "verifier" / name,
+                verifier_output=writer.feedback_root / f"{name}.log",
+            ),
+            observer,
+        )
+        assert not list(runtime.rounds.iterdir())
+        assert "snapshot_released" in dict(observer.events)
+        assert (writer.root / "submissions" / name / "report.json").is_file()
+        assert (writer.feedback_root / f"{name}.log").read_text() == "passed\n"
+    assert raw.read_text() == "original trajectory\n"
+    assert (runtime.workspace / "answer.py").read_text() == "answer = 42\n"
+
+
+@pytest.mark.parametrize("failure", [None, "judge-close", "release", "report"])
+def test_snapshot_release_follows_judge_teardown_and_precedes_work_resume(
+    tmp_path, monkeypatch, failure
+):
+    from rsi_harness.cluster.snapshots import DirectorySnapshot
+
+    plan = make_run_plan(tmp_path)
+    writer = RunArtifactWriter(plan, run_id="native-run")
+    writer.start()
+    runtime = _Runtime(tmp_path)
+    observer = _Observer()
+    events = []
+
+    class Lifecycle:
+        enabled = True
+        can_resume = True
+        work_ended_normally = False
+
+        def freeze_work(self):
+            events.append("freeze")
+
+        def prepare_judge(self, _round):
+            pass
+
+        def activate_judge(self, _deadline):
+            pass
+
+        def close_judge(self):
+            if failure == "judge-close":
+                raise OSError("judge-close failed")
+            events.append("closed")
+
+        def contain_work(self):
+            events.append("contained")
+
+        def resume_work(self):
+            events.append("resume")
+
+        def reopen_work(self):
+            events.append("reopen")
+
+    original = DirectorySnapshot.release
+
+    def release(lease):
+        assert events == ["freeze", "closed"]
+        assert (writer.root / "submissions/agent-1/report.json").is_file()
+        assert "unpause" not in runtime.events
+        if failure == "release":
+            raise OSError("release failed")
+        original(lease)
+        events.append("released")
+
+    monkeypatch.setattr(DirectorySnapshot, "release", release)
+    if failure == "report":
+
+        def fail_report(_report):
+            raise OSError("report failed")
+
+        monkeypatch.setattr(writer, "record_submission", fail_report)
+    request = EvaluationRequest(
+        run_plan=plan,
+        work_container=ContainerRef(container_id="work", role="work"),
+        round_id="agent-1",
+        verifier_logs=writer.root / "verifier/agent-1",
+        verifier_output=writer.feedback_root / "agent-1.log",
+    )
+    evaluator = NativeJudgeEvaluator(runtime, writer, Lifecycle())
+    if failure:
+        with pytest.raises((OSError, InfrastructureError), match="failed"):
+            evaluator.evaluate(request, observer)
+        assert (runtime.rounds / "agent-1/workspace/answer.py").exists()
+        assert "snapshot_released" not in dict(observer.events)
+        assert "recovery_required" in dict(observer.events)
+        assert "unpause" not in runtime.events
+        assert "fail" in runtime.events
+        assert "resume" not in events
+    else:
+        evaluator.evaluate(request, observer)
+        assert events == ["freeze", "closed", "released", "resume", "reopen"]
+        assert "snapshot_released" in dict(observer.events)
+        assert not (runtime.rounds / "agent-1").exists()
+
+
+@pytest.mark.parametrize("error_type", [KeyboardInterrupt, SystemExit])
+def test_cancelled_judge_keeps_evidence_without_resuming_work(
+    tmp_path, monkeypatch, error_type
+):
+    plan = make_run_plan(tmp_path)
+    writer = RunArtifactWriter(plan, run_id="native-run")
+    writer.start()
+    runtime = _Runtime(tmp_path)
+    observer = _Observer()
+
+    def cancel(*_args, **_kwargs):
+        raise error_type("cancelled")
+
+    monkeypatch.setattr(runtime, "run_judge", cancel)
+    request = EvaluationRequest(
+        run_plan=plan,
+        work_container=ContainerRef(container_id="work", role="work"),
+        round_id="agent-1",
+        verifier_logs=writer.root / "verifier/agent-1",
+        verifier_output=writer.feedback_root / "agent-1.log",
+    )
+    with pytest.raises(error_type):
+        NativeJudgeEvaluator(runtime, writer).evaluate(request, observer)
+    assert "unpause" not in runtime.events
+    assert "fail" in runtime.events
+    assert "snapshot_released" not in dict(observer.events)
+    assert (runtime.rounds / "agent-1/workspace/answer.py").is_file()

@@ -55,6 +55,7 @@ from rsi_harness.cluster.bluevela.network import (
     judge_proxy_environment,
 )
 from rsi_harness.cluster.bluevela.sandbox import ClusterSandbox
+from rsi_harness.cluster.snapshots import DirectorySnapshot
 from rsi_harness.errors import (
     InfrastructureError,
     RetryableSubmissionError,
@@ -478,6 +479,7 @@ class ApptainerAgentRuntime:
         self.work_broker: MultiNodeBroker | None = None
         self.judge_broker: MultiNodeBroker | None = None
         self._paused = False
+        self._work_failure: str | None = None
         self._lock = threading.RLock()
         # The Work sandbox endpoint directory (cluster/bluevela/sandbox.py).
         self.work_sandbox: Path | None = None
@@ -1857,60 +1859,119 @@ class ApptainerAgentRuntime:
         timeout_seconds: float,
         output_path: Path,
     ) -> AgentRunResult:
-        # Persist directly: a controller can emit arbitrarily long verifier logs.
-        # Only the feedback returned to the coordinator is memory bounded.
+        # Capture through a pipe: redirecting the child's fd directly to a
+        # file hides failed writes if the child ignores ENOSPC/EDQUOT.
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        captured = BoundedBytes(16_000_000)
+        errors: list[Exception] = []
         timed_out = False
+        cleanup_failure = None
         with output_path.open("wb") as stream:
             process = subprocess.Popen(
                 command,
                 stdin=subprocess.DEVNULL,
-                stdout=stream,
+                stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
-            try:
-                process.wait(timeout=timeout_seconds)
-            except subprocess.TimeoutExpired:
-                timed_out = True
-                stop = stop_command(
-                    command,
-                    remote_binary=self.profile.scheduler.remote_binary,
-                    remote_host_flag=self.profile.scheduler.remote_host_flag,
-                    remote_args=self.profile.scheduler.remote_args,
-                    module="rsi_harness.cluster.bluevela.judge_controller",
-                )
+
+            def drain() -> None:
                 try:
-                    stopped = subprocess.run(
-                        stop,
-                        check=False,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                        timeout=20,
-                    )
-                    if stopped.returncode:
-                        stream.write(
-                            f"\ncontroller stop exited {stopped.returncode}\n".encode()
-                        )
-                except (OSError, subprocess.TimeoutExpired) as error:
-                    stream.write(f"\ncontroller stop failed: {error}\n".encode())
+                    assert process.stdout is not None
+                    while chunk := process.stdout.read1(64 * 1024):
+                        captured.append(chunk)
+                        stream.write(chunk)
+                        stream.flush()
+                except Exception as error:
+                    errors.append(error)
+
+            def require_output() -> None:
+                if errors:
+                    raise InfrastructureError(
+                        "recovery_required: controller output capture failed"
+                    ) from None
+
+            reader = threading.Thread(target=drain, daemon=True)
+            reader.start()
+            deadline = time.monotonic() + timeout_seconds
+            interrupted = False
+            try:
+                while True:
+                    require_output()
+                    self._require_brokers_healthy()
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    try:
+                        process.wait(timeout=min(0.25, remaining))
+                        break
+                    except subprocess.TimeoutExpired:
+                        continue
+            except BaseException:
+                interrupted = True
+                raise
             finally:
-                # Also runs if remote stop fails or the caller is cancelled.
-                # Signal the group even if its leader has already exited.
-                if timed_out or process.returncode is None:
+                # Stop the remote owner as well as the local scheduler client;
+                # a local process-group kill alone cannot attest remote exit.
+                if timed_out or interrupted or errors:
+                    try:
+                        stopped = subprocess.run(
+                            stop_command(
+                                command,
+                                remote_binary=self.profile.scheduler.remote_binary,
+                                remote_host_flag=self.profile.scheduler.remote_host_flag,
+                                remote_args=self.profile.scheduler.remote_args,
+                                module="rsi_harness.cluster.bluevela.judge_controller",
+                            ),
+                            check=False,
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=20,
+                        )
+                        detail = (
+                            f"controller stop exited {stopped.returncode}"
+                            if stopped.returncode
+                            else ""
+                        )
+                    except Exception as error:
+                        detail = f"controller stop failed: {error}"
+                    if detail:
+                        cleanup_failure = detail
+                    # Keep the timeout diagnostic when the sink still works.
+                    if detail and not errors:
+                        try:
+                            reader.join(timeout=0.1)
+                            stream.write(("\n" + detail + "\n").encode())
+                        except OSError as error:
+                            errors.append(error)
                     with contextlib.suppress(ProcessLookupError):
                         os.killpg(process.pid, signal.SIGTERM)
-                    try:
-                        with contextlib.suppress(subprocess.TimeoutExpired):
-                            process.wait(timeout=10)
-                    finally:
-                        with contextlib.suppress(ProcessLookupError):
-                            os.killpg(process.pid, signal.SIGKILL)
-                        process.wait()
-        captured = BoundedBytes(16_000_000)
-        with output_path.open("rb") as stream:
-            while chunk := stream.read(64 * 1024):
-                captured.append(chunk)
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        process.wait(timeout=10)
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+                reader.join(timeout=10)
+                if reader.is_alive():
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    reader.join(timeout=5)
+                if reader.is_alive():
+                    errors.append(
+                        InfrastructureError("controller output did not close")
+                    )
+                try:
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                except OSError as error:
+                    errors.append(error)
+            require_output()
+            self._require_brokers_healthy()
+            if cleanup_failure is not None:
+                raise InfrastructureError(
+                    "recovery_required: remote controller teardown unproven"
+                )
         return AgentRunResult(
             exit_code=process.returncode,
             output=captured.value.decode(errors="replace"),
@@ -1918,6 +1979,11 @@ class ApptainerAgentRuntime:
             full_output_captured=True,
             timed_out=timed_out,
         )
+
+    def _require_brokers_healthy(self) -> None:
+        for broker in (self.work_broker, self.judge_broker):
+            if broker is not None:
+                broker.require_healthy()
 
     def pause(self, container: ContainerRef) -> None:
         self._require_work(container)
@@ -2010,6 +2076,16 @@ class ApptainerAgentRuntime:
             except ProcessLookupError:
                 pass  # the whole group has exited
             self._paused = False
+
+    def fail_work(self, message: str) -> None:
+        """Wake the Work execution loop on a controller failure.
+
+        Do not resume a paused Agent, or signal an unrelated job. The loop
+        terminates its own process group and reports the infrastructure error.
+        This also works if the failing controller cannot write recovery files.
+        """
+        with self._lock:
+            self._work_failure = message
 
     def quiescence(self, container: ContainerRef) -> WorkQuiescence:
         self._require_work(container)
@@ -2321,30 +2397,40 @@ class ApptainerAgentRuntime:
         # (binds, mount options, container variables) never reach the exec.
         child_env = isolated_apptainer_environment(values)
         child_env["CUDA_VISIBLE_DEVICES"] = ",".join(devices)
-        process = subprocess.Popen(
-            argv,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            bufsize=1,
-            start_new_session=True,
-            env=child_env,
-        )
-        if track_work:
-            with self._lock:
-                if self._process is not None and self._process.poll() is None:
-                    process.kill()
-                    raise InfrastructureError("an Agent process is already running")
-                self._process = process
-                self._paused = False
+        # Open before spawning: an unavailable output sink must not leave a
+        # child running without a reader or a tracked lifetime.
         secrets = set(output_redact_values)
-        captured = BoundedBytes(16_000_000)
         stream = None
         if output_path is not None:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             # Append: a resumed run's Agent output continues the same file.
             stream = output_path.open("a", encoding="utf-8")
-
+        try:
+            process = subprocess.Popen(
+                argv,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                start_new_session=True,
+                env=child_env,
+            )
+        except BaseException:
+            if stream is not None:
+                stream.close()
+            raise
+        if track_work:
+            with self._lock:
+                if self._process is not None and self._process.poll() is None:
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+                    if stream is not None:
+                        stream.close()
+                    raise InfrastructureError("an Agent process is already running")
+                self._process = process
+                self._paused = False
+        captured = BoundedBytes(16_000_000)
         drain_errors: list[Exception] = []
 
         def drain() -> None:
@@ -2365,8 +2451,33 @@ class ApptainerAgentRuntime:
         thread = threading.Thread(target=drain, name="apptainer-output", daemon=True)
         thread.start()
         timed_out = False
+        deadline = (
+            None if timeout_seconds is None else time.monotonic() + timeout_seconds
+        )
+
+        def require_capture() -> None:
+            if drain_errors:
+                detail = _safe_output(str(drain_errors[0]), secrets)
+                raise InfrastructureError(f"output capture failed: {detail}") from None
+
         try:
-            process.wait(timeout=timeout_seconds)
+            while True:
+                if track_work and self._work_failure is not None:
+                    raise InfrastructureError(self._work_failure)
+                self._require_brokers_healthy()
+                # The reader may fail while the child is silent or paused.
+                # Do not spend the remaining research budget with lost output.
+                require_capture()
+                remaining = None if deadline is None else deadline - time.monotonic()
+                if remaining is not None and remaining <= 0:
+                    raise subprocess.TimeoutExpired(argv, timeout_seconds)
+                try:
+                    process.wait(
+                        timeout=min(0.25, remaining) if remaining is not None else 0.25
+                    )
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
         except subprocess.TimeoutExpired:
             timed_out = True
             os.killpg(process.pid, signal.SIGTERM)
@@ -2385,14 +2496,30 @@ class ApptainerAgentRuntime:
                 process.wait(timeout=5)
             with contextlib.suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=5)
             raise
         finally:
             thread.join(timeout=30)
             if stream is not None:
-                stream.close()
+                try:
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                except OSError as error:
+                    drain_errors.append(error)
+                finally:
+                    try:
+                        stream.close()
+                    except OSError as error:
+                        drain_errors.append(error)
             if track_work:
                 with self._lock:
                     self._paused = False
+        if track_work and self._work_failure is not None:
+            raise InfrastructureError(self._work_failure)
+        # The final line, flush, fsync or close can fail after the child exits.
+        self._require_brokers_healthy()
+        require_capture()
         return AgentRunResult(
             exit_code=process.returncode,
             output=captured.value.decode("utf-8", errors="ignore"),
@@ -2496,6 +2623,18 @@ class NativeJudgeEvaluator:
 
     def evaluate(self, request: EvaluationRequest, observer: Any) -> SubmissionReport:
         started = time.monotonic()
+        report = None
+        failed = False
+
+        def recover(error: BaseException) -> None:
+            message = f"recovery_required: cluster submission failed: {error}"
+            try:
+                observer.resource_event("recovery_required", recovery_context=message)
+            finally:
+                # A full quota can prevent the recovery journal itself from
+                # being written. Still end the execution loop in memory.
+                self.runtime.fail_work(message)
+
         snapshot = self.runtime.rounds / request.round_id / "workspace"
         # Before Work pauses, as on Docker: a refresh may take a while.
         self.runtime.renew_operator_login(request.round_id)
@@ -2532,8 +2671,10 @@ class NativeJudgeEvaluator:
                 "snapshot_planned",
                 round_id=request.round_id,
             )
-            snapshot.parent.mkdir(parents=True, mode=0o700, exist_ok=False)
-            shutil.copytree(self.runtime.workspace, snapshot, symlinks=True)
+            lease = DirectorySnapshot.acquire(
+                self.runtime.workspace, self.runtime.rounds, request.round_id
+            )
+            snapshot = lease.workspace
             observer.resource_event(
                 "snapshot_acquired",
                 snapshot_lease_id=f"workspace-{request.round_id}",
@@ -2602,25 +2743,60 @@ class NativeJudgeEvaluator:
                 duration_seconds=max(0.0, time.monotonic() - started),
                 error=error,
             )
-            self.artifacts.record_submission(report)
-            observer.resource_event("judge_removed", judge_container_id=judge_id)
-            observer.resource_event(
-                "snapshot_released", snapshot_lease_id=f"workspace-{request.round_id}"
-            )
+            try:
+                self.artifacts.record_submission(report)
+            except BaseException:
+                report = None  # A report file alone is not a committed round.
+                raise
             return report
+        except RetryableSubmissionError:
+            raise
+        except BaseException as error:
+            failed = True
+            recover(error)
+            raise
         finally:
             # Work that ended (deadline or retired) during the round stays
             # paused for the coordinator to stop.
-            if not frozen or self._release_sandbox():
-                self.runtime.unpause(request.work_container)
-                if frozen:
-                    self.sandbox.reopen_work()
-                observer.resource_event(
-                    "work_unpaused",
-                    work_container_id=request.work_container.container_id,
-                )
+            def release_snapshot() -> None:
+                if report is not None:
+                    observer.resource_event(
+                        "judge_removed", judge_container_id=judge_id
+                    )
+                    lease.release()
+                    observer.resource_event(
+                        "snapshot_released",
+                        snapshot_lease_id=f"workspace-{request.round_id}",
+                    )
 
-    def _release_sandbox(self) -> bool:
+            if failed:
+                if frozen:
+                    try:
+                        self.sandbox.close_judge()
+                    finally:
+                        self.sandbox.contain_work()
+            else:
+                try:
+                    if frozen:
+                        can_resume = self._release_sandbox(
+                            before_resume=release_snapshot
+                        )
+                    else:
+                        release_snapshot()
+                        can_resume = True
+                    if can_resume:
+                        self.runtime.unpause(request.work_container)
+                        if frozen:
+                            self.sandbox.reopen_work()
+                        observer.resource_event(
+                            "work_unpaused",
+                            work_container_id=request.work_container.container_id,
+                        )
+                except Exception as error:
+                    recover(error)
+                    raise InfrastructureError(str(error)) from error
+
+    def _release_sandbox(self, before_resume: Callable[[], None] | None = None) -> bool:
         """End the round's envs, then resume Work's; False when Work ended
         normally meanwhile (nothing to resume)."""
         try:
@@ -2630,6 +2806,8 @@ class NativeJudgeEvaluator:
             raise InfrastructureError(
                 f"recovery_required: sandbox Judge cleanup failed: {error}"
             ) from error
+        if before_resume is not None:
+            before_resume()
         if not self.sandbox.can_resume:
             if self.sandbox.work_ended_normally:
                 return False
