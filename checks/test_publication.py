@@ -102,6 +102,7 @@ class PrimitiveTests(unittest.TestCase):
             "rsi-logs/SANITIZATION.md",
             "rsi-logs/signature-tasks/README.md",
             "rsi-tasks/README.md",
+            "rsi-tasks/SGNOMI/README.md",
             "rsi-tasks/signature-tasks/NOTES.MD",
         ):
             self.assertTrue(pub.collection_doc(path), path)
@@ -109,6 +110,8 @@ class PrimitiveTests(unittest.TestCase):
             "rsi-logs/run.jsonl",
             "rsi-logs/README.txt",
             "rsi-tasks/stray/README.md",
+            "rsi-tasks/SGNOMI/loose.json",
+            "rsi-tasks/SGNOMI/stray/README.md",
             "README.md",
             "docs/rsi-logs.md",
         ):
@@ -1074,8 +1077,9 @@ class RepositoryTests(unittest.TestCase):
         self.write("rsi-logs/NOTES.md", "Notes\n")
         self.write("rsi-logs/signature-tasks/README.md", "Signature logs\n")
         self.write("rsi-tasks/README.md", "Tasks\n")
+        self.write("rsi-tasks/SGNOMI/README.md", "SGLang-Omni tasks\n")
         self.commit()
-        self.assertIn("PASS 3 published files", self.check())
+        self.assertIn("PASS 4 published files", self.check())
 
     def test_removing_a_loose_file_passes(self):
         self.write("rsi-logs/run.jsonl", "{}\n")
