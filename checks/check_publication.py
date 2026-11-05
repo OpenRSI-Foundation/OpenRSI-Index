@@ -40,6 +40,7 @@ COLLECTIONS = {
     "rsi-tasks/SGNOMI",
     "rsi-tasks/signature-tasks",
     "rsi-logs",
+    "rsi-logs/SGNOMI",
     "rsi-logs/signature-tasks",
 }
 # The Harness runs a task's verifier and reference solution; other task Python
@@ -169,7 +170,7 @@ def log_root(path: str) -> str | None:
     parts = PurePosixPath(path).parts
     if len(parts) < 3 or parts[0] != "rsi-logs":
         return None
-    n = 3 if parts[1] == "signature-tasks" else 2
+    n = 3 if parts[1] in ("signature-tasks", "SGNOMI") else 2
     return "/".join(parts[:n]) if len(parts) > n else None
 
 
@@ -1132,14 +1133,16 @@ def check(
             raise CheckError(f"{p}: task files have no enclosing task.toml")
         elif logs_mode:
             raise CheckError(
-                f"{p}: log files must be inside <task>/ or signature-tasks/<task>/ "
+                f"{p}: log files must be inside <task>/, signature-tasks/<task>/ "
+                "or SGNOMI/<task>/ "
                 "of the Logs repository; only .md documentation, README.md, LICENSE "
                 "and .gitattributes may sit outside them"
             )
         else:
             raise CheckError(
-                f"{p}: log files must be inside rsi-logs/<task>/ or "
-                "rsi-logs/signature-tasks/<task>/; only .md documentation may sit beside them"
+                f"{p}: log files must be inside rsi-logs/<task>/, "
+                "rsi-logs/signature-tasks/<task>/ or rsi-logs/SGNOMI/<task>/; "
+                "only .md documentation may sit beside them"
             )
     if logs_mode:
         attributes = revisions.prefix + ".gitattributes"
