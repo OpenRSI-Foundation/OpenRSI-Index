@@ -1541,6 +1541,142 @@ def test_local_codex_auth_supplies_exact_provider_urls_for_no_network_agent(
     )
 
 
+def test_a_no_network_agent_uses_the_runs_proxy_settings_as_its_upstream(
+    tmp_path: Path,
+) -> None:
+    from rsi_harness.cluster.bluevela.network import UpstreamProxy
+    from rsi_harness.cluster.bluevela.runtime import (
+        _agent_provider_urls,
+        _agent_upstream_proxy,
+    )
+    from rsi_loop.harness.config import RSILoopConfig
+
+    provider = "https://api.provider.test/v1"
+    config = RSILoopConfig(
+        https_proxy="http://user:pw@proxy.example:3128",
+        agent_api_base_url=provider,
+    )
+    # The proxy no longer refuses the Agent; it carries its endpoints.
+    urls = _agent_provider_urls(
+        SimpleNamespace(agent_auth=None),
+        make_run_plan(tmp_path),
+        config,
+        auth_resolver=lambda **_options: None,
+    )
+    assert urls == (provider,)
+    upstream = _agent_upstream_proxy(urls, config)
+    assert (upstream.host, upstream.port) == ("proxy.example", 3128)
+    assert upstream.authorization == "Basic dXNlcjpwdw=="
+    assert _agent_upstream_proxy(
+        urls, RSILoopConfig(https_proxy="proxy.example:3128")
+    ) == UpstreamProxy(host="proxy.example", port=3128)
+    # No proxy, an Oracle without endpoints, or no_proxy: direct, as before.
+    assert _agent_upstream_proxy(urls, RSILoopConfig()) is None
+    assert _agent_upstream_proxy((), config) is None
+    for no_proxy in ("provider.test", ".provider.test", "*"):
+        bypass = RSILoopConfig(https_proxy="http://p:3128", no_proxy=no_proxy)
+        assert _agent_upstream_proxy(urls, bypass) is None
+    # An https endpoint never takes the http proxy.
+    assert _agent_upstream_proxy(urls, RSILoopConfig(http_proxy="http://p:80")) is None
+
+
+@pytest.mark.parametrize(
+    ("urls", "config", "match"),
+    [
+        (
+            # Hostnames only: a URL's credentials stay out of the message.
+            ("https://chatgpt.com/backend-api/codex", "https://u:pw@auth.openai.com"),
+            {"https_proxy": "http://p:3128", "no_proxy": "auth.openai.com"},
+            r"send auth\.openai\.com around it \(no_proxy\)$",
+        ),
+        (
+            ("https://api.provider.test", "http://api.provider.test"),
+            {"https_proxy": "http://p:3128", "http_proxy": "http://q:3128"},
+            "different proxies",
+        ),
+        (
+            ("https://api.provider.test",),
+            {"https_proxy": "https://p:3128"},
+            "must be an http:// proxy",
+        ),
+    ],
+)
+def test_a_no_network_agent_refuses_an_ambiguous_upstream_proxy(urls, config, match):
+    from rsi_harness.cluster.bluevela.runtime import _agent_upstream_proxy
+    from rsi_loop.harness.config import RSILoopConfig
+
+    with pytest.raises(SetupError, match=match):
+        _agent_upstream_proxy(urls, RSILoopConfig(**config))
+
+
+def test_through_an_upstream_proxy_the_agents_endpoints_need_no_dns(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from rsi_harness.cluster.bluevela.network import UpstreamProxy
+    from rsi_harness.runtime.network import PinnedEndpoint
+
+    node_tmp = tmp_path / "node-tmp"
+    node_tmp.mkdir()
+    monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
+    runtime = ApptainerAgentRuntime(
+        SimpleNamespace(
+            profile=load_cluster_profile("bluevela"),
+            run_id="native-run",
+            sif_path=tmp_path / "task.sif",
+        ),
+        make_run_plan(tmp_path),
+    )
+    # As on a compute node without external DNS.
+    provider = ("https://api.provider.invalid/v1",)
+    with pytest.raises(SetupError, match="cannot resolve network policy hostname"):
+        runtime.configure_agent_network("http://127.0.0.1:43123", provider)
+    upstream = UpstreamProxy(host="proxy.example", port=3128)
+    runtime.upstream_proxy = upstream
+    runtime.configure_agent_network("http://127.0.0.1:43123", provider)
+    try:
+        proxy = runtime._network_broker._provider
+        assert proxy._endpoints == {
+            ("api.provider.invalid", 443): PinnedEndpoint(
+                hostname="api.provider.invalid", port=443, addresses=()
+            )
+        }
+        assert proxy._upstream is upstream
+    finally:
+        runtime.close_agent_network()
+
+
+def test_the_composition_tunnels_the_agent_and_shows_only_the_proxy_address(
+    tmp_path: Path, monkeypatch, capsys
+) -> None:
+    from rsi_harness.cluster.bluevela import runtime as module
+    from rsi_loop.harness.config import RSILoopConfig
+
+    node_tmp = tmp_path / "node-tmp"
+    node_tmp.mkdir()
+    monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
+    config = RSILoopConfig(
+        https_proxy="http://u:pw@proxy.example:3128",
+        agent_api_base_url="https://api.provider.test/v1",
+    )
+    monkeypatch.setattr(module, "load_config", lambda: config)
+    payload = SimpleNamespace(
+        profile=load_cluster_profile("bluevela"),
+        run_id="native-run",
+        sif_path=tmp_path / "task.sif",
+        agent_auth=None,
+    )
+
+    composition = NativeEngineComposition(payload, make_run_plan(tmp_path))
+
+    upstream = composition.runtime.upstream_proxy
+    assert (upstream.host, upstream.port) == ("proxy.example", 3128)
+    assert upstream.authorization is not None
+    out = capsys.readouterr().out
+    assert "[rsi-engine] agent_upstream_proxy: proxy.example:3128" in out
+    assert "pw" not in out and "u:" not in out
+    assert {"u", "pw"} <= composition.secrets
+
+
 def test_native_hook_install_starts_no_network_agent_broker(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -299,8 +299,17 @@ def inspect_current_node(
         raise InfrastructureError(
             f"host {host} must resolve to one safe unique IPv4, got {addresses!r}"
         )
-    raw_devices = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-    devices = tuple(item.strip() for item in raw_devices.split(",") if item.strip())
+    raw_devices = os.environ.get("CUDA_VISIBLE_DEVICES")
+    devices = tuple(
+        item.strip() for item in (raw_devices or "").split(",") if item.strip()
+    )
+    # Remote workers parse indices; only one-node jobs map UUIDs or find
+    # unset devices.
+    if raw_devices is None or any(item.startswith("GPU-") for item in devices):
+        raise InfrastructureError(
+            f"host {host}: multi-node jobs need CUDA_VISIBLE_DEVICES as GPU "
+            f"indices, got {raw_devices or 'unset'}"
+        )
     if not sif_path.is_file():
         raise InfrastructureError(f"host {host} cannot see SIF {sif_path}")
     return NodeProbe(

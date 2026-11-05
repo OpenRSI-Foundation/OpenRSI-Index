@@ -264,6 +264,21 @@ def test_the_pod_binds_exactly_the_allocated_gpus(tmp_path, devices, nodes, cuda
         assert code == 1 and "GPU devices" in err
 
 
+def test_the_pods_gpu_uuids_reach_phases_as_indices(tmp_path):
+    from rsi_harness.cluster.bluevela.devices import allocated_cuda_devices
+
+    code, out, _ = _run_wrapper(tmp_path, 2, "GPU-bb,GPU-aa")
+    smi = "0, GPU-aa, 00000000:01:00.0\n1, GPU-bb, 00000000:02:00.0\n"
+
+    result = allocated_cuda_devices(
+        out.strip().removeprefix("cuda="),
+        runner=lambda argv: subprocess.CompletedProcess(argv, 0, smi, ""),
+        gpus_root=tmp_path / "no-driver",
+    )
+
+    assert code == 0 and result == (("1", "0"), True)
+
+
 def test_a_pod_that_cannot_mount_proc_names_the_runtime(tmp_path):
     spec = _spec(tmp_path)
     command = _scheduler(Kubectl()).render_manifest(spec)["spec"]["template"]["spec"][

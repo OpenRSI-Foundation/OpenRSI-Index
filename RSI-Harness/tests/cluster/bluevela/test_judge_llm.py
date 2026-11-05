@@ -219,12 +219,18 @@ def test_pinned_egress_goes_through_the_judges_own_provider_proxy(tmp_path):
     ]
 
 
-def test_pinned_egress_refuses_an_upstream_proxy_and_plain_http(tmp_path):
+def test_pinned_egress_keeps_model_destinations_when_using_an_upstream(tmp_path):
     task = _task()
-    with pytest.raises(SetupError, match="upstream proxy"):
-        _api(task, egress="pinned", proxy="http://proxy.example:3128")
-    with pytest.raises(SetupError, match="upstream proxy"):
-        _codex(task, tmp_path, egress="pinned", proxy="http://proxy.example:3128")
+    api = _api(task, egress="pinned", proxy="http://proxy.example:3128")
+    assert api.spec["proxy"] == PROXY
+    assert [(item.hostname, item.addresses) for item in api.endpoints] == [
+        ("api.openai.com", ())
+    ]
+    codex = _codex(task, tmp_path, egress="pinned", proxy="http://proxy.example:3128")
+    assert codex.spec["environment"]["HTTPS_PROXY"] == PROXY
+    assert [(item.hostname, item.addresses) for item in codex.endpoints] == [
+        ("chatgpt.com", ())
+    ]
     with pytest.raises(SetupError, match="https API base URL"):
         _api(task, egress="pinned", base_url="http://models.example")
 
@@ -317,10 +323,10 @@ def test_preflight_refuses_what_the_job_could_not_use(tmp_path):
             environ=KEY_ENV,
             **options,
         )
-    with pytest.raises(SetupError, match="upstream proxy"):
+    with pytest.raises(SetupError, match="must be an http:// proxy"):
         preflight_cluster_judge_llm(
             _task(verifier="no-network"),
-            JudgeLLMRequest(auth=JudgeLLMAuth.API, proxy="http://proxy:3128"),
+            JudgeLLMRequest(auth=JudgeLLMAuth.API, proxy="https://proxy:3128"),
             environ=KEY_ENV,
             **options,
         )
@@ -619,6 +625,52 @@ def test_the_job_resolves_an_api_key_judge_llm_again(tmp_path, monkeypatch, caps
     assert API_KEY not in out
 
 
+@pytest.mark.parametrize("bypass", [False, True])
+def test_judge_model_uses_its_own_proxy_route_and_resolves_only_direct_hosts(
+    tmp_path, monkeypatch, bypass
+):
+    from rsi_harness.cluster.bluevela.network import UpstreamProxy
+
+    plan = _llm_plan(tmp_path, model_access=True, agent_network="no-network")
+    prepared = ClusterJudgeLLM(
+        request=JudgeLLMRequest(
+            auth=JudgeLLMAuth.API,
+            base_url="https://judge.example",
+        )
+    )
+    composition = _composition(tmp_path, monkeypatch, plan, prepared)
+    composition.rsi_loop_config = RSILoopConfig(
+        agent_api_key="SYNTHETIC-AGENT-KEY",
+        https_proxy="http://judge-proxy.example:3128",
+        no_proxy="judge.example" if bypass else None,
+    )
+    composition.provider_urls = ("https://work.example",)
+    composition.runtime.upstream_proxy = UpstreamProxy("work-proxy.example", 3128)
+    resolved = []
+
+    def pin_endpoints(_enforcer, urls, *, resolve=True):
+        if resolve:
+            resolved.extend(urls)
+            return pin(urls)
+        return cluster_judge_llm.unresolved_endpoints(urls)
+
+    monkeypatch.setattr(
+        runtime_module.NetworkPolicyEnforcer, "pin_endpoints", pin_endpoints
+    )
+    access = composition.judge_model_access()
+    assert [(item.hostname, item.port) for item in access.endpoints] == [
+        ("work.example", 443),
+        ("judge.example", 443),
+    ]
+    assert resolved == (["https://judge.example/v1/responses"] if bypass else [])
+    assert composition.runtime.judge_upstreams == {
+        ("judge.example", 443): None
+        if bypass
+        else UpstreamProxy("judge-proxy.example", 3128),
+    }
+    assert json.loads(access.launch)["llm"]["proxy"] == PROXY
+
+
 def test_the_job_prepares_the_codex_cli_and_checks_the_login_in_place(
     tmp_path, monkeypatch
 ):
@@ -700,7 +752,7 @@ def test_the_agent_and_the_judge_llm_on_one_host_get_one_pinned_endpoint(
     # Each resolution of the shared host answers with another address.
     answers = iter(("198.51.100.8", "198.51.100.9"))
 
-    def pin_endpoints(_enforcer, urls):
+    def pin_endpoints(_enforcer, urls, *, resolve=True):
         return tuple(
             PinnedEndpoint(
                 hostname=cluster_judge_llm.urlsplit(url).hostname,
@@ -719,6 +771,67 @@ def test_the_agent_and_the_judge_llm_on_one_host_get_one_pinned_endpoint(
     assert access.egress == "pinned"
     assert [(item.hostname, item.port) for item in access.endpoints] == [
         ("llm.example", 443)
+    ]
+
+
+@pytest.mark.parametrize(
+    "judge_proxy", ["http://work-proxy:3128", "http://other-proxy:3128", None]
+)
+def test_one_shared_destination_requires_one_consistent_proxy_route(
+    tmp_path, monkeypatch, judge_proxy
+):
+    from rsi_harness.cluster.bluevela.network import UpstreamProxy
+
+    plan = _llm_plan(tmp_path, model_access=True, agent_network="no-network")
+    prepared = ClusterJudgeLLM(
+        request=JudgeLLMRequest(
+            auth=JudgeLLMAuth.API,
+            base_url="https://llm.example",
+            proxy=judge_proxy,
+        )
+    )
+    composition = _composition(tmp_path, monkeypatch, plan, prepared)
+    composition.rsi_loop_config = RSILoopConfig(agent_api_key="SYNTHETIC-AGENT-KEY")
+    composition.provider_urls = ("https://llm.example",)
+    composition.runtime.upstream_proxy = UpstreamProxy("work-proxy", 3128)
+    monkeypatch.setattr(
+        runtime_module.NetworkPolicyEnforcer,
+        "pin_endpoints",
+        lambda _self, urls, resolve=True: (
+            pin(urls) if resolve else cluster_judge_llm.unresolved_endpoints(urls)
+        ),
+    )
+    if judge_proxy == "http://work-proxy:3128":
+        access = composition.judge_model_access()
+        assert len(access.endpoints) == 1
+        assert access.endpoints[0].addresses == ()
+    else:
+        with pytest.raises(SetupError, match="different proxy routes.*llm.example:443"):
+            composition.judge_model_access()
+
+
+def test_preflight_preserves_each_direct_model_endpoint_once(monkeypatch, tmp_path):
+    from rsi_harness.runtime.network import PinnedEndpoint
+
+    # Additional Codex login hosts stay model destinations, not a repeated
+    # copy of the complete endpoint list or an accidentally allowed proxy.
+    monkeypatch.setattr(
+        cluster_judge_llm,
+        "CODEX_LOGIN_ENDPOINTS",
+        ("https://chatgpt.com", "https://auth.example"),
+    )
+    raw = _codex(_task(), tmp_path, egress="site")
+    raw = replace(
+        raw,
+        endpoints=(
+            *raw.endpoints,
+            PinnedEndpoint(hostname="proxy.example", port=3128, addresses=()),
+        ),
+    )
+    access = judge_llm_for_egress(raw, "pinned")
+    assert [(item.hostname, item.port) for item in access.endpoints] == [
+        ("chatgpt.com", 443),
+        ("auth.example", 443),
     ]
 
 

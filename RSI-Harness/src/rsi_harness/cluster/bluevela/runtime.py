@@ -28,6 +28,7 @@ from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from rsi_harness.cluster.agent_version import parse_agent_version
 from rsi_harness.cluster.bluevela import rsi_nonet
@@ -54,6 +55,7 @@ from rsi_harness.cluster.bluevela.multinode import (
 from rsi_harness.cluster.bluevela.network import (
     AgentNetworkBroker,
     JudgeProviderBroker,
+    UpstreamProxy,
     judge_proxy_environment,
 )
 from rsi_harness.cluster.bluevela.sandbox import ClusterSandbox
@@ -129,7 +131,7 @@ from rsi_harness.runtime.gpu import (
     resolve_allocation,
 )
 from rsi_harness.runtime.judge import JUDGE_ROUND_END_SLACK_SECONDS
-from rsi_harness.runtime.judge_llm import judge_codex_login
+from rsi_harness.runtime.judge_llm import config_proxy_environment, judge_codex_login
 from rsi_harness.runtime.judge_login_refresh import renew_operator_login
 from rsi_harness.runtime.judge_model_access import (
     JudgeModelAccess,
@@ -143,7 +145,7 @@ from rsi_harness.runtime.local_auth import (
     read_login_store,
     resolve_agent_auth,
 )
-from rsi_harness.runtime.network import NetworkPolicyEnforcer
+from rsi_harness.runtime.network import NetworkPolicyEnforcer, proxy_for
 from rsi_harness.runtime.oracle import oracle_failures
 from rsi_harness.runtime.output import BoundedBytes
 from rsi_harness.runtime.recovery import LeaseStore, retained_round_id
@@ -197,10 +199,6 @@ def _agent_provider_urls(
 ) -> tuple[str, ...]:
     if plan.task.agent.name == "oracle":
         return ()
-    if config.http_proxy or config.https_proxy:
-        raise SetupError(
-            "Blue Vela no-network Agent does not support an upstream proxy"
-        )
     agent = create_agent(plan.task.agent.name, config)
     auth = auth_resolver(
         source=payload.agent_auth,
@@ -213,6 +211,39 @@ def _agent_provider_urls(
     if not provider:
         raise SetupError("no-network Agent has no provider endpoint")
     return (provider,)
+
+
+def _agent_upstream_proxy(
+    provider_urls: tuple[str, ...], config: Any
+) -> UpstreamProxy | None:
+    """The proxy a no-network Agent's model endpoints are tunnelled through:
+    the run's proxy settings, chosen per endpoint with ``no_proxy`` as a
+    public Agent chooses them; None to connect to them directly."""
+    environment = config_proxy_environment(config)
+    proxies = {url: proxy_for(url, environment) for url in provider_urls}
+    chosen = set(proxies.values())
+    if len(chosen) > 1:
+        # Hostnames only: a URL may carry credentials.
+        direct = sorted(
+            {urlsplit(url).hostname or "?" for url, p in proxies.items() if p is None}
+        )
+        raise SetupError(
+            "a no-network Agent reaches all its model endpoints through one "
+            "upstream proxy or none, but the run's proxy settings "
+            + (
+                f"send {', '.join(direct)} around it (no_proxy)"
+                if direct
+                else "name different proxies for them"
+            )
+        )
+    proxy = next(iter(chosen), None)
+    return None if proxy is None else UpstreamProxy.from_url(proxy)
+
+
+def _report_tunnel_failures(phase: str, broker: Any) -> None:
+    failures = broker.tunnel_failures()
+    if failures is not None:
+        print(f"[rsi-engine] upstream_proxy_tunnels: {phase}: {failures}", flush=True)
 
 
 # The contained $HOME of every Apptainer exec in a Kubernetes Pod.
@@ -584,6 +615,10 @@ class ApptainerAgentRuntime:
         self.auth_secret_values: set[str] = set()
         self._process: subprocess.Popen[str] | None = None
         self._network_broker: AgentNetworkBroker | None = None
+        # Set by the composition: the proxy the Agent's endpoints are
+        # tunnelled through, or None to connect to them directly.
+        self.upstream_proxy: UpstreamProxy | None = None
+        self.judge_upstreams: dict[tuple[str, int], UpstreamProxy | None] = {}
         self.allocated_pools = allocated_pools
         self.work_broker: MultiNodeBroker | None = None
         self.judge_broker: MultiNodeBroker | None = None
@@ -681,8 +716,10 @@ class ApptainerAgentRuntime:
         # A previous attempt's isolation check does not count for this one.
         (self.feedback.parent / "isolation_check.json").unlink(missing_ok=True)
         if self.plan.task.agent.name == "oracle":
-            if self.profile.scheduler.kind not in ("slurm", "kubernetes"):
-                raise SetupError("Oracle requires a Slurm or Kubernetes allocation")
+            if self.profile.scheduler.kind not in ("slurm", "kubernetes", "pbs", "pjm"):
+                raise SetupError(
+                    "Oracle requires a Slurm, Kubernetes, PBS or PJM allocation"
+                )
             if resume:
                 raise SetupError(
                     "Oracle validation cannot resume; start a fresh validation"
@@ -845,7 +882,18 @@ class ApptainerAgentRuntime:
         return result.output + self._namespace_remedy(result)
 
     def _namespace_remedy(self, result: AgentRunResult) -> str:
-        if "create network namespace" in result.output and not self._seccomp_network:
+        # Apptainer could not create the namespace, or (setuid, without
+        # CAP_NET_ADMIN) could not set it up.
+        if self._seccomp_network:
+            return ""
+        if "Failed to set flags on interface" in result.output:
+            # Seccomp mode needs an unprivileged (non-setuid) Apptainer.
+            return (
+                "\nthis setuid Apptainer cannot set up network namespaces; use "
+                "an unprivileged Apptainer with [apptainer] network_isolation "
+                '= "seccomp"'
+            )
+        if "create network namespace" in result.output:
             return (
                 "\nthis site has no network namespaces; set "
                 '[apptainer] network_isolation = "seccomp"'
@@ -1324,13 +1372,15 @@ class ApptainerAgentRuntime:
     ) -> None:
         if self._network_broker is not None:
             raise InfrastructureError("Agent network broker is already configured")
+        # Through an upstream proxy, pinned by name: the proxy resolves them.
         endpoints = NetworkPolicyEnforcer(run_id=self.payload.run_id).pin_endpoints(
-            provider_urls
+            provider_urls, resolve=self.upstream_proxy is None
         )
         broker = AgentNetworkBroker(
             self.node_tmp / "network",
             endpoints=endpoints,
             submit_url=submit_url,
+            upstream=self.upstream_proxy,
         )
         broker.start()
         self._network_broker = broker
@@ -1340,6 +1390,7 @@ class ApptainerAgentRuntime:
         self._network_broker = None
         if broker is not None:
             broker.stop()
+            _report_tunnel_failures("agent", broker)
 
     def _smoke_agent(self) -> None:
         if self.plan.task.agent.name == "oracle":
@@ -1581,9 +1632,12 @@ class ApptainerAgentRuntime:
                 else:
                     network_mode = "no-network"
                     # Short: a Unix socket path is limited to 108 bytes.
+                    # The Agent and Judge LLM keep their own configured routes.
                     provider = JudgeProviderBroker(
                         self.node_tmp / f"jnet-{round_digest}",
                         endpoints=access.endpoints,
+                        upstream=self.upstream_proxy,
+                        upstreams=self.judge_upstreams,
                     )
                     provider.start()
                     relay = PurePosixPath("/usr/local/bin/rsi-netns-relay")
@@ -1637,6 +1691,7 @@ class ApptainerAgentRuntime:
             try:
                 if provider is not None:
                     provider.stop()
+                    _report_tunnel_failures(f"judge {request.round_id}", provider)
                     shutil.rmtree(provider.root, ignore_errors=True)
             finally:
                 if agent_root is not None:
@@ -2994,6 +3049,11 @@ class NativeEngineComposition:
             if plan.task.agent.network.mode == "no-network"
             else ()
         )
+        upstream = _agent_upstream_proxy(self.provider_urls, config)
+        self.runtime.upstream_proxy = upstream
+        if upstream is not None:
+            # Its address only, never its credentials.
+            self._event("agent_upstream_proxy", f"{upstream.host}:{upstream.port}")
         self.evaluator: NativeJudgeEvaluator | None = None
         self.volume: ManagedWorkdirVolume | None = None
         self.secrets = rsi_loop_runtime_secret_values(config)
@@ -3166,8 +3226,11 @@ class NativeEngineComposition:
         endpoints: tuple[Any, ...] = ()
         extra = None
         if egress == "pinned" and task.verifier.model_access:
-            endpoints = enforcer.pin_endpoints(self.provider_urls)
+            endpoints = enforcer.pin_endpoints(
+                self.provider_urls, resolve=self.runtime.upstream_proxy is None
+            )
             extra = judge_proxy_environment()
+        judge_upstreams: dict[tuple[str, int], UpstreamProxy | None] = {}
         judge_llm = resolve_cluster_judge_llm(
             task,
             getattr(self.payload, "judge_llm", None),
@@ -3176,7 +3239,20 @@ class NativeEngineComposition:
             egress=egress,
             # Site egress resolves names in the Judge, as Work does.
             pin=enforcer.pin_endpoints if egress == "pinned" else unresolved_endpoints,
+            upstreams=judge_upstreams,
         )
+        for endpoint in endpoints:
+            key = (endpoint.hostname.rstrip(".").lower(), endpoint.port)
+            if (
+                key in judge_upstreams
+                and judge_upstreams[key] != self.runtime.upstream_proxy
+            ):
+                raise SetupError(
+                    "the Work Agent and Judge LLM choose different proxy routes "
+                    f"for the same destination {endpoint.hostname}:{endpoint.port}; "
+                    "configure the same proxy or no_proxy route for that destination"
+                )
+        self.runtime.judge_upstreams = judge_upstreams
         access = resolve_judge_model_access(
             task,
             self.rsi_loop_config,

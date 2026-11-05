@@ -321,3 +321,26 @@ def test_single_node_slurm_exclusive_is_not_silently_ignored(tmp_path, exclusive
     )
     adapter.run(_request(tmp_path, dry_run=True))
     assert ("--exclusive" in events["dry_run"]["run_argv"]) is exclusive
+
+
+def test_slurm_inherits_the_submit_host_singularity_ce_refusal(tmp_path):
+    local = _profile(tmp_path)
+    base = load_cluster_profile("slurm", {"USER": "alice"})
+    profile = base.model_copy(
+        update={
+            "storage": local.storage,
+            "apptainer": local.apptainer,
+            "builder": local.builder,
+        }
+    )
+    profile.apptainer.binary.write_text(
+        "#!/bin/sh\necho 'singularity-ce version 4.1.3'\n"
+    )
+    scheduler = RecordingSlurmScheduler()
+    adapter = SlurmClusterAdapter(profile, scheduler=scheduler)
+
+    with pytest.raises(SetupError, match="SingularityCE is not supported"):
+        adapter.run(_request(tmp_path, dry_run=False))
+
+    assert scheduler.events == []
+    assert not profile.storage.run_root.parent.exists()

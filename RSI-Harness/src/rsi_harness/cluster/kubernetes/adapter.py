@@ -148,6 +148,10 @@ class KubernetesClusterAdapter(SlurmClusterAdapter):
             }
         )
 
+    def _check_container_runtime(self) -> None:
+        """The Pod's Apptainer is not the submit host's file: the job
+        drivers check it."""
+
     def _check_job_paths(self, agent_paths: tuple[Path, ...]) -> None:
         """The Pod sees only its volumes and image: every path the jobs use
         at the submit host's path must be in one of them."""

@@ -367,6 +367,50 @@ def test_pinned_egress_runs_the_judge_behind_its_own_provider_proxy(
     assert environment["NO_PROXY"] == "127.0.0.1,localhost"
 
 
+def test_a_pinned_judge_reaches_the_agents_endpoints_through_its_upstream_proxy(
+    tmp_path, monkeypatch
+):
+    """The Agent's endpoints, pinned by name for its upstream proxy, are the
+    model-access Judge's too, through the same proxy."""
+    from rsi_harness.cluster.bluevela import runtime as runtime_module
+    from rsi_harness.cluster.bluevela.network import UpstreamProxy
+    from rsi_harness.runtime.network import PinnedEndpoint
+
+    plan = _plan(tmp_path, agent_network="no-network", verifier_network="no-network")
+    runtime = _runtime(tmp_path, monkeypatch, plan)
+    upstream = UpstreamProxy(host="proxy.example", port=3128)
+    runtime.upstream_proxy = upstream
+    composition = object.__new__(NativeEngineComposition)
+    composition.plan = plan
+    composition.runtime = runtime
+    composition.payload = runtime.payload
+    composition.rsi_loop_config = RSILoopConfig(agent_api_key=API_KEY)
+    # Unresolvable here, as on a compute node without DNS.
+    composition.provider_urls = ("https://api.provider.invalid/v1",)
+
+    access = composition.judge_model_access()
+
+    assert access.endpoints == (
+        PinnedEndpoint(hostname="api.provider.invalid", port=443, addresses=()),
+    )
+    brokers = []
+
+    class Broker(runtime_module.JudgeProviderBroker):
+        def __init__(self, root, **options):
+            super().__init__(root, **options)
+            brokers.append(options)
+
+    monkeypatch.setattr(runtime_module, "JudgeProviderBroker", Broker)
+    runtime.configure_judge_model_access(access)
+    monkeypatch.setattr(runtime, "_run", _Capture(runtime))
+    workspace = runtime.rounds / "agent-1" / "workspace"
+    workspace.mkdir(parents=True)
+    runtime.task_assets.mkdir(parents=True, exist_ok=True)
+    runtime.run_judge(workspace, _request(tmp_path, plan), {})
+
+    assert [options["upstream"] for options in brokers] == [upstream]
+
+
 def test_pinned_egress_needs_a_no_network_verifier(tmp_path, monkeypatch):
     plan = _plan(tmp_path, agent_network="no-network", verifier_network="public")
     endpoints = NetworkPolicyEnforcer(run_id="native-run").pin_endpoints(

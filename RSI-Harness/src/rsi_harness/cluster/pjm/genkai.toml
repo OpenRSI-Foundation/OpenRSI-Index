@@ -1,0 +1,77 @@
+# Kyushu University Genkai, node group B (Fujitsu TCS pjsub, x86-64, four
+# H100 per node), packaged as --cluster genkai. Copy it to add the task's
+# data binds, WORKDIR and image Python. Run `rsi-harness run --cluster genkai`
+# on a login node. See docs/cluster-sites.md for setup and the bundled
+# Apptainer device-directory patch.
+name = "genkai"
+adapter = "pjm"
+owner = "${USER}"
+
+[scheduler]
+kind = "pjm"
+resource_group = "b-batch"
+# gpu=N gives a job N GPUs with their share of the node's cores and memory.
+gpu_resource = "gpu"
+resources = ["jobenv=singularity"]
+exclusive = false
+poll_seconds = 30.0
+# b-batch supplies 30 cores and 226.7 GiB per GPU (rounded down to MiB).
+capacity = { cpu_slots = 30, memory_mb = 232140, per_gpu = true }
+
+[scheduler.build]
+resource_group = "b-batch"
+gpus = 1
+
+[storage]
+run_root = "${HOME}/rsi/runs"
+image_cache = "${HOME}/rsi/images"
+logs_root = "${HOME}/rsi/logs"
+hf_home = "${HOME}/rsi/cache/huggingface"
+hf_datasets_cache = "${HOME}/rsi/cache/datasets"
+
+[builder]
+# The compute nodes have no Podman: the Harness installs its static Podman
+# here before the first build.
+podman_bundle = "${HOME}/rsi/podman"
+storage_driver = "vfs"
+host_namespaces = ["network", "uts"]
+cpu_slots = 24
+memory_mb = 131072
+walltime = "02:00"
+temp_root = "/tmp"
+min_tmp_mb = 71680
+# Single-ID rootless builds use the helpers installed with Apptainer.
+rootless_apt_sandbox = true
+faked_binary = "${HOME}/rsi/apptainer/x86_64/utils/bin/faked-sysv"
+fakeroot_library = "${HOME}/rsi/apptainer/x86_64/utils/lib/libfakeroot/libfakeroot-sysv.so"
+
+[apptainer]
+mount_policy = "scoped"
+# The site's setuid SingularityCE cannot isolate a phase's network in a
+# job: install an unprivileged Apptainer here. Stock Apptainer binds device
+# directories non-recursively, which fails (EINVAL) for /dev/nvidia-caps in a
+# job, whose device nodes are bind mounts: --nv needs one that binds them
+# recursively (MS_REC), such as 1.5.5 with a recursive-device-dir-bind patch,
+# built without setuid.
+binary = "${HOME}/rsi/apptainer/bin/apptainer"
+dns_bind = "/etc/resolv.conf"
+work_binds = []
+judge_binds = []
+# The task image's WORKDIR and Python 3.8 or later.
+workspace_target = "/workspace"
+temp_root = "/tmp"
+container_python = "/usr/bin/python3"
+rdma_binds = []
+
+[apptainer.environment]
+RSI_SHARED_DATA_ROOT = "/rsi-data"
+
+[resources]
+min_cpu_slots = 8
+min_memory_mb = 65536
+min_runtime_tmp_mb = 71680
+gpus_per_node = 4
+all_gpus_override = 4
+walltime_margin_seconds = 900
+# /tmp has a per-job quota; each job's NVMe directory is $PJM_SSD_DIR.
+node_tmp_variable = "PJM_SSD_DIR"

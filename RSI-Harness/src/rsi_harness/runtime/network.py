@@ -595,6 +595,21 @@ def provider_bypasses_proxy(provider: str, environment: Mapping[str, str]) -> bo
     return False
 
 
+def proxy_for(url: str, environment: Mapping[str, str]) -> str | None:
+    """The proxy ``environment`` sends ``url`` through, as HTTP clients pick
+    it: ``https_proxy`` (``http_proxy`` for an http URL), else ``all_proxy``;
+    None when there is none or ``no_proxy`` sends ``url`` around it."""
+    keys = (
+        ("https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
+        if urlsplit(url).scheme == "https"
+        else ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY")
+    )
+    proxy = next((environment[key] for key in keys if environment.get(key)), None)
+    if proxy is None or provider_bypasses_proxy(url, environment):
+        return None
+    return proxy
+
+
 def judge_requires_internal_bridge(
     role: str, mode: str, has_api_endpoints: bool
 ) -> bool:
@@ -863,10 +878,18 @@ class NetworkPolicyEnforcer:
                 raise
         return lease
 
-    def pin_endpoints(self, endpoints: Sequence[str]) -> tuple[PinnedEndpoint, ...]:
-        """Resolve endpoint authority without mutating Docker or the firewall."""
+    def pin_endpoints(
+        self, endpoints: Sequence[str], *, resolve: bool = True
+    ) -> tuple[PinnedEndpoint, ...]:
+        """Resolve endpoint authority without mutating Docker or the firewall.
 
-        return tuple(self._pin_endpoint(endpoint) for endpoint in endpoints)
+        ``resolve=False`` pins hostnames and ports only, with no addresses:
+        for endpoints reached through an upstream proxy, which resolves them.
+        """
+
+        return tuple(
+            self._pin_endpoint(endpoint, resolve=resolve) for endpoint in endpoints
+        )
 
     def attest(self, lease: NetworkPolicyLease) -> None:
         """Verify issuance and the exact firewall jump immediately before start."""
@@ -892,7 +915,7 @@ class NetworkPolicyEnforcer:
             ) from error
         self._issued_leases.pop(lease.rule_id, None)
 
-    def _pin_endpoint(self, url: str) -> PinnedEndpoint:
+    def _pin_endpoint(self, url: str, *, resolve: bool = True) -> PinnedEndpoint:
         parsed = urlsplit(url)
         if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
             raise SetupError("invalid HTTP API endpoint")
@@ -903,6 +926,8 @@ class NetworkPolicyEnforcer:
             raise SetupError(
                 f"invalid HTTP API endpoint port for hostname {hostname!r}"
             ) from error
+        if not resolve:
+            return PinnedEndpoint(hostname=hostname, port=port, addresses=())
         try:
             direct = ipaddress.ip_address(hostname)
             addresses = (direct,)
@@ -978,4 +1003,5 @@ __all__ = [
     "DockerIptablesFirewallBackend",
     "managed_bridge_interface",
     "provider_bypasses_proxy",
+    "proxy_for",
 ]

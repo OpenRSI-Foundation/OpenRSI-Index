@@ -233,6 +233,59 @@ def test_build_driver_uses_the_bundle_configuration(tmp_path: Path) -> None:
     assert f"conf {etc}/containers.conf {etc}/storage.conf" in calls
 
 
+def test_build_driver_refuses_a_bundle_of_another_architecture(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    node = os.uname().machine
+    other = "aarch64" if node == "x86_64" else "x86_64"
+    monkeypatch.setattr(podman_bundle.platform, "machine", lambda: other)
+
+    completed, calls = _run_build(tmp_path, "  true", podman_bundle=tmp_path / "b")
+
+    assert completed.returncode == 1
+    assert f"the Podman bundle is for {other}, this node is {node}" in (
+        completed.stderr
+    )
+    assert not calls
+
+
+def test_an_arm64_build_driver_uses_the_arm64_tree(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(podman_bundle.platform, "machine", lambda: "aarch64")
+    root = tmp_path / "bundles"
+    context = tmp_path / "context"
+    context.mkdir()
+    (context / "Dockerfile").write_text("FROM scratch\n")
+    base = load_cluster_profile("bluevela", {"USER": "alice"})
+    tree = podman_bundle.bundle_dir(root, "arm64")
+    profile = base.model_copy(
+        update={
+            "builder": base.builder.model_copy(
+                update={
+                    "binary": tree / podman_bundle.PODMAN,
+                    "conmon": tree / podman_bundle.CONMON,
+                    "runtime": tree / podman_bundle.RUNTIME,
+                    "podman_bundle": root,
+                    "temp_root": tmp_path,
+                }
+            )
+        }
+    )
+    driver = tmp_path / "build.sh"
+
+    render_build_driver(
+        plan_image(context, tmp_path / "cache"), profile, context, driver, 1
+    )
+
+    script = driver.read_text()
+    etc = root / "arm64" / podman_bundle.RELEASE / "etc/containers"
+    assert f"CONTAINERS_CONF={etc}/containers.conf" in script
+    assert f"CONTAINERS_STORAGE_CONF={etc}/storage.conf" in script
+    assert f"--signature-policy {etc}/policy.json" in script
+    assert "the Podman bundle is for aarch64" in script
+
+
 def test_build_driver_refuses_a_missing_helper(tmp_path: Path) -> None:
     completed, calls = _run_build(tmp_path, "  true", conmon=tmp_path / "conmon")
 

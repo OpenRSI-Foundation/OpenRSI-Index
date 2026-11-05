@@ -1018,7 +1018,10 @@ On a cluster, a Judge LLM works the same way, except:
 - It needs a single-node Judge and a `"public"` or `"no-network"` Verifier.
   Without `model_access`, a `"public"` Verifier's Judge uses the site
   network; a `"no-network"` one reaches only the pinned endpoints through
-  its private proxy, so no upstream proxy and an `https` base URL.
+  its private proxy, directly or by HTTP CONNECT through `--judge-llm-proxy`
+  or the run's proxy settings (an `http://` proxy), and needs an `https`
+  base URL. A `host:port` the Work Agent also uses must take the same proxy
+  route.
 - The submit host checks the credential; the job, where the Engine runs the
   Judge rounds, reads it again (an API key from the same variable, which
   the scheduler passes on, or a key file on shared storage). Only where it

@@ -20,8 +20,10 @@ from rsi_harness.runtime.network import (
     FirewallRuleNotFound,
     NetworkPolicyEnforcer,
     NetworkRuleSet,
+    PinnedEndpoint,
     managed_bridge_interface,
     no_network_dns_servers,
+    proxy_for,
 )
 from tests.fakes import FakeDockerClient, FakeDockerContainer, FakeFirewallBackend
 
@@ -1283,3 +1285,53 @@ def test_real_internal_bridge_reaches_host_before_policy_then_input_blocks_it():
         listener.shutdown()
         listener.server_close()
         listener_thread.join(timeout=2)
+
+
+def test_endpoints_pinned_for_an_upstream_proxy_are_never_resolved():
+    enforcer, resolver, _firewall = make_enforcer()
+
+    pinned = enforcer.pin_endpoints(
+        ("https://Model.Test./v1", "http://model.test:8080", "https://192.0.2.7"),
+        resolve=False,
+    )
+
+    assert resolver.queries == []
+    # By name only, an address literal too: the proxy reaches all of them.
+    assert pinned == (
+        PinnedEndpoint(hostname="model.test", port=443, addresses=()),
+        PinnedEndpoint(hostname="model.test", port=8080, addresses=()),
+        PinnedEndpoint(hostname="192.0.2.7", port=443, addresses=()),
+    )
+    for invalid in ("ftp://model.test", "https://model.test:99999"):
+        with pytest.raises(SetupError, match="invalid HTTP API endpoint"):
+            enforcer.pin_endpoints((invalid,), resolve=False)
+    # Resolution stays the default.
+    assert enforcer.pin_endpoints(("https://model.test",))[0].addresses == (
+        ipaddress.ip_address("127.0.0.1"),
+    )
+    assert resolver.queries == ["model.test"]
+
+
+@pytest.mark.parametrize(
+    ("url", "environment", "expected"),
+    [
+        ("https://api.test", {"HTTPS_PROXY": "http://p:3128"}, "http://p:3128"),
+        ("https://api.test", {"https_proxy": "http://a", "ALL_PROXY": "b"}, "http://a"),
+        ("https://api.test", {"all_proxy": "http://all:1"}, "http://all:1"),
+        ("https://api.test", {"http_proxy": "http://p:3128"}, None),
+        ("http://api.test", {"http_proxy": "http://p:3128"}, "http://p:3128"),
+        (
+            "https://api.test",
+            {"https_proxy": "http://p:3128", "no_proxy": ".test"},
+            None,
+        ),
+        (
+            "https://api.test",
+            {"https_proxy": "http://p:3128", "NO_PROXY": "other.test"},
+            "http://p:3128",
+        ),
+        ("https://api.test", {}, None),
+    ],
+)
+def test_proxy_for_picks_the_proxy_as_http_clients_do(url, environment, expected):
+    assert proxy_for(url, environment) == expected

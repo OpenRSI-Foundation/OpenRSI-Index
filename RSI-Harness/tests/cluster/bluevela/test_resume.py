@@ -437,3 +437,43 @@ def test_the_engine_runs_the_payload_attempt_in_resume_mode(
     store.write(lease.model_copy(update={"status": None}))
     with pytest.raises(SetupError, match="changed after attempt 2"):
         runtime_module.run_native_engine(payload, payload.run_plan)
+
+
+def test_resume_reports_the_ended_jobs_only_when_it_proceeds(
+    tmp_path: Path, monkeypatch
+) -> None:
+    run = _interrupted_run(tmp_path)
+    ended: list[Path] = []
+    monkeypatch.setattr(run.adapter, "_jobs_ended", ended.append)
+
+    run.adapter.plan_resume(run.run_id, AttemptGrants(), dry_run=True)
+    run.scheduler.active = True
+    with pytest.raises(SetupError, match="still live"):
+        run.adapter.plan_resume(run.run_id, AttemptGrants())
+    run.scheduler.active = False
+    run.scheduler.name_taken = True
+    with pytest.raises(InfrastructureError, match="already active"):
+        run.adapter.plan_resume(run.run_id, AttemptGrants())
+    assert ended == []
+
+    run.scheduler.name_taken = False
+    run.adapter.plan_resume(run.run_id, AttemptGrants())
+    assert ended == [run.run_dir]
+
+
+def test_a_batch_resume_removes_environment_files_its_jobs_left(
+    tmp_path: Path,
+) -> None:
+    from rsi_harness.cluster.batch_adapter import OneHostBatchAdapter
+
+    run_dir = tmp_path / "run-1"
+    for stage in ("build", "run"):
+        directory = run_dir / stage / f"job-{stage}"
+        directory.mkdir(parents=True)
+        (directory / "environment").write_text("K=v")
+        (directory / "job.sh").write_text("exit 0")
+
+    OneHostBatchAdapter._jobs_ended(None, run_dir)  # type: ignore[arg-type]
+
+    assert not list(run_dir.glob("*/*/environment"))
+    assert len(list(run_dir.glob("*/*/job.sh"))) == 2

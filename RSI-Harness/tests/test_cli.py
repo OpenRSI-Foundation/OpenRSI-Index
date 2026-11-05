@@ -10,7 +10,7 @@ import pytest
 from typer.testing import CliRunner
 
 from rsi_harness.cluster.base import ClusterRunResult
-from rsi_harness.errors import SetupError
+from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.models import (
     AgentAuthSource,
     GPUAllocation,
@@ -394,6 +394,36 @@ def test_cluster_console_warns_when_the_agent_is_not_the_pinned_version(
     assert capsys.readouterr().out == (
         "Warning: codex 0.163.0 runs, not the pinned 0.162.1; RUN_INFO records both.\n"
     )
+
+
+def test_a_failed_cluster_run_still_shows_its_run_id(
+    cli, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cli_module, _local_services = cli
+    task = tmp_path / "task"
+    task.mkdir()
+
+    class ClusterAdapter:
+        def __init__(self, event_callback):
+            self.event_callback = event_callback
+
+        def run(self, request):
+            self.event_callback("run_started", {"run_id": "cluster-123"})
+            raise InfrastructureError("SIF build failed")
+
+    monkeypatch.setattr(
+        cli_module,
+        "build_cluster_adapter",
+        lambda name, event_callback=None: ClusterAdapter(event_callback),
+    )
+
+    result = CliRunner().invoke(
+        cli_module.app, ["run", str(task), "--cluster", "bluevela"]
+    )
+
+    assert result.exit_code == 1
+    assert "Run ID: cluster-123\n" in result.output
+    assert "SIF build failed" in result.output
 
 
 def test_cluster_run_rejects_local_gpu_selectors_before_adapter_creation(

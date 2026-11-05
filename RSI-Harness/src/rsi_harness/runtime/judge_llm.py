@@ -53,7 +53,7 @@ from rsi_harness.runtime.local_auth import (
     withheld_values,
     withhold_refresh_token,
 )
-from rsi_harness.runtime.network import PinnedEndpoint, provider_bypasses_proxy
+from rsi_harness.runtime.network import PinnedEndpoint, proxy_for
 from rsi_loop.harness.config import RSILoopConfig
 
 DEFAULT_API_BASE_URL = "https://api.openai.com"
@@ -254,7 +254,7 @@ def _operator_credential(
     user_lookup: Callable[[int], Any],
 ) -> tuple[JudgeLLMAuth, dict[str, Any], frozenset[str]]:
     # The run's proxy settings, as for the Agent, unless one is given.
-    proxies = _config_proxies(config)
+    proxies = config_proxy_environment(config)
     proxy = _checked_url(request.proxy, "proxy") if request.proxy else None
     if request.auth is JudgeLLMAuth.API:
         if request.api_key_file is not None:
@@ -329,7 +329,8 @@ def _operator_credential(
     )
 
 
-def _config_proxies(config: RSILoopConfig) -> dict[str, str]:
+def config_proxy_environment(config: RSILoopConfig) -> dict[str, str]:
+    """The run's proxy settings as proxy environment variables."""
     environment = {}
     for value, names in (
         (config.http_proxy, ("http_proxy", "HTTP_PROXY")),
@@ -410,16 +411,8 @@ def _work_credential(
 
 def _work_proxy(provider: str, environment: Mapping[str, str]) -> str | None:
     """The Work Agent's proxy for ``provider``, as Work reaches it."""
-    scheme = urlsplit(provider).scheme
-    keys = (
-        ("https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
-        if scheme == "https"
-        else ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY")
-    )
-    proxy = next((environment[key] for key in keys if environment.get(key)), None)
-    if proxy is None or provider_bypasses_proxy(provider, environment):
-        return None
-    return _checked_url(proxy, "proxy")
+    proxy = proxy_for(provider, environment)
+    return None if proxy is None else _checked_url(proxy, "proxy")
 
 
 def _parse_login(content: bytes) -> dict[str, Any]:
@@ -508,6 +501,7 @@ __all__ = [
     "JUDGE_MODEL_EFFORT_ENV",
     "JUDGE_MODEL_ENV",
     "JudgeLLMAccess",
+    "config_proxy_environment",
     "judge_codex_login",
     "resolve_judge_llm",
     "shared_login_refusal",

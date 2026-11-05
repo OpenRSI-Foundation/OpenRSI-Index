@@ -24,7 +24,7 @@ cluster changes is where things happen:
 - Network (:func:`cluster_judge_egress`): ``site`` gives the Judge the site
   network; ``pinned`` gives it a private network namespace whose only way
   out is the Harness's per-round proxy to the pinned Judge LLM endpoints,
-  with no upstream proxy.
+  directly or through the site's configured upstream proxy.
 """
 
 from __future__ import annotations
@@ -49,11 +49,16 @@ from pydantic import Field, field_validator
 
 from rsi_harness.cluster.bluevela.network import (
     JUDGE_PROVIDER_PORT,
+    UpstreamProxy,
     judge_proxy_environment,
 )
 from rsi_harness.errors import SetupError
 from rsi_harness.models import JudgeLLMAuth, JudgeLLMRequest, PersistedModel
-from rsi_harness.runtime.judge_llm import JudgeLLMAccess, resolve_judge_llm
+from rsi_harness.runtime.judge_llm import (
+    CODEX_LOGIN_ENDPOINTS,
+    JudgeLLMAccess,
+    resolve_judge_llm,
+)
 from rsi_harness.runtime.judge_login_refresh import (
     MAX_REFRESH_SECONDS,
     LoginRefreshError,
@@ -63,7 +68,7 @@ from rsi_harness.runtime.judge_login_refresh import (
 )
 from rsi_harness.runtime.judge_model_access import JudgeEgress
 from rsi_harness.runtime.local_auth import AgentAuthMaterial
-from rsi_harness.runtime.network import PinnedEndpoint
+from rsi_harness.runtime.network import PinnedEndpoint, proxy_for
 
 # Node-local scratch below RSI_HARNESS_NODE_TMP holding the verified copy.
 JUDGE_CODEX_SCRATCH = "judge-codex"
@@ -139,40 +144,61 @@ def cluster_judge_egress(task: Any) -> JudgeEgress:
 
 
 def judge_llm_for_egress(
-    judge_llm: JudgeLLMAccess, egress: JudgeEgress
+    judge_llm: JudgeLLMAccess,
+    egress: JudgeEgress,
+    *,
+    pin: Callable[[tuple[str, ...]], tuple[PinnedEndpoint, ...]] | None = None,
+    upstreams: dict[tuple[str, int], UpstreamProxy | None] | None = None,
 ) -> JudgeLLMAccess:
     """``judge_llm`` as a cluster Judge with ``egress`` reaches it.
 
     ``pinned``: the Judge's only way out is the loopback proxy of its
-    per-round provider broker, which connects to the pinned endpoints itself
-    and cannot chain to an upstream proxy (as for a no-network Work Agent).
+    per-round provider broker. The broker reaches model destinations directly
+    or through their configured upstream; the upstream itself is never an
+    allowed CONNECT destination for the Judge.
     """
     if egress == "site":
         return judge_llm
     spec = dict(judge_llm.spec)
     if judge_llm.kind is JudgeLLMAuth.API:
-        if spec.get("proxy"):
-            raise SetupError(_pinned_proxy_refusal(judge_llm.model))
         if urlsplit(str(spec["url"])).scheme != "https":
             raise SetupError(
                 f"the Judge LLM {judge_llm.model!r} through pinned endpoints on a "
                 "cluster needs an https API base URL"
             )
+        targets = (str(spec["url"]),)
+        proxies = {targets[0]: spec.get("proxy")}
+    else:
+        targets = CODEX_LOGIN_ENDPOINTS
+        environment = dict(spec.get("environment") or {})
+        proxies = {url: proxy_for(url, environment) for url in targets}
+    endpoints = []
+    for url, destination in zip(targets, unresolved_endpoints(targets), strict=True):
+        proxy = proxies[url]
+        upstream = UpstreamProxy.from_url(proxy) if proxy else None
+        key = (destination.hostname.rstrip(".").lower(), destination.port)
+        if upstreams is not None:
+            upstreams[key] = upstream
+        if upstream is not None:
+            endpoints.append(destination)
+        elif pin is not None:
+            endpoints.extend(pin((url,)))
+        else:
+            endpoints.append(
+                next(
+                    (
+                        item
+                        for item in judge_llm.endpoints
+                        if (item.hostname.rstrip(".").lower(), item.port) == key
+                    ),
+                    destination,
+                )
+            )
+    if judge_llm.kind is JudgeLLMAuth.API:
         spec["proxy"] = f"http://127.0.0.1:{JUDGE_PROVIDER_PORT}"
     else:
-        if dict(spec.get("environment") or {}):
-            raise SetupError(_pinned_proxy_refusal(judge_llm.model))
         spec["environment"] = judge_proxy_environment()
-    return replace(judge_llm, spec=spec)
-
-
-def _pinned_proxy_refusal(model: str) -> str:
-    return (
-        f"the Judge LLM {model!r} would use an upstream proxy, but a cluster "
-        'Judge with [verifier] network_mode = "no-network" reaches it only '
-        "through pinned endpoints, without one; drop --judge-llm-proxy and the "
-        "run's proxy settings, or use a public Verifier"
-    )
+    return replace(judge_llm, spec=spec, endpoints=tuple(endpoints))
 
 
 def preflight_cluster_judge_llm(
@@ -189,8 +215,8 @@ def preflight_cluster_judge_llm(
 
     Resolves the Judge LLM as the job will, with ``agent_auth`` the Work
     Agent's login as the job reads it (refusing a missing credential, the
-    Work Agent's own login as the operator's, or an upstream proxy a pinned
-    Judge cannot use), and finds the pinned Codex CLI a Codex login needs.
+    Work Agent's own login as the operator's, or an unsupported upstream
+    proxy), and finds the pinned Codex CLI a Codex login needs.
     Returns None for a task without ``judge_model``.
     """
     if definition.verifier.judge_model is None:
@@ -249,6 +275,7 @@ def resolve_cluster_judge_llm(
     egress: JudgeEgress,
     pin: Callable[[tuple[str, ...]], tuple[PinnedEndpoint, ...]],
     environ: Mapping[str, str] | None = None,
+    upstreams: dict[tuple[str, int], UpstreamProxy | None] | None = None,
 ) -> JudgeLLMAccess | None:
     """In the job: the Judge LLM again, as the submit host checked it."""
     if task.verifier.judge_model is None:
@@ -263,10 +290,12 @@ def resolve_cluster_judge_llm(
         request,
         config,
         agent_auth,
-        pin=pin,
+        # The Docker resolver pins the proxy's address when it is configured.
+        # A cluster broker instead pins the actual model destination below.
+        pin=unresolved_endpoints if egress == "pinned" else pin,
         environ=environ,
     )
-    return judge_llm_for_egress(judge_llm, egress)
+    return judge_llm_for_egress(judge_llm, egress, pin=pin, upstreams=upstreams)
 
 
 def require_login_in_place(

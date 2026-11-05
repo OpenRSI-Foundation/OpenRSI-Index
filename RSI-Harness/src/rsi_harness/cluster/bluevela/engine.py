@@ -13,6 +13,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Self
 
@@ -27,12 +28,17 @@ from rsi_harness.cluster.bluevela.allocation import (
 from rsi_harness.cluster.bluevela.apptainer_environment import (
     OPERATOR_APPTAINER_NAMES,
 )
+from rsi_harness.cluster.bluevela.devices import allocated_cuda_devices
 from rsi_harness.cluster.bluevela.judge_llm import ClusterJudgeLLM
-from rsi_harness.cluster.bluevela.preflight import apptainer_preflight
+from rsi_harness.cluster.bluevela.preflight import (
+    apptainer_preflight,
+    node_tmp_assignment,
+)
 from rsi_harness.cluster.bluevela.resources import MultiNodeResources
 from rsi_harness.cluster.config import (
     ApptainerProfile,
     ClusterProfile,
+    PJMSchedulerProfile,
     SlurmSchedulerProfile,
 )
 from rsi_harness.cluster.slurm.allocation import discover_slurm_inventory
@@ -133,9 +139,17 @@ def bind_lsf_devices(
     allocated_devices: tuple[str, ...],
     *,
     scheduler_name: str = "LSF",
+    whole_node: bool = False,
 ) -> RunPlan:
-    """Replace planning placeholders with the exact ordered LSF allocation."""
+    """Replace planning placeholders with the exact ordered LSF allocation.
+
+    ``whole_node``: the job may hold more GPUs than planned (a whole node);
+    the plan takes the first ones by index and no phase gets the rest."""
     expected = len(plan.gpu_plan.authorized_pool.devices)
+    if whole_node and len(allocated_devices) > expected:
+        if all(device.isdigit() for device in allocated_devices):
+            allocated_devices = tuple(sorted(allocated_devices, key=int))
+        allocated_devices = allocated_devices[:expected]
     if (
         len(allocated_devices) != expected
         or any(not device for device in allocated_devices)
@@ -270,6 +284,9 @@ def render_engine_driver(
     for name in ("network_isolation", "process_namespaces"):
         if apptainer.get(name) == ApptainerProfile.model_fields[name].default:
             apptainer.pop(name, None)
+    resources = serialized["profile"]["resources"]
+    if resources.get("node_tmp_variable") is None:
+        resources.pop("node_tmp_variable", None)
     payload_path.write_text(json.dumps(serialized, indent=2))
     leaf = (
         payload.run_plan.paths.logs
@@ -301,8 +318,10 @@ test -s {_quote(leaf / "final_result.json")}
 """
     if payload.resources is not None:
         if payload.resources.total_gpus:
-            device_environment = '''test -n "${CUDA_VISIBLE_DEVICES:-}"
-export APPTAINERENV_CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"'''
+            # Unset: the Engine finds the GPUs the job can open.
+            device_environment = """if [[ -v CUDA_VISIBLE_DEVICES ]]; then
+  export APPTAINERENV_CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"
+fi"""
             device_preflight = f"""{_quote(profile.apptainer.binary)} \
   exec --nv --containall --no-mount hostfs --writable-tmpfs {bind_args} \
   {_quote(payload.sif_path)} nvidia-smi"""
@@ -331,7 +350,7 @@ umask 077
 export HF_HOME={_quote(profile.storage.hf_home)}
 export HF_DATASETS_CACHE={_quote(profile.storage.hf_datasets_cache)}
 export PYTHONPATH={_quote(payload.source_root / "src")}
-runtime_tmp_root={_quote(profile.apptainer.temp_root)}
+{_runtime_tmp_root(profile)}
 available_tmp_kb="$(df -Pk -- "$runtime_tmp_root" | awk 'NR == 2 {{print $4}}')"
 required_tmp_kb=$(({payload.resources.local_tmp_mb} * 1024))
 if [[ ! "$available_tmp_kb" =~ ^[0-9]+$ ]] || \
@@ -370,7 +389,7 @@ test -n "${{{inventory_variable}:-}}"
 export HF_HOME={_quote(profile.storage.hf_home)}
 export HF_DATASETS_CACHE={_quote(profile.storage.hf_datasets_cache)}
 export PYTHONPATH={_quote(payload.source_root / "src")}
-runtime_tmp_root={_quote(profile.apptainer.temp_root)}
+{_runtime_tmp_root(profile)}
 available_tmp_kb="$(df -Pk -- "$runtime_tmp_root" | awk 'NR == 2 {{print $4}}')"
 required_tmp_kb=$(({payload.multi_node.node_tmp_mb} * 1024))
 if [[ ! "$available_tmp_kb" =~ ^[0-9]+$ ]] || \
@@ -439,9 +458,57 @@ def _usable_image(payload: EnginePayload) -> EnginePayload:
     return payload.model_copy(update={"sif_path": sandbox})
 
 
+def _runtime_tmp_root(profile: ClusterProfile) -> str:
+    return node_tmp_assignment(
+        "runtime_tmp_root",
+        profile.apptainer.temp_root,
+        profile.resources.node_tmp_variable,
+    )
+
+
+def with_node_tmp(
+    payload: EnginePayload, environ: Mapping[str, str] | None = None
+) -> EnginePayload:
+    """The payload with temp roots in the job's own node-local scratch, where
+    the profile names a variable for it and the scheduler set it."""
+    environment = os.environ if environ is None else environ
+    variable = payload.profile.resources.node_tmp_variable
+    scratch = environment.get(variable, "") if variable else ""
+    if not scratch:
+        return payload
+    profile = payload.profile
+    profile = profile.model_copy(
+        update={
+            "builder": profile.builder.model_copy(update={"temp_root": Path(scratch)}),
+            "apptainer": profile.apptainer.model_copy(
+                update={"temp_root": Path(scratch)}
+            ),
+        }
+    )
+    return payload.model_copy(update={"profile": profile})
+
+
+def _pci_bus_order(payload: EnginePayload) -> EnginePayload:
+    """Phases count derived indices in nvidia-smi's (PCI bus) order."""
+    apptainer = payload.profile.apptainer
+    for table in ("environment", "work_environment", "judge_environment"):
+        order = getattr(apptainer, table).get("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
+        if order != "PCI_BUS_ID":
+            raise SetupError(
+                f"apptainer.{table} sets CUDA_DEVICE_ORDER={order}, but the "
+                "Engine derived this job's GPU indices in PCI bus order; "
+                "remove it or set it to PCI_BUS_ID"
+            )
+    environment = {**apptainer.environment, "CUDA_DEVICE_ORDER": "PCI_BUS_ID"}
+    profile = payload.profile.model_copy(
+        update={"apptainer": apptainer.model_copy(update={"environment": environment})}
+    )
+    return payload.model_copy(update={"profile": profile})
+
+
 def run_engine_payload(payload: EnginePayload) -> None:
     """Run the native RSI-Harness Engine inside the current scheduler allocation."""
-    payload = _usable_image(payload)
+    payload = _usable_image(with_node_tmp(payload))
     if payload.profile.apptainer.process_namespaces == "harness":
         # Without Apptainer PID namespaces Work may see this process: then
         # its /proc environ and root still need privilege.
@@ -453,12 +520,39 @@ def run_engine_payload(payload: EnginePayload) -> None:
     )
     allocated_pools: AllocatedPools | None = None
     if payload.resources is not None:
-        raw = os.environ.get("CUDA_VISIBLE_DEVICES", "")
-        devices = tuple(item.strip() for item in raw.split(",") if item.strip())
+        raw = os.environ.get("CUDA_VISIBLE_DEVICES")
+        if payload.resources.total_gpus:
+            scheduler = payload.profile.scheduler
+            # PJM gpu=N owns N GPUs even when N is every GPU on a node;
+            # such a job has no outside GPU to demonstrate its device fence.
+            allocation_size = (
+                payload.resources.total_gpus
+                if isinstance(scheduler, PJMSchedulerProfile)
+                and scheduler.gpu_resource is not None
+                and not scheduler.exclusive
+                else None
+            )
+            devices, derived = allocated_cuda_devices(
+                raw,
+                exclusive=scheduler.exclusive,
+                allocation_size=allocation_size,
+            )
+        else:
+            items = (item.strip() for item in (raw or "").split(","))
+            devices, derived = tuple(item for item in items if item), False
+        if derived:
+            print(
+                f"GPUs {raw or '(CUDA_VISIBLE_DEVICES unset)'}: "
+                f"indices {','.join(devices)}",
+                file=sys.stderr,
+                flush=True,
+            )
+            payload = _pci_bus_order(payload)
         plan = bind_lsf_devices(
             payload.run_plan,
             devices,
             scheduler_name=payload.profile.scheduler.kind.upper(),
+            whole_node=payload.profile.scheduler.whole_node,
         )
     else:
         resources = payload.multi_node

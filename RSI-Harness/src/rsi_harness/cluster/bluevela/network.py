@@ -2,18 +2,69 @@
 
 from __future__ import annotations
 
+import base64
 import os
+import re
 import select
 import socket
 import struct
 import threading
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from urllib.parse import urlsplit
+from urllib.parse import unquote, urlsplit
 
 from rsi_harness.errors import SetupError
 from rsi_harness.runtime.network import PinnedEndpoint
 
 _MAX_PROXY_HEADER_BYTES = 16 * 1024
+_CONNECT_ESTABLISHED = re.compile(rb"HTTP/1\.[01] 2[0-9]{2}(?: .*)?")
+
+
+@dataclass(frozen=True, slots=True)
+class UpstreamProxy:
+    """The site's HTTP proxy a provider proxy tunnels endpoints through.
+
+    Only its address is ever shown: ``authorization`` is the
+    ``Proxy-Authorization`` value made from the URL's credentials, if any.
+    """
+
+    host: str
+    port: int
+    authorization: str | None = field(default=None, repr=False)
+
+    @classmethod
+    def from_url(cls, url: str) -> UpstreamProxy:
+        """Parse ``http://[USER:PASS@]HOST[:PORT]`` (or ``HOST:PORT``, as HTTP
+        clients read it); PORT defaults to 80. Errors never repeat the URL."""
+        value = url.strip()
+        if "://" not in value:
+            value = f"http://{value}"
+        try:
+            parsed = urlsplit(value)
+            port = 80 if parsed.port is None else parsed.port
+        except ValueError:
+            raise SetupError("the upstream proxy is not a valid URL") from None
+        if port == 0:
+            raise SetupError("the upstream proxy port must not be 0")
+        if parsed.scheme != "http":
+            raise SetupError(
+                f"the upstream proxy must be an http:// proxy, not {parsed.scheme}://"
+            )
+        if (
+            not parsed.hostname
+            or parsed.path not in ("", "/")
+            or parsed.query
+            or parsed.fragment
+        ):
+            raise SetupError("the upstream proxy must be http://HOST[:PORT]")
+        authorization = None
+        if parsed.username is not None or parsed.password is not None:
+            credentials = (
+                f"{unquote(parsed.username or '')}:{unquote(parsed.password or '')}"
+            )
+            authorization = "Basic " + base64.b64encode(credentials.encode()).decode()
+        return cls(host=parsed.hostname, port=port, authorization=authorization)
 
 
 def _peer_pid(connection: socket.socket) -> int:
@@ -30,6 +81,13 @@ def _peer_pid(connection: socket.socket) -> int:
 class UnixConnectProxy:
     """Expose only pinned HTTPS CONNECT targets on a private Unix socket.
 
+    An endpoint pinned to addresses is connected to directly. One pinned by
+    name only is reached through ``upstream``: a CONNECT tunnel to the same
+    hostname and port, relayed unchanged (TLS stays end to end); the proxy
+    resolves the name. ``upstreams`` overrides that default per destination,
+    allowing the Judge LLM to use a different route from the Work Agent.
+    Targets that are not pinned are refused before the proxy is contacted.
+
     With ``pin_first_peer`` the first connection only registers its process
     (the relay, which connects before it starts anything else) and is closed;
     afterwards a connection from any other process is closed unanswered. A
@@ -45,6 +103,8 @@ class UnixConnectProxy:
         endpoints: tuple[PinnedEndpoint, ...],
         connect_timeout_seconds: float = 10.0,
         pin_first_peer: bool = False,
+        upstream: UpstreamProxy | None = None,
+        upstreams: Mapping[tuple[str, int], UpstreamProxy | None] | None = None,
     ) -> None:
         if not endpoints:
             raise SetupError("Agent provider proxy requires pinned endpoints")
@@ -62,8 +122,14 @@ class UnixConnectProxy:
         self._stopping = threading.Event()
         self._lock = threading.Lock()
         self._pin_first_peer = pin_first_peer
+        self._upstream = upstream
+        self._upstreams = dict(upstreams or {})
         self.owner_pid: int | None = None
         self.refused_peers = 0
+        # Upstream tunnels that failed, and the last reason: the proxy's
+        # status line, never the request (it carries the credentials).
+        self.tunnel_failures = 0
+        self.last_tunnel_failure: str | None = None
 
     def start(self) -> None:
         if self._listener is not None:
@@ -150,12 +216,22 @@ class UnixConnectProxy:
             if target is None:
                 client.sendall(b"HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n")
                 return
-            upstream = self._connect(target)
-            if upstream is None:
+            key = (target.hostname.rstrip(".").lower(), target.port)
+            proxy = self._upstreams.get(key, self._upstream)
+            connected = (
+                self._tunnel(target, proxy)
+                if proxy is not None
+                and (key in self._upstreams or not target.addresses)
+                else self._connect(target)
+            )
+            if connected is None:
                 client.sendall(b"HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\n\r\n")
                 return
+            upstream, early = connected
             with upstream:
                 client.sendall(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                if early:
+                    client.sendall(early)
                 if remainder:
                     upstream.sendall(remainder)
                 client.settimeout(None)
@@ -195,16 +271,55 @@ class UnixConnectProxy:
             return None
         return self._endpoints.get((hostname.rstrip(".").lower(), port))
 
-    def _connect(self, endpoint: PinnedEndpoint) -> socket.socket | None:
+    def _connect(self, endpoint: PinnedEndpoint) -> tuple[socket.socket, bytes] | None:
         for address in endpoint.addresses:
             try:
-                return socket.create_connection(
+                connection = socket.create_connection(
                     (str(address), endpoint.port),
                     timeout=self._connect_timeout,
                 )
             except OSError:
                 continue
+            return connection, b""
         return None
+
+    def _tunnel(
+        self, endpoint: PinnedEndpoint, proxy: UpstreamProxy
+    ) -> tuple[socket.socket, bytes] | None:
+        """A CONNECT tunnel through ``proxy`` to the pinned hostname and port,
+        and any bytes the proxy sent after its 2xx answer; None otherwise."""
+        host = endpoint.hostname
+        authority = (
+            f"[{host}]:{endpoint.port}" if ":" in host else f"{host}:{endpoint.port}"
+        )
+        request = f"CONNECT {authority} HTTP/1.1\r\nHost: {authority}\r\n"
+        if proxy.authorization is not None:
+            request += f"Proxy-Authorization: {proxy.authorization}\r\n"
+        try:
+            connection = socket.create_connection(
+                (proxy.host, proxy.port), timeout=self._connect_timeout
+            )
+        except OSError as error:
+            self._tunnel_failed(
+                f"cannot connect to the proxy: {error.strerror or error}"
+            )
+            return None
+        try:
+            connection.sendall(f"{request}\r\n".encode("ascii"))
+            header, early = self._read_header(connection)
+            status = header.split(b"\r\n", 1)[0]
+            if _CONNECT_ESTABLISHED.fullmatch(status) is not None:
+                return connection, early
+            self._tunnel_failed(status[:200].decode("ascii", "replace"))
+        except (OSError, UnicodeError, ValueError) as error:
+            self._tunnel_failed(f"no proxy answer: {type(error).__name__}")
+        connection.close()
+        return None
+
+    def _tunnel_failed(self, reason: str) -> None:
+        with self._lock:
+            self.tunnel_failures += 1
+            self.last_tunnel_failure = reason
 
     def _relay(self, left: socket.socket, right: socket.socket) -> None:
         sockets = (left, right)
@@ -325,6 +440,12 @@ class UnixTcpRelay:
             client.close()
 
 
+def _tunnel_failures(proxy: UnixConnectProxy | None) -> str | None:
+    if proxy is None or not proxy.tunnel_failures:
+        return None
+    return f"{proxy.tunnel_failures} failed, last: {proxy.last_tunnel_failure}"
+
+
 class AgentNetworkBroker:
     """Own the host-side sockets exposed to one no-network Agent: the submit
     relay, and the provider proxy unless the Agent has no provider (Oracle,
@@ -338,6 +459,7 @@ class AgentNetworkBroker:
         *,
         endpoints: tuple[PinnedEndpoint, ...],
         submit_url: str,
+        upstream: UpstreamProxy | None = None,
     ) -> None:
         parsed = urlsplit(submit_url)
         try:
@@ -363,7 +485,9 @@ class AgentNetworkBroker:
         self._provider = (
             None
             if self.provider_socket is None
-            else UnixConnectProxy(self.provider_socket, endpoints=endpoints)
+            else UnixConnectProxy(
+                self.provider_socket, endpoints=endpoints, upstream=upstream
+            )
         )
         self._submit = UnixTcpRelay(
             self.submit_socket,
@@ -391,6 +515,10 @@ class AgentNetworkBroker:
         if self._provider is not None:
             self._provider.stop()
         self._started = False
+
+    def tunnel_failures(self) -> str | None:
+        """How many upstream proxy tunnels failed, and the last reason."""
+        return _tunnel_failures(self._provider)
 
     def wrap(
         self,
@@ -431,11 +559,22 @@ class JudgeProviderBroker:
 
     _CONTAINER_ROOT = PurePosixPath("/run/rsi-harness/network")
 
-    def __init__(self, root: Path, *, endpoints: tuple[PinnedEndpoint, ...]) -> None:
+    def __init__(
+        self,
+        root: Path,
+        *,
+        endpoints: tuple[PinnedEndpoint, ...],
+        upstream: UpstreamProxy | None = None,
+        upstreams: Mapping[tuple[str, int], UpstreamProxy | None] | None = None,
+    ) -> None:
         self.root = Path(root)
         self.provider_socket = self.root / "provider.sock"
         self._provider = UnixConnectProxy(
-            self.provider_socket, endpoints=endpoints, pin_first_peer=True
+            self.provider_socket,
+            endpoints=endpoints,
+            pin_first_peer=True,
+            upstream=upstream,
+            upstreams=upstreams,
         )
         self._started = False
 
@@ -449,6 +588,10 @@ class JudgeProviderBroker:
     def stop(self) -> None:
         self._provider.stop()
         self._started = False
+
+    def tunnel_failures(self) -> str | None:
+        """How many upstream proxy tunnels failed, and the last reason."""
+        return _tunnel_failures(self._provider)
 
     def wrap(
         self, command: tuple[str, ...], *, relay_path: PurePosixPath
@@ -498,5 +641,6 @@ __all__ = [
     "JudgeProviderBroker",
     "UnixConnectProxy",
     "UnixTcpRelay",
+    "UpstreamProxy",
     "judge_proxy_environment",
 ]

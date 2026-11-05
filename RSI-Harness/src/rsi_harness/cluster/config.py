@@ -49,6 +49,11 @@ class SchedulerProfile(_ProfileModel):
     excluded_hosts: tuple[str, ...] = ()
     poll_seconds: float = Field(default=10.0, gt=0.0)
 
+    @property
+    def whole_node(self) -> bool:
+        """Whether a one-host job may hold more GPUs than it asked for."""
+        return False
+
     @field_validator(
         "submit_binary",
         "status_binary",
@@ -137,6 +142,157 @@ class SlurmSchedulerProfile(SchedulerProfile):
     @classmethod
     def _nonempty_slurm_binary(cls, value: str) -> str:
         return cls._nonempty_binary_argument(value)
+
+
+_BATCH_RESOURCE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*=[A-Za-z0-9_.:+-]+$")
+
+
+def _batch_resources(value: tuple[str, ...]) -> tuple[str, ...]:
+    if any(_BATCH_RESOURCE.fullmatch(item) is None for item in value):
+        raise ValueError("scheduler resources must be NAME=VALUE")
+    names = [item.split("=", 1)[0] for item in value]
+    if len(names) != len(set(names)):
+        raise ValueError("scheduler resources must be named once")
+    return value
+
+
+class BatchCapacity(_ProfileModel):
+    """CPU/RAM supplied by a fixed-size queue allocation, in cores and MiB."""
+
+    cpu_slots: int = Field(gt=0)
+    memory_mb: int = Field(gt=0)
+    per_gpu: bool = False
+
+
+class PBSBuildProfile(_ProfileModel):
+    """Scheduling overrides for image construction, never Work or Judge."""
+
+    queue: str | None = None
+    account: str | None = None
+    project: str | None = None
+    # The build queue's own select chunk, where it differs from the runs'.
+    chunk_resources: tuple[Literal["ncpus", "mem", "ngpus"], ...] | None = None
+    gpus: int = Field(default=0, ge=0)
+    exclusive: bool = False
+    capacity: BatchCapacity | None = None
+
+
+class PBSSchedulerProfile(SchedulerProfile):
+    """PBS Pro: each build and run job is one PBS job on one host."""
+
+    kind: Literal["pbs"]
+    submit_binary: str = "qsub"
+    status_binary: str = "qstat"
+    cancel_binary: str = "qdel"
+    select_binary: str = "qselect"
+    group: str = Field(default="", validation_alias=AliasChoices("account", "group"))
+    project: str | None = None
+    # The planned resources the select chunk names; a queue that hands out
+    # whole nodes or fixed shares may take fewer ("select=1" alone). A job
+    # whose chunk names no ngpus, or an exclusive one, may get all the
+    # node's GPUs: the Engine uses the planned number, lowest index first.
+    chunk_resources: tuple[Literal["ncpus", "mem", "ngpus"], ...] = (
+        "ncpus",
+        "mem",
+        "ngpus",
+    )
+    # Site resources added to the chunk as given, such as "host_type=gpu".
+    chunk_extra: tuple[str, ...] = ()
+    build: PBSBuildProfile | None = None
+    run_walltime_limit: str | None = None
+    capacity: BatchCapacity | None = None
+
+    @field_validator("run_walltime_limit")
+    @classmethod
+    def _run_walltime_limit(cls, value: str | None) -> str | None:
+        return _walltime_limit(value)
+
+    @property
+    def whole_node(self) -> bool:
+        return self.exclusive or "ngpus" not in self.chunk_resources
+
+    @field_validator("select_binary")
+    @classmethod
+    def _nonempty_pbs_binary(cls, value: str) -> str:
+        return cls._nonempty_binary_argument(value)
+
+    @field_validator("chunk_extra")
+    @classmethod
+    def _safe_chunk_extra(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _batch_resources(value)
+
+    @field_validator("excluded_hosts")
+    @classmethod
+    def _no_excluded_hosts(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value:
+            raise ValueError("PBS jobs cannot exclude hosts")
+        return value
+
+
+class PJMBuildProfile(_ProfileModel):
+    """Scheduling overrides for image construction, never Work or Judge."""
+
+    resource_group: str | None = None
+    group: str | None = None
+    gpus: int = Field(default=0, ge=0)
+    exclusive: bool = False
+    capacity: BatchCapacity | None = None
+
+
+class PJMSchedulerProfile(SchedulerProfile):
+    """Fujitsu Technical Computing Suite (pjsub): each build and run job is
+    one job on one node."""
+
+    kind: Literal["pjm"]
+    submit_binary: str = "pjsub"
+    status_binary: str = "pjstat"
+    cancel_binary: str = "pjdel"
+    queue: str = Field(validation_alias=AliasChoices("resource_group", "queue"))
+    group: str = ""
+    # How a job asks for its GPUs (gpu=N); for a job without GPUs, its CPU
+    # cores (vnode-core=N) and memory (vnode-mem=<MiB>Mi) where the resource
+    # group needs them. A gpu=N job gets the node's share for N GPUs. An
+    # exclusive job asks for a whole node (node=1) instead and gets all its
+    # GPUs: the Engine uses the planned number, lowest index first.
+    gpu_resource: str | None = "gpu"
+    cpu_resource: str | None = None
+    memory_resource: str | None = None
+    # Site resources added as given, such as "jobenv=singularity".
+    resources: tuple[str, ...] = ()
+    build: PJMBuildProfile | None = None
+    run_walltime_limit: str | None = None
+    capacity: BatchCapacity | None = None
+
+    @field_validator("run_walltime_limit")
+    @classmethod
+    def _run_walltime_limit(cls, value: str | None) -> str | None:
+        return _walltime_limit(value)
+
+    @property
+    def whole_node(self) -> bool:
+        return self.exclusive or self.gpu_resource is None
+
+    @field_validator("resources")
+    @classmethod
+    def _safe_resources(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _batch_resources(value)
+
+    @field_validator("gpu_resource", "cpu_resource", "memory_resource")
+    @classmethod
+    def _resource_name(cls, value: str | None) -> str | None:
+        if (
+            value is not None
+            and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", value) is None
+        ):
+            raise ValueError("PJM resource names must be plain names")
+        return value
+
+    @field_validator("excluded_hosts")
+    @classmethod
+    def _no_excluded_hosts(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if value:
+            raise ValueError("PJM jobs cannot exclude hosts")
+        return value
 
 
 _KUBERNETES_NAME = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -254,6 +410,10 @@ class KubernetesSchedulerProfile(_ProfileModel):
     @property
     def queue(self) -> str:
         return self.namespace
+
+    @property
+    def whole_node(self) -> bool:
+        return False
 
     @property
     def group(self) -> str:
@@ -528,15 +688,30 @@ class ResourceProfile(_ProfileModel):
     gpus_per_node: int = Field(gt=0)
     walltime_margin_seconds: int = Field(ge=0)
     all_gpus_override: int | None = Field(default=None, gt=0)
+    # A variable the scheduler sets in each job to its node-local scratch
+    # (PJM_SSD_DIR, for example): where it is set, jobs use it instead of the
+    # builder's and Apptainer's temp_root.
+    node_tmp_variable: str | None = None
+
+    @field_validator("node_tmp_variable")
+    @classmethod
+    def _variable_name(cls, value: str | None) -> str | None:
+        if value is not None and re.fullmatch(r"[A-Z_][A-Z0-9_]*", value) is None:
+            raise ValueError("node_tmp_variable must be an environment variable name")
+        return value
 
 
 class ClusterProfile(_ProfileModel):
     name: str
-    adapter: Literal["bluevela", "slurm", "kubernetes"]
+    adapter: Literal["bluevela", "slurm", "kubernetes", "pbs", "pjm"]
     owner: str
-    scheduler: SchedulerProfile | SlurmSchedulerProfile | KubernetesSchedulerProfile = (
-        Field(discriminator="kind")
-    )
+    scheduler: (
+        SchedulerProfile
+        | SlurmSchedulerProfile
+        | KubernetesSchedulerProfile
+        | PBSSchedulerProfile
+        | PJMSchedulerProfile
+    ) = Field(discriminator="kind")
     storage: StorageProfile
     builder: BuilderProfile
     apptainer: ApptainerProfile
@@ -575,18 +750,32 @@ _PACKAGED_PROFILES = {
     "slurm": ("rsi_harness.cluster.slurm", "profile.toml"),
     "sherlock": ("rsi_harness.cluster.slurm", "sherlock.toml"),
     "kubernetes": ("rsi_harness.cluster.kubernetes", "profile.toml"),
+    "pbs": ("rsi_harness.cluster.pbs", "profile.toml"),
+    "flow2": ("rsi_harness.cluster.pbs", "flow2.toml"),
+    "flow2-node": ("rsi_harness.cluster.pbs", "flow2-node.toml"),
+    "pjm": ("rsi_harness.cluster.pjm", "profile.toml"),
+    "genkai": ("rsi_harness.cluster.pjm", "genkai.toml"),
 }
 
 
-def _profile_bytes(name_or_path: str | Path) -> bytes:
+def resolve_cluster_profile_path(name_or_path: str | Path) -> Path:
+    """Resolve the exact profile file, also for callers recording its digest.
+
+    Site names belong to the selected Harness's registry; consumers need not
+    keep their own list of packaged profiles.
+    """
     candidate = Path(name_or_path).expanduser()
     if candidate.is_file():
-        return candidate.read_bytes()
+        return candidate.resolve()
     packaged = _PACKAGED_PROFILES.get(str(name_or_path))
     if packaged is not None:
         package, filename = packaged
-        return resources.files(package).joinpath(filename).read_bytes()
+        return Path(str(resources.files(package).joinpath(filename))).resolve()
     raise SetupError(f"unknown cluster or profile path: {name_or_path}")
+
+
+def _profile_bytes(name_or_path: str | Path) -> bytes:
+    return resolve_cluster_profile_path(name_or_path).read_bytes()
 
 
 def load_cluster_profile(

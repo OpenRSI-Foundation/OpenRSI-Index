@@ -135,7 +135,7 @@ def test_gpu_driver_invokes_native_engine_without_harbor_run(tmp_path: Path) -> 
     assert "available_tmp_kb" in script
     assert "required_tmp_kb=$((15360 * 1024))" in script
     assert payload_path == output.with_suffix(".json")
-    assert 'test -n "${CUDA_VISIBLE_DEVICES:-}"' in script
+    assert "if [[ -v CUDA_VISIBLE_DEVICES ]]; then" in script
     assert "exec --nv --containall --no-mount hostfs" in script
     assert "--env" not in script
     assert "nvidia-smi" in script
@@ -565,3 +565,329 @@ def test_payload_keeps_an_older_runtime_loading_it(
             LegacyProfile.model_validate(serialized["profile"])
     else:
         LegacyProfile.model_validate(serialized["profile"])
+
+
+@pytest.mark.parametrize("devices", [None, "GPU-a3,GPU-a2"])
+def test_gpu_driver_hands_the_engine_set_or_unset_devices(
+    tmp_path: Path, monkeypatch, devices
+) -> None:
+    """Unset devices reach the Engine unset, which finds the job's GPUs."""
+    import hashlib
+    import os
+    import shlex
+    import subprocess
+
+    payload = _payload(tmp_path)
+    payload.sif_path.write_bytes(b"gpu-image")
+    payload.sif_sha256_path.write_text(
+        f"{hashlib.sha256(b'gpu-image').hexdigest()}  {payload.sif_path.name}\n"
+    )
+    leaf = payload.run_plan.paths.logs / "runs" / payload.run_id
+    result = leaf / payload.run_plan.task.task_id / "final_result.json"
+    result.parent.mkdir(parents=True)
+    expected = shlex.quote("unset" if devices is None else devices)
+    engine = tmp_path / "fake-engine"
+    engine.write_text(
+        "#!/bin/sh\nset -eu\n"
+        f'test "${{CUDA_VISIBLE_DEVICES-unset}}" = {expected}\n'
+        f'test "${{APPTAINERENV_CUDA_VISIBLE_DEVICES-unset}}" = {expected}\n'
+        f"printf '{{}}' > {shlex.quote(str(result))}\n"
+    )
+    engine.chmod(0o700)
+    apptainer = tmp_path / "apptainer"
+    apptainer.write_text("#!/bin/sh\nexit 0\n")
+    apptainer.chmod(0o700)
+    profile = payload.profile.model_copy(
+        update={
+            "apptainer": payload.profile.apptainer.model_copy(
+                update={"binary": apptainer, "temp_root": tmp_path}
+            )
+        }
+    )
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.engine.sys.executable", str(engine)
+    )
+    output = tmp_path / "gpu-run.sh"
+    render_engine_driver(payload, profile, output)
+    env = {**os.environ}
+    env.pop("CUDA_VISIBLE_DEVICES", None)
+    if devices is not None:
+        env["CUDA_VISIBLE_DEVICES"] = devices
+
+    completed = subprocess.run(
+        ["/bin/bash", str(output)], env=env, capture_output=True, text=True
+    )
+
+    assert completed.returncode == 0, completed.stderr
+
+
+def _capture_engine(monkeypatch) -> list:
+    captured: list = []
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.runtime.run_native_engine",
+        lambda payload, plan, **kwargs: captured.append((payload, plan)),
+    )
+    return captured
+
+
+def test_the_engine_plans_gpu_uuids_as_indices_in_pci_bus_order(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import os
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    smi = bin_dir / "nvidia-smi"
+    smi.write_text(
+        "#!/bin/sh\n"
+        + "".join(
+            f"echo '{index}, GPU-a{index}, 00000000:{index + 1:02x}:00.0'\n"
+            for index in range(4)
+        )
+    )
+    smi.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-a3,GPU-a2,GPU-a1,GPU-a0")
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.devices.GPUS_ROOT", tmp_path / "no-driver"
+    )
+    captured = _capture_engine(monkeypatch)
+
+    run_engine_payload(_payload(tmp_path))
+
+    payload, plan = captured[0]
+    assert plan.gpu_plan.authorized_pool.uuids == ("3", "2", "1", "0")
+    assert (plan.gpu_plan.work.uuids, plan.gpu_plan.judge.uuids) == (
+        ("3", "2"),
+        ("1", "0"),
+    )
+    assert payload.profile.apptainer.environment["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
+
+
+def test_the_engine_finds_unset_devices_of_the_scheduler_s_job(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from rsi_harness.cluster.bluevela.devices import AllocatedDevices
+
+    payload = _payload(tmp_path)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    calls: list = []
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.engine.allocated_cuda_devices",
+        lambda raw, *, exclusive, allocation_size: (
+            calls.append((raw, exclusive, allocation_size))
+            or AllocatedDevices(("0", "1", "2", "3"), True)
+        ),
+    )
+    captured = _capture_engine(monkeypatch)
+
+    run_engine_payload(payload)
+
+    assert calls == [(None, payload.profile.scheduler.exclusive, None)]
+    engine_payload, plan = captured[0]
+    assert plan.gpu_plan.authorized_pool.uuids == ("0", "1", "2", "3")
+    order = engine_payload.profile.apptainer.environment["CUDA_DEVICE_ORDER"]
+    assert order == "PCI_BUS_ID"
+
+
+@pytest.mark.parametrize(
+    "table", ["environment", "work_environment", "judge_environment"]
+)
+def test_derived_indices_refuse_another_cuda_device_order(
+    tmp_path: Path, monkeypatch, table: str
+) -> None:
+    from rsi_harness.cluster.bluevela.devices import AllocatedDevices
+    from rsi_harness.errors import SetupError
+
+    payload = _payload(tmp_path)
+    apptainer = payload.profile.apptainer
+    environment = {**getattr(apptainer, table), "CUDA_DEVICE_ORDER": "FASTEST_FIRST"}
+    profile = payload.profile.model_copy(
+        update={"apptainer": apptainer.model_copy(update={table: environment})}
+    )
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.engine.allocated_cuda_devices",
+        lambda raw, *, exclusive, allocation_size: AllocatedDevices(
+            ("0", "1", "2", "3"), True
+        ),
+    )
+    _capture_engine(monkeypatch)
+
+    with pytest.raises(SetupError, match=f"apptainer.{table} sets CUDA_DEVICE_ORDER"):
+        run_engine_payload(payload.model_copy(update={"profile": profile}))
+
+
+def test_the_engine_passes_scheduler_indices_unchanged(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "7,5,2,0")
+    monkeypatch.setenv("PATH", str(tmp_path))  # no nvidia-smi
+    captured = _capture_engine(monkeypatch)
+
+    run_engine_payload(_payload(tmp_path))
+
+    payload, plan = captured[0]
+    assert plan.gpu_plan.authorized_pool.uuids == ("7", "5", "2", "0")
+    assert "CUDA_DEVICE_ORDER" not in payload.profile.apptainer.environment
+
+
+def test_the_engine_refuses_an_unknown_gpu_uuid(tmp_path: Path, monkeypatch) -> None:
+    import subprocess
+
+    from rsi_harness.errors import InfrastructureError
+
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-a0,GPU-a1,GPU-a2,GPU-a3")
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.devices.GPUS_ROOT", tmp_path / "no-driver"
+    )
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.devices._run",
+        lambda argv: subprocess.CompletedProcess(
+            argv, 0, "0, GPU-a0, 00000000:01:00.0\n", ""
+        ),
+    )
+    _capture_engine(monkeypatch)
+
+    with pytest.raises(InfrastructureError, match="GPU-a1 is not a GPU"):
+        run_engine_payload(_payload(tmp_path))
+
+
+def test_a_whole_node_job_binds_its_first_gpus_by_index(tmp_path: Path) -> None:
+    from rsi_harness.errors import SetupError
+
+    run_plan = _payload(tmp_path).run_plan
+    devices = ("3", "7", "1", "0", "6", "2")
+
+    plan = bind_lsf_devices(run_plan, devices, scheduler_name="PBS", whole_node=True)
+
+    assert plan.gpu_plan.authorized_pool.uuids == ("0", "1", "2", "3")
+    assert plan.gpu_plan.work.uuids == ("0", "1")
+    assert plan.gpu_plan.judge.uuids == ("2", "3")
+    # Never fewer than planned; without whole_node, the exact count only.
+    with pytest.raises(SetupError, match="expected 4"):
+        bind_lsf_devices(run_plan, devices[:3], whole_node=True)
+    with pytest.raises(SetupError, match="expected 4"):
+        bind_lsf_devices(run_plan, devices)
+
+
+@pytest.mark.parametrize("requested", [2, 4])
+def test_pjm_uses_unset_unfenced_devices_only_when_it_allocated_every_gpu(
+    tmp_path: Path, monkeypatch, requested: int
+) -> None:
+    from rsi_harness.errors import InfrastructureError
+    from tests.cluster.bluevela.test_devices import _smi, _whole_node
+
+    payload = _payload(tmp_path)
+    assert payload.resources is not None
+    profile = load_cluster_profile("genkai", {"USER": "alice", "HOME": "/home/alice"})
+    assert not profile.scheduler.exclusive
+    payload = payload.model_copy(
+        update={
+            "profile": profile,
+            "resources": payload.resources.model_copy(update={"total_gpus": requested}),
+        }
+    )
+    gpus_root, dev = _whole_node(tmp_path)
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.setattr("rsi_harness.cluster.bluevela.devices.GPUS_ROOT", gpus_root)
+    monkeypatch.setattr("rsi_harness.cluster.bluevela.devices.DEV_ROOT", dev)
+    monkeypatch.setattr("rsi_harness.cluster.bluevela.devices._run", _smi())
+    captured = _capture_engine(monkeypatch)
+
+    if requested != 4:
+        with pytest.raises(InfrastructureError, match="nothing fences this job's GPUs"):
+            run_engine_payload(payload)
+        assert captured == []
+        return
+    run_engine_payload(payload)
+
+    actual, plan = captured[0]
+    assert plan.gpu_plan.authorized_pool.uuids == ("0", "1", "2", "3")
+    assert (plan.gpu_plan.work.uuids, plan.gpu_plan.judge.uuids) == (
+        ("0", "1"),
+        ("2", "3"),
+    )
+    assert actual.profile.apptainer.environment["CUDA_DEVICE_ORDER"] == "PCI_BUS_ID"
+
+
+@pytest.mark.parametrize(
+    ("name", "scheduler", "whole_node"),
+    [
+        ("pbs", {}, False),
+        ("pbs", {"exclusive": True}, True),
+        ("flow2", {}, False),
+        ("flow2-node", {}, True),
+        ("pjm", {}, False),
+        ("pjm", {"exclusive": True}, True),
+        ("genkai", {}, False),
+        ("slurm", {}, False),
+        ("bluevela", {}, False),
+    ],
+)
+def test_only_whole_node_pbs_and_pjm_jobs_may_hold_more_gpus(
+    name: str, scheduler: dict, whole_node: bool
+) -> None:
+    profile = load_cluster_profile(name, {"USER": "alice", "HOME": "/home/alice"})
+    settings = type(profile.scheduler).model_validate(
+        {**profile.scheduler.model_dump(), **scheduler}
+    )
+    assert settings.whole_node is whole_node
+
+
+def test_a_flow2_node_job_runs_a_one_plus_one_task_on_its_four_gpus(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import os
+
+    from rsi_harness.models import GPUAllocation, GPUDevice, RunGPUPlan
+
+    payload = _payload(tmp_path)
+    placeholders = tuple(
+        GPUDevice(index=index, uuid=f"PBS-{index}", name="planned")
+        for index in range(2)
+    )
+    run_plan = payload.run_plan.model_copy(
+        update={
+            "gpu_plan": RunGPUPlan(
+                authorized_pool=GPUAllocation(devices=placeholders),
+                work=GPUAllocation(devices=placeholders[:1]),
+                judge=GPUAllocation(devices=placeholders[1:]),
+                judge_mode="disjoint",
+            )
+        }
+    )
+    assert payload.resources is not None
+    payload = payload.model_copy(
+        update={
+            "run_plan": run_plan,
+            "resources": payload.resources.model_copy(
+                update={"work_gpus": 1, "verifier_gpus": 1, "total_gpus": 2}
+            ),
+            "profile": load_cluster_profile("flow2-node", {"USER": "alice"}),
+        }
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    smi = bin_dir / "nvidia-smi"
+    smi.write_text(
+        "#!/bin/sh\n"
+        + "".join(
+            f"echo '{index}, GPU-a{index}, 00000000:{index + 1:02x}:00.0'\n"
+            for index in range(4)
+        )
+    )
+    smi.chmod(0o755)
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    # PBS on the whole t2-single node: its four GPU UUIDs, in its own order.
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "GPU-a2,GPU-a0,GPU-a3,GPU-a1")
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.devices.GPUS_ROOT", tmp_path / "no-driver"
+    )
+    captured = _capture_engine(monkeypatch)
+
+    run_engine_payload(payload)
+
+    _, plan = captured[0]
+    assert plan.gpu_plan.authorized_pool.uuids == ("0", "1")
+    assert (plan.gpu_plan.work.uuids, plan.gpu_plan.judge.uuids) == (("0",), ("1",))

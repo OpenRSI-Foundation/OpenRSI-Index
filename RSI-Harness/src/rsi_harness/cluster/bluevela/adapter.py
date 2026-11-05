@@ -37,6 +37,7 @@ from rsi_harness.cluster.bluevela.judge_llm import (
     _codex_candidates,
     preflight_cluster_judge_llm,
 )
+from rsi_harness.cluster.bluevela.preflight import refuse_singularity_ce
 from rsi_harness.cluster.bluevela.resources import (
     ClusterResources,
     MultiNodeResources,
@@ -324,9 +325,18 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             return None
         return {"build": render(build), "run": render(run)}
 
+    def _check_build_spec(self, spec: Any) -> None:
+        """Refuse a build job the site cannot run; only an image that is not
+        cached is built."""
+
     def _check_job_paths(self, agent_paths: tuple[Path, ...]) -> None:
         """Refuse before submission what the job could not see; batch
         clusters share their filesystem with the submit host."""
+
+    def _check_container_runtime(self) -> None:
+        """Refuse a SingularityCE before submission where the submit host
+        sees the jobs' Apptainer; the jobs check again."""
+        refuse_singularity_ce(self.profile.apptainer.binary)
 
     def run(self, request: ClusterRunRequest) -> ClusterRunResult:
         definition = self._compile(request)
@@ -354,6 +364,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             self.profile.apptainer,
             multi_node=resource_plan.multi_node is not None,
         )
+        self._check_container_runtime()
         judge_llm = self._judge_llm(definition, request)
         sandbox = self._sandbox_grant(
             definition, request, multi_node=resource_plan.multi_node is not None
@@ -406,6 +417,8 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         build_spec = self._build_spec(
             run_dir, names["build"], resources, run_dir / "control" / "build.sh"
         )
+        if not planned_image.cache_hit:
+            self._check_build_spec(build_spec)
         run_spec = self._run_spec(
             run_dir,
             names["run"],
@@ -480,6 +493,8 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             )
 
         run_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
+        # Shown now, so a run that fails or is interrupted can be found.
+        self.event_callback("run_started", {"run_id": run_id})
         (run_dir / "build").mkdir()
         (run_dir / "run").mkdir()
         control = run_dir / "control"
@@ -736,6 +751,8 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         definition = payload.run_plan.task
         name = self._job_name(definition.task_id, "run", definition.agent.name)
         self.scheduler.require_name_available(name)
+        if not dry_run:
+            self._jobs_ended(run_dir)
         job_ended_at = ended.ended_at
         store = LeaseStore(run_dir / "leases")
         recovery = RecoveryManager(
@@ -802,6 +819,9 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 ),
             ),
         )
+
+    def _jobs_ended(self, run_dir: Path) -> None:
+        """Called by resume once every job of the run has ended."""
 
     def _resume_policy_validator(
         self, payload: EnginePayload
@@ -875,7 +895,9 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         oracle = definition.agent.name == "oracle"
         if oracle:
             if self.profile.scheduler.kind not in _ORACLE_SCHEDULERS:
-                raise SetupError("Oracle requires a Slurm or Kubernetes allocation")
+                raise SetupError(
+                    "Oracle requires a Slurm, Kubernetes, PBS or PJM allocation"
+                )
             task_solution_script(definition.source_dir)
             if request.agent_auth is not None:
                 raise SetupError(
@@ -1384,7 +1406,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             )
 
 
-_ORACLE_SCHEDULERS = ("slurm", "kubernetes")
+_ORACLE_SCHEDULERS = ("slurm", "kubernetes", "pbs", "pjm")
 
 
 def build_cluster_adapter(
@@ -1401,4 +1423,12 @@ def build_cluster_adapter(
         from rsi_harness.cluster.kubernetes.adapter import KubernetesClusterAdapter
 
         return KubernetesClusterAdapter(profile, event_callback=event_callback)
+    if profile.adapter == "pbs":
+        from rsi_harness.cluster.pbs.adapter import PBSClusterAdapter
+
+        return PBSClusterAdapter(profile, event_callback=event_callback)
+    if profile.adapter == "pjm":
+        from rsi_harness.cluster.pjm.adapter import PJMClusterAdapter
+
+        return PJMClusterAdapter(profile, event_callback=event_callback)
     return BlueVelaClusterAdapter(profile, event_callback=event_callback)
