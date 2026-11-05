@@ -544,8 +544,11 @@ minutes for `sbatch`.
 Set `apptainer.binary` to an absolute path on the compute nodes. Profile loading
 rejects relative paths; it does not require the binary to exist on the submit
 host. Build and Engine jobs check its executable permissions on their nodes,
-including when using a cached SIF. The submit host needs scheduler
-commands, task/configuration files, shared staging storage and any Agent
+including when using a cached SIF. It must be Apptainer: SingularityCE is
+refused by the jobs and, when the submit host sees the same file, before any
+job. Where a site ships only SingularityCE, install an unprivileged Apptainer
+(upstream `install-unprivileged.sh`) under your storage. The submit host needs
+scheduler commands, task/configuration files, shared staging storage and any Agent
 CLI/credentials to stage; Oracle needs no Work model CLI. A research Agent's CLI
 must also run inside the task container: its `--version` probe runs before model
 calls. Host-only wrappers and undeclared dependencies are not installed for it.
@@ -564,6 +567,18 @@ the site cannot build images; cached images still require runtime validation.
 `scheduler.exclusive` applies to single-node and multi-node runs (default
 `true`); set it to `false` where shared allocations are required. Build jobs
 use the separate `scheduler.build.exclusive` setting.
+
+A single-node job's GPUs come from `CUDA_VISIBLE_DEVICES`. Indices and MIG
+UUIDs are used as they are; GPU UUIDs become their `nvidia-smi` indices, which
+needs `nvidia-smi` on the job's `PATH`. Where the variable is unset, the job
+uses the GPUs it can open, but only when a device cgroup visibly fences it (a
+GPU the driver lists cannot be opened) or the job is exclusive; otherwise it
+stops. PJM `gpu=N` jobs can also use an unfenced inventory when it contains
+exactly the requested N GPUs, including Genkai's four-GPU allocation.
+Phases then get `CUDA_DEVICE_ORDER=PCI_BUS_ID`, so CUDA counts as
+`nvidia-smi` does; a profile environment that sets another order stops the
+job. An unknown or ambiguous UUID, a listed GPU the job cannot open, or a GPU
+count other than the task's, stops the job too. Multi-node jobs need indices.
 
 Optional Slurm site policies:
 
@@ -588,12 +603,15 @@ Optional Slurm site policies:
 - `[builder]` `conmon` and `runtime` give Podman explicit helper paths;
   `podman_bundle` instead names a shared directory where the Harness installs
   its own static Podman (downloaded and checked against a pinned SHA256 when
-  missing or damaged) and builds with it and its configuration. Concurrent
-  installs and repairs use a persistent per-release lock; the shared filesystem
-  must support cross-node `flock` locks;
-  `storage_driver = "vfs"` replaces rootless overlay; `host_namespaces =
-  ["network", "uts"]` lets build `RUN` steps share the node's namespaces where
-  it cannot create its own. A failed build names its log and the likely cause.
+  missing or damaged) and builds with it and its configuration. It picks the
+  bundle for the submit host's architecture, which build nodes must share:
+  amd64 under `<RELEASE>/`, arm64 under `arm64/<RELEASE>/`. Concurrent
+  installs and repairs use a persistent per-release lock; the shared
+  filesystem must support cross-node `flock` locks; `storage_driver = "vfs"`
+  replaces rootless overlay; `host_namespaces = ["network", "uts"]` lets build
+  `RUN` steps share the node's namespaces where it cannot create its own. A
+  failed build names its log and the likely cause. Cached images are not keyed
+  by architecture: use one `storage.image_cache` per architecture.
 
 A segmented attempt exits nonzero as an interruption, not completed research.
 After confirming the job is terminal, inspect its artifacts, then run
@@ -719,6 +737,19 @@ through a private proxy to the pinned endpoints for a `"no-network"` Agent
 for a `"public"` Agent, whose egress the site governs, not the Harness. Model
 access on a multi-node Judge is not supported yet.
 
+When the run's proxy settings (`RSI_HTTPS_PROXY`, `RSI_HTTP_PROXY`,
+`RSI_NO_PROXY` or their unprefixed forms) send a `"no-network"` Agent's model
+endpoints through an `http://` proxy (port 80 unless given), the Harness's
+proxy reaches them by HTTP CONNECT through it, by hostname and port, so
+compute nodes need no DNS for the model endpoints. Only those hostnames and
+ports are allowed, TLS stays end to end, and credentials in the proxy URL go
+only to that proxy. The trade-off: names are resolved by the site proxy, not
+pinned to addresses by the Harness, so the run trusts the proxy's DNS. Where
+the Work Agent and a Judge LLM use the same `host:port`, they must take the
+same proxy route (the same proxy, or both exempted by `no_proxy`); the run
+refuses different routes. Failed tunnels show as `upstream_proxy_tunnels` in
+the Engine log, with the proxy's last status line.
+
 `rsi-isolate isolation` and `rsi-agent isolation` test creation of the actual
 Landlock ruleset; an ABI query alone is insufficient. They report
 `landlock_scoped` (the scope bitmask) and `landlock_signal_scope`.
@@ -790,8 +821,9 @@ refused. Start from `src/rsi_harness/cluster/kubernetes/profile.toml`:
   need `"userns"`, or
   `privileged_devices = "allocated"` where the container runtime hides host
   devices (`privileged_without_host_devices`). The Pod uses the device
-  plugin's GPU UUIDs (`NVIDIA_VISIBLE_DEVICES`), or else its own GPUs, and
-  stops unless it holds exactly the GPUs it requested. Apptainer must mount a
+  plugin's GPU UUIDs (`NVIDIA_VISIBLE_DEVICES`), which need `nvidia-smi` on
+  the Pod image's `PATH`, or else its own GPUs, and stops unless it holds
+  exactly the GPUs it requested. Apptainer must mount a
   fresh `/proc` in the Pod, which anything mounted over `/proc` prevents: the
   NVIDIA runtime hook, and the CDI hook `disable-device-node-modification`
   that newer NVIDIA specs carry. Inject GPUs with CDI (for example the device
@@ -828,6 +860,71 @@ or a queue's suspension waits like a queued job. The Kubernetes API may be
 unreachable for up to 15 minutes before a wait fails. Finished Jobs stay for
 `ttl_seconds_after_finished` (default a week, at least an hour); `resume`
 reads the Job's end while it exists.
+
+### PBS Pro and Fujitsu TCS (PJM)
+
+The `pbs` adapter submits each build and run job as one PBS Pro job (`qsub`,
+`qstat -x`, `qdel`); the `pjm` adapter as one Fujitsu Technical Computing Suite
+job (`pjsub`, `pjstat`, `pjdel`). Each job runs on one host with the same
+Engine, image build, isolation checks, Oracle, segmented runs and `resume` as
+on Slurm. Multi-node tasks are refused. Start from
+`src/rsi_harness/cluster/pbs/profile.toml` or
+`src/rsi_harness/cluster/pjm/profile.toml`:
+
+- Jobs get the submit host's environment, as Slurm forwards it, through a
+  0600 file in the job's directory that the job loads and deletes; never
+  through `qsub -V` or `pjsub -X`, which copy credentials into the
+  scheduler's job records. A variable the job's shell makes read-only keeps
+  the job's value.
+- PBS: `queue`, `account` (`-A`), `project` (`-P`), and `chunk_resources`,
+  the planned resources the select chunk names (`ncpus`, `mem`, `ngpus`);
+  `chunk_extra` adds site resources. `exclusive` asks for `place=excl`. The
+  server's job history must be enabled (`qstat -x`).
+- PJM: `resource_group` (`rscgrp`), `group` (`-g`), `gpu_resource` (`gpu=N`,
+  which brings the node's share of cores and memory), `cpu_resource` and
+  `memory_resource` for jobs without GPUs where the group needs a core count
+  or memory (`vnode-core=N`, `vnode-mem=<MiB>Mi`), and `resources` for site
+  resources such as `jobenv=singularity`. `exclusive` asks for `node=1`.
+  Ended jobs are read from `pjstat -H`; a job held for an error (`ERR`) is
+  deleted and fails.
+- A whole-node job (a PBS chunk without `ngpus`, or an exclusive PBS or PJM
+  job) may hold more GPUs than the task plans: the Engine uses the planned
+  number, lowest index first, and leaves the rest idle.
+- Fixed-size queues declare `scheduler.capacity` with `cpu_slots` and
+  `memory_mb` (MiB), and `per_gpu = true` when that capacity is per allocated
+  GPU. The planner rejects a task that needs more CPU/RAM before submitting
+  jobs. `scheduler.build.capacity` overrides it for a different build queue.
+  Queues that accept explicit CPU/RAM requests need no capacity setting.
+- `resources.node_tmp_variable` names a variable each job sets to its
+  node-local scratch (`PJM_SSD_DIR`, for example); jobs then use it in place
+  of the builder's and Apptainer's `temp_root`.
+- `run_walltime_limit` segments a long run: the job sends the Engine SIGTERM
+  as long before its walltime as the Judge drain needs, as Slurm's advance
+  signal does, and `resume` continues it.
+- Cancelling the submit command deletes the job (`qdel`, `pjdel`).
+
+Packaged site profiles (see [installation and profile setup](docs/cluster-sites.md)):
+
+- `--cluster flow2` and `--cluster flow2-node`: Nagoya University Flow 2.0,
+  Type II (PBS Pro, aarch64 GB200): one GPU per `t2-share` job, or a whole
+  node with four GPUs per `t2-single` job. On `flow2`, Work and Judge share
+  the one GPU in release-all when both need a GPU. `flow2-node` allows up to
+  four GPUs per phase; separate Work/Judge GPU sets must fit within four in
+  total. Check the dry-run resource plan against the task's intended topology.
+  The login nodes are x86-64, so start
+  `rsi-harness run` in a controller job on a GPU node, with an aarch64
+  Harness venv and Agent CLI; its walltime must cover the run job's queue
+  waits and the whole run, or the run is resumed from a new controller job.
+  Compute nodes reach the internet only through the job's HTTP proxy, used
+  by the Agent and independent Judge-model brokers. It needs an unprivileged Apptainer at
+  `/data/$USER/rsi/apptainer`.
+- `--cluster genkai`: Kyushu University Genkai, node group B (PJM, x86-64
+  H100, `gpu=N` jobs in `b-batch`, `jobenv=singularity`). Run it on a login
+  node. Jobs use `$PJM_SSD_DIR` for scratch. It needs an unprivileged
+  Apptainer at `$HOME/rsi/apptainer` that binds device directories
+  recursively (`MS_REC`), such as 1.5.5 with a recursive-device-dir-bind
+  patch, built without setuid: stock Apptainer's non-recursive bind of
+  `/dev/nvidia-caps` fails (EINVAL) in a job, so `--nv` fails.
 
 ## View results
 
@@ -928,7 +1025,7 @@ above.
 | `--judge-llm-auth api\|codex-login` | Credential for a task's `judge_model`: an OpenAI API key, or a Codex login made with a ChatGPT plan (the Judge gets its access token only; before a Judge round that would outlive it, the Harness runs its pinned Codex CLI as you to refresh the login in place; never a login a Work Agent holds a copy of, which that refresh logs out; on a cluster, only a login the compute nodes see in place). Ignored, with a warning, for a task without `judge_model`. | Not set; a Codex Agent with a ChatGPT login or an OpenAI API key on OpenAI's own API lends its own (whatever its model; a login is renewed from Work before each Judge round), otherwise a `judge_model` task fails before the Agent starts |
 | `--judge-llm-api-key-env NAME` / `--judge-llm-api-key-file PATH` | Where the `api` key is read from. | `RSI_JUDGE_LLM_API_KEY` |
 | `--judge-llm-base-url URL` | API base URL for `api`; `/v1/responses` is appended (once). | `https://api.openai.com` |
-| `--judge-llm-proxy URL` | HTTP(S) proxy the Judge uses to reach the Judge model. | The run's proxy settings (`RSI_HTTPS_PROXY`, `HTTPS_PROXY`, ...) |
+| `--judge-llm-proxy URL` | HTTP(S) proxy the Judge uses to reach the Judge model. | The run's proxy settings (`RSI_HTTPS_PROXY`, `RSI_HTTP_PROXY`, `RSI_NO_PROXY` or their unprefixed forms) |
 | `--judge-llm-codex-home DIR` | Codex home holding `auth.json` for `codex-login`. | `$CODEX_HOME`, then `~/.codex` |
 | `--timeout SECONDS` | Override the Agent time limit. | Task `agent.timeout_sec`, or 60 seconds if unset |
 | `--max-submissions N` | Limit how many Judge submissions the Agent may make. The `oracle` submits exactly N times. | Unlimited; the `oracle` submits once |

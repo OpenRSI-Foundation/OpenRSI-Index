@@ -321,6 +321,8 @@ def test_the_engine_admits_an_e2b_plan_and_refuses_a_multinode_judge(
         update={"task": plan.task.model_copy(update=sandbox), "sandbox": grant}
     )
     monkeypatch.setattr(engine, "bind_lsf_devices", reached)
+    # The allocation's own GPU indices: no nvidia-smi on the test host.
+    monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "0")
     with pytest.raises(Reached):
         engine.run_engine_payload(payload.model_copy(update={"run_plan": plan}))
 

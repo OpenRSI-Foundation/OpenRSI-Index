@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import select
 import shutil
 import socket
+import socketserver
 import subprocess
 import sys
 import threading
@@ -477,3 +479,382 @@ def test_an_agent_without_a_provider_gets_only_the_submit_relay(
     finally:
         broker.stop()
     assert not broker.submit_socket.exists()
+
+
+class _Echo(socketserver.ThreadingTCPServer):
+    """A model endpoint stand-in: echoes every byte until the peer closes."""
+
+    daemon_threads = True
+
+    def __init__(self) -> None:
+        super().__init__(("127.0.0.1", 0), _EchoHandler)
+        self.port = int(self.server_address[1])
+        self._thread = threading.Thread(
+            target=self.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+        )
+
+    def __enter__(self) -> _Echo:
+        self._thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.shutdown()
+        self.server_close()
+        self._thread.join(timeout=2)
+
+
+class _EchoHandler(socketserver.BaseRequestHandler):
+    def handle(self) -> None:
+        self.request.settimeout(5)
+        while data := self.request.recv(64 * 1024):
+            self.request.sendall(data)
+
+
+class _SiteProxy(_Echo):
+    """A tiny HTTP CONNECT proxy, as a site runs one: records each request
+    header, then tunnels to ``routes[authority]``, or answers ``answer``."""
+
+    def __init__(
+        self, routes: dict[str, tuple[str, int]], answer: bytes | None = None
+    ) -> None:
+        self.routes = routes
+        self.answer = answer
+        self.requests: list[bytes] = []
+        socketserver.ThreadingTCPServer.__init__(
+            self, ("127.0.0.1", 0), _SiteProxyHandler
+        )
+        self.port = int(self.server_address[1])
+        self._thread = threading.Thread(
+            target=self.serve_forever, kwargs={"poll_interval": 0.05}, daemon=True
+        )
+
+
+class _SiteProxyHandler(socketserver.BaseRequestHandler):
+    def handle(self) -> None:
+        server = self.server
+        assert isinstance(server, _SiteProxy)
+        client = self.request
+        client.settimeout(5)
+        header = _read_headers(client)
+        server.requests.append(header)
+        if server.answer is not None:
+            client.sendall(server.answer)
+            return
+        authority = header.split(b" ", 2)[1].decode()
+        with socket.create_connection(server.routes[authority], timeout=5) as target:
+            client.sendall(b"HTTP/1.1 200 Connection established\r\n\r\n")
+            sockets = (client, target)
+            while True:
+                readable, _writable, _errors = select.select(sockets, (), (), 5)
+                if not readable:
+                    return
+                for source in readable:
+                    data = source.recv(64 * 1024)
+                    if not data:
+                        return
+                    (target if source is client else client).sendall(data)
+
+
+_BY_NAME = (PinnedEndpoint(hostname="api.provider.test", port=443, addresses=()),)
+
+
+def _through(
+    proxy, authority: str, payload: bytes = b"ping", *, early: bytes = b""
+) -> tuple[bytes, bytes]:
+    """CONNECT ``authority`` on ``proxy``'s socket (with ``early`` bytes in
+    the same write); its answer and what then comes back for ``payload``."""
+    with socket.socket(socket.AF_UNIX) as client:
+        client.settimeout(5)
+        client.connect(str(proxy.socket_path))
+        client.sendall(f"CONNECT {authority} HTTP/1.1\r\n\r\n".encode() + early)
+        answer = _read_headers(client)
+        echo = bytearray()
+        try:
+            client.sendall(payload)
+            while len(echo) < len(early) + len(payload):
+                chunk = client.recv(64 * 1024)
+                if not chunk:
+                    break
+                echo.extend(chunk)
+        except OSError:
+            pass
+        return answer, bytes(echo)
+
+
+def test_an_upstream_proxy_carries_the_pinned_endpoints_bytes_unchanged(
+    tmp_path: Path,
+) -> None:
+    from rsi_harness.cluster.bluevela.network import UnixConnectProxy, UpstreamProxy
+
+    with (
+        _Echo() as model,
+        _SiteProxy({"api.provider.test:443": ("127.0.0.1", model.port)}) as site,
+    ):
+        # Pinned by name only: the node need not resolve it, the proxy does.
+        proxy = UnixConnectProxy(
+            tmp_path / "provider.sock",
+            endpoints=_BY_NAME,
+            upstream=UpstreamProxy.from_url(f"http://127.0.0.1:{site.port}"),
+        )
+        proxy.start()
+        try:
+            # TLS records pass as opaque bytes, including the first one sent
+            # with the CONNECT itself.
+            hello = b"\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03"
+            payload = bytes(range(256)) * 512
+            answer, echo = _through(
+                proxy, "API.Provider.test.:443", payload, early=hello
+            )
+        finally:
+            proxy.stop()
+    assert answer == b"HTTP/1.1 200 Connection Established\r\n\r\n"
+    assert echo == hello + payload
+    assert site.requests == [
+        b"CONNECT api.provider.test:443 HTTP/1.1\r\nHost: api.provider.test:443\r\n\r\n"
+    ]
+
+
+def test_unpinned_targets_are_refused_before_the_upstream_proxy(
+    tmp_path: Path,
+) -> None:
+    from rsi_harness.cluster.bluevela.network import UnixConnectProxy, UpstreamProxy
+
+    with _SiteProxy({}) as site:
+        proxy = UnixConnectProxy(
+            tmp_path / "provider.sock",
+            endpoints=_BY_NAME,
+            upstream=UpstreamProxy.from_url(f"127.0.0.1:{site.port}"),
+        )
+        proxy.start()
+        try:
+            for authority in (
+                "huggingface.co:443",
+                "api.provider.test:80",
+                "provider.test:443",
+                f"127.0.0.1:{site.port}",
+            ):
+                answer, echo = _through(proxy, authority)
+                assert answer.startswith(b"HTTP/1.1 403 "), authority
+                assert echo == b""
+        finally:
+            proxy.stop()
+    assert site.requests == []
+
+
+@pytest.mark.parametrize("resolved_judge", [False, True])
+def test_judge_and_work_endpoints_can_use_separate_upstream_proxies(
+    tmp_path, resolved_judge
+):
+    from rsi_harness.cluster.bluevela.network import UnixConnectProxy, UpstreamProxy
+
+    with (
+        _Echo() as model,
+        _SiteProxy({"api.provider.test:443": ("127.0.0.1", model.port)}) as work_site,
+        _SiteProxy({"judge.test:443": ("127.0.0.1", model.port)}) as judge_site,
+    ):
+        proxy = UnixConnectProxy(
+            tmp_path / "provider.sock",
+            endpoints=(
+                *_BY_NAME,
+                PinnedEndpoint(
+                    hostname="judge.test",
+                    port=443,
+                    addresses=(ipaddress.ip_address("127.0.0.1"),)
+                    if resolved_judge
+                    else (),
+                ),
+            ),
+            upstream=UpstreamProxy("127.0.0.1", work_site.port),
+            upstreams={
+                ("judge.test", 443): UpstreamProxy("127.0.0.1", judge_site.port)
+            },
+        )
+        proxy.start()
+        try:
+            for target in ("api.provider.test:443", "judge.test:443"):
+                answer, echo = _through(proxy, target)
+                assert answer.startswith(b"HTTP/1.1 200 ") and echo == b"ping"
+            answer, _ = _through(proxy, f"127.0.0.1:{judge_site.port}")
+            assert answer.startswith(b"HTTP/1.1 403 ")
+        finally:
+            proxy.stop()
+    assert len(work_site.requests) == len(judge_site.requests) == 1
+    assert work_site.requests[0].startswith(b"CONNECT api.provider.test:443 ")
+    assert judge_site.requests[0].startswith(b"CONNECT judge.test:443 ")
+
+
+def test_an_endpoint_pinned_to_addresses_bypasses_the_upstream_proxy(
+    tmp_path: Path,
+) -> None:
+    """A Judge LLM the run's no_proxy sends around the proxy, resolved and
+    pinned, shares the Judge's provider proxy with the Agent's endpoints."""
+    from rsi_harness.cluster.bluevela.network import UnixConnectProxy, UpstreamProxy
+
+    with _Echo() as model, _SiteProxy({}) as site:
+        proxy = UnixConnectProxy(
+            tmp_path / "provider.sock",
+            endpoints=(
+                *_BY_NAME,
+                PinnedEndpoint(
+                    hostname="judge.test",
+                    port=model.port,
+                    addresses=(ipaddress.ip_address("127.0.0.1"),),
+                ),
+            ),
+            upstream=UpstreamProxy.from_url(f"http://127.0.0.1:{site.port}"),
+        )
+        proxy.start()
+        try:
+            answer, echo = _through(proxy, f"judge.test:{model.port}")
+        finally:
+            proxy.stop()
+    assert answer.startswith(b"HTTP/1.1 200 ") and echo == b"ping"
+    assert site.requests == []
+
+
+def test_upstream_proxy_credentials_reach_only_the_proxy(tmp_path: Path) -> None:
+    from rsi_harness.cluster.bluevela.network import UnixConnectProxy, UpstreamProxy
+
+    with (
+        _Echo() as model,
+        _SiteProxy({"api.provider.test:443": ("127.0.0.1", model.port)}) as site,
+    ):
+        upstream = UpstreamProxy.from_url(f"http://alice:p%40ss@127.0.0.1:{site.port}")
+        proxy = UnixConnectProxy(
+            tmp_path / "provider.sock", endpoints=_BY_NAME, upstream=upstream
+        )
+        proxy.start()
+        try:
+            answer, echo = _through(proxy, "api.provider.test:443")
+        finally:
+            proxy.stop()
+    # base64("alice:p@ss"), sent to the proxy only.
+    token = b"YWxpY2U6cEBzcw=="
+    assert b"\r\nProxy-Authorization: Basic " + token + b"\r\n" in site.requests[0]
+    assert answer == b"HTTP/1.1 200 Connection Established\r\n\r\n"
+    assert echo == b"ping"
+    for shown in (repr(upstream), str(upstream)):
+        assert "p@ss" not in shown and "p%40ss" not in shown
+        assert token.decode() not in shown and "alice" not in shown
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://alice:s3cret@proxy.example:3128",
+        "socks5://alice:s3cret@proxy.example:1080",
+        "http://alice:s3cret@proxy.example:3128/path",
+        "http://alice:s3cret@proxy.example:99999",
+        "http://alice:s3cret@proxy.example:0",
+        "http://alice:s3cret@:3128",
+    ],
+)
+def test_unsupported_upstream_proxies_are_refused_without_their_credentials(
+    url: str,
+) -> None:
+    from rsi_harness.cluster.bluevela.network import UpstreamProxy
+    from rsi_harness.errors import SetupError
+
+    with pytest.raises(SetupError, match="upstream proxy") as error:
+        UpstreamProxy.from_url(url)
+    assert "s3cret" not in str(error.value) and "alice" not in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        ("http://proxy.example:3128", ("proxy.example", 3128)),
+        ("http://proxy.example:3128/", ("proxy.example", 3128)),
+        ("proxy.example:3128", ("proxy.example", 3128)),
+        ("http://proxy.example", ("proxy.example", 80)),
+    ],
+)
+def test_upstream_proxies_parse_as_http_clients_read_them(
+    url: str, expected: tuple[str, int]
+) -> None:
+    from rsi_harness.cluster.bluevela.network import UpstreamProxy
+
+    proxy = UpstreamProxy.from_url(url)
+    assert (proxy.host, proxy.port, proxy.authorization) == (*expected, None)
+
+
+@pytest.mark.parametrize(
+    "answer",
+    [
+        b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n",
+        b"HTTP/1.1 407 Proxy Authentication Required\r\n\r\n",
+        b"HTTP/1.0 502 Bad Gateway\r\n\r\n",
+        b"SSH-2.0-OpenSSH_9.6\r\n\r\n",
+        b"",
+    ],
+    ids=["403", "407", "502", "not-http", "closed"],
+)
+def test_a_refusing_upstream_proxy_is_a_bad_gateway(
+    tmp_path: Path, answer: bytes
+) -> None:
+    from rsi_harness.cluster.bluevela.network import UnixConnectProxy, UpstreamProxy
+
+    with _SiteProxy({}, answer=answer) as site:
+        proxy = UnixConnectProxy(
+            tmp_path / "provider.sock",
+            endpoints=_BY_NAME,
+            upstream=UpstreamProxy.from_url(f"http://127.0.0.1:{site.port}"),
+        )
+        proxy.start()
+        try:
+            reply, echo = _through(proxy, "api.provider.test:443")
+        finally:
+            proxy.stop()
+    assert reply.startswith(b"HTTP/1.1 502 ")
+    assert echo == b""
+    assert len(site.requests) == 1
+    # Only the proxy's status line is kept, never the request.
+    status = answer.split(b"\r\n", 1)[0].decode() or "no proxy answer"
+    assert proxy.tunnel_failures == 1
+    assert proxy.last_tunnel_failure.startswith(status)
+
+
+def test_an_unreachable_upstream_proxy_is_a_bad_gateway(tmp_path: Path) -> None:
+    from rsi_harness.cluster.bluevela.network import UnixConnectProxy, UpstreamProxy
+
+    with socket.socket() as unused:
+        unused.bind(("127.0.0.1", 0))
+        port = int(unused.getsockname()[1])
+    proxy = UnixConnectProxy(
+        tmp_path / "provider.sock",
+        endpoints=_BY_NAME,
+        upstream=UpstreamProxy(host="127.0.0.1", port=port),
+    )
+    proxy.start()
+    try:
+        reply, _echo = _through(proxy, "api.provider.test:443")
+    finally:
+        proxy.stop()
+    assert reply.startswith(b"HTTP/1.1 502 ")
+    assert proxy.last_tunnel_failure.startswith("cannot connect to the proxy")
+
+
+def test_both_brokers_hand_their_upstream_proxy_to_the_provider_proxy(
+    tmp_path: Path,
+) -> None:
+    from rsi_harness.cluster.bluevela.network import (
+        AgentNetworkBroker,
+        JudgeProviderBroker,
+        UpstreamProxy,
+    )
+
+    upstream = UpstreamProxy(host="proxy.example", port=3128)
+    agent = AgentNetworkBroker(
+        tmp_path / "agent",
+        endpoints=_BY_NAME,
+        submit_url="http://127.0.0.1:43123",
+        upstream=upstream,
+    )
+    judge = JudgeProviderBroker(tmp_path / "judge", endpoints=_BY_NAME)
+    assert agent._provider._upstream is upstream
+    assert judge._provider._upstream is None
+    assert agent.tunnel_failures() is None
+    agent._provider._tunnel_failed("HTTP/1.1 407 Proxy Authentication Required")
+    assert agent.tunnel_failures() == (
+        "1 failed, last: HTTP/1.1 407 Proxy Authentication Required"
+    )

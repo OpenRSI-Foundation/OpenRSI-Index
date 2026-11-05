@@ -255,9 +255,12 @@ class _ClusterConsole:
             resources = resources if isinstance(resources, Mapping) else {}
             multi_node = details.get("multi_node", {})
             multi_node = multi_node if isinstance(multi_node, Mapping) else {}
-            label = {"slurm": "Slurm", "kubernetes": "Kubernetes"}.get(
-                str(details.get("adapter")), "Blue Vela"
-            )
+            label = {
+                "slurm": "Slurm",
+                "kubernetes": "Kubernetes",
+                "pbs": "PBS",
+                "pjm": "PJM",
+            }.get(str(details.get("adapter")), "Blue Vela")
             typer.echo(f"{label} dry-run:")
             typer.echo(_field("Run ID:", details.get("run_id")))
             typer.echo(_field("Run dir:", details.get("run_dir")))
@@ -323,6 +326,8 @@ class _ClusterConsole:
                             f"{item.get('phase')}:{item.get('path')}",
                         )
                     )
+        elif name == "run_started":
+            typer.echo(f"Run ID: {details.get('run_id')}")
         elif name in ("judge_llm", "judge_llm_ignored"):
             _RunConsole()(name, value)
         elif name == "job_submitted":
@@ -462,7 +467,8 @@ def run_command(
         typer.Option(
             "--cluster",
             help=(
-                "Cluster name (bluevela, slurm, sherlock or kubernetes) or a "
+                "Cluster name (bluevela, slurm, sherlock, kubernetes, pbs, "
+                "flow2, flow2-node, pjm or genkai) or a "
                 "cluster profile TOML"
             ),
         ),

@@ -422,13 +422,32 @@ def test_the_default_profile_runs_no_site_checks(tmp_path, monkeypatch):
     runtime._require_site_isolation()
 
 
-def test_a_missing_network_namespace_names_seccomp_mode(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    ("error", "remedy"),
+    [
+        (
+            "FATAL: Failed to create network namespace: maximum number exceeded",
+            "no network namespaces",
+        ),
+        # Setuid, without CAP_NET_ADMIN in the job: seccomp mode needs an
+        # unprivileged Apptainer.
+        (
+            "ERROR  : Failed to set flags on interface: Operation not permitted",
+            "use an unprivileged Apptainer",
+        ),
+    ],
+)
+def test_a_missing_network_namespace_names_seccomp_mode(
+    tmp_path, monkeypatch, error, remedy
+):
     runtime = _runtime(tmp_path, monkeypatch)
-    error = "FATAL: Failed to create network namespace: maximum number exceeded"
     _scripted(runtime, monkeypatch, AgentRunResult(exit_code=255, output=error))
 
-    with pytest.raises(InfrastructureError, match='network_isolation = "seccomp"'):
+    with pytest.raises(
+        InfrastructureError, match='network_isolation = "seccomp"'
+    ) as caught:
         runtime._seed()
+    assert remedy in str(caught.value)
 
 
 _FAKE_BOX = r"""

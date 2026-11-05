@@ -352,6 +352,80 @@ def test_driven_agent_is_refused_before_cluster_runtime_or_storage(
     assert not request.logs_root.exists()
 
 
+@pytest.mark.parametrize("dry_run", [True, False])
+def test_a_singularity_ce_the_submit_host_sees_is_refused_before_any_job(
+    tmp_path: Path, dry_run: bool
+) -> None:
+    profile = _profile(tmp_path)
+    profile.apptainer.binary.write_text(
+        "#!/bin/sh\necho 'singularity-ce version 4.1.3'\n"
+    )
+    scheduler = RecordingScheduler()
+    events: list[tuple[str, object]] = []
+    adapter = BlueVelaClusterAdapter(
+        profile,
+        scheduler=scheduler,
+        event_callback=lambda name, value: events.append((name, value)),
+    )
+
+    with pytest.raises(SetupError, match="SingularityCE is not supported"):
+        adapter.run(_request(tmp_path, dry_run=dry_run))
+
+    assert events == []
+    assert scheduler.events == []
+    assert not profile.storage.run_root.parent.exists()
+
+
+def test_a_run_shows_its_id_before_any_job_so_a_failure_keeps_it(
+    tmp_path: Path,
+) -> None:
+    profile = _profile(tmp_path)
+    events: list[tuple[str, object]] = []
+
+    class RefusingScheduler(RecordingScheduler):
+        def submit(self, spec: LSFJobSpec) -> str:
+            raise InfrastructureError("submission refused")
+
+    adapter = BlueVelaClusterAdapter(
+        profile,
+        scheduler=RefusingScheduler(),
+        event_callback=lambda name, value: events.append((name, value)),
+        agent_version_resolver=lambda _name: "0.149.0",
+    )
+
+    with pytest.raises(InfrastructureError, match="submission refused"):
+        adapter.run(_request(tmp_path, dry_run=False))
+
+    names = [name for name, _value in events]
+    assert "run_started" in names and "job_submitted" not in names
+    run_id = dict(events)["run_started"]["run_id"]
+    info = json.loads((profile.storage.run_root / run_id / "RUN_INFO.json").read_text())
+    assert info["state"] == "failed"
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_the_console_shows_a_run_id_once_and_before_any_job(
+    tmp_path: Path, dry_run: bool, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from rsi_harness.cli import _ClusterConsole
+
+    adapter = BlueVelaClusterAdapter(
+        _profile(tmp_path),
+        scheduler=RecordingScheduler(),
+        event_callback=_ClusterConsole(),
+        agent_version_resolver=lambda _name: "0.149.0",
+    )
+
+    result = adapter.run(_request(tmp_path, dry_run=dry_run))
+
+    out = capsys.readouterr().out
+    assert out.count("Run ID:") == 1
+    if not dry_run:
+        assert out.index(f"Run ID: {result.run_id}\n") < out.index(
+            "Submitted build job"
+        )
+
+
 def test_dry_run_resolves_four_gpus_without_mutation(tmp_path: Path) -> None:
     profile = _profile(tmp_path)
     scheduler = RecordingScheduler()

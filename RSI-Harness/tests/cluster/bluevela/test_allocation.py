@@ -294,3 +294,27 @@ def test_probe_and_partition_retries_a_transient_remote_launch_failure(
     assert tuple(node.host for node in pools.work) == ("work-a", "work-b")
     assert calls == ["work-a", "work-b", "work-b", "judge-a"]
     assert sleeps == [2.0]
+
+
+@pytest.mark.parametrize("devices", [None, "GPU-309f6df9,GPU-8dac9b9b"])
+def test_the_node_probe_refuses_gpus_not_given_as_indices(
+    tmp_path: Path, monkeypatch, devices
+) -> None:
+    allocation = _module()
+    monkeypatch.setattr(
+        allocation.socket,
+        "getaddrinfo",
+        lambda host, port, family: [(family, 1, 6, "", ("10.0.0.5", 0))],
+    )
+    if devices is None:
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    else:
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", devices)
+
+    with pytest.raises(InfrastructureError, match="need CUDA_VISIBLE_DEVICES as GPU"):
+        allocation.inspect_current_node(
+            host="node1",
+            sif_path=tmp_path / "task.sif",
+            run_dir=tmp_path,
+            temp_root=tmp_path,
+        )

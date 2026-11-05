@@ -196,8 +196,14 @@ def rsi_loop_runtime_secret_values(config: RSILoopConfig) -> set[str]:
     ):
         if not endpoint:
             continue
+        url = endpoint
+        if endpoint in (config.http_proxy, config.https_proxy) and (
+            "://" not in endpoint
+        ):
+            # A proxy without a scheme is read as http://, credentials too.
+            url = f"http://{endpoint.strip()}"
         try:
-            parsed = urlsplit(endpoint)
+            parsed = urlsplit(url)
         except ValueError:
             # An arbitrary setting resembling a URL is not necessarily one.
             continue

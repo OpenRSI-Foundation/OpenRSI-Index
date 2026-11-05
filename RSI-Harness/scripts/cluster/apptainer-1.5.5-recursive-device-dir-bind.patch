@@ -1,0 +1,18 @@
+--- a/internal/pkg/runtime/engine/apptainer/container_linux.go
++++ b/internal/pkg/runtime/engine/apptainer/container_linux.go
+@@ -1550,7 +1550,14 @@
+ 
+ 	sylog.Debugf("Mounting device %s at %s", srcpath, dst)
+ 
+-	if err := system.Points.AddBind(mount.DevTag, srcpath, dst, syscall.MS_BIND); err != nil {
++	// A device directory (e.g. /dev/nvidia-caps) can hold child mounts that are locked in an
++	// unprivileged user namespace (a job runtime that bind-mounts each granted device node);
++	// a non-recursive bind of such a directory fails with EINVAL, so bind directories recursively.
++	flags := uintptr(syscall.MS_BIND)
++	if fi.IsDir() {
++		flags |= syscall.MS_REC
++	}
++	if err := system.Points.AddBind(mount.DevTag, srcpath, dst, flags); err != nil {
+ 		return fmt.Errorf("failed to add %s mount: %s", srcpath, err)
+ 	}
+ 	return nil

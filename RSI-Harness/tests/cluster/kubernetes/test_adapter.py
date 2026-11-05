@@ -108,6 +108,19 @@ def test_profile_requires_the_kubernetes_scheduler(tmp_path):
         load_cluster_profile(path, {"USER": "alice"})
 
 
+def test_a_submit_host_singularity_ce_is_not_the_pods_apptainer(tmp_path):
+    """The Pod's Apptainer comes from its image; the job drivers check it."""
+    profile = _kubernetes(tmp_path)
+    profile.apptainer.binary.write_text(
+        "#!/bin/sh\necho 'singularity-ce version 4.1.3'\n"
+    )
+    events: dict = {}
+
+    _adapter(profile, events).run(_req(tmp_path, dry_run=True))
+
+    assert "dry_run" in events
+
+
 @pytest.mark.parametrize("dry_run", [False, True])
 def test_kubernetes_reuses_build_run_and_artifact_lifecycle(tmp_path, dry_run):
     profile = _kubernetes(tmp_path)

@@ -9,7 +9,10 @@ from pathlib import Path
 from pydantic import field_validator
 
 from rsi_harness.cluster import podman_bundle
-from rsi_harness.cluster.bluevela.preflight import apptainer_preflight
+from rsi_harness.cluster.bluevela.preflight import (
+    apptainer_preflight,
+    node_tmp_assignment,
+)
 from rsi_harness.cluster.config import ClusterProfile
 from rsi_harness.models import PersistedModel
 from rsi_harness.task.digest import hash_tree
@@ -88,7 +91,6 @@ def render_build_driver(
     cache_dir = plan.sif_path.parent
     image_name = f"localhost/rsi-harness-{plan.cache_key}:latest"
     apptainer_args = " ".join(_quote(arg) for arg in profile.apptainer.build_args)
-    temp_template = profile.builder.temp_root / "rsi-harness-sif.XXXXXX"
     dockerfile = Path(frozen_context) / "Dockerfile"
     rootless_apt = (
         profile.builder.rootless_apt_sandbox
@@ -96,6 +98,9 @@ def render_build_driver(
         and "apt-get" in dockerfile.read_text(errors="replace")
     )
     builder = profile.builder
+    builder_tmp = node_tmp_assignment(
+        "builder_tmp_root", builder.temp_root, profile.resources.node_tmp_variable
+    )
     podman_options = [
         f"--storage-driver={builder.storage_driver}",
         "--storage-opt",
@@ -120,9 +125,21 @@ def render_build_driver(
     )
     # The bundle's own configuration, not the node's or the user's.
     bundle_env = ""
+    bundle_preflight = ""
     signature_policy = ""
     if builder.podman_bundle is not None:
-        tree = podman_bundle.bundle_dir(builder.podman_bundle)
+        arch = podman_bundle.architecture()
+        tree = podman_bundle.bundle_dir(builder.podman_bundle, arch)
+        machine = podman_bundle.MACHINES[arch]
+        # The bundle follows the submit host; a build node must match it.
+        bundle_preflight = (
+            'case "$(uname -m)" in\n'
+            f"  {machine} | {arch}) ;;\n"
+            f'  *) echo "compute-node preflight: the Podman bundle is for {machine},"'
+            ' "this node is $(uname -m)" >&2\n'
+            "    exit 1 ;;\n"
+            "esac\n"
+        )
         bundle_env = (
             f"export CONTAINERS_CONF={_quote(tree / podman_bundle.CONTAINERS_CONF)}\n"
             "export CONTAINERS_STORAGE_CONF="
@@ -141,7 +158,7 @@ cache_dir={_quote(cache_dir)}
 final_sif={_quote(plan.sif_path)}
 final_sha={_quote(plan.sha256_path)}
 image_name={_quote(image_name)}
-builder_tmp_root={_quote(profile.builder.temp_root)}
+{builder_tmp}
 faked={_quote(profile.builder.faked_binary or "")}
 fakeroot_library={_quote(profile.builder.fakeroot_library or "")}
 for tool in "$builder" {helpers}; do
@@ -150,7 +167,7 @@ for tool in "$builder" {helpers}; do
     exit 1
   fi
 done
-for ns in {created_namespaces}; do
+{bundle_preflight}for ns in {created_namespaces}; do
   if [[ "$(cat "/proc/sys/user/max_${{ns}}_namespaces" 2>/dev/null)" == 0 ]]; then
     echo "compute-node preflight: this node cannot create $ns namespaces" \
       "(max_${{ns}}_namespaces=0); add it to builder.host_namespaces" >&2
@@ -180,7 +197,7 @@ if [[ -s "$final_sif" && -s "$final_sha" ]] && \
   exit 0
 fi
 
-local_root="$(mktemp -d {_quote(temp_template)})"
+local_root="$(mktemp -d "$builder_tmp_root/rsi-harness-sif.XXXXXX")"
 # Podman 4.x to 5.0 refuse a runroot longer than 50 characters.
 podman_runroot="$(mktemp -d /tmp/rsi-run.XXXXXX)"
 job_tag="${{SLURM_JOB_ID:-${{LSB_JOBID:-$$}}}}"

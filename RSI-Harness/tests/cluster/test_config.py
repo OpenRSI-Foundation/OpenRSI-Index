@@ -6,7 +6,10 @@ from pathlib import Path
 import pytest
 
 from rsi_harness.cluster import podman_bundle
-from rsi_harness.cluster.config import load_cluster_profile
+from rsi_harness.cluster.config import (
+    load_cluster_profile,
+    resolve_cluster_profile_path,
+)
 from rsi_harness.errors import SetupError
 
 
@@ -131,6 +134,29 @@ def test_profile_rejects_unknown_environment_reference(tmp_path) -> None:
 def test_profile_rejects_unknown_cluster_name() -> None:
     with pytest.raises(SetupError, match="unknown cluster"):
         load_cluster_profile("not-a-cluster", {"USER": "alice"})
+
+
+def test_profile_resolver_uses_the_harness_registry(monkeypatch):
+    from rsi_harness.cluster import config
+
+    monkeypatch.setitem(
+        config._PACKAGED_PROFILES,
+        "another-site",
+        ("rsi_harness.cluster.pbs", "profile.toml"),
+    )
+    path = resolve_cluster_profile_path("another-site")
+    assert path.is_absolute() and path.is_file()
+    assert load_cluster_profile(path, {"USER": "alice"}) == load_cluster_profile(
+        "another-site", {"USER": "alice"}
+    )
+
+
+def test_explicit_file_takes_precedence_over_packaged_profile(tmp_path, monkeypatch):
+    path = tmp_path / "slurm"
+    path.write_bytes(resolve_cluster_profile_path("pbs").read_bytes())
+    monkeypatch.chdir(tmp_path)
+    assert resolve_cluster_profile_path("slurm") == path
+    assert load_cluster_profile("slurm", {"USER": "alice"}).adapter == "pbs"
 
 
 def test_profile_rejects_legacy_shared_root_mounts(tmp_path: Path) -> None:
@@ -270,3 +296,27 @@ def test_the_sherlock_site_profile_loads(tmp_path: Path) -> None:
     missing = {k: v for k, v in SHERLOCK_ENV.items() if k != "GROUP_HOME"}
     with pytest.raises(SetupError, match="GROUP_HOME"):
         load_cluster_profile(SHERLOCK, missing)
+
+
+@pytest.mark.parametrize(
+    ("machine", "subdir"), [("aarch64", "arm64"), ("ppc64le", "ppc64le")]
+)
+def test_a_bundle_profile_loads_on_any_machine_and_names_its_tree(
+    monkeypatch: pytest.MonkeyPatch, machine: str, subdir: str
+) -> None:
+    monkeypatch.setattr(podman_bundle.platform, "machine", lambda: machine)
+
+    builder = load_cluster_profile("sherlock", SHERLOCK_ENV).builder
+
+    tree = builder.podman_bundle / subdir / podman_bundle.RELEASE
+    assert (builder.binary, builder.conmon, builder.runtime) == (
+        tree / "bin/podman",
+        tree / "lib/podman/conmon",
+        tree / "bin/runc",
+    )
+    if machine == "ppc64le":
+        # A machine without a bundle refuses only when it would install one.
+        with pytest.raises(
+            SetupError, match="remove builder.podman_bundle and set builder binary"
+        ):
+            podman_bundle.ensure_installed(builder.podman_bundle)

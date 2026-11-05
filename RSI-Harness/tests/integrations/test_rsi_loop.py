@@ -2285,3 +2285,13 @@ def test_legacy_resume_keeps_the_most_recent_session_command() -> None:
     assert claude.splitlines()[-1].startswith(
         'exec claude --continue -p "Continue working."'
     )
+
+
+def test_a_proxy_without_a_scheme_still_redacts_its_credentials() -> None:
+    from rsi_harness.integrations.rsi_loop import rsi_loop_runtime_secret_values
+
+    config = RSILoopConfig(https_proxy="alice:s3cret@proxy:3128")
+
+    secrets = rsi_loop_runtime_secret_values(config)
+
+    assert {"alice", "s3cret", "alice:s3cret@proxy:3128"} <= secrets

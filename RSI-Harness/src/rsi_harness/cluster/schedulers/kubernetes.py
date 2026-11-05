@@ -176,8 +176,9 @@ if ! unshare --user --map-root-user --mount --pid --fork --mount-proc true \\
   exit 1
 fi
 if (( $4 )); then
-  # The device plugin's UUIDs when it passes them; otherwise (CDI, volume
-  # mounts, indices) the Pod holds only its own GPUs, numbered 0..N-1.
+  # The device plugin's UUIDs when it passes them (the Engine maps them to
+  # indices with nvidia-smi); otherwise (CDI, volume mounts, indices) the
+  # Pod holds only its own GPUs, numbered 0..N-1.
   devices=${NVIDIA_VISIBLE_DEVICES:-}
   if [[ $devices == GPU-* || $devices == MIG-* ]]; then
     IFS=, read -ra allocated <<<"$devices"
