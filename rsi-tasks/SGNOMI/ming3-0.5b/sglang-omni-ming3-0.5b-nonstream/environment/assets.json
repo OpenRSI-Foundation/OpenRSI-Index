@@ -1,0 +1,229 @@
+[
+  {
+    "repo": "inclusionAI/Ming-3.0-tts-0.5B",
+    "kind": "model",
+    "revision": "8d66b70a00f05ad183fa8a863b4ce609fc83cbc0",
+    "files": [
+      {
+        "path": ".gitattributes",
+        "size": 1697,
+        "git_blob": "8079f5a13ad02758be28ec9748ff7524e153bcc7",
+        "sha256": null
+      },
+      {
+        "path": "Ming-3.0-tts-0.5B-TDS2026.pdf",
+        "size": 390569,
+        "git_blob": "daf59ee42339ae9c59c983de85617d4209bb27d9",
+        "sha256": "f95e017b201e7d2fb53f30a07b1e3241d5a72c223fe15a21c274846390f71f3b"
+      },
+      {
+        "path": "README.md",
+        "size": 54491,
+        "git_blob": "aa2dd5a578626978072ec32d5c4cc2d6bf8314a4",
+        "sha256": null
+      },
+      {
+        "path": "added_tokens.json",
+        "size": 1785,
+        "git_blob": "6ed12db23265d04f85fef76b45a75fe6e0a2c5d9",
+        "sha256": null
+      },
+      {
+        "path": "campplus.onnx",
+        "size": 28303423,
+        "git_blob": "7b08523b2e28e437cfb1a0312723a5ab0bac287e",
+        "sha256": "a6ac6a63997761ae2997373e2ee1c47040854b4b759ea41ec48e4e42df0f4d73"
+      },
+      {
+        "path": "config.json",
+        "size": 4754,
+        "git_blob": "3b33bfbb7b316f212e3baa4c36b9469666305aa5",
+        "sha256": null
+      },
+      {
+        "path": "configuration.json",
+        "size": 51,
+        "git_blob": "b120f7ddae024b7ce9634614656c5120a241fa20",
+        "sha256": null
+      },
+      {
+        "path": "figures/ant-bailing.png",
+        "size": 58712,
+        "git_blob": "603e33d25fb0b2668c094dbc5fbc777fafc70fba",
+        "sha256": null
+      },
+      {
+        "path": "figures/icons/github-color.svg",
+        "size": 837,
+        "git_blob": "81920ca332522d9e2bdb4110f95c9bc1b0d3fc16",
+        "sha256": null
+      },
+      {
+        "path": "figures/icons/modelscope-color.svg",
+        "size": 423,
+        "git_blob": "d309f3c004fb149664a3e0c872e2f8be981f039c",
+        "sha256": null
+      },
+      {
+        "path": "figures/icons/technical-report.svg",
+        "size": 414,
+        "git_blob": "5647a2c8f04f12fa5967acdd5f7b068d00406ae0",
+        "sha256": null
+      },
+      {
+        "path": "figures/ming_3.0_tts.png",
+        "size": 629806,
+        "git_blob": "7e2b8c8adf1df3e33524c22860e1c68f5ed82bc5",
+        "sha256": "8ccb87480ca0d3b5a852cd69c0e4974c9330733685afc87e155fa37dd8b2d55a"
+      },
+      {
+        "path": "merges.txt",
+        "size": 1671853,
+        "git_blob": "31349551d90c7606f325fe0f11bbb8bd5fa0d7c7",
+        "sha256": null
+      },
+      {
+        "path": "model.safetensors",
+        "size": 2959055504,
+        "git_blob": "78187496c704a1ae3eb5b2921c92b8fed057b1ba",
+        "sha256": "45c4d78d8ad6b1d942e3da86ba035fece02de569f7b2ca7e9d121dfaf18d674c"
+      },
+      {
+        "path": "special_tokens_map.json",
+        "size": 2726,
+        "git_blob": "cfdd7ee20831ec9f4dc5db451063915b94381ce3",
+        "sha256": null
+      },
+      {
+        "path": "tokenizer.json",
+        "size": 11431389,
+        "git_blob": "65071f41a72077479b78866d5f5f33d87e7d719e",
+        "sha256": "87d54ca3b44ea2f822ba39a0a45cb1b61644bd6606d9d3536dea75367bffb06d"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "size": 16260,
+        "git_blob": "d26ca5cf2e50334e29ff075de13e7b3bed3c383b",
+        "sha256": null
+      },
+      {
+        "path": "vocab.json",
+        "size": 2776833,
+        "git_blob": "4783fe10ac3adce15ac8f358ef5462739852c569",
+        "sha256": null
+      }
+    ]
+  },
+  {
+    "kind": "model",
+    "repo": "Qwen/Qwen3-ASR-1.7B",
+    "revision": "7278e1e70fe206f11671096ffdd38061171dd6e5",
+    "files": [
+      {
+        "path": ".gitattributes",
+        "size": 1519,
+        "sha256": null,
+        "git_blob": "a6344aac8c09253b3b630fb776ae94478aa0275b"
+      },
+      {
+        "path": "README.md",
+        "size": 57456,
+        "sha256": null,
+        "git_blob": "3a67d43f21febda213ff36efdb60ef10019af7f3"
+      },
+      {
+        "path": "chat_template.json",
+        "size": 1161,
+        "sha256": null,
+        "git_blob": "c44736493efd71ec96218cc626904698cdb13235"
+      },
+      {
+        "path": "config.json",
+        "size": 6194,
+        "sha256": null,
+        "git_blob": "2bc16c9d4ca08963715cfb94d879799b9adbd0e9"
+      },
+      {
+        "path": "generation_config.json",
+        "size": 142,
+        "sha256": null,
+        "git_blob": "7382a4d347c0a865b76bb1b8277f66a5ac312854"
+      },
+      {
+        "path": "merges.txt",
+        "size": 1671853,
+        "sha256": null,
+        "git_blob": "31349551d90c7606f325fe0f11bbb8bd5fa0d7c7"
+      },
+      {
+        "path": "model-00001-of-00002.safetensors",
+        "size": 4220320824,
+        "sha256": "a4cd1f1a04d90b757dc7f7dd26254e69a013b19e80efe590a83c6a3bde8608d6",
+        "git_blob": "1522f6592ff361cdc8b95692bbd8c513d68fc40a"
+      },
+      {
+        "path": "model-00002-of-00002.safetensors",
+        "size": 478200688,
+        "sha256": "6e0b9d9e09e2e0238e7ef3cc8a484ab387e91b90f1900bedf88bc92d7929ccfc",
+        "git_blob": "5a13bd2988d1368745384b4acb6e8bab73f98a75"
+      },
+      {
+        "path": "model.safetensors.index.json",
+        "size": 64821,
+        "sha256": null,
+        "git_blob": "1048a4eb4f21fef9aea06d8568a784b2b5595689"
+      },
+      {
+        "path": "preprocessor_config.json",
+        "size": 330,
+        "sha256": null,
+        "git_blob": "8f7f07346466d5d494ec0d4969d1c3d0190eed72"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "size": 12487,
+        "sha256": null,
+        "git_blob": "b93109843922a40c6654c5449d3bf95372267c66"
+      },
+      {
+        "path": "vocab.json",
+        "size": 2776833,
+        "sha256": null,
+        "git_blob": "4783fe10ac3adce15ac8f358ef5462739852c569"
+      }
+    ],
+    "license": "apache-2.0"
+  },
+  {
+    "kind": "dataset",
+    "repo": "zhaochenyang20/seed-tts-eval-arrow",
+    "revision": "27f4c1adee83b5b29b7c4b375f6b976324bda308",
+    "files": [
+      {
+        "path": ".gitattributes",
+        "size": 2504,
+        "sha256": null,
+        "git_blob": "bed0738c7eeb449bca98b5d2f33c89a1ee56349a"
+      },
+      {
+        "path": "README.md",
+        "size": 528,
+        "sha256": null,
+        "git_blob": "8ff6e425d85115994712beafe41858617e90ed14"
+      },
+      {
+        "path": "data/en-00000-of-00001.parquet",
+        "size": 247555423,
+        "sha256": "5849b41b49cae996328c06d2c5791717c3bafc369bddfa1ec4f86761bb8bc0ca",
+        "git_blob": "b7d78eba97d48f59912defe1f7e79f3022368e73"
+      },
+      {
+        "path": "data/zh-00000-of-00001.parquet",
+        "size": 454302299,
+        "sha256": "5d73be79cf2e84fd0bebf5d47212438a88dd264a591031d092164ba84545f1de",
+        "git_blob": "424a557d2b773ad4d12fd579c4f03b501f4a5672"
+      }
+    ],
+    "license": null
+  }
+]

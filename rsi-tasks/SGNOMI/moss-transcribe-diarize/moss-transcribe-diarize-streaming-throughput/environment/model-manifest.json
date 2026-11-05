@@ -1,0 +1,122 @@
+[
+  {
+    "path": ".eval_results/open_asr_leaderboard.yaml",
+    "size": 1917,
+    "sha256": null,
+    "git_sha1": "1bd7b119bd3c5cc99e7209b290d64c14287821e8"
+  },
+  {
+    "path": ".gitattributes",
+    "size": 226,
+    "sha256": null,
+    "git_sha1": "3dcddd35da2ecef8b15d391049f9b7f63e952bf4"
+  },
+  {
+    "path": "Model_Architecture.png",
+    "size": 59860,
+    "sha256": null,
+    "git_sha1": "890411661b2084acfb585407e8630383fd6538a2"
+  },
+  {
+    "path": "README.md",
+    "size": 13985,
+    "sha256": null,
+    "git_sha1": "45bb4d739db629f4bceaaa2da52a9d9297c8a772"
+  },
+  {
+    "path": "added_tokens.json",
+    "size": 707,
+    "sha256": null,
+    "git_sha1": "b54f9135e44c1e81047e8d05cb027af8bc039eed"
+  },
+  {
+    "path": "chat_template.jinja",
+    "size": 4762,
+    "sha256": null,
+    "git_sha1": "9211db1411b2480fd0698b12fb1b34d08449e9f6"
+  },
+  {
+    "path": "config.json",
+    "size": 2335,
+    "sha256": null,
+    "git_sha1": "87f0b37e0048e8b10b914cfa0dbfe887f96fab01"
+  },
+  {
+    "path": "configuration_moss_transcribe_diarize.py",
+    "size": 2663,
+    "sha256": null,
+    "git_sha1": "d82c5c6fdfdd408a408c8ad06b8d7149312e32c8"
+  },
+  {
+    "path": "generation_config.json",
+    "size": 107,
+    "sha256": null,
+    "git_sha1": "70fb308092f1563e0d716b7e1933e44ca3ff438c"
+  },
+  {
+    "path": "merges.txt",
+    "size": 1671853,
+    "sha256": null,
+    "git_sha1": "31349551d90c7606f325fe0f11bbb8bd5fa0d7c7"
+  },
+  {
+    "path": "model-00000-of-00001.safetensors",
+    "size": 1817113576,
+    "sha256": "9a0ceb4ab7330357db3ff583dba8d83625d5b733b00e1d55d6970e11b07026c4",
+    "git_sha1": "b458c6c61d8b21e992a30f8ac02191c17cc4e013"
+  },
+  {
+    "path": "model.safetensors.index.json",
+    "size": 65401,
+    "sha256": null,
+    "git_sha1": "97047f804b673b7f4192d72823262ea790f32208"
+  },
+  {
+    "path": "modeling_moss_transcribe_diarize.py",
+    "size": 15101,
+    "sha256": null,
+    "git_sha1": "d6c3db9569a1302a24b9b55aacff9934096fb626"
+  },
+  {
+    "path": "preprocessor_config.json",
+    "size": 315,
+    "sha256": null,
+    "git_sha1": "c876ba478425fdf8bc1d36b35fa165a151284602"
+  },
+  {
+    "path": "processing_moss_transcribe_diarize.py",
+    "size": 10975,
+    "sha256": null,
+    "git_sha1": "783d899c56b405960b87b9323f09c82ce67acfa5"
+  },
+  {
+    "path": "processor_config.json",
+    "size": 292,
+    "sha256": null,
+    "git_sha1": "5a3d630b8cb8387a082a36897413f49011180ba6"
+  },
+  {
+    "path": "special_tokens_map.json",
+    "size": 613,
+    "sha256": null,
+    "git_sha1": "ac23c0aaa2434523c494330aeb79c58395378103"
+  },
+  {
+    "path": "tokenizer.json",
+    "size": 11423222,
+    "sha256": "bcf03774334462d6e34b5005cb11120a62275f146ee2953e68731ecdbce84fbb",
+    "git_sha1": "5ac718f112af542c39adcd73bb3bde829991ce0c"
+  },
+  {
+    "path": "tokenizer_config.json",
+    "size": 503,
+    "sha256": null,
+    "git_sha1": "f8ef6420f8887c88dc6e100c77f580c462e3b37e"
+  },
+  {
+    "path": "vocab.json",
+    "size": 2776833,
+    "sha256": null,
+    "git_sha1": "4783fe10ac3adce15ac8f358ef5462739852c569"
+  }
+]

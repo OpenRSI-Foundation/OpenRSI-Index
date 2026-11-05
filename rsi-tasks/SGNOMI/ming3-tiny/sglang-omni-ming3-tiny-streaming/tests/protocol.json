@@ -1,0 +1,208 @@
+{
+  "version": 10,
+  "source": "0c663861d7d4a558e4f53258c4d48cfce577b47e",
+  "archive_sha256": "b4ddf612674dbe0f0d4edfa7d486702a8cafca841e5f8da59f31a15acc0cc930",
+  "rows": 1088,
+  "repetitions": 3,
+  "repetition_seeds": [
+    42,
+    43,
+    44
+  ],
+  "benchmark_engine_overrides": {
+    "max_running_requests": 64,
+    "cuda_graph_max_bs": 64
+  },
+  "tts_warmup": 16,
+  "asr_warmup": 64,
+  "asr_concurrency": 32,
+  "cache_policy": "fresh-empty-per-lane-per-repetition",
+  "lower_metrics": [
+    "wer_corpus",
+    "latency_mean_s",
+    "latency_median_s",
+    "latency_p95_s",
+    "latency_p99_s",
+    "rtf_mean",
+    "rtf_median",
+    "rtf_p95",
+    "rtf_p99"
+  ],
+  "higher_metrics": [
+    "throughput_qps",
+    "audio_throughput_s_per_s"
+  ],
+  "lanes": [
+    {
+      "name": "ming",
+      "model": "inclusionAI/Ming-3.0-tts-tiny",
+      "port": 8000,
+      "output": "results/ming3_tts_en",
+      "argv": [
+        "-m",
+        "benchmarks.eval.benchmark_tts_seedtts",
+        "--meta",
+        "zhaochenyang20/seed-tts-eval-arrow",
+        "--model",
+        "inclusionAI/Ming-3.0-tts-tiny",
+        "--port",
+        "8000",
+        "--output-dir",
+        "results/ming3_tts_en",
+        "--lang",
+        "en",
+        "--max-concurrency",
+        "16"
+      ]
+    }
+  ],
+  "evaluation_policy": {
+    "method": "three-run-mean-stream-strict-qps-v1",
+    "calibration_evaluations": 1,
+    "holdout_evaluations": 1,
+    "aggregation": "arithmetic-mean-of-three-per-run-metrics",
+    "primary_objective": {
+      "models": [
+        "ming"
+      ],
+      "metric": "throughput_qps",
+      "comparison": ">",
+      "require_all": true
+    },
+    "other_performance_gates_relative_tolerance": 0.03,
+    "wer_absolute_max": 0.02,
+    "baseline_update": "previous-complete-eligible-candidate",
+    "reward": "stream-qps-ratio-to-b0",
+    "reward_weights": {
+      "ming": 1.0
+    }
+  },
+  "evaluation_timeout_seconds": 14400,
+  "sglang_source_commit": "b8100b74bf4f6563f402c20a1e1af685cbd2246e",
+  "streaming": {
+    "concurrency": 16,
+    "warmup": 16,
+    "lower_metrics": [
+      "audio_ttfp_mean_s",
+      "audio_ttfp_median_s",
+      "audio_ttfp_p95_s",
+      "audio_ttfp_p99_s"
+    ],
+    "higher_metrics": [
+      "c50"
+    ],
+    "reference": "https://github.com/sgl-project/sglang-omni/pull/2555",
+    "continuity_threshold_ms": 50
+  },
+  "core_api_compatibility": {
+    "module": "sglang.kernels.ops.layernorm.rmsnorm_hf",
+    "shim_sha256": "81eba0d23f671722ea96205195a7a2711681286f5d4b1f156bc4beb969d272d2",
+    "reason": "Core #47503 unified RMSNorm API; preserve Omni cast-before-weight and returning-output contract with latest kernel",
+    "core_source_files_modified": false
+  },
+  "omni_source_compatibility": {
+    "upstream_revision": "0c663861d7d4a558e4f53258c4d48cfce577b47e",
+    "core_revision": "b8100b74bf4f6563f402c20a1e1af685cbd2246e",
+    "upstream_archive_sha256": "b779c080858a1d8d29662384c37b879404d5d292c06e82ad7f172f6c927fee79",
+    "adapted_archive_sha256": "b4ddf612674dbe0f0d4edfa7d486702a8cafca841e5f8da59f31a15acc0cc930",
+    "patch_sha256": "cc82134f5d65913ce3ca1388155d8feff214566229101c9192724cd70a511fa0",
+    "reason": "Port latest core KV arguments, cache slots, scheduler constructors, request/step state and descriptor lookup; resolve the ASR format enum and forward attention batch context. Preserve budgeting, cache selection, fused arithmetic and evaluation semantics.",
+    "files": {
+      "sglang_omni/model_runner/sglang_model_runner.py": {
+        "original_sha256": "928b0d9ca68a4499e3762c9472a496ad5934330a66cf00fd6b930293809ba655",
+        "adapted_sha256": "d7c1034d4b2f1bda32217c12def39ec2e4a84aec7828e4f2049a1d01ee8fd0e4",
+        "accepted_input_sha256": [
+          "48e17de23e72f9e46c83f1957ca0495af31e30873b002cc73879f465e9956c8b",
+          "928b0d9ca68a4499e3762c9472a496ad5934330a66cf00fd6b930293809ba655",
+          "d4ccf2fbc1d7640bf33129d2a8d647743be01366ae89c3fdb7d33f985145a3f3",
+          "d7c1034d4b2f1bda32217c12def39ec2e4a84aec7828e4f2049a1d01ee8fd0e4"
+        ]
+      },
+      "sglang_omni/scheduling/sglang_backend/cache.py": {
+        "original_sha256": "3a701abef8de646358f3921218502994147aadb9403667af0d0a1553a3c9cd72",
+        "adapted_sha256": "fe890aa42cea6065e4225d302a8fd59413656883d3872421f739d7b839270104",
+        "accepted_input_sha256": [
+          "3a701abef8de646358f3921218502994147aadb9403667af0d0a1553a3c9cd72",
+          "fe890aa42cea6065e4225d302a8fd59413656883d3872421f739d7b839270104"
+        ]
+      },
+      "sglang_omni/scheduling/omni_scheduler.py": {
+        "original_sha256": "80194722b6ee1cf97a0c246a6d8c638a4ec2663919ddb3f4e7223178e4406282",
+        "adapted_sha256": "4d1a3f58378bc5b2b2ef73d076ee33a71d63f6843a62e30585f6a788dd0fc37a",
+        "accepted_input_sha256": [
+          "426230d84a12a8c9e5294cf4df2c8507b318925c69bef3764e4e3c035baae624",
+          "46a6ee9e1a458fbefc505e38c81f89a678d1cc43036878e9c0041bda112f198e",
+          "49234e2830797eb9939b364d7c14c29f0a6d61ce8b8e1ee3ec12d9b6d96a5d1e",
+          "4d1a3f58378bc5b2b2ef73d076ee33a71d63f6843a62e30585f6a788dd0fc37a",
+          "80194722b6ee1cf97a0c246a6d8c638a4ec2663919ddb3f4e7223178e4406282",
+          "85fcf7d86a127c44d08336bad743e1f3061b772b90d600cf96841aea9e2edc99",
+          "e223f6dd3890a1543dbc9ac5fd35c2b9b666970513c951f3771d3d52c863e0f2"
+        ]
+      },
+      "sglang_omni/models/qwen3_asr/encoder_service.py": {
+        "original_sha256": "90956b08607a780b9c18dc504c6e82d8027492f5e63ca1bc8fad21f9ee9273cc",
+        "adapted_sha256": "3fe8aa7449ecaa6d4f7658430cd23a8f02ed59d846a6b9a282c5c504689ac0d2",
+        "accepted_input_sha256": [
+          "3fe8aa7449ecaa6d4f7658430cd23a8f02ed59d846a6b9a282c5c504689ac0d2",
+          "90956b08607a780b9c18dc504c6e82d8027492f5e63ca1bc8fad21f9ee9273cc"
+        ]
+      },
+      "sglang_omni/models/qwen3_asr/sglang_model.py": {
+        "original_sha256": "e7aa7accbffa8b812a622f9f4c73920ee02a565b178bb40f6f43705a4a61ad51",
+        "adapted_sha256": "3c123a1e3f3db6282a3484c065de1f3dda359992062d5ac0e7b0a7061794d386",
+        "accepted_input_sha256": [
+          "3c123a1e3f3db6282a3484c065de1f3dda359992062d5ac0e7b0a7061794d386",
+          "e7aa7accbffa8b812a622f9f4c73920ee02a565b178bb40f6f43705a4a61ad51"
+        ]
+      }
+    },
+    "upstream_manifest_sha256": "a56cd07eb77b4aa2b9848c2d9623bb1f26c58c9ad8a28a8018cea1e4010f8f61",
+    "adapted_manifest_sha256": "cfad011a2a28a5881a8c7ddb905b556f414171b2bacb0b7238b495ce56b34dca",
+    "accepted_archive_inputs": [
+      {
+        "archive_sha256": "067fd73526f0ce9e28506593f6d75725e8d8659a91111e9772090e87023bbf0e",
+        "manifest_sha256": "71d874d9313be1c0f5c7bd986a6859c2041afcfd87f92bf15813987964c97a10"
+      },
+      {
+        "archive_sha256": "0560574c15a11b833b5259fed2dbe9742b449a2f9d87eeb9c201993d39fd4fb3",
+        "manifest_sha256": "619d584ef1e4193d5b7aa08e4c6847ff1a05bb7de8ecf22a905d78d67206eec8"
+      },
+      {
+        "archive_sha256": "533c8e8e5a5ea4b1139b761a3807af8b98894ac261074164929f1b2d2e38d348",
+        "manifest_sha256": "d510f7f2c81a0e38e9bcb9344b8eacaa075739e561d5c3e407e5d32583a35bff"
+      },
+      {
+        "archive_sha256": "91def507c6c83bcdea1b358270101106b0b0e1eecbf6b0c7e52b99b872b1fca7",
+        "manifest_sha256": "b38b6d2bb831a8a91482fbb20c7106712c56ad226627e370b71ef61b9c65e291"
+      },
+      {
+        "archive_sha256": "b7a28bad531c9ef9020114031d0d6e298bdba70562e9b4de9b29afbd3cbd2309",
+        "manifest_sha256": "d01c5256e6dd37ab2ce702465b72174e60001eee9d6dd0ab86bd974459f5860d"
+      },
+      {
+        "archive_sha256": "96a4ca22e1c5bcf660222bcec2b528868ddaaa11b28de55e2eb44dd3e3f013ed",
+        "manifest_sha256": "4f6eae43cdecea7c8cfec95764b11b6732a5f2f4f52876db1f8f851bc90d5699"
+      },
+      {
+        "archive_sha256": "e7cd2b9c7dd521a9c28529139616dd296d8db26e974898178a32f8c544789e20",
+        "manifest_sha256": "09d273361f4ec151af160be02007ea5733af869f036d83eee5f4dc52750b3154"
+      },
+      {
+        "archive_sha256": "a1e6ddb20eefc8c2a47a413563564f7e078f6235aa2d52b8b136c111502c76fa",
+        "manifest_sha256": "c5370cf9ccddd275b64ad043e484ef73e979225f95b5bfab2acaf96e60c99487"
+      },
+      {
+        "archive_sha256": "9aa65bd499677b84e0d984630152f10b06f67fa63134c113d4aa5eec45506a71",
+        "manifest_sha256": "0c070c607a7a449277aba989becc31fcd8d3e67a94efaa6da0c2e7299cb75791"
+      },
+      {
+        "archive_sha256": "07f8466454f38ea16e438ef83d2158f12e962a36adaf1dc66ad6a1d9876c4c6b",
+        "manifest_sha256": "309e6405061c45b3d0b3a2afd9ceb7e6d63fdae24071412a9329e135bcd7c8a8"
+      },
+      {
+        "archive_sha256": "5f6c4618323c6278067e2247fceec38c23be9c8c6553c83e629d54af9c0a8f86",
+        "manifest_sha256": "cee3ceb0d1316109f49f0c85ba997aaa38d6701fa97835cf826604e1cf4c2a92"
+      }
+    ]
+  }
+}

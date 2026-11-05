@@ -1,0 +1,94 @@
+pyzmq>=25.0.0
+msgpack>=1.0.0
+msgspec
+typing-extensions>=4.13
+numpy>=1.24.0
+pydantic>=2.0.0
+PyYAML>=6.0
+pybase64>=1.4.0
+torch==2.13.0
+torchvision==0.28.0
+accelerate>=0.27.0
+transformers==5.12.1
+safetensors>=0.4.3
+pillow>=10.0.0
+huggingface-hub[hf_xet]>=0.36.0
+datasets>=2.14.0
+fastapi>=0.110.0
+uvicorn>=0.23.0
+sglang==0.5.21; sys_platform != 'darwin' or platform_machine != 'arm64'
+mlx>=0.32.0; sys_platform == 'darwin' and platform_machine == 'arm64'
+mlx-lm; sys_platform == 'darwin' and platform_machine == 'arm64'
+flashinfer_python[cu13]==0.6.18; sys_platform != 'darwin' or platform_machine != 'arm64'
+cache-dit==1.3.0
+addict==2.4.0
+imageio==2.36.0
+imageio-ffmpeg==0.5.1
+flash-attn-4>=4.0.0b18; sys_platform != 'darwin' or platform_machine != 'arm64'
+kernels>=0.14.1,<0.15; sys_platform != 'darwin' or platform_machine != 'arm64'
+nixl-cu13>=1.1.0; sys_platform != 'darwin' or platform_machine != 'arm64'
+mooncake-transfer-engine-cuda13>=0.3.10; sys_platform != 'darwin' or platform_machine != 'arm64'
+httpx
+xxhash>=3.0.0
+sox>=1.4.1
+av>=16.1.0
+decord==0.6.0; sys_platform == 'linux' and platform_machine == 'x86_64'
+audioread>=3.0.0
+qwen-vl-utils==0.0.11
+numba==0.65.1
+librosa>=0.11.0
+sentencepiece>=0.2.0
+pandas
+tabulate
+typer>=0.9.0
+openai==2.6.1
+openai-harmony==0.0.4
+soundfile>=0.12.0
+mistral_common[audio]>=1.11.0
+silero-vad>=5.1
+onnxruntime-gpu>=1.17; sys_platform != 'darwin' or platform_machine != 'arm64'
+onnxruntime>=1.17; sys_platform == 'darwin' and platform_machine == 'arm64'
+websockets>=12.0
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+jiwer
+zhon>=2.0.2
+scipy>=1.10.0
+tiktoken
+hydra-core
+omegaconf
+torchaudio==2.11.0
+torchcodec==0.15.0
+gradio>=4.0.0
+dots.tts==0.2.1; sys_platform != 'darwin' or platform_machine != 'arm64'
+diffusers==0.37.0
+torchdiffeq>=0.2.4
+x-transformers
+nemo_text_processing==1.2.0; sys_platform != 'darwin' or platform_machine != 'arm64'
+numpy==2.3.4
+scipy==1.16.3
+pyarrow==22.0.0
+aiohttp==3.13.1
+requests==2.32.5
+jiwer==4.0.0
+zhon==2.1.1
+setuptools==80.9.0
+wheel==0.45.1
+more-itertools
+numba
+numpy
+tiktoken
+torch
+tqdm
+triton>=2; (platform_machine == "x86_64" and sys_platform == "linux") or sys_platform == "linux2"
+black; extra == "dev"
+flake8; extra == "dev"
+isort; extra == "dev"
+pytest; extra == "dev"
+scipy; extra == "dev"
+
+typing-extensions
+setuptools >= 61.0
+pytest
+ruff
+twine

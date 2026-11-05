@@ -1,0 +1,145 @@
+{
+  "schema": 1,
+  "resolved_date": "2026-10-21",
+  "parent_repository": "https://github.com/OpenRSI-Foundation/sglang-omni-tts-cosyvoice3-dual-mode-guided-d154",
+  "parent_commit": "be29a8dafc2460163439db0d0c21a88d3b2d1b86",
+  "upstream_repository": "https://github.com/sgl-project/sglang-omni",
+  "requested_ref": "main",
+  "resolved_commit": "fa90213e1674e99ef15e6c3ba6fa9bb15255414a",
+  "sglang_omni_version": "0.1.9",
+  "sglang_version": "0.5.22",
+  "upstream_archive_sha256": "70f2eac1c487a92e542a9870fdd7c2063c4f02d3cfa45d1884580a88e21e4eaf",
+  "materialized_archive_sha256": "fc25e47e8eda9b2f69c44dbf1266c8f26b806e5e2b5759ea31db7498d5025d93",
+  "frozen_evaluator": {
+    "prefix": "benchmarks/",
+    "source_commit": "1523543056bf334bc2f4d69db23aad0a002cedf2",
+    "reason": "Preserve original workload, 2048 token cap, timing, metrics and collection behavior; update runtime only."
+  },
+  "unchanged_contract": [
+    "research question and guidance",
+    "assets and model revisions",
+    "all protocol fields except source identity and archive hash",
+    "evaluation implementation outside source inventory",
+    "task.toml and all resource/time budgets",
+    "RSI-Harness",
+    "native benchmark tree"
+  ],
+  "execution_validation": "not performed; fresh build/GPU preflight, B0 and A/A required",
+  "dependency_changes": {
+    "audioread": {
+      "before": null,
+      "after": "3.1.0"
+    },
+    "decord": {
+      "before": null,
+      "after": "0.6.0"
+    },
+    "flashinfer-python": {
+      "before": "0.6.18",
+      "after": "0.7.1"
+    },
+    "nccl-extensions": {
+      "before": null,
+      "after": "0.1.0"
+    },
+    "nvidia-cuda-nvdisasm": {
+      "before": "13.4.92",
+      "after": null
+    },
+    "nvidia-cudnn-cu13": {
+      "before": "9.20.0.48",
+      "after": "9.24.0.43"
+    },
+    "nvidia-cutlass-dsl": {
+      "before": "4.6.2",
+      "after": "4.8.0"
+    },
+    "nvidia-cutlass-dsl-libs-base": {
+      "before": "4.6.2",
+      "after": "4.8.0"
+    },
+    "nvidia-cutlass-dsl-libs-core": {
+      "before": "4.6.2",
+      "after": "4.8.0"
+    },
+    "nvidia-cutlass-dsl-libs-cu12": {
+      "before": "4.6.2",
+      "after": "4.8.0"
+    },
+    "nvidia-cutlass-dsl-libs-cu13": {
+      "before": "4.6.2",
+      "after": "4.8.0"
+    },
+    "nvidia-nccl-cu13": {
+      "before": "2.29.7",
+      "after": "2.30.7"
+    },
+    "quack-kernels": {
+      "before": "0.6.4",
+      "after": "0.6.5"
+    },
+    "sentencepiece": {
+      "before": "0.2.2",
+      "after": "0.2.1"
+    },
+    "sgl-deep-ep": {
+      "before": "0.1.2",
+      "after": "0.1.2.post1"
+    },
+    "sgl-deep-gemm": {
+      "before": "0.2.0",
+      "after": "0.2.2"
+    },
+    "sglang": {
+      "before": "0.5.20",
+      "after": "0.5.22"
+    },
+    "sglang-kernel": {
+      "before": "0.4.7",
+      "after": "0.4.9"
+    },
+    "tokenizers": {
+      "before": "0.22.2",
+      "after": "0.23.2"
+    },
+    "torch": {
+      "before": "2.13.0",
+      "after": "2.14.1"
+    },
+    "torchcodec": {
+      "before": "0.15.0",
+      "after": "0.17.0"
+    },
+    "torchvision": {
+      "before": "0.28.0",
+      "after": "0.29.1"
+    },
+    "transformers": {
+      "before": "5.12.1",
+      "after": "5.19.0"
+    },
+    "triton": {
+      "before": "3.7.1",
+      "after": "3.8.0"
+    },
+    "xgrammar": {
+      "before": "0.2.1",
+      "after": "0.2.7"
+    }
+  },
+  "checks": {
+    "static_preflight": "PASS",
+    "contract_tests": {
+      "passed": 27,
+      "failed": 0
+    },
+    "source_composition": "exact latest upstream outside benchmarks/; exact original inside benchmarks/",
+    "protocol_changes": [
+      "source",
+      "archive_sha256"
+    ],
+    "unchanged": "research question/guidance; task.toml; tests code; assets; source-deps; Dockerfile; Harness/skills",
+    "image_gpu_performance_validation": "not performed",
+    "calibration_schema_change": "source commit constant only; prevents calibration reuse across runtime versions"
+  }
+}

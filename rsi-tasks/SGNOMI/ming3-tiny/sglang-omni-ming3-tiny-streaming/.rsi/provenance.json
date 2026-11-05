@@ -1,0 +1,21 @@
+{
+  "source_repository": "https://github.com/OpenRSI-Foundation/sglang-omni-v0.1.9-ca9e8789fcd8-tts-ming3-tiny-nonstream.git",
+  "source_task_commit": "c2e016ae654c171e4a724e3956d957eb7f66b462",
+  "omni_commit": "0c663861d7d4a558e4f53258c4d48cfce577b47e",
+  "sglang_core_commit": "b8100b74bf4f6563f402c20a1e1af685cbd2246e",
+  "model": "inclusionAI/Ming-3.0-tts-tiny",
+  "mode": "streaming",
+  "protocol_version": 10,
+  "calibration_reused": false,
+  "user_authorization": "User explicitly requested direct generation of both streaming repos and immediate Radix CLI execution with latest SGLang.",
+  "created_utc": "2026-11-03T01:15:09.950420+00:00",
+  "source_freeze_utc": "2026-11-03T06:20:35.960162+00:00",
+  "core_build_toolchain": {
+    "channel": "1.92",
+    "authority": "selectedcore rust/rust-toolchain.toml",
+    "installer_url": "https://static.rust-lang.org/rustup/archive/1.28.2/x86_64-unknown-linux-gnu/rustup-init",
+    "installer_sha256": "20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c",
+    "rust_extensions": "upstreamdefault;notdisabled"
+  },
+  "core_version_policy": "Use compatible pinned core; latest requirement applies to Omni only"
+}

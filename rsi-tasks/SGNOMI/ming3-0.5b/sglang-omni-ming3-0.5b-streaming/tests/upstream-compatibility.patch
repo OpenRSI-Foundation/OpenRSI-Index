@@ -1,0 +1,313 @@
+--- a/sglang_omni/model_runner/sglang_model_runner.py
++++ b/sglang_omni/model_runner/sglang_model_runner.py
+@@ -574,7 +574,7 @@
+             pass
+         return result
+ 
+-    def post_capture_resize_kv_pool(self):
++    def post_capture_resize_kv_pool(self, *, draft_runners=()):
+         """Back the KV pool post-capture without silently shrinking a byte budget.
+ 
+         Upstream's post-capture sizing re-derives the pool from live free
+@@ -584,12 +584,12 @@
+         serving with a silently clamped pool.
+         """
+         if self.kv_cache_bytes is None:
+-            return super().post_capture_resize_kv_pool()
++            return super().post_capture_resize_kv_pool(draft_runners=draft_runners)
+         else:
+             pass
+ 
+         tokens_before = self.max_total_num_tokens
+-        result = super().post_capture_resize_kv_pool()
++        result = super().post_capture_resize_kv_pool(draft_runners=draft_runners)
+         if self.max_total_num_tokens < tokens_before:
+             free_bytes = free_gpu_memory_bytes(self.device, self.gpu_id)
+             raise RuntimeError(
+@@ -773,7 +773,7 @@
+         except Exception as exc:
+             logger.warning(f"sglang-omni: skipping Ming-Omni registration ({exc})")
+ 
+-    def init_kv_cache_configurator(self):
++    def init_kv_cache_configurator(self, draft_parallel_layout=None):
+         """Swap in the Omni configurator so the colocated budget stays hooked.
+ 
+         Upstream keeps _profile_available_bytes on the composed
+@@ -781,7 +781,7 @@
+         the Omni subclass, copying every declared field so upstream can add
+         fields without silently dropping them here.
+         """
+-        super().init_kv_cache_configurator()
++        super().init_kv_cache_configurator(draft_parallel_layout)
+         base = self.kv_cache_configurator
+         self.kv_cache_configurator = OmniKVCacheConfigurator(
+             **{
+--- a/sglang_omni/scheduling/sglang_backend/cache.py
++++ b/sglang_omni/scheduling/sglang_backend/cache.py
+@@ -14,9 +14,10 @@
+ from sglang.srt.mem_cache.memory_pool import HybridReqToTokenPool, ReqToTokenPool
+ from sglang.srt.mem_cache.pure_swa_radix_cache import PureSWARadixCache
+ from sglang.srt.mem_cache.radix_cache import RadixCache
++from sglang.srt.mem_cache.static_kv_storage import StaticPoolShape, kv_storage_of
+ from sglang.srt.mem_cache.unified_cache.components import ComponentType
+ from sglang.srt.mem_cache.unified_radix_cache import UnifiedRadixCache
+-from sglang.srt.runtime_context import get_memory, get_schedule, get_serving
++from sglang.srt.runtime_context import get_memory, get_schedule, get_serving, mamba_cache_chunk_size
+ 
+ from sglang_omni.scheduling.sglang_backend.evict_heap_radix_cache import (
+     EvictHeapRadixCache,
+@@ -76,7 +77,23 @@
+             tree_components.append(ComponentType.MAMBA)
+         else:
+             pass
+-        params.tree_components = tuple(tree_components)
++        # Core derives the read-only component ids from the storage's slots.
++        storage = kv_storage_of(
++            req_to_token_pool,
++            token_to_kv_pool_allocator,
++            shape=StaticPoolShape(
++                has_window=ComponentType.SWA in tree_components,
++                has_state=ComponentType.MAMBA in tree_components,
++                token_capacity=token_to_kv_pool_allocator.size,
++                window=sliding_window_size,
++                checkpoint_interval=(
++                    mamba_cache_chunk_size()
++                    if ComponentType.MAMBA in tree_components
++                    else None
++                ),
++            ),
++        )
++        params.tree_slots = storage.tree_slots(window_reach=params.draft_swa_window)
+         return UnifiedRadixCache(params)
+     elif params.eviction_policy.lower() == "lru":
+         return EvictHeapRadixCache(params)
+--- a/sglang_omni/scheduling/omni_scheduler.py
++++ b/sglang_omni/scheduling/omni_scheduler.py
+@@ -45,6 +45,7 @@
+     retract_all,
+ )
+ from sglang.srt.managers.scheduler import (
++    PAUSE_WINDOWS_MAX,
+     TEST_RETRACT,
+     TEST_RETRACT_NO_PREFILL_BS,
+     GenerationBatchResult,
+@@ -57,7 +58,7 @@
+ from sglang.srt.mem_cache.base_prefix_cache import BasePrefixCache
+ from sglang.srt.mem_cache.common import release_kv_cache
+ from sglang.srt.mem_cache.memory_pool import HybridReqToTokenPool, ReqToTokenPool
+-from sglang.srt.runtime_context import get_model, get_parallel, get_serving, get_spec
++from sglang.srt.runtime_context import get_memory, get_model, get_parallel, get_schedule, get_serving, get_spec
+ from sglang.srt.server_args import ServerArgs
+ from sglang.srt.session.session_controller import SessionController
+ from sglang.srt.speculative.base_spec_worker import BaseSpecWorker
+@@ -824,6 +825,23 @@
+         # init_req_max_new_tokens() clamps against this one.
+         self.max_new_tokens_limit = envs.SGLANG_MAX_NEW_TOKENS_LIMIT.get()
+         self.cur_batch_for_debug = None
++        from sglang.srt.managers.scheduler_components.request_list import RequestList
++        from sglang.srt.managers.prefill_delayer import RecentPrefillBatchSizeTracker
++
++        self.running_reqs = RequestList()
++        self.prefill_launched_reqs = RequestList()
++        self.prefill_bs_tracker = RecentPrefillBatchSizeTracker(
++            window_size=envs.SGLANG_PREFILL_DELAYER_MAX_PREFILL_BS_WINDOW_SIZE.get()
++        )
++        self.disagg_prefill_bootstrap_queue = None
++        self.disagg_prefill_transfer_queue = None
++        self.disagg_decode_prealloc_queue = None
++        self.disagg_decode_transfer_queue = None
++        self.uocr_runtime = None
++        self.enable_unified_memory = get_memory().enable_unified_memory
++        self.enable_continuous_input_polling = False
++        self.rust_server = None
++        self.prefill_decode_interval_min_bs = get_schedule().prefill_decode_interval_min_bs
+         # get_next_batch_to_run() calls prepare_for_forward() on this
+         # unconditionally, so it must be a real manager, not None. Upstream
+         # takes it from the model runner; no Omni model uses ngram embedding
+@@ -867,7 +885,13 @@
+         from sglang.srt.managers.scheduler_components.pool_stats_observer import (
+             SchedulerPoolStatsObserver,
+         )
+-        from sglang.srt.runtime_context import get_parallel
++        from sglang.srt.layers.cp.base import get_cp_strategy, is_cp_sharded_padded
++        from sglang.srt.layers.cp.utils import from_cp_sharded
++        from sglang.srt.mem_cache.allocator.page_interleave import (
++            page_interleave_shard_size,
++        )
++        from sglang.srt.mem_cache.kv_weight_version_tracker import KvWeightVersionTracker
++        from sglang.srt.mem_cache.static_kv_storage import StaticPoolShape, kv_storage_of
+ 
+         self.dp_attn_adapter = SchedulerDPAttnAdapter(
+             model_runner=self.tp_worker.model_runner,
+@@ -880,20 +904,33 @@
+             spec_algorithm=self.spec_algorithm,
+             get_require_mlp_sync=lambda: self.require_mlp_sync,
+         )
++        self.kv_shard_widening = page_interleave_shard_size(
++            self.token_to_kv_pool_allocator
++        )
++        self.logical_page_size = self.page_size
++        if is_cp_sharded_padded():
++            self.logical_page_size *= get_cp_strategy().cp_size
++        global_tokens = self.max_total_num_tokens * self.kv_shard_widening
++        if is_cp_sharded_padded():
++            global_tokens = from_cp_sharded(global_tokens)
++        storage = kv_storage_of(
++            self.req_to_token_pool,
++            self.token_to_kv_pool_allocator,
++            shape=StaticPoolShape(
++                has_window=self.is_hybrid_swa,
++                has_state=self.is_hybrid_ssm,
++                token_capacity=global_tokens,
++                full_tokens_per_layer=self.full_tokens_per_layer,
++                swa_tokens_per_layer=self.swa_tokens_per_layer,
++            ),
++        )
+         self.pool_stats_observer = SchedulerPoolStatsObserver(
+             tree_cache=self.tree_cache,
++            storage=storage,
+             token_to_kv_pool_allocator=self.token_to_kv_pool_allocator,
+-            req_to_token_pool=self.req_to_token_pool,
+             session_controller=self.session_controller,
+             hisparse_coordinator=self.hisparse_coordinator,
+-            is_hybrid_swa=self.is_hybrid_swa,
+-            is_hybrid_ssm=self.is_hybrid_ssm,
+             enable_hisparse=self.enable_hisparse,
+-            full_tokens_per_layer=self.full_tokens_per_layer,
+-            swa_tokens_per_layer=self.swa_tokens_per_layer,
+-            max_total_num_tokens=(
+-                self.max_total_num_tokens * get_parallel().attn_dcp_size
+-            ),
+         )
+         empty_queue = types.SimpleNamespace(queue=[], retracted_queue=[])
+         self.total_prefill_uncached_tokens = 0
+@@ -902,6 +939,8 @@
+         self._prev_step = None  # noqa: leading-underscore
+         self._prev_prefill_end_ts = None  # noqa: leading-underscore
+         self._sched_idled = False  # noqa: leading-underscore
++        self._pause_intervals = deque(maxlen=PAUSE_WINDOWS_MAX)
++        self._pause_started_at = None
+         self.init_load_publisher()
+         self.load_inquirer = SchedulerLoadInquirer(
+             disaggregation_mode=self.disaggregation_mode,
+@@ -921,7 +960,7 @@
+             get_stats=lambda: self.metrics_reporter.stats,
+             get_chunked_req=lambda: self.chunked_req,
+             get_disagg_prefill_bootstrap_queue=lambda: empty_queue,
+-            get_disagg_prefill_inflight_queue=lambda: [],
++            get_disagg_prefill_transfer_queue=lambda: [],
+             get_disagg_decode_prealloc_queue=lambda: empty_queue,
+             get_disagg_decode_transfer_queue=lambda: empty_queue,
+             get_spec_total_num_accept_tokens=lambda: (
+@@ -943,7 +982,16 @@
+             ),
+         )
+         self.init_beam_coordinator()
++        self.init_deferred_responses()
++        self.kv_weight_version_tracker = KvWeightVersionTracker.maybe_create(
++            server_args=self.server_args,
++            model_config=self.model_config,
++            allocator=self.token_to_kv_pool_allocator,
++            req_to_token_pool=self.req_to_token_pool,
++        )
+         self.batch_result_processor = SchedulerBatchResultProcessor(
++            kv_weight_version_tracker=self.kv_weight_version_tracker,
++            leave_prefill_launched=self.prefill_launched_reqs.leave,
+             is_generation=self.is_generation,
+             disaggregation_mode=self.disaggregation_mode,
+             enable_overlap=self.enable_overlap,
+@@ -967,6 +1015,8 @@
+             beam_coordinator=self.beam_coordinator,
+             abort_request=lambda request: self.abort(request.rid),
+         )
++        self.init_invariant_checker()
++
+ 
+     def self_check_during_idle(self) -> None:
+         self.new_token_ratio_tracker.reset()
+@@ -1001,18 +1051,19 @@
+         else:
+             pass
+ 
++        import inspect
++
+         try:
+-            attr = getattr(_Upstream, name)
++            attr = inspect.getattr_static(_Upstream, name)
+         except AttributeError:
+             raise AttributeError(
+                 f"'{type(self).__name__}' has no attribute {name!r}"
+             ) from None
+ 
+-        # Bind unbound methods to this instance so they use our state
+-        if callable(attr):
+-            return types.MethodType(attr, self)
+-        else:
+-            pass
++        # Preserve upstream methods, properties and static/class descriptors.
++        descriptor_get = getattr(attr, "__get__", None)
++        if descriptor_get is not None:
++            return descriptor_get(self, _Upstream)
+         return attr
+ 
+     def init_parallel_state(self, tp_worker: ModelWorker) -> None:
+@@ -2091,9 +2142,11 @@
+         running_bs: int,
+         beam_width: int | None = None,
+         running_batch: ScheduleBatch | None = None,
++        num_held_rows: int = 0,
+     ) -> int:
+         free_request_rows = _Upstream.get_num_allocatable_reqs(
+-            self, running_bs, beam_width=beam_width, running_batch=running_batch
++            self, running_bs, beam_width=beam_width, running_batch=running_batch,
++            num_held_rows=num_held_rows,
+         )
+         bridge = self.session_bridge
+         if (
+@@ -2289,6 +2342,7 @@
+ 
+     def stamp_batch_launch(self, batch) -> None:
+         """Mirror upstream per-forward bookkeeping for custom runner paths."""
++        self.metrics_reporter.record_scheduler_active(time.monotonic_ns())
+         self.forward_ct += 1
+         batch.forward_iter = self.forward_ct
+         batch.launch_ts = time.monotonic()
+@@ -2298,6 +2352,10 @@
+             self.processed_tokens_counter += batch.extend_num_tokens
+         else:
+             pass
++        batch.add_inflight_step()
++        self._join_prefill_launched(batch)
++        self.invariant_checker.maybe_check_request_lists(batch)
++
+ 
+     def _run_batch(self, batch, pp_proxy_tensors=None):
+         """Run a batch through the model runner.
+--- a/sglang_omni/models/qwen3_asr/encoder_service.py
++++ b/sglang_omni/models/qwen3_asr/encoder_service.py
+@@ -26,7 +26,8 @@
+ from typing import TYPE_CHECKING, TypeGuard
+ 
+ import torch
+-from sglang.srt.managers.schedule_batch import MultimodalDataItem, MultimodalInputFormat
++from sglang.srt.managers.schedule_batch import MultimodalDataItem
++from sglang.srt.multimodal.modality import MultimodalInputFormat
+ from sglang.srt.utils import create_device_stream, device_stream_context
+ from transformers import WhisperFeatureExtractor
+ 
+--- a/sglang_omni/models/qwen3_asr/sglang_model.py
++++ b/sglang_omni/models/qwen3_asr/sglang_model.py
+@@ -46,11 +46,13 @@
+     attention: Qwen3Attention,
+     positions: torch.Tensor,
+     hidden_states: torch.Tensor,
++    forward_batch: ForwardBatch,
+ ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+     if hidden_states.dtype != torch.bfloat16 or fused_qk_norm_rope is None:
+         return attention._asr_unfused_forward_prepare_native(  # noqa: leading-underscore  # upstream spelling, or the public name is already taken
+             positions,
+             hidden_states,
++            forward_batch=forward_batch,
+         )
+     else:
+         pass

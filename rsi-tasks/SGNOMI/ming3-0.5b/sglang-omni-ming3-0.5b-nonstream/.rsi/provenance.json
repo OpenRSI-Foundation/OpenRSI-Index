@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "created_at": "2026-10-22T17:40:06.680298+00:00",
+  "reference_repository": "https://github.com/OpenRSI-Foundation/sglang-omni-tts-cosyvoice3-dual-mode-d154",
+  "reference_commit": "50ba16ad3fb5b62e0db436f0da79b5e38e352cbf",
+  "source_repository": "https://github.com/sgl-project/sglang-omni",
+  "source_commit": "ca9e8789fcd84ed6f7272276cb99447eec751787",
+  "source_version": "0.1.9",
+  "source_version_path": "sglang_omni/__init__.py",
+  "repository_name": "sglang-omni-v0.1.9-ca9e8789fcd8-tts-ming3-0.5b-nonstream",
+  "task_folder": "sglang-omni-ming3-0.5b-nonstream",
+  "model": "inclusionAI/Ming-3.0-tts-0.5B",
+  "model_revision": "8d66b70a00f05ad183fa8a863b4ce609fc83cbc0",
+  "history_and_calibration_reused": false,
+  "execution_validation": "not performed",
+  "dependencies": "283 distributions resolved from current upstream requirements; runtime validation pending",
+  "baseline_patch": null,
+  "blockers": [],
+  "agent": {
+    "agent": "codex",
+    "model": "gpt-6-astra",
+    "reasoning_effort": "xhigh",
+    "timeout_seconds": 86400,
+    "submission_limit": null
+  },
+  "resources": {
+    "cluster": "Radix CI",
+    "gpu_family": "Hopper",
+    "gpus_per_task": 1
+  },
+  "task_version": "5.0.0",
+  "protocol_version": 9,
+  "requested_mode": "nonstreaming",
+  "scope_change_authority": "User: 那就直接优化非流式就 ok 了; 你对应 model 可以 adapt 一下"
+}

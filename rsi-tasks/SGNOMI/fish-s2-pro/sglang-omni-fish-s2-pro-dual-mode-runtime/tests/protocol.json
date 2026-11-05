@@ -1,0 +1,98 @@
+{
+  "version": 8,
+  "source": "1523543056bf334bc2f4d69db23aad0a002cedf2",
+  "archive_sha256": "c5a1d842729a0d431b3b139e0d1ccbc40d161c8e77aad3234d82a8c742454357",
+  "rows": 1088,
+  "repetitions": 3,
+  "repetition_seeds": [
+    42,
+    43,
+    44
+  ],
+  "benchmark_engine_overrides": {
+    "max_running_requests": 64,
+    "cuda_graph_max_bs": 64
+  },
+  "tts_warmup": 16,
+  "asr_warmup": 64,
+  "asr_concurrency": 32,
+  "cache_policy": "fresh-empty-per-lane-per-repetition",
+  "lower_metrics": [
+    "wer_corpus",
+    "latency_mean_s",
+    "latency_median_s",
+    "latency_p95_s",
+    "latency_p99_s",
+    "rtf_mean",
+    "rtf_median",
+    "rtf_p95",
+    "rtf_p99"
+  ],
+  "higher_metrics": [
+    "throughput_qps",
+    "audio_throughput_s_per_s"
+  ],
+  "lanes": [
+    {
+      "name": "fish",
+      "model": "fishaudio/s2-pro",
+      "port": 8000,
+      "output": "results/fish_en",
+      "argv": [
+        "-m",
+        "benchmarks.eval.benchmark_tts_seedtts",
+        "--meta",
+        "zhaochenyang20/seed-tts-eval-arrow",
+        "--model",
+        "fishaudio/s2-pro",
+        "--port",
+        "8000",
+        "--output-dir",
+        "results/fish_en",
+        "--lang",
+        "en",
+        "--max-concurrency",
+        "16"
+      ]
+    }
+  ],
+  "evaluation_policy": {
+    "method": "three-run-mean-dual-strict-qps-stream-weighted-v1",
+    "calibration_evaluations": 1,
+    "holdout_evaluations": 1,
+    "aggregation": "arithmetic-mean-of-three-per-run-metrics",
+    "primary_objective": {
+      "models": [
+        "fish",
+        "fish_stream"
+      ],
+      "metric": "throughput_qps",
+      "comparison": ">",
+      "require_all": true
+    },
+    "other_performance_gates_relative_tolerance": 0.03,
+    "wer_absolute_max": 0.02,
+    "baseline_update": "previous-complete-eligible-candidate",
+    "reward": "stream-qps-ratio-to-b0^(2/3)*nonstream-qps-ratio-to-b0^(1/3)",
+    "reward_weights": {
+      "fish": 0.3333333333333333,
+      "fish_stream": 0.6666666666666666
+    }
+  },
+  "streaming": {
+    "concurrency": 16,
+    "warmup": 16,
+    "lower_metrics": [
+      "audio_ttfp_mean_s",
+      "audio_ttfp_median_s",
+      "audio_ttfp_p95_s",
+      "audio_ttfp_p99_s"
+    ],
+    "higher_metrics": [
+      "c50"
+    ],
+    "reference": "https://github.com/sgl-project/sglang-omni/pull/2555",
+    "continuity_threshold_ms": 50
+  },
+  "evaluation_timeout_seconds": 14400
+}

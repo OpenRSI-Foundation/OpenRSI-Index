@@ -1,0 +1,7 @@
+# Constraints intersect published requirements; they never override them.
+# smg-grpc-servicer 0.13.6 requires gRPC >=1.81.1. These generated modules
+# require protobuf >=6.33.5,<7, compatible with the fixed protobuf 6 runtime.
+grpcio==1.81.1
+grpcio-health-checking==1.81.1
+grpcio-reflection==1.81.1
+protobuf>=6.33.5,<7.0.0

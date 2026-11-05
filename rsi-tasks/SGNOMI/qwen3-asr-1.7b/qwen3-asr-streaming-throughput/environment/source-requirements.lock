@@ -1,0 +1,6 @@
+openai-whisper==20250625 --hash=sha256:37a91a3921809d9f44748ffc73c0a55c9f366c85a3ef5c2ae0cc09540432eb96
+logger==1.4 --hash=sha256:4ecac57133c6376fa215f0fe6b4dc4d60e4d1ad8be005cab4e8a702df682f8b3
+s3prl==0.4.18 --hash=sha256:b59dcb12c434edc969b0b0290d4059c3a5c661adecc31db81ed9c510cd7f405e
+cdifflib==1.2.9 --hash=sha256:6286da08f72b7ddb5b40145dcb8f214ad913a86d72b1f62cc8d6cf7a92029590
+wget==3.2 --hash=sha256:35e630eca2aa50ce998b9b1a127bb26b30dfee573702782aa982f875e3f16061
+cuda-tile @ https://pypi.nvidia.com/cuda-tile/cuda_tile-1.6.0rc5-cp312-cp312-manylinux2014_x86_64.whl --hash=sha256:b74c20348210d2182cd998a0ecb60c518989a79b28592d72eb8294b38ddb93d7

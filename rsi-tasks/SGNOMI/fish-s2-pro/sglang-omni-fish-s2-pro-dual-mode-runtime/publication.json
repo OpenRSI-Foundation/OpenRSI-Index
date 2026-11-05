@@ -1,0 +1,307 @@
+{
+  "model": "Fish S2-Pro",
+  "source_repository": "OpenRSI-Foundation/sglang-omni-tts-fish-s2-pro-dual-mode-d154",
+  "source_commit": "c01a4d4ab53004ac94623f0923cd60cb27d38958",
+  "original_task_slug": "sglang-omni-fish-s2-pro-dual-mode-runtime",
+  "public_path": "rsi-tasks/SGNOMI/fish-s2-pro/sglang-omni-fish-s2-pro-dual-mode-runtime",
+  "publication_changes": [
+    "Added publication.json with source identity and per-file hashes.",
+    "Appended public-copy provenance and fresh-validation note to README.md.",
+    "Included task-referenced provenance and optional research guidance from the same source revision."
+  ],
+  "original_files": {
+    "README.md": {
+      "git_blob": "502b732f5d00f63da6dcc437910ff140ab4f3bde",
+      "sha256": "07d87d3b3df511cbe49ac6acb3bbd891ef0aba0051b80787a73fc057f88f3de9",
+      "bytes": 11914,
+      "mode": "100644"
+    },
+    "environment/Dockerfile": {
+      "git_blob": "29ba38bbf4354908d1becf7545f52f1c5b9df5b2",
+      "sha256": "6ef7943eea8efcdb8fac055c0ac51231773c6a2c48e05911f0682b0f6f90cb6a",
+      "bytes": 3041,
+      "mode": "100644"
+    },
+    "environment/assets.json": {
+      "git_blob": "15643ec92b97940b2f90c40957dd3afb43e5b72d",
+      "sha256": "b67e6d3029f632c7659358c28943746c403d7b4a7aa24a18307eb7bc2f543c01",
+      "bytes": 5900,
+      "mode": "100644"
+    },
+    "environment/docker-compose.yaml": {
+      "git_blob": "ff6a9363fd2ab84f994533dab8ea3497b2a3f55c",
+      "sha256": "5220096c03c448049ef1c3869261287ba87f6ef9ce5f1f4d9699f1872090ea6d",
+      "bytes": 77,
+      "mode": "100644"
+    },
+    "environment/fish-codec-artifacts.json": {
+      "git_blob": "1b32420807670c511ee8ff133aa767938343cd8c",
+      "sha256": "0db334635722987e9b7e4f8e8abf4aa5a7b82775dbc2201d951577756681be03",
+      "bytes": 6584,
+      "mode": "100644"
+    },
+    "environment/fish-codec-requirements.lock": {
+      "git_blob": "082a006e568a651575548881c20b3588aa7d70d2",
+      "sha256": "97fcc3a11a3f38e79c516f731024d5d5819d7ca56f689dbca0a8bd47952fe015",
+      "bytes": 1810,
+      "mode": "100644"
+    },
+    "environment/prepare.py": {
+      "git_blob": "edb162cf521334d75d6fc8df08c603a79b1c02fb",
+      "sha256": "f452160418d5a739cf043421d1e8fd91bfd84a1e0ff9f123e508e35642fbcadf",
+      "bytes": 4352,
+      "mode": "100644"
+    },
+    "environment/python-artifacts.json": {
+      "git_blob": "18de11c9525489f06d5da79e070fa8aacc96f721",
+      "sha256": "a9e91b5e3bf5053133b26ed61ba99837f6330e536a20302eaaa9be0e426e3cb9",
+      "bytes": 2691341,
+      "mode": "100644"
+    },
+    "environment/requirements.lock": {
+      "git_blob": "dd54527780b862b65bd507f2a53fe03982893371",
+      "sha256": "e3f91c1f5cd6b4d1fee1ef649976a6e0b17ced749505df65a0a3ec83a3ee8673",
+      "bytes": 470872,
+      "mode": "100644"
+    },
+    "environment/source-deps.json": {
+      "git_blob": "679282267d84c6d890750865882cd9199c5ffa4b",
+      "sha256": "d9007cb32e34187ea7993ece569ae967dea442d763823cc958564db1e8e23df7",
+      "bytes": 42311,
+      "mode": "100644"
+    },
+    "environment/source-manifest.json": {
+      "git_blob": "250f5434cceb24dd428da3d424a3185af6fd2a21",
+      "sha256": "9dbfaad6cd8d8306de660a3ad146eaeb1357c572dde6e668ad27b3f426a69375",
+      "bytes": 298921,
+      "mode": "100644"
+    },
+    "environment/source.tar.gz": {
+      "git_blob": "f8042b32dad59ad8f5787de86cb13e16af4f5c76",
+      "sha256": "c5a1d842729a0d431b3b139e0d1ccbc40d161c8e77aad3234d82a8c742454357",
+      "bytes": 21358467,
+      "mode": "100644"
+    },
+    "generation/check_static.py": {
+      "git_blob": "53e9331937fd934da6d936aa25959dfb05103e9b",
+      "sha256": "8bbbafa7dab3a041b45f26e7dcf7150005523dd602b99dd9ec0c7327a7a6f3b5",
+      "bytes": 4895,
+      "mode": "100644"
+    },
+    "generation/resolve_metadata.py": {
+      "git_blob": "d97b2a29c3152aa00880f5fd2d9f594e4e734421",
+      "sha256": "83d7e5e2f4d1033d0f5c20f2b7c54a399a5ba0bd3e4f6ed4eb78cd0fe77fb20b",
+      "bytes": 5604,
+      "mode": "100644"
+    },
+    "generation/test_dual_mode.py": {
+      "git_blob": "c81c959cf8c0df09a9518c40f151922957b92bdf",
+      "sha256": "81d22ccb66643023ae9e92635f3ecbb86679f88667bd7189adec5e08e32efab9",
+      "bytes": 4878,
+      "mode": "100644"
+    },
+    "generation/test_model_lane.py": {
+      "git_blob": "831e39dd0667ba0a95182871a11eb2629402c88a",
+      "sha256": "92e6c72c48e89372977ec0fcdd0ff636d933e83036de140285c3d3cb8bd902b4",
+      "bytes": 10451,
+      "mode": "100644"
+    },
+    "generation/test_protocol.py": {
+      "git_blob": "b01e6e17761b17ad54dedfd0ec40e1cd6e338c11",
+      "sha256": "314690995f141ae926de3bc1e50d8354d43728c383253c47d7b18f56dd100f54",
+      "bytes": 10638,
+      "mode": "100644"
+    },
+    "generation/test_streaming.py": {
+      "git_blob": "0753636bc758df25b907f25ede43f3d15cb8ef4d",
+      "sha256": "98db2f467095427f473bbd00efc4c4d3c73c7501ccfbd816809debe889855bf6",
+      "bytes": 8255,
+      "mode": "100644"
+    },
+    "instruction.md": {
+      "git_blob": "502b732f5d00f63da6dcc437910ff140ab4f3bde",
+      "sha256": "07d87d3b3df511cbe49ac6acb3bbd891ef0aba0051b80787a73fc057f88f3de9",
+      "bytes": 11914,
+      "mode": "100644"
+    },
+    "solution/solve.sh": {
+      "git_blob": "18fe09100d77cb9b9db482e4eca87b5167e1b24e",
+      "sha256": "8e6c5184d10b648325d5f4a7a85e68bd0d7703efc233041d2cb90d347c8ea0d5",
+      "bytes": 265,
+      "mode": "100755"
+    },
+    "task.toml": {
+      "git_blob": "f8dcf106955e3f7f824a8e26d1f9a1e25040300f",
+      "sha256": "8999a122407de61862cec798ae0462576b08987480694e7d1f10b079a12342cf",
+      "bytes": 1570,
+      "mode": "100644"
+    },
+    "tests/assets.json": {
+      "git_blob": "15643ec92b97940b2f90c40957dd3afb43e5b72d",
+      "sha256": "b67e6d3029f632c7659358c28943746c403d7b4a7aa24a18307eb7bc2f543c01",
+      "bytes": 5900,
+      "mode": "100644"
+    },
+    "tests/bootstrap/sitecustomize.py": {
+      "git_blob": "e510f2ef83072f02a04452b1a704aaefc8561bef",
+      "sha256": "da554ee18fbd17b69715cec4a046b9b539ceccc2cb74d2271335bdf8258a81f9",
+      "bytes": 1138,
+      "mode": "100644"
+    },
+    "tests/calibrate.py": {
+      "git_blob": "c505a534e84b3b16cf40948d94c33757f2564378",
+      "sha256": "f15da60795aa5e9e2ea2a61dedc4579b5d9fa619b320b288611d03b53486a805",
+      "bytes": 188,
+      "mode": "100644"
+    },
+    "tests/calibration.schema.json": {
+      "git_blob": "edf0796ac019ffdd35a5aa334f5d95aacbc78557",
+      "sha256": "6ba2ab947d94da41e7c0cb14b89f4e73a81db9823811214342acc26cf26ed8e7",
+      "bytes": 20453,
+      "mode": "100644"
+    },
+    "tests/common.py": {
+      "git_blob": "65c1f279886ad21ec01f402d65525c601653f18f",
+      "sha256": "10c9d5e3903c7f196af781b68b4c0bba37c7439bd69c0286a5361cf358269493",
+      "bytes": 15882,
+      "mode": "100644"
+    },
+    "tests/device_probe.py": {
+      "git_blob": "4639aef48d4ffabc3204e344d54a3bd987abbc14",
+      "sha256": "f0c1b9ce74d93ae415c5365b975cfcfa239822e0b0a745d20396bd584c5a8556",
+      "bytes": 770,
+      "mode": "100644"
+    },
+    "tests/engine.py": {
+      "git_blob": "b74077df1af4f4f60e469a6c21706d9c8c90de0a",
+      "sha256": "f7200a3d8023e87ed9280ba0fad2598fb1f53815b28a34d5ae312a7cbfc2ffe0",
+      "bytes": 12614,
+      "mode": "100644"
+    },
+    "tests/evaluate.py": {
+      "git_blob": "6333eb2e6fae5073835651ff2e540952e9610170",
+      "sha256": "526e4c797e8d17e7995b4b6f0c595966ed9972fb94939cd9fff0468a5abced2b",
+      "bytes": 104,
+      "mode": "100644"
+    },
+    "tests/lane.py": {
+      "git_blob": "f7e6b93caf7ce45234006b07e0d8fec7f8fb9a0c",
+      "sha256": "7a4ebcb0506af81f118bcbbeae7c0ed1d0358b2bc0b67106d830feeea56f317f",
+      "bytes": 25584,
+      "mode": "100644"
+    },
+    "tests/noise.py": {
+      "git_blob": "869bb04fcd1788990b750ecf4fc2d281578aa259",
+      "sha256": "433edf93493276356e8ef32de2371d00f9bc39d19bddde6c9bac167bf9b0e38f",
+      "bytes": 14048,
+      "mode": "100644"
+    },
+    "tests/pool_calibrations.py": {
+      "git_blob": "28f49359dacf0da95fc14cac248d6e37f71e097a",
+      "sha256": "ddd8ec400d6e80d3c2c49ae4493fac8e298a69a3ecd87f8f9ea1de16dc0a895b",
+      "bytes": 415,
+      "mode": "100644"
+    },
+    "tests/preflight.py": {
+      "git_blob": "e0648bdf1a9ed98c8c77c14c95a2c1f5bced5826",
+      "sha256": "b173a403c8f31031719ce65a947d795db098e46a4c861aee0dc3605f9ed3da2e",
+      "bytes": 3069,
+      "mode": "100644"
+    },
+    "tests/protocol.json": {
+      "git_blob": "036fc80b0026b37884797175cc1297a2bdc51c88",
+      "sha256": "de225aa7b5a70f3ec8867debdb296612b83b17161dbe7531bea9838af2a17b9e",
+      "bytes": 2374,
+      "mode": "100644"
+    },
+    "tests/python-artifacts.json": {
+      "git_blob": "18de11c9525489f06d5da79e070fa8aacc96f721",
+      "sha256": "a9e91b5e3bf5053133b26ed61ba99837f6330e536a20302eaaa9be0e426e3cb9",
+      "bytes": 2691341,
+      "mode": "100644"
+    },
+    "tests/requirements.lock": {
+      "git_blob": "dd54527780b862b65bd507f2a53fe03982893371",
+      "sha256": "e3f91c1f5cd6b4d1fee1ef649976a6e0b17ced749505df65a0a3ec83a3ee8673",
+      "bytes": 470872,
+      "mode": "100644"
+    },
+    "tests/source-deps.json": {
+      "git_blob": "679282267d84c6d890750865882cd9199c5ffa4b",
+      "sha256": "d9007cb32e34187ea7993ece569ae967dea442d763823cc958564db1e8e23df7",
+      "bytes": 42311,
+      "mode": "100644"
+    },
+    "tests/source-manifest.json": {
+      "git_blob": "250f5434cceb24dd428da3d424a3185af6fd2a21",
+      "sha256": "9dbfaad6cd8d8306de660a3ad146eaeb1357c572dde6e668ad27b3f426a69375",
+      "bytes": 298921,
+      "mode": "100644"
+    },
+    "tests/source.tar.gz": {
+      "git_blob": "f8042b32dad59ad8f5787de86cb13e16af4f5c76",
+      "sha256": "c5a1d842729a0d431b3b139e0d1ccbc40d161c8e77aad3234d82a8c742454357",
+      "bytes": 21358467,
+      "mode": "100644"
+    },
+    "tests/test.sh": {
+      "git_blob": "d54233abb62480b9d1886fa7625f186bd9aa8b35",
+      "sha256": "658c76b5b8237ad6b455efdcf90e4d3f2d2402811b5a6019007d9241b98cf38f",
+      "bytes": 95,
+      "mode": "100755"
+    }
+  },
+  "gpu_execution_for_publication": "not performed",
+  "supporting_files": [
+    {
+      "source_path": ".rsi/provenance.json",
+      "public_path": ".rsi/provenance.json",
+      "git_blob": "da219bb6d47075917c3082944f391e6c69e29d08",
+      "sha256": "ed9daa07eb5f31b1e03346a3d7e1a62d14db9dfffa867848a4f8b6797e1080ee"
+    }
+  ],
+  "unchanged_files": [
+    "environment/Dockerfile",
+    "environment/assets.json",
+    "environment/docker-compose.yaml",
+    "environment/fish-codec-artifacts.json",
+    "environment/fish-codec-requirements.lock",
+    "environment/prepare.py",
+    "environment/python-artifacts.json",
+    "environment/requirements.lock",
+    "environment/source-deps.json",
+    "environment/source-manifest.json",
+    "environment/source.tar.gz",
+    "generation/check_static.py",
+    "generation/resolve_metadata.py",
+    "generation/test_dual_mode.py",
+    "generation/test_model_lane.py",
+    "generation/test_protocol.py",
+    "generation/test_streaming.py",
+    "instruction.md",
+    "solution/solve.sh",
+    "task.toml",
+    "tests/assets.json",
+    "tests/bootstrap/sitecustomize.py",
+    "tests/calibrate.py",
+    "tests/calibration.schema.json",
+    "tests/common.py",
+    "tests/device_probe.py",
+    "tests/engine.py",
+    "tests/evaluate.py",
+    "tests/lane.py",
+    "tests/noise.py",
+    "tests/pool_calibrations.py",
+    "tests/preflight.py",
+    "tests/protocol.json",
+    "tests/python-artifacts.json",
+    "tests/requirements.lock",
+    "tests/source-deps.json",
+    "tests/source-manifest.json",
+    "tests/source.tar.gz",
+    "tests/test.sh"
+  ],
+  "modified_files": [
+    "README.md"
+  ]
+}
