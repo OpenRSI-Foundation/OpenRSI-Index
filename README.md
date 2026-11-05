@@ -45,6 +45,8 @@ We are witnessing the dawn of a new era: AI is entering a recursive self-improve
 
 We are actively developing this project and welcome [contributions](https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md) from the community. Tasks and execution logs are available in [rsi-tasks/](rsi-tasks/) and [OpenRSI-Index-Logs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs), respectively. Open the [RSI Logs Viewer](https://index.openrsi.foundation/logs/) to explore results visually. See [Quick Start](assets/docs/quick-start.md) for instructions on running these tasks.
 
+The [SGLang-Omni task repository index](rsi-tasks/sglang-omni.md) lists one entry per model with the final streaming and non-streaming task packages and related upstream pull requests.
+
 <details>
 <summary><strong>View tasks</strong></summary>
 
