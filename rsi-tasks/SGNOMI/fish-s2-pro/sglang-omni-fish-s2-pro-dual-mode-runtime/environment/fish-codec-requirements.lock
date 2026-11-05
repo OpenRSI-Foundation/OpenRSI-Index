@@ -1,0 +1,19 @@
+# Fish codec dependencies; original installed distributions remain pinned.
+# Preserve protobuf 6.33.5, matching SGLang-Omni's upstream protobuf override.
+argbind==0.3.9 --hash=sha256:1b159c04af56858a91d59c7a47bc9ea39d96adfce1d7fcfa38050d7ac9815745
+descript-audio-codec==1.0.0 --hash=sha256:7ecd1883040613d143494f27f199c11c7053a8a7f9fd2120568c5a98db926e61
+descript-audiotools==0.7.2 --hash=sha256:bb7a4e837f92395e43894d99a89406485325b88c6f158caf59e18876cf5b06ea
+ffmpy==1.0.0 --hash=sha256:5640e5f0fd03fb6236d0e119b16ccf6522db1c826fdf35dcb87087b60fd7504f
+fire==0.7.1 --hash=sha256:e43fd8a5033a9001e7e2973bab96070694b9f12f2e0ecf96d4683971b5ab1882
+flatten-dict==0.5.0 --hash=sha256:c4bd2010052e4d33241433720d054322403fa7ad914fdc5cb1b31a713d4c561e
+julius==0.2.8 --hash=sha256:6891235cbc355e629d839f87489bff8ca46e57a0e7cc35abb909c7a2aa538c25
+markdown==3.11 --hash=sha256:cd6c89e7eb308c8b332ed673215a52d208a43f8bacc030b1419376129408719e
+markdown2==2.5.5 --hash=sha256:be798587e09d1f52d2e4d96a649c4b82a778c75f9929aad52a2c95747fa26941
+pyloudnorm==0.2.0 --hash=sha256:9bb69afb904f59d007a7f9ba3d75d16fb8aeef35c44d6df822a9f192d69cf13f
+pystoi==0.4.1 --hash=sha256:e277b671663d26d35a2416c9c8010a74084e6c3970354506398051a554896939
+randomname==0.2.1 --hash=sha256:b79b98302ba4479164b0a4f87995b7bebbd1d91012aeda483341e3e58ace520e
+tensorboard==2.21.0 --hash=sha256:7279316dcb6bd5bc391d623dea841531299cde1887310e8133bc34a996d32255
+tensorboard-data-server==0.7.2 --hash=sha256:ef687163c24185ae9754ed5650eb5bc4d84ff257aabdc33f0cc6f74d8ba54530
+termcolor==3.3.0 --hash=sha256:cf642efadaf0a8ebbbf4bc7a31cec2f9b5f21a9f726f4ccbb08192c9c26f43a5
+torch-stoi==0.2.3 --hash=sha256:6eee85e33b42fe843a2150de46000f72e7b87cbeb19ae6ab9bbd94b6ec6b3cd2
+werkzeug==3.1.9 --hash=sha256:6392e50c78460ba618e5b21f08a71f59c99ce99cdc6cf6e3dd7e6ccca8754fab

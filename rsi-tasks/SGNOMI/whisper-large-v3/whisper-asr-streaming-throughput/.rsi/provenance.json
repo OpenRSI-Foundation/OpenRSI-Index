@@ -1,0 +1,31 @@
+{
+  "schema": 1,
+  "kind": "authorized_model_derivation",
+  "parent_repository": "https://github.com/OpenRSI-Foundation/qwen3-asr-streaming-throughput-d257",
+  "parent_commit": "69d933bd2884b094b098d8e1514648822e9d6492",
+  "parent_provenance": {
+    "compiler_validation": "PASS",
+    "confirmation_sha256": "952b716b5cd42424617f488321d8c36d48eb0552ef24315f89b67da3a49a8d34",
+    "correction_count": 1,
+    "final_status": "PASS",
+    "initial_review_decision": "CHANGES_REQUIRED",
+    "proposal_sha256": "6cb2f769735feb42a9f6acde820308891021fc19d84f34afbce978b709363cb8",
+    "public_commit": "b753b9ab6c7e2f5c3e24169463bb25338b726355",
+    "rereview_decision": "PASS",
+    "schema": 1,
+    "skills_commit": "ca6d3f65d7cb20f741a5ec6f551833d9216e7100",
+    "source": {
+      "discussion_node_id": "D_kwDOT4zfac4AqDBG",
+      "discussion_number": 257,
+      "discussion_url": "https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/257"
+    },
+    "static_validation": "PASS",
+    "task_tree_sha256": "f9a2c7140f400de1f0355f3df0e236d6e763d887008a70abf4a4dbbc95ff35c3",
+    "validation_attestation_sha256": "69004ccf39bfe64aa4395e1f169a967d9491d22ea85eedcf05cd0d9065179070"
+  },
+  "model": "openai/whisper-large-v3",
+  "revision": "06f233fe06e710322aca913c1bc4249a0d71fce1",
+  "quality_rule": "Each language/mode candidate mean error <= 1.03 * its initial measured B0 mean error; not rolling.",
+  "gpu_validation": "not_run",
+  "baseline_measurements": "not_yet_calibrated"
+}

@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "created_date": "2026-10-19",
+  "source_repository": "https://github.com/OpenRSI-Foundation/sglang-omni-tts-fish-s2-pro-d154",
+  "source_commit": "5445076e500135a17b3a3782b4e9a102cd19eced",
+  "source_task": "sglang-omni-fish-s2-pro-runtime",
+  "task_folder": "sglang-omni-fish-s2-pro-dual-mode-runtime",
+  "task_version": "4.0.0",
+  "protocol_version": 8,
+  "baseline_source": "1523543056bf334bc2f4d69db23aad0a002cedf2",
+  "asr_objective_reference": "https://github.com/OpenRSI-Foundation/sglang-omni-asr-qwen3-asr-1.7b-d257/blob/a75f65d1009e215a52d405ddd5de3e33f5c5a7d6/qwen3-asr-streaming-throughput/instruction.md",
+  "new_repository": true,
+  "history_and_calibration_reused": false,
+  "execution_validation": "not performed",
+  "changes": [
+    "Both mode QPS means strictly improve against Bk",
+    "Streaming/nonstreaming weighted geometric reward: 2/3 and 1/3",
+    "Fresh matching B0 and A/A required"
+  ]
+}

@@ -1,0 +1,199 @@
+[
+  {
+    "repo": "fishaudio/s2-pro",
+    "kind": "model",
+    "revision": "1de9996b6be38b745688de084d87a5633f714e4e",
+    "files": [
+      {
+        "path": ".gitattributes",
+        "size": 1619,
+        "sha256": null,
+        "git_blob": "d5f62335ceb0f6d3dd5b48d7cbc97c7ba24d43d7"
+      },
+      {
+        "path": "LICENSE.md",
+        "size": 10360,
+        "sha256": null,
+        "git_blob": "b469a1a983b3f961e839881fc0ea5c4eb82ec4be"
+      },
+      {
+        "path": "README.md",
+        "size": 5117,
+        "sha256": null,
+        "git_blob": "afb5f3a5d842294faf1f65dd0f93b38b65ad64cb"
+      },
+      {
+        "path": "chat_template.jinja",
+        "size": 4116,
+        "sha256": null,
+        "git_blob": "699ff8df401fe4788525e9c1f9b86a99eadd6230"
+      },
+      {
+        "path": "codec.pth",
+        "size": 1871099728,
+        "sha256": "74fc41c5a7151c6f350af8bd7e5d6e3accfcc7f3dfbfac23afd35af07052bb2f",
+        "git_blob": "720d65abd6e6d80a6e4e2b87f8248450615107af"
+      },
+      {
+        "path": "config.json",
+        "size": 1863,
+        "sha256": null,
+        "git_blob": "5214fbf56c44b20d00b1d5654d68b3b1f9ec9ea5"
+      },
+      {
+        "path": "model-00001-of-00002.safetensors",
+        "size": 4986872984,
+        "sha256": "c4218e8ac93be83b35eee30b4f94cb2e9b5ecff40f3e21611438d2f4f8804aad",
+        "git_blob": "46ab49915baaf04bbee9a5fcc09dea584c9104df"
+      },
+      {
+        "path": "model-00002-of-00002.safetensors",
+        "size": 4136876104,
+        "sha256": "76738d23465deaac431433232c0762908cc99a6eddc3d49f67307d92680827be",
+        "git_blob": "fe83f1daea317b409b48cad31a9c34fc962f6f10"
+      },
+      {
+        "path": "model.safetensors.index.json",
+        "size": 32686,
+        "sha256": null,
+        "git_blob": "4a355d7d68ae0885db2c3ed3e2d9846420eef9a1"
+      },
+      {
+        "path": "overview.png",
+        "size": 3544504,
+        "sha256": "f77da18e7d3cf59182fb714fc6c1bc526e7877b538e6380d8f002e84e8c56ea9",
+        "git_blob": "3017fe99245536cc94bdcebe1ff5fae807ba7d3a"
+      },
+      {
+        "path": "special_tokens_map.json",
+        "size": 101864,
+        "sha256": null,
+        "git_blob": "7989e2cfbbfec23cfe75e17cb5494c2354a1769e"
+      },
+      {
+        "path": "tokenizer.json",
+        "size": 12217872,
+        "sha256": "f24e08099d45a8adf3f52f5f0b03276e433bb9d689bb15fcbcc48ce58744588b",
+        "git_blob": "afa762738efa064eb11720c934271b739b02cf97"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "size": 860832,
+        "sha256": null,
+        "git_blob": "47a7c4ee0e88f50904020eec33f723cec6933c61"
+      }
+    ]
+  },
+  {
+    "kind": "model",
+    "repo": "Qwen/Qwen3-ASR-1.7B",
+    "revision": "7278e1e70fe206f11671096ffdd38061171dd6e5",
+    "files": [
+      {
+        "path": ".gitattributes",
+        "size": 1519,
+        "sha256": null,
+        "git_blob": "a6344aac8c09253b3b630fb776ae94478aa0275b"
+      },
+      {
+        "path": "README.md",
+        "size": 57456,
+        "sha256": null,
+        "git_blob": "3a67d43f21febda213ff36efdb60ef10019af7f3"
+      },
+      {
+        "path": "chat_template.json",
+        "size": 1161,
+        "sha256": null,
+        "git_blob": "c44736493efd71ec96218cc626904698cdb13235"
+      },
+      {
+        "path": "config.json",
+        "size": 6194,
+        "sha256": null,
+        "git_blob": "2bc16c9d4ca08963715cfb94d879799b9adbd0e9"
+      },
+      {
+        "path": "generation_config.json",
+        "size": 142,
+        "sha256": null,
+        "git_blob": "7382a4d347c0a865b76bb1b8277f66a5ac312854"
+      },
+      {
+        "path": "merges.txt",
+        "size": 1671853,
+        "sha256": null,
+        "git_blob": "31349551d90c7606f325fe0f11bbb8bd5fa0d7c7"
+      },
+      {
+        "path": "model-00001-of-00002.safetensors",
+        "size": 4220320824,
+        "sha256": "a4cd1f1a04d90b757dc7f7dd26254e69a013b19e80efe590a83c6a3bde8608d6",
+        "git_blob": "1522f6592ff361cdc8b95692bbd8c513d68fc40a"
+      },
+      {
+        "path": "model-00002-of-00002.safetensors",
+        "size": 478200688,
+        "sha256": "6e0b9d9e09e2e0238e7ef3cc8a484ab387e91b90f1900bedf88bc92d7929ccfc",
+        "git_blob": "5a13bd2988d1368745384b4acb6e8bab73f98a75"
+      },
+      {
+        "path": "model.safetensors.index.json",
+        "size": 64821,
+        "sha256": null,
+        "git_blob": "1048a4eb4f21fef9aea06d8568a784b2b5595689"
+      },
+      {
+        "path": "preprocessor_config.json",
+        "size": 330,
+        "sha256": null,
+        "git_blob": "8f7f07346466d5d494ec0d4969d1c3d0190eed72"
+      },
+      {
+        "path": "tokenizer_config.json",
+        "size": 12487,
+        "sha256": null,
+        "git_blob": "b93109843922a40c6654c5449d3bf95372267c66"
+      },
+      {
+        "path": "vocab.json",
+        "size": 2776833,
+        "sha256": null,
+        "git_blob": "4783fe10ac3adce15ac8f358ef5462739852c569"
+      }
+    ],
+    "license": "apache-2.0"
+  },
+  {
+    "kind": "dataset",
+    "repo": "zhaochenyang20/seed-tts-eval-arrow",
+    "revision": "27f4c1adee83b5b29b7c4b375f6b976324bda308",
+    "files": [
+      {
+        "path": ".gitattributes",
+        "size": 2504,
+        "sha256": null,
+        "git_blob": "bed0738c7eeb449bca98b5d2f33c89a1ee56349a"
+      },
+      {
+        "path": "README.md",
+        "size": 528,
+        "sha256": null,
+        "git_blob": "8ff6e425d85115994712beafe41858617e90ed14"
+      },
+      {
+        "path": "data/en-00000-of-00001.parquet",
+        "size": 247555423,
+        "sha256": "5849b41b49cae996328c06d2c5791717c3bafc369bddfa1ec4f86761bb8bc0ca",
+        "git_blob": "b7d78eba97d48f59912defe1f7e79f3022368e73"
+      },
+      {
+        "path": "data/zh-00000-of-00001.parquet",
+        "size": 454302299,
+        "sha256": "5d73be79cf2e84fd0bebf5d47212438a88dd264a591031d092164ba84545f1de",
+        "git_blob": "424a557d2b773ad4d12fd579c4f03b501f4a5672"
+      }
+    ],
+    "license": null
+  }
+]

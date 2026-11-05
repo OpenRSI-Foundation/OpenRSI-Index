@@ -1,0 +1,13 @@
+{
+  "schema": 1,
+  "created_date": "2026-10-21",
+  "parent_repository": "https://github.com/OpenRSI-Foundation/sglang-omni-tts-cosyvoice3-dual-mode-d154",
+  "parent_commit": "50ba16ad3fb5b62e0db436f0da79b5e38e352cbf",
+  "baseline_source": "fa90213e1674e99ef15e6c3ba6fa9bb15255414a",
+  "article_url": "https://github.com/zhaochenyang20/Awesome-ML-SYS-Tutorial/blob/d1f309b46f81a23e8b6ca0718c05bc897fafacf7/sglang/sglang-omni/cosyvoice.md",
+  "article_code_revision": "0ee0304a5",
+  "contributor_report_path": "research-guidance/cosyvoice-optimization-report.md",
+  "contributor_report_sha256": "4c714123bf2a0e6364e1e6141be3985ca5813f849566abb8d73a1b84d0e6cd5a",
+  "guidance_directions": 20,
+  "change_scope": "research question and optional guidance only; no experiment or calibration performed"
+}

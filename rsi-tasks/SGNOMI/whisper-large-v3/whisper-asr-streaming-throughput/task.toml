@@ -1,0 +1,39 @@
+schema_version = "1.4"
+[task]
+name = "rsi/whisper-asr-streaming-throughput"
+version = "1.0.0"
+description = "Improve fixed-weight Whisper ASR throughput in both post-upload SSE and non-streaming modes."
+[metadata]
+author_name = "Zhuofeng Li"
+author_email = "zhuofengli12345@gmail.com"
+difficulty_explanation = "Encoder batching, admission, overlap and decoding trade throughput against tail and first-text latency."
+verification_explanation = "Full bilingual HTTP evaluation with three fresh-service repeats, independent timing and corpus error, and host-owned comparison state."
+category = "ML"
+subcategory = "Inference"
+tags = ["autoresearch", "asr", "whisper", "streaming", "throughput"]
+expert_time_estimate_hours = 48
+relevant_experience = "Agentic system optimization and asynchronous rollout execution; coauthors Chenyang Zhao and db-oi."
+[metadata.rsi_harness.verifier]
+gpus = 1
+[environment]
+os = "linux"
+cpus = 16
+memory_mb = 131072
+storage_mb = 204800
+build_timeout_sec = 14400
+workdir = "/workspace"
+gpus = 1
+network_mode = "no-network"
+[environment.env]
+HF_HUB_OFFLINE = "1"
+TRANSFORMERS_OFFLINE = "1"
+HF_DATASETS_OFFLINE = "1"
+PYTHONDONTWRITEBYTECODE = "1"
+TOKENIZERS_PARALLELISM = "false"
+[agent]
+timeout_sec = 86400
+network_mode = "no-network"
+[verifier]
+timeout_sec = 10800
+network_mode = "no-network"
+environment_mode = "shared"

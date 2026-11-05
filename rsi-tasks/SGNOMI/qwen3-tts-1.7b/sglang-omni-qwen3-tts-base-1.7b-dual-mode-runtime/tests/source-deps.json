@@ -1,0 +1,1376 @@
+[
+  {
+    "name": "cosyvoice",
+    "repo": "FunAudioLLM/CosyVoice",
+    "revision": "074ca6dc9e80a2f424f1f74b48bdd7d3fea531cc",
+    "files": [
+      {
+        "path": ".github/ISSUE_TEMPLATE/bug_report.md",
+        "mode": "100644",
+        "sha": "dd84ea7824f11be1eeda22377549cbc1aec7f980"
+      },
+      {
+        "path": ".github/ISSUE_TEMPLATE/feature_request.md",
+        "mode": "100644",
+        "sha": "bbcbbe7d61558adde3cbfd0c7a63a67c27ed6d30"
+      },
+      {
+        "path": ".github/workflows/lint.yml",
+        "mode": "100644",
+        "sha": "4002222c8c52fa0474a367bfffde1499857027d1"
+      },
+      {
+        "path": ".github/workflows/stale-issues.yml",
+        "mode": "100644",
+        "sha": "d5cd3cf15cc2ff804b00dc91af6465df28705e95"
+      },
+      {
+        "path": ".gitignore",
+        "mode": "100644",
+        "sha": "4a9f23f8f2e48de8d4309382ad28f43e006786bd"
+      },
+      {
+        "path": ".gitmodules",
+        "mode": "100644",
+        "sha": "3d1b157d53a4d636737eefb44d513fa9ec0515d5"
+      },
+      {
+        "path": "CODE_OF_CONDUCT.md",
+        "mode": "100644",
+        "sha": "66c2a4cafb77b81f9d8f7e65a485b841a6a347a9"
+      },
+      {
+        "path": "FAQ.md",
+        "mode": "100644",
+        "sha": "53df058b3e66f6070cfd49704c8e91759ddd5047"
+      },
+      {
+        "path": "LICENSE",
+        "mode": "100644",
+        "sha": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64"
+      },
+      {
+        "path": "README.md",
+        "mode": "100644",
+        "sha": "ef8829e0e981678cd95cb1d4c88465ae97804b88"
+      },
+      {
+        "path": "asset/cross_lingual_prompt.wav",
+        "mode": "100644",
+        "sha": "35d6d4eed08b24ca379fea873c4925bdb0b58d1e"
+      },
+      {
+        "path": "asset/dingding.png",
+        "mode": "100644",
+        "sha": "b7a955e32779a8693ac313963c4779544da2ca5d"
+      },
+      {
+        "path": "asset/zero_shot_prompt.wav",
+        "mode": "100644",
+        "sha": "a7b9d954289ddf5c90a4dc4f0a912edaea10945a"
+      },
+      {
+        "path": "cosyvoice/__init__.py",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "cosyvoice/bin/average_model.py",
+        "mode": "100644",
+        "sha": "b7140c12ef4c0868019b62f2ebe32df99687f66e"
+      },
+      {
+        "path": "cosyvoice/bin/export_jit.py",
+        "mode": "100644",
+        "sha": "3ecfd05f76f593d054c2432103479cc017e40b2b"
+      },
+      {
+        "path": "cosyvoice/bin/export_onnx.py",
+        "mode": "100644",
+        "sha": "58e7708a487578d91efaab60272671084aba49ac"
+      },
+      {
+        "path": "cosyvoice/bin/train.py",
+        "mode": "100644",
+        "sha": "d650161c8b0bb2519025ba83758fe0424ea952ae"
+      },
+      {
+        "path": "cosyvoice/cli/__init__.py",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "cosyvoice/cli/cosyvoice.py",
+        "mode": "100644",
+        "sha": "7ab04a70fff9a0960f2e34ef35555c55486bf2a1"
+      },
+      {
+        "path": "cosyvoice/cli/frontend.py",
+        "mode": "100644",
+        "sha": "6d397cc99be417e98b8d9fc7a1438ec722312276"
+      },
+      {
+        "path": "cosyvoice/cli/model.py",
+        "mode": "100644",
+        "sha": "92a15d985dfbca4bb676d3fdc02732be1d07c461"
+      },
+      {
+        "path": "cosyvoice/dataset/__init__.py",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "cosyvoice/dataset/dataset.py",
+        "mode": "100644",
+        "sha": "ea19840d05f2929054454809f92d5fe0889d6537"
+      },
+      {
+        "path": "cosyvoice/dataset/processor.py",
+        "mode": "100644",
+        "sha": "545c007874ea6064b0b4161e3a390e447202a731"
+      },
+      {
+        "path": "cosyvoice/flow/DiT/dit.py",
+        "mode": "100644",
+        "sha": "0d637e4ad2fc8514b62c7ea7e564b7d29d4d91d4"
+      },
+      {
+        "path": "cosyvoice/flow/DiT/modules.py",
+        "mode": "100644",
+        "sha": "be8caecb8a2acd290f4f6e7e1d756dff67f78e5b"
+      },
+      {
+        "path": "cosyvoice/flow/decoder.py",
+        "mode": "100644",
+        "sha": "97768a459fbb89a2c99f98de302628d8ccafda67"
+      },
+      {
+        "path": "cosyvoice/flow/flow.py",
+        "mode": "100644",
+        "sha": "c25518621bf98e95d5ed75b83c5a2a610d0822be"
+      },
+      {
+        "path": "cosyvoice/flow/flow_matching.py",
+        "mode": "100644",
+        "sha": "d3beb9ec2ce8c26972433080c458f90c3f2c0467"
+      },
+      {
+        "path": "cosyvoice/flow/length_regulator.py",
+        "mode": "100644",
+        "sha": "e1b6c1bd1f877d9c52100fa6074fc6cf81bd0fe0"
+      },
+      {
+        "path": "cosyvoice/hifigan/discriminator.py",
+        "mode": "100644",
+        "sha": "bb8e85f7379d3de96f6eb1f6b0ef0ba1fdbb212a"
+      },
+      {
+        "path": "cosyvoice/hifigan/f0_predictor.py",
+        "mode": "100644",
+        "sha": "c896890612053d97a9567bfe261dce000dae0f52"
+      },
+      {
+        "path": "cosyvoice/hifigan/generator.py",
+        "mode": "100644",
+        "sha": "bbc2a2112bfd260963765af33760c95c3161fe14"
+      },
+      {
+        "path": "cosyvoice/hifigan/hifigan.py",
+        "mode": "100644",
+        "sha": "046c2cf97055967729dcf231f449bf9cf3058d19"
+      },
+      {
+        "path": "cosyvoice/llm/llm.py",
+        "mode": "100644",
+        "sha": "e8e81d942af886d85b1331f9ce8b72ba42f8843b"
+      },
+      {
+        "path": "cosyvoice/tokenizer/assets/multilingual_zh_ja_yue_char_del.tiktoken",
+        "mode": "100644",
+        "sha": "ac47fe685d24565030965a94c0d98e00e0331eaa"
+      },
+      {
+        "path": "cosyvoice/tokenizer/tokenizer.py",
+        "mode": "100644",
+        "sha": "6ecf4ae84b1b88d10c42e110db4665f944cc0317"
+      },
+      {
+        "path": "cosyvoice/transformer/__init__.py",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "cosyvoice/transformer/activation.py",
+        "mode": "100644",
+        "sha": "8cea54816385d3b6585ccc2417bc71630d578177"
+      },
+      {
+        "path": "cosyvoice/transformer/attention.py",
+        "mode": "100644",
+        "sha": "8c0c0983a833a6a91cae306a8198ebb2ca82696f"
+      },
+      {
+        "path": "cosyvoice/transformer/convolution.py",
+        "mode": "100644",
+        "sha": "edb32b241035852ae07f027d1ea6fcf42f7aaba4"
+      },
+      {
+        "path": "cosyvoice/transformer/decoder.py",
+        "mode": "100644",
+        "sha": "98f3a66a6649b125343bb111b337f92793c492a9"
+      },
+      {
+        "path": "cosyvoice/transformer/decoder_layer.py",
+        "mode": "100644",
+        "sha": "91c7c5d7fb2a8e79cea7705646e5381016f73466"
+      },
+      {
+        "path": "cosyvoice/transformer/embedding.py",
+        "mode": "100644",
+        "sha": "ba20d71bec11baa7081bed522399cf3a2046ef56"
+      },
+      {
+        "path": "cosyvoice/transformer/encoder.py",
+        "mode": "100644",
+        "sha": "c5709d0ce86b71cb994a9ea188e66fd233ebda67"
+      },
+      {
+        "path": "cosyvoice/transformer/encoder_layer.py",
+        "mode": "100644",
+        "sha": "efbb12dd365770bebe8bca75276fe63be260a08f"
+      },
+      {
+        "path": "cosyvoice/transformer/label_smoothing_loss.py",
+        "mode": "100644",
+        "sha": "feacabf09609ee6eb047c89ce18d372256c72c71"
+      },
+      {
+        "path": "cosyvoice/transformer/positionwise_feed_forward.py",
+        "mode": "100644",
+        "sha": "b7a2cf6e7315e3a5ed2794423daff0a59cc5b208"
+      },
+      {
+        "path": "cosyvoice/transformer/subsampling.py",
+        "mode": "100644",
+        "sha": "e17c2e324e3afb24e1b619effe29cef07c9c5b3a"
+      },
+      {
+        "path": "cosyvoice/transformer/upsample_encoder.py",
+        "mode": "100644",
+        "sha": "baf7481977d7079dbbabd20332eced7b046738c4"
+      },
+      {
+        "path": "cosyvoice/utils/__init__.py",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "cosyvoice/utils/class_utils.py",
+        "mode": "100644",
+        "sha": "aab83266a2644b5110aeaa64317c25b61419ba0d"
+      },
+      {
+        "path": "cosyvoice/utils/common.py",
+        "mode": "100644",
+        "sha": "3f235a62e0455abbbf028635978b800e8be951af"
+      },
+      {
+        "path": "cosyvoice/utils/executor.py",
+        "mode": "100644",
+        "sha": "f08fa09465bc194d4a9feb3a0215ed9fdc66b4b0"
+      },
+      {
+        "path": "cosyvoice/utils/file_utils.py",
+        "mode": "100644",
+        "sha": "b173ef2014f76fcfd28ce4f927fa05773970692b"
+      },
+      {
+        "path": "cosyvoice/utils/frontend_utils.py",
+        "mode": "100644",
+        "sha": "ea1c9fc8cc7438f257eecffe460a8b6f4ddf8584"
+      },
+      {
+        "path": "cosyvoice/utils/losses.py",
+        "mode": "100644",
+        "sha": "2429fdcd5624297bf0c8ac3842e2e93ac84aee43"
+      },
+      {
+        "path": "cosyvoice/utils/mask.py",
+        "mode": "100644",
+        "sha": "5d3dfd6ca6cd84e95f237a9aef4467cb7d2d4c33"
+      },
+      {
+        "path": "cosyvoice/utils/onnx.py",
+        "mode": "100644",
+        "sha": "b459eb54df934ff304829891de7bac87f1606168"
+      },
+      {
+        "path": "cosyvoice/utils/scheduler.py",
+        "mode": "100644",
+        "sha": "06e7f3dacbd3f890f35020acea56783b58f98e0e"
+      },
+      {
+        "path": "cosyvoice/utils/train_utils.py",
+        "mode": "100644",
+        "sha": "2ab5ebe66c50f03e860091b71c16497a0c78a394"
+      },
+      {
+        "path": "cosyvoice/vllm/cosyvoice2.py",
+        "mode": "100644",
+        "sha": "fff05437f056419487613b48df20e33fda886b80"
+      },
+      {
+        "path": "docker/Dockerfile",
+        "mode": "100644",
+        "sha": "7d7b16ee6e699aa60a91f67b963545cc1e40428f"
+      },
+      {
+        "path": "example.py",
+        "mode": "100644",
+        "sha": "875226767d2f358a6140726576beecca30aa36b0"
+      },
+      {
+        "path": "examples/grpo/cosyvoice2/Dockerfile",
+        "mode": "100644",
+        "sha": "17d80ed5cddfea442fbc8465bd3a63f18b0c2aab"
+      },
+      {
+        "path": "examples/grpo/cosyvoice2/README.md",
+        "mode": "100644",
+        "sha": "1f5c6a0bc6bed8f541a585990334dd68ff8b5658"
+      },
+      {
+        "path": "examples/grpo/cosyvoice2/huggingface_to_pretrained.py",
+        "mode": "100644",
+        "sha": "ca49fc3b72202d05f243e19f7df7ee0a179c019a"
+      },
+      {
+        "path": "examples/grpo/cosyvoice2/infer_dataset.py",
+        "mode": "100644",
+        "sha": "f72cd7733c8008aacac25bbf5314174e6dbb766d"
+      },
+      {
+        "path": "examples/grpo/cosyvoice2/prepare_data.py",
+        "mode": "100644",
+        "sha": "46c3c0977cf95037fb592676696ec97294ca92da"
+      },
+      {
+        "path": "examples/grpo/cosyvoice2/pretrained_to_huggingface.py",
+        "mode": "100644",
+        "sha": "7aaa10b625357f45bb9fe0e62c03b96929801c02"
+      },
+      {
+        "path": "examples/grpo/cosyvoice2/requirements.txt",
+        "mode": "100644",
+        "sha": "50f4edd72fb502d4cf17f2a8f3a5d52c9f5e41f0"
+      },
+      {
+        "path": "examples/grpo/cosyvoice2/reward_tts.py",
+        "mode": "100644",
+        "sha": "4c4076119885d9af8c905fad5e3d4a3da005ecb0"
+      },
+      {
+        "path": "examples/grpo/cosyvoice2/run.sh",
+        "mode": "100644",
+        "sha": "b1658e2426e38bab184a8a231742213f08e136d9"
+      },
+      {
+        "path": "examples/grpo/cosyvoice2/scripts/compute_wer.sh",
+        "mode": "100644",
+        "sha": "43a6872bcbd2296b3097d59394b4a568014169fc"
+      },
+      {
+        "path": "examples/grpo/cosyvoice2/scripts/offline-decode-files.py",
+        "mode": "100644",
+        "sha": "90c46658999a1b5d48c92c75fbd97f6b41c5de4b"
+      },
+      {
+        "path": "examples/grpo/cosyvoice2/token2wav_asr_server.py",
+        "mode": "100644",
+        "sha": "9f9f80bbb9f67e353019b2152879e98a84823a86"
+      },
+      {
+        "path": "examples/libritts/cosyvoice/conf/cosyvoice.yaml",
+        "mode": "100644",
+        "sha": "c421b4f36f6be438d9f67389fc1eb56eff3a70ac"
+      },
+      {
+        "path": "examples/libritts/cosyvoice/conf/ds_stage2.json",
+        "mode": "100644",
+        "sha": "2b2de3df7fe50968269ecafbf1f4ab9eb210f322"
+      },
+      {
+        "path": "examples/libritts/cosyvoice/local/download_and_untar.sh",
+        "mode": "100755",
+        "sha": "ec1360afea16a70d162e8c3098733e7657910f3d"
+      },
+      {
+        "path": "examples/libritts/cosyvoice/local/prepare_data.py",
+        "mode": "100644",
+        "sha": "2f0b850dca8cfbfb67ed62f89d5b903d8254ee2d"
+      },
+      {
+        "path": "examples/libritts/cosyvoice/local/prepare_reject_sample.py",
+        "mode": "100644",
+        "sha": "065532cc67fbe74adcb4df737ba6ffc9ccebdf3a"
+      },
+      {
+        "path": "examples/libritts/cosyvoice/path.sh",
+        "mode": "100644",
+        "sha": "e0fa06ca2168b64b7c06cc81ae5a36d1aa08a613"
+      },
+      {
+        "path": "examples/libritts/cosyvoice/run.sh",
+        "mode": "100644",
+        "sha": "5449ce6c636951dc694feeed91874329fe0f31ed"
+      },
+      {
+        "path": "examples/libritts/cosyvoice/tts_text.json",
+        "mode": "100644",
+        "sha": "9f3e8d9f7326b7e2eb9b9cbcfc9611d8f5c8bd9d"
+      },
+      {
+        "path": "examples/libritts/cosyvoice2/conf/cosyvoice2.yaml",
+        "mode": "100644",
+        "sha": "8a4db63b1e3a9be36d001df61109074f002813a3"
+      },
+      {
+        "path": "examples/libritts/cosyvoice2/conf/ds_stage2.json",
+        "mode": "100644",
+        "sha": "2b2de3df7fe50968269ecafbf1f4ab9eb210f322"
+      },
+      {
+        "path": "examples/libritts/cosyvoice2/local",
+        "mode": "120000",
+        "sha": "5e847a128fe51c7d44379bc7f0dea5e20264b871"
+      },
+      {
+        "path": "examples/libritts/cosyvoice2/path.sh",
+        "mode": "120000",
+        "sha": "59f7179ef6c2001073ef69e7435d2f267297848e"
+      },
+      {
+        "path": "examples/libritts/cosyvoice2/run.sh",
+        "mode": "100644",
+        "sha": "018f84189157e71262f11d2fe67cfb427c674f88"
+      },
+      {
+        "path": "examples/libritts/cosyvoice2/run_dpo.sh",
+        "mode": "100644",
+        "sha": "cceb44151cc82c237401cfb0a098457c5448f714"
+      },
+      {
+        "path": "examples/libritts/cosyvoice2/tts_text.json",
+        "mode": "120000",
+        "sha": "e85cf1c2ad2ba445e1f4b2fc01116f2283d1bf8c"
+      },
+      {
+        "path": "examples/libritts/cosyvoice3/conf/cosyvoice3.yaml",
+        "mode": "100644",
+        "sha": "36dfee4889b6f1c5a1e85e59a0e716005aa0063f"
+      },
+      {
+        "path": "examples/libritts/cosyvoice3/conf/ds_stage2.json",
+        "mode": "100644",
+        "sha": "2b2de3df7fe50968269ecafbf1f4ab9eb210f322"
+      },
+      {
+        "path": "examples/libritts/cosyvoice3/local",
+        "mode": "120000",
+        "sha": "5e847a128fe51c7d44379bc7f0dea5e20264b871"
+      },
+      {
+        "path": "examples/libritts/cosyvoice3/path.sh",
+        "mode": "120000",
+        "sha": "59f7179ef6c2001073ef69e7435d2f267297848e"
+      },
+      {
+        "path": "examples/libritts/cosyvoice3/run.sh",
+        "mode": "100644",
+        "sha": "fb7d1039491f07bbb966ecf25fce325738f299d1"
+      },
+      {
+        "path": "examples/magicdata-read/cosyvoice/conf",
+        "mode": "120000",
+        "sha": "e1368df31e040d054b76460bba588b4013a08b24"
+      },
+      {
+        "path": "examples/magicdata-read/cosyvoice/local/download_and_untar.sh",
+        "mode": "100755",
+        "sha": "80dc45c744adfbf50f8a2f8e7add7ad14ff0d74e"
+      },
+      {
+        "path": "examples/magicdata-read/cosyvoice/local/prepare_data.py",
+        "mode": "100644",
+        "sha": "51ccd5f9c55bba232ae125995e6f734a84086d4d"
+      },
+      {
+        "path": "examples/magicdata-read/cosyvoice/path.sh",
+        "mode": "120000",
+        "sha": "4541305ff96969b629178b62253cd9555f09db47"
+      },
+      {
+        "path": "examples/magicdata-read/cosyvoice/run.sh",
+        "mode": "100644",
+        "sha": "b3e03360deda3701037f20733c3598fdfc9b5d30"
+      },
+      {
+        "path": "examples/magicdata-read/cosyvoice/tts_text.json",
+        "mode": "100644",
+        "sha": "9dd71095bc8800359a9fdc12934658b794032c19"
+      },
+      {
+        "path": "requirements.txt",
+        "mode": "100644",
+        "sha": "989bccf6108a1ba886e4021cd4a4d620aadab592"
+      },
+      {
+        "path": "runtime/python/Dockerfile",
+        "mode": "100644",
+        "sha": "e2d2012cfe178f841a41f80c67581ef49c1f29b4"
+      },
+      {
+        "path": "runtime/python/fastapi/client.py",
+        "mode": "100644",
+        "sha": "0fb29b76ff0a374fa1f1b457c6067c48ef5036a9"
+      },
+      {
+        "path": "runtime/python/fastapi/server.py",
+        "mode": "100644",
+        "sha": "1502f9cbf3c8423c0506f233a9537f7760e0b58c"
+      },
+      {
+        "path": "runtime/python/grpc/client.py",
+        "mode": "100644",
+        "sha": "9885130aaf6453ccbc9c7addc9906a6720d18977"
+      },
+      {
+        "path": "runtime/python/grpc/cosyvoice.proto",
+        "mode": "100644",
+        "sha": "fe0c3ad242326813b7e925c66a2d9b09567f548c"
+      },
+      {
+        "path": "runtime/python/grpc/server.py",
+        "mode": "100644",
+        "sha": "28ecc19a4c1d75bd3af2333ed3f79e8ffe52c260"
+      },
+      {
+        "path": "runtime/triton_trtllm/Dockerfile.server",
+        "mode": "100644",
+        "sha": "38494f4d75c3caf94102c129bb5b186694ddd34e"
+      },
+      {
+        "path": "runtime/triton_trtllm/README.Cosyvoice2.DiT.md",
+        "mode": "100644",
+        "sha": "c4bfa5259c6ebaad9c7da6410fc143d2f19c1dc5"
+      },
+      {
+        "path": "runtime/triton_trtllm/README.Cosyvoice2.Unet.md",
+        "mode": "100644",
+        "sha": "33f2908395d971064230f4e1d9c5e839ebe7d5a5"
+      },
+      {
+        "path": "runtime/triton_trtllm/README.Cosyvoice3.md",
+        "mode": "100644",
+        "sha": "063bf07e14bf489db096a853950c250efb1a1acb"
+      },
+      {
+        "path": "runtime/triton_trtllm/README.md",
+        "mode": "100644",
+        "sha": "eafaf0ab6be7344bd2ff4bf5329907905750da61"
+      },
+      {
+        "path": "runtime/triton_trtllm/client_grpc.py",
+        "mode": "100644",
+        "sha": "440904f2ad1a62c37f3c375053d9a23c9bbbe584"
+      },
+      {
+        "path": "runtime/triton_trtllm/client_http.py",
+        "mode": "100644",
+        "sha": "9c15a6cb2cb6c30898f966ec713aed7e820a7ba3"
+      },
+      {
+        "path": "runtime/triton_trtllm/docker-compose.cosyvoice2.dit.yml",
+        "mode": "100644",
+        "sha": "35312a13e93db6b8a6d03134f6e45ab252b2fcb8"
+      },
+      {
+        "path": "runtime/triton_trtllm/docker-compose.cosyvoice2.unet.yml",
+        "mode": "100644",
+        "sha": "e221e568483029b6cbb57a7d26f8d5bcb7450f3c"
+      },
+      {
+        "path": "runtime/triton_trtllm/docker-compose.cosyvoice3.yml",
+        "mode": "100644",
+        "sha": "5ebb9774caf86b834513281bc186f8f6f40a1f9d"
+      },
+      {
+        "path": "runtime/triton_trtllm/infer_cosyvoice3.py",
+        "mode": "100644",
+        "sha": "69b1a83a62b5d2c14129a1965c64cf6dd042ef57"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/audio_tokenizer/1/model.py",
+        "mode": "100644",
+        "sha": "339cb0ee9fc08b6359db602a05c2ee564a9db9ef"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/audio_tokenizer/config.pbtxt",
+        "mode": "100644",
+        "sha": "4bb972c7b2eaaf04e1f9026ac836981f7f812f76"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/cosyvoice2/1/model.py",
+        "mode": "100644",
+        "sha": "94c82c6fbb85c3039e27389e774bc95fb5902ef0"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/cosyvoice2/config.pbtxt",
+        "mode": "100644",
+        "sha": "73a9a052f3f81d386d062a8270bf0b49996bff75"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/cosyvoice2_dit/1/model.py",
+        "mode": "100644",
+        "sha": "2e2533c4ac0207085708aea0041e002ff5e58b83"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/cosyvoice2_dit/config.pbtxt",
+        "mode": "100644",
+        "sha": "e64647efa26e4b2a0b6f270faa028c696c7684cb"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/speaker_embedding/1/model.py",
+        "mode": "100644",
+        "sha": "1a7293a08295261ead063f65b4dd600a62210a74"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/speaker_embedding/config.pbtxt",
+        "mode": "100644",
+        "sha": "fd91bd671bb1c49f54b227b039e2862254635f7d"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/tensorrt_llm/1/.gitkeep",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/tensorrt_llm/config.pbtxt",
+        "mode": "100644",
+        "sha": "3da789470746cfa02200a44a9e34471adad45d20"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/token2wav/1/model.py",
+        "mode": "100644",
+        "sha": "1e3805200e247866633dfd43bf4809a97a0dca2e"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/token2wav/config.pbtxt",
+        "mode": "100644",
+        "sha": "c33a85f5e93e73888515ada8495b09ed17d7f5ba"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/token2wav_dit/1/model.py",
+        "mode": "100644",
+        "sha": "f9e461eca8727a3db38a3deee814877a04f95146"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/token2wav_dit/1/token2wav_dit.py",
+        "mode": "100644",
+        "sha": "1c6c4235f8b8e0bee5b3e8496a7097123699b0c0"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo/token2wav_dit/config.pbtxt",
+        "mode": "100644",
+        "sha": "3f579aa0d2915ab083513e042215b2cd7806597e"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo_cosyvoice3/audio_tokenizer/1/model.py",
+        "mode": "100644",
+        "sha": "f70a715b6860214e3e15c614c3150c6dd92b0428"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo_cosyvoice3/audio_tokenizer/config.pbtxt",
+        "mode": "100644",
+        "sha": "4bb972c7b2eaaf04e1f9026ac836981f7f812f76"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo_cosyvoice3/cosyvoice3/1/model.py",
+        "mode": "100644",
+        "sha": "519adc86c8189db054b11e4b1189d2cd96e82c48"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo_cosyvoice3/cosyvoice3/config.pbtxt",
+        "mode": "100644",
+        "sha": "fa988b5476c8c77afbcd81b6c81a1a6caae9b806"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo_cosyvoice3/speaker_embedding/1/model.py",
+        "mode": "100644",
+        "sha": "132ca8234568739a33f3c0455e5ee8f290920298"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo_cosyvoice3/speaker_embedding/config.pbtxt",
+        "mode": "100644",
+        "sha": "fd91bd671bb1c49f54b227b039e2862254635f7d"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo_cosyvoice3/token2wav/1/model.py",
+        "mode": "100644",
+        "sha": "abfb1f6560ef9432a1005f5de47fbefa2fa86915"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo_cosyvoice3/token2wav/config.pbtxt",
+        "mode": "100644",
+        "sha": "a46926c83dddf2ab3aeb60a1b6a9a238e9005558"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo_cosyvoice3/vocoder/1/model.py",
+        "mode": "100644",
+        "sha": "987fa49eed1a4041bac962f37980549f11df8373"
+      },
+      {
+        "path": "runtime/triton_trtllm/model_repo_cosyvoice3/vocoder/config.pbtxt",
+        "mode": "100644",
+        "sha": "5ebb7668229813a1bb319b5d12f3acc9547017c5"
+      },
+      {
+        "path": "runtime/triton_trtllm/offline_inference.py",
+        "mode": "100644",
+        "sha": "326fb0ed890d65d60f0ca41eb27613cccf5c0543"
+      },
+      {
+        "path": "runtime/triton_trtllm/requirements.txt",
+        "mode": "100644",
+        "sha": "2fce08cd82fb45d87a1b1b995603f62ca7fe3520"
+      },
+      {
+        "path": "runtime/triton_trtllm/run.sh",
+        "mode": "100644",
+        "sha": "7c7f3cd22c24b4ca47c71f5275811fe4266a9301"
+      },
+      {
+        "path": "runtime/triton_trtllm/run_cosyvoice3.sh",
+        "mode": "100644",
+        "sha": "21871e5b90d87dfa7b95654903d0e61594a6c53f"
+      },
+      {
+        "path": "runtime/triton_trtllm/run_stepaudio2_dit_token2wav.sh",
+        "mode": "100644",
+        "sha": "28ab13fea9e407c8604a5a07529ac69feb1d14c3"
+      },
+      {
+        "path": "runtime/triton_trtllm/scripts/convert_checkpoint.py",
+        "mode": "100644",
+        "sha": "7cd166f1160129548b4d60cf0cda481c1ff233d1"
+      },
+      {
+        "path": "runtime/triton_trtllm/scripts/convert_cosyvoice3_to_hf.py",
+        "mode": "100644",
+        "sha": "37c8c28d66e4742b318c3d9216fff6bce81f4329"
+      },
+      {
+        "path": "runtime/triton_trtllm/scripts/fill_template.py",
+        "mode": "100644",
+        "sha": "6e6a2bcbe5ea1e10a9709b7dd2dc50742230ed74"
+      },
+      {
+        "path": "runtime/triton_trtllm/scripts/test_llm.py",
+        "mode": "100644",
+        "sha": "90e6710ccd80514cfa372582ead829ce808f84fd"
+      },
+      {
+        "path": "runtime/triton_trtllm/streaming_inference.py",
+        "mode": "100644",
+        "sha": "7cfb6f9a9a59e695d2f3595b27c219d7242d16ff"
+      },
+      {
+        "path": "runtime/triton_trtllm/token2wav.py",
+        "mode": "100644",
+        "sha": "09b6db6aee4717fd7c1c3769d44b74e3ee2ebe73"
+      },
+      {
+        "path": "runtime/triton_trtllm/token2wav_cosyvoice3.py",
+        "mode": "100644",
+        "sha": "69303dd3425a224912494e733e03cead08c42ee5"
+      },
+      {
+        "path": "runtime/triton_trtllm/token2wav_dit.py",
+        "mode": "120000",
+        "sha": "2bd78a5457a749d5d8057cf960347a0fc96e4214"
+      },
+      {
+        "path": "tools/extract_embedding.py",
+        "mode": "100755",
+        "sha": "de48779e815c0c1c117aaaa723847915f05a8e59"
+      },
+      {
+        "path": "tools/extract_speech_token.py",
+        "mode": "100755",
+        "sha": "976a23b487b98deeb27d42fc0fdea7b7d1271931"
+      },
+      {
+        "path": "tools/make_parquet_list.py",
+        "mode": "100755",
+        "sha": "485d2abc1e6962bc372d9ebe0e4eda97c082f9f2"
+      },
+      {
+        "path": "vllm_example.py",
+        "mode": "100644",
+        "sha": "697d7a9a3da606dc28816f676f3f3ed59a4ecdf8"
+      },
+      {
+        "path": "webui.py",
+        "mode": "100644",
+        "sha": "24b79513638d4a76033c4120459094d8638aa6cd"
+      }
+    ]
+  },
+  {
+    "name": "matcha",
+    "repo": "shivammehta25/Matcha-TTS",
+    "revision": "dd9105b34bf2be2230f4aa1e4769fb586a3c824e",
+    "files": [
+      {
+        "path": ".env.example",
+        "mode": "100644",
+        "sha": "a790e320464ebc778ca07f5bcd826a9c8412ed0e"
+      },
+      {
+        "path": ".github/PULL_REQUEST_TEMPLATE.md",
+        "mode": "100644",
+        "sha": "410bcd87a45297ab8f0d369574a032858b6b1811"
+      },
+      {
+        "path": ".github/codecov.yml",
+        "mode": "100644",
+        "sha": "c66853c4bd9991f730da5dda7dc9881986779558"
+      },
+      {
+        "path": ".github/dependabot.yml",
+        "mode": "100644",
+        "sha": "b19ccab12a3c573025ce6ba6d9068b062b29cc1b"
+      },
+      {
+        "path": ".github/release-drafter.yml",
+        "mode": "100644",
+        "sha": "59af159f671abe75311eb626c8ec92ca6ea09d3c"
+      },
+      {
+        "path": ".gitignore",
+        "mode": "100644",
+        "sha": "cbec8b43a0414bbbf4cc9feae49b9dc091a60c92"
+      },
+      {
+        "path": ".pre-commit-config.yaml",
+        "mode": "100644",
+        "sha": "e695f115eba12d84fe6f465c5d834dfa35c3d2ec"
+      },
+      {
+        "path": ".project-root",
+        "mode": "100644",
+        "sha": "63eab774b9e36aa1a46cbd31b59cbd373bc5477f"
+      },
+      {
+        "path": ".pylintrc",
+        "mode": "100644",
+        "sha": "962864189eab99a66b315b80f5a9976e7a423d4a"
+      },
+      {
+        "path": "LICENSE",
+        "mode": "100644",
+        "sha": "858018e750da7be7b271bb7307e68d159ed67ef6"
+      },
+      {
+        "path": "MANIFEST.in",
+        "mode": "100644",
+        "sha": "c013140cdfb9de19c4d4e73c73a44e33f33fa871"
+      },
+      {
+        "path": "Makefile",
+        "mode": "100644",
+        "sha": "4b523dd17b13a19617c9cc9d9dad7f7d8d4c24a0"
+      },
+      {
+        "path": "README.md",
+        "mode": "100644",
+        "sha": "ebc6b7c0a76d30c33bf95583d629825c02183e31"
+      },
+      {
+        "path": "configs/__init__.py",
+        "mode": "100644",
+        "sha": "56bf7f4aa4906bc0f997132708cc0826c198e4aa"
+      },
+      {
+        "path": "configs/callbacks/default.yaml",
+        "mode": "100644",
+        "sha": "ebaa3ed31a7f626bc62f90184dc4b25b631e52a9"
+      },
+      {
+        "path": "configs/callbacks/model_checkpoint.yaml",
+        "mode": "100644",
+        "sha": "3d085c711a8521b6b98ad6401b686bb601ceacd6"
+      },
+      {
+        "path": "configs/callbacks/model_summary.yaml",
+        "mode": "100644",
+        "sha": "6e5368d0e94298cce6d5421365b4583bd763ba92"
+      },
+      {
+        "path": "configs/callbacks/none.yaml",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "configs/callbacks/rich_progress_bar.yaml",
+        "mode": "100644",
+        "sha": "de6f1ccb11205a4db93645fb6f297e50205de172"
+      },
+      {
+        "path": "configs/data/hi-fi_en-US_female.yaml",
+        "mode": "100644",
+        "sha": "1269f9b3b421d27a204bb0697e2f27a0fa0864a3"
+      },
+      {
+        "path": "configs/data/ljspeech.yaml",
+        "mode": "100644",
+        "sha": "f251420c3caadd9b27a0b01ad28ee37b5eec1440"
+      },
+      {
+        "path": "configs/data/vctk.yaml",
+        "mode": "100644",
+        "sha": "ba11cc63371ad6308d6711513268de7efe50eed9"
+      },
+      {
+        "path": "configs/debug/default.yaml",
+        "mode": "100644",
+        "sha": "e3932c82585fbe44047c1569a5cfe9ee9895c71a"
+      },
+      {
+        "path": "configs/debug/fdr.yaml",
+        "mode": "100644",
+        "sha": "7f2d34fa37c31017e749d5a4fc5ae6763e688b46"
+      },
+      {
+        "path": "configs/debug/limit.yaml",
+        "mode": "100644",
+        "sha": "514d77fbd1475b03fff0372e3da3c2fa7ea7d190"
+      },
+      {
+        "path": "configs/debug/overfit.yaml",
+        "mode": "100644",
+        "sha": "9906586a67a12aa81ff69138f589a366dbe2222f"
+      },
+      {
+        "path": "configs/debug/profiler.yaml",
+        "mode": "100644",
+        "sha": "266295f15e0166e1d1b58b88caa7673f4b6493b5"
+      },
+      {
+        "path": "configs/eval.yaml",
+        "mode": "100644",
+        "sha": "be312992b2a486b04d83a54dbd8f670d94979709"
+      },
+      {
+        "path": "configs/experiment/hifi_dataset_piper_phonemizer.yaml",
+        "mode": "100644",
+        "sha": "7e6c57a0d0a399f7463f4ff2d96e1928c435779b"
+      },
+      {
+        "path": "configs/experiment/ljspeech.yaml",
+        "mode": "100644",
+        "sha": "d5723f42cf3552226c42bd91202cc18818b685f0"
+      },
+      {
+        "path": "configs/experiment/ljspeech_min_memory.yaml",
+        "mode": "100644",
+        "sha": "ef554dc633c392b1592d90d9d7734f2329264fdd"
+      },
+      {
+        "path": "configs/experiment/multispeaker.yaml",
+        "mode": "100644",
+        "sha": "553842f4e2168db0fee4e44db11b5d086295b044"
+      },
+      {
+        "path": "configs/extras/default.yaml",
+        "mode": "100644",
+        "sha": "b9c6b622283a647fbc513166fc14f016cc3ed8a0"
+      },
+      {
+        "path": "configs/hparams_search/mnist_optuna.yaml",
+        "mode": "100644",
+        "sha": "1391183ebcdec3d8f5eb61374e0719d13c7545da"
+      },
+      {
+        "path": "configs/hydra/default.yaml",
+        "mode": "100644",
+        "sha": "1533136b22802a4f81e5387b74e407289edce94d"
+      },
+      {
+        "path": "configs/local/.gitkeep",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "configs/logger/aim.yaml",
+        "mode": "100644",
+        "sha": "8f9f6adad7feb2780c2efd5ddb0ed053621e05f8"
+      },
+      {
+        "path": "configs/logger/comet.yaml",
+        "mode": "100644",
+        "sha": "e0789274e2137ee6c97ca37a5d56c2b8abaf0aaa"
+      },
+      {
+        "path": "configs/logger/csv.yaml",
+        "mode": "100644",
+        "sha": "fa028e9c146430c319101ffdfce466514338591c"
+      },
+      {
+        "path": "configs/logger/many_loggers.yaml",
+        "mode": "100644",
+        "sha": "dd586800bdccb4e8f4b0236a181b7ddd756ba9ab"
+      },
+      {
+        "path": "configs/logger/mlflow.yaml",
+        "mode": "100644",
+        "sha": "f8fb7e685fa27fc8141387a421b90a0b9b492d9e"
+      },
+      {
+        "path": "configs/logger/neptune.yaml",
+        "mode": "100644",
+        "sha": "8233c140018ecce6ab62971beed269991d31c89b"
+      },
+      {
+        "path": "configs/logger/tensorboard.yaml",
+        "mode": "100644",
+        "sha": "2bd31f6d8ba68d1f5c36a804885d5b9f9c1a9302"
+      },
+      {
+        "path": "configs/logger/wandb.yaml",
+        "mode": "100644",
+        "sha": "ece165889b3d0d9dc750a8f3c7454188cfdf12b7"
+      },
+      {
+        "path": "configs/model/cfm/default.yaml",
+        "mode": "100644",
+        "sha": "0d1d9609e2d05c7b0a12a26115520340ac18e584"
+      },
+      {
+        "path": "configs/model/decoder/default.yaml",
+        "mode": "100644",
+        "sha": "aaa00e63402ade5c76247a2f1d6b294ec3c61e63"
+      },
+      {
+        "path": "configs/model/encoder/default.yaml",
+        "mode": "100644",
+        "sha": "d4d5e5adee8f707bd384b682a3ad9a116c40c6ed"
+      },
+      {
+        "path": "configs/model/matcha.yaml",
+        "mode": "100644",
+        "sha": "36f6eafbdcaa324f7494a4b97a7590da7824f357"
+      },
+      {
+        "path": "configs/model/optimizer/adam.yaml",
+        "mode": "100644",
+        "sha": "42795577474eaee5b0b96845a95e1a11c9152385"
+      },
+      {
+        "path": "configs/paths/default.yaml",
+        "mode": "100644",
+        "sha": "ec81db2d34712909a79be3e42e65efe08c35ecee"
+      },
+      {
+        "path": "configs/train.yaml",
+        "mode": "100644",
+        "sha": "e6f5c2e7b9781758c8d25f941f004ca383c3f494"
+      },
+      {
+        "path": "configs/trainer/cpu.yaml",
+        "mode": "100644",
+        "sha": "b7d6767e60c956567555980654f15e7bb673a41f"
+      },
+      {
+        "path": "configs/trainer/ddp.yaml",
+        "mode": "100644",
+        "sha": "94b43e20ca7bf1f2ea92627fd46906e4f0a273a1"
+      },
+      {
+        "path": "configs/trainer/ddp_sim.yaml",
+        "mode": "100644",
+        "sha": "8404419e5c295654967d0dfb73a7366e75be2f1f"
+      },
+      {
+        "path": "configs/trainer/default.yaml",
+        "mode": "100644",
+        "sha": "ee3d370d8ca6b08d7ee7a86d34184c2104f0e1ef"
+      },
+      {
+        "path": "configs/trainer/gpu.yaml",
+        "mode": "100644",
+        "sha": "b2389510a90f5f0161cff6ccfcb4a96097ddf9a1"
+      },
+      {
+        "path": "configs/trainer/mps.yaml",
+        "mode": "100644",
+        "sha": "1ecf6d5cc3a34ca127c5510f4a18e989561e38e4"
+      },
+      {
+        "path": "data",
+        "mode": "120000",
+        "sha": "18e4b1a408c735470895e67a9e5151721c71d271"
+      },
+      {
+        "path": "matcha/VERSION",
+        "mode": "100644",
+        "sha": "442b1138f7851df1c22deb15fd5d6ff5b742e550"
+      },
+      {
+        "path": "matcha/__init__.py",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "matcha/app.py",
+        "mode": "100644",
+        "sha": "d68fbaa2d10d1faab606d89906af5e8b6baa5aa4"
+      },
+      {
+        "path": "matcha/cli.py",
+        "mode": "100644",
+        "sha": "579d7d636450a41f1c06a4393d64ddbae38c5011"
+      },
+      {
+        "path": "matcha/data/__init__.py",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "matcha/data/components/__init__.py",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "matcha/data/text_mel_datamodule.py",
+        "mode": "100644",
+        "sha": "704f93629f1874b88efd07609409653ffbb8338a"
+      },
+      {
+        "path": "matcha/hifigan/LICENSE",
+        "mode": "100644",
+        "sha": "91751daed806f63ac594cf077a3065f719a41662"
+      },
+      {
+        "path": "matcha/hifigan/README.md",
+        "mode": "100644",
+        "sha": "5db25850451a794b1db1b15b08e82c1d802edbb3"
+      },
+      {
+        "path": "matcha/hifigan/__init__.py",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "matcha/hifigan/config.py",
+        "mode": "100644",
+        "sha": "b3abea9e151a08864353d32066bd4935e24b82e7"
+      },
+      {
+        "path": "matcha/hifigan/denoiser.py",
+        "mode": "100644",
+        "sha": "9fd33312a09b1940374a0e29a97fe3a1a1dac7d2"
+      },
+      {
+        "path": "matcha/hifigan/env.py",
+        "mode": "100644",
+        "sha": "9ea4f948a3f002921bf9bc24f52cbc1c0b1fc2ec"
+      },
+      {
+        "path": "matcha/hifigan/meldataset.py",
+        "mode": "100644",
+        "sha": "8b43ea7965e04a52d5427a485ee911b743057c4a"
+      },
+      {
+        "path": "matcha/hifigan/models.py",
+        "mode": "100644",
+        "sha": "d209d9a4e99ec29e4167a5a2eaa62d72b3eff694"
+      },
+      {
+        "path": "matcha/hifigan/xutils.py",
+        "mode": "100644",
+        "sha": "eefadcb7a1d0bf9015e636b88fee3e22c9771bc5"
+      },
+      {
+        "path": "matcha/models/__init__.py",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "matcha/models/baselightningmodule.py",
+        "mode": "100644",
+        "sha": "3724888090e36b5f55445d33a87fcdae687b35a5"
+      },
+      {
+        "path": "matcha/models/components/__init__.py",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "matcha/models/components/decoder.py",
+        "mode": "100644",
+        "sha": "1137cd7008e9d07b4f306926a82e44c2b2cddbdf"
+      },
+      {
+        "path": "matcha/models/components/flow_matching.py",
+        "mode": "100644",
+        "sha": "5cad7431ef66a8d11da32a77c1af7f6e31d6b774"
+      },
+      {
+        "path": "matcha/models/components/text_encoder.py",
+        "mode": "100644",
+        "sha": "a388d05d6351fa2c9d9632fed0942d51fbec067b"
+      },
+      {
+        "path": "matcha/models/components/transformer.py",
+        "mode": "100644",
+        "sha": "dd1afa3aff5383912209e508676c6885e13ef4ee"
+      },
+      {
+        "path": "matcha/models/matcha_tts.py",
+        "mode": "100644",
+        "sha": "64b2c07fe8de4760aee1aed80d206112d30df55f"
+      },
+      {
+        "path": "matcha/onnx/__init__.py",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "matcha/onnx/export.py",
+        "mode": "100644",
+        "sha": "9b795086158e1ad8a4bb5cd92306f3fa765f71ea"
+      },
+      {
+        "path": "matcha/onnx/infer.py",
+        "mode": "100644",
+        "sha": "89ca92559c6df3776a07a038d7838242a3d19189"
+      },
+      {
+        "path": "matcha/text/__init__.py",
+        "mode": "100644",
+        "sha": "71a4b57891d3c06ad9f25493c1b40bc2f5962d17"
+      },
+      {
+        "path": "matcha/text/cleaners.py",
+        "mode": "100644",
+        "sha": "5e8d96b681eb9f57356a1b86a7008e74b65ff44b"
+      },
+      {
+        "path": "matcha/text/numbers.py",
+        "mode": "100644",
+        "sha": "f99a8686dcb73532091122613e74bd643a8a327f"
+      },
+      {
+        "path": "matcha/text/symbols.py",
+        "mode": "100644",
+        "sha": "7018df549a1e50c3be20416069b6913c641024bd"
+      },
+      {
+        "path": "matcha/train.py",
+        "mode": "100644",
+        "sha": "d1d64c6c44af2622be5e6bf368616feb6619ed7e"
+      },
+      {
+        "path": "matcha/utils/__init__.py",
+        "mode": "100644",
+        "sha": "074db6461184e8cbb86d977cb41d9ebd918e958a"
+      },
+      {
+        "path": "matcha/utils/audio.py",
+        "mode": "100644",
+        "sha": "0bcd74df47fb006f68deb5a5f4a4c2fb0aa84f57"
+      },
+      {
+        "path": "matcha/utils/generate_data_statistics.py",
+        "mode": "100644",
+        "sha": "96a5382296426803f1010385d184af7bfc901290"
+      },
+      {
+        "path": "matcha/utils/instantiators.py",
+        "mode": "100644",
+        "sha": "5547b4ed61ed8c21e63c528f58526a949879a94f"
+      },
+      {
+        "path": "matcha/utils/logging_utils.py",
+        "mode": "100644",
+        "sha": "1a12d1ddafa25ca3ae8e497bcd7de2191f13659b"
+      },
+      {
+        "path": "matcha/utils/model.py",
+        "mode": "100644",
+        "sha": "869cc6092f5952930534c47544fae88308e96abf"
+      },
+      {
+        "path": "matcha/utils/monotonic_align/__init__.py",
+        "mode": "100644",
+        "sha": "eee6e0d47c2e3612ef02bc17442e6886998e5a94"
+      },
+      {
+        "path": "matcha/utils/monotonic_align/core.pyx",
+        "mode": "100644",
+        "sha": "091fcc3a50a51f3d3fee47a70825260757e6d885"
+      },
+      {
+        "path": "matcha/utils/monotonic_align/setup.py",
+        "mode": "100644",
+        "sha": "f22bc6a35a5a04c9e6d7b82040973722c9b770c9"
+      },
+      {
+        "path": "matcha/utils/pylogger.py",
+        "mode": "100644",
+        "sha": "61600678029362e110f655edb91d5f3bc5b1cd1c"
+      },
+      {
+        "path": "matcha/utils/rich_utils.py",
+        "mode": "100644",
+        "sha": "f602f6e9351d948946eb419eb4e420190ea634bc"
+      },
+      {
+        "path": "matcha/utils/utils.py",
+        "mode": "100644",
+        "sha": "af65e09070b4a4786ad139ec6e3d57d5ef578204"
+      },
+      {
+        "path": "notebooks/.gitkeep",
+        "mode": "100644",
+        "sha": "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391"
+      },
+      {
+        "path": "pyproject.toml",
+        "mode": "100644",
+        "sha": "74aa39300a61b8b3607dc634d68aa47013141ec5"
+      },
+      {
+        "path": "requirements.txt",
+        "mode": "100644",
+        "sha": "3e14a532cb14f99190404472915213940bfad4b9"
+      },
+      {
+        "path": "scripts/schedule.sh",
+        "mode": "100644",
+        "sha": "44b3da1116ef4d54e9acffee7d639d549e136d45"
+      },
+      {
+        "path": "setup.py",
+        "mode": "100644",
+        "sha": "80d4aac04c6cd36859c5d753468ef2e105770098"
+      },
+      {
+        "path": "synthesis.ipynb",
+        "mode": "100644",
+        "sha": "dfbde30b5ad98f1368be3aa181145a4eac97da93"
+      }
+    ]
+  }
+]

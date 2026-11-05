@@ -1,0 +1,9 @@
+{
+  "models.py": "63e46dae454c7d5ef9b4c69fa8d609745188535bdd5e4077e0d5e98a278d6a9a",
+  "runtime/production.py": "8d12758fdb4001f8c6879bf21546e8736edf1e581c9fe4616cea75c19dec3237",
+  "runtime/judge.py": "5506d608c5ebd2f2bce74d275243d998474cec39558e1a550480a051001c633d",
+  "runtime/artifacts.py": "b194f26b1111d195a237c3f4fdb70424c906c50df820eb170aa875c9615512cf",
+  "runtime/submissions.py": "b298567d8b8a3b26cde70060e16a1ad30583ec52dcac0c20c124b59e4d07066c",
+  "integrations/rsi_loop.py": "5a9b9ac5aacec5d309600811f58ecb4fc11a2e33155f788b3d609909064addc8",
+  "task/compiler.py": "c7b16106eb726e2720ca88f1c45989ddeb75bde03ae0e7e5fa4a1975343e23fe"
+}

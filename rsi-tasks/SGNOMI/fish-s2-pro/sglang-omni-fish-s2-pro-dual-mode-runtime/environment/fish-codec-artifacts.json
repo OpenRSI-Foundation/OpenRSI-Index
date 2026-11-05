@@ -1,0 +1,127 @@
+{
+  "schema": 1,
+  "documentation": "https://sgl-project.github.io/sglang-omni/cookbook/fishaudio_s2_pro.html",
+  "existing_distribution_changes": [],
+  "protobuf_override": "6.33.5 (retain original pin; upstream requires >=6.31.1,<7)",
+  "packages": {
+    "torch-stoi": {
+      "version": "0.2.3",
+      "filename": "torch_stoi-0.2.3-py3-none-any.whl",
+      "sha256": "6eee85e33b42fe843a2150de46000f72e7b87cbeb19ae6ab9bbd94b6ec6b3cd2",
+      "url": "https://files.pythonhosted.org/packages/a3/92/ead346e904390a53e71b5da2df7e7839abb16e967ba07fa15addf1f9f37c/torch_stoi-0.2.3-py3-none-any.whl",
+      "bytes": 8146
+    },
+    "termcolor": {
+      "version": "3.3.0",
+      "filename": "termcolor-3.3.0-py3-none-any.whl",
+      "sha256": "cf642efadaf0a8ebbbf4bc7a31cec2f9b5f21a9f726f4ccbb08192c9c26f43a5",
+      "url": "https://files.pythonhosted.org/packages/33/d1/8bb87d21e9aeb323cc03034f5eaf2c8f69841e40e4853c2627edf8111ed3/termcolor-3.3.0-py3-none-any.whl",
+      "bytes": 7734
+    },
+    "markdown2": {
+      "version": "2.5.5",
+      "filename": "markdown2-2.5.5-py3-none-any.whl",
+      "sha256": "be798587e09d1f52d2e4d96a649c4b82a778c75f9929aad52a2c95747fa26941",
+      "url": "https://files.pythonhosted.org/packages/43/af/4b3891eb0a49d6cfd5cbf3e9bf514c943afc2b0f13e2c57cc57cd88ecc21/markdown2-2.5.5-py3-none-any.whl",
+      "bytes": 56250
+    },
+    "pyloudnorm": {
+      "version": "0.2.0",
+      "filename": "pyloudnorm-0.2.0-py3-none-any.whl",
+      "sha256": "9bb69afb904f59d007a7f9ba3d75d16fb8aeef35c44d6df822a9f192d69cf13f",
+      "url": "https://files.pythonhosted.org/packages/aa/b6/65a49a05614b2548edbba3aab118f2ebe7441dfd778accdcdce9f6567f20/pyloudnorm-0.2.0-py3-none-any.whl",
+      "bytes": 10879
+    },
+    "tensorboard-data-server": {
+      "version": "0.7.2",
+      "filename": "tensorboard_data_server-0.7.2-py3-none-manylinux_2_31_x86_64.whl",
+      "sha256": "ef687163c24185ae9754ed5650eb5bc4d84ff257aabdc33f0cc6f74d8ba54530",
+      "url": "https://files.pythonhosted.org/packages/73/c6/825dab04195756cf8ff2e12698f22513b3db2f64925bdd41671bfb33aaa5/tensorboard_data_server-0.7.2-py3-none-manylinux_2_31_x86_64.whl",
+      "bytes": 6590363
+    },
+    "pystoi": {
+      "version": "0.4.1",
+      "filename": "pystoi-0.4.1-py2.py3-none-any.whl",
+      "sha256": "e277b671663d26d35a2416c9c8010a74084e6c3970354506398051a554896939",
+      "url": "https://files.pythonhosted.org/packages/1a/22/60cd92bd3ec00948800984410f4cf5ded5bd8e9b715729f3642efe0edb3d/pystoi-0.4.1-py2.py3-none-any.whl",
+      "bytes": 8218
+    },
+    "fire": {
+      "version": "0.7.1",
+      "filename": "fire-0.7.1-py3-none-any.whl",
+      "sha256": "e43fd8a5033a9001e7e2973bab96070694b9f12f2e0ecf96d4683971b5ab1882",
+      "url": "https://files.pythonhosted.org/packages/e5/4c/93d0f85318da65923e4b91c1c2ff03d8a458cbefebe3bc612a6693c7906d/fire-0.7.1-py3-none-any.whl",
+      "bytes": 115945
+    },
+    "werkzeug": {
+      "version": "3.1.9",
+      "filename": "werkzeug-3.1.9-py3-none-any.whl",
+      "sha256": "6392e50c78460ba618e5b21f08a71f59c99ce99cdc6cf6e3dd7e6ccca8754fab",
+      "url": "https://files.pythonhosted.org/packages/a1/38/df03f564f43cec2684823f3cccae1a652ee7face1cbaa76fb223096e64d7/werkzeug-3.1.9-py3-none-any.whl",
+      "bytes": 228700
+    },
+    "argbind": {
+      "version": "0.3.9",
+      "filename": "argbind-0.3.9.tar.gz",
+      "sha256": "1b159c04af56858a91d59c7a47bc9ea39d96adfce1d7fcfa38050d7ac9815745",
+      "url": "https://files.pythonhosted.org/packages/8e/25/4422cf7777c0cedd2fbcbdf8face786be76186e6d2e7b66f5f37e266b604/argbind-0.3.9.tar.gz",
+      "bytes": 17567
+    },
+    "randomname": {
+      "version": "0.2.1",
+      "filename": "randomname-0.2.1.tar.gz",
+      "sha256": "b79b98302ba4479164b0a4f87995b7bebbd1d91012aeda483341e3e58ace520e",
+      "url": "https://files.pythonhosted.org/packages/e8/c2/525e9e9b458c3ca493d9bd0871f3ed9b51446d26fe82d462494de188f848/randomname-0.2.1.tar.gz",
+      "bytes": 64242
+    },
+    "julius": {
+      "version": "0.2.8",
+      "filename": "julius-0.2.8-py3-none-any.whl",
+      "sha256": "6891235cbc355e629d839f87489bff8ca46e57a0e7cc35abb909c7a2aa538c25",
+      "url": "https://files.pythonhosted.org/packages/86/43/efdb0bcb07c47826fa55857cec0deb743f74cd83b6ba5ec9e413505a72e6/julius-0.2.8-py3-none-any.whl",
+      "bytes": 21819
+    },
+    "descript-audio-codec": {
+      "version": "1.0.0",
+      "filename": "descript_audio_codec-1.0.0-py3-none-any.whl",
+      "sha256": "7ecd1883040613d143494f27f199c11c7053a8a7f9fd2120568c5a98db926e61",
+      "url": "https://files.pythonhosted.org/packages/6e/c4/93f7309eb40a9299c59a6637f13c21b08e585c569fee85901ccd55ce00f5/descript_audio_codec-1.0.0-py3-none-any.whl",
+      "bytes": 26933
+    },
+    "flatten-dict": {
+      "version": "0.5.0",
+      "filename": "flatten_dict-0.5.0-py3-none-any.whl",
+      "sha256": "c4bd2010052e4d33241433720d054322403fa7ad914fdc5cb1b31a713d4c561e",
+      "url": "https://files.pythonhosted.org/packages/72/9f/485516087cd8c44183aaf9ab850247a28e2e4a42a4d62eab77c21f673450/flatten_dict-0.5.0-py3-none-any.whl",
+      "bytes": 9869
+    },
+    "ffmpy": {
+      "version": "1.0.0",
+      "filename": "ffmpy-1.0.0-py3-none-any.whl",
+      "sha256": "5640e5f0fd03fb6236d0e119b16ccf6522db1c826fdf35dcb87087b60fd7504f",
+      "url": "https://files.pythonhosted.org/packages/55/56/dd3669eccebb6d8ac81e624542ebd53fe6f08e1b8f2f8d50aeb7e3b83f99/ffmpy-1.0.0-py3-none-any.whl",
+      "bytes": 5614
+    },
+    "descript-audiotools": {
+      "version": "0.7.2",
+      "filename": "descript_audiotools-0.7.2-py2.py3-none-any.whl",
+      "sha256": "bb7a4e837f92395e43894d99a89406485325b88c6f158caf59e18876cf5b06ea",
+      "url": "https://files.pythonhosted.org/packages/68/b8/72a58cb3b241d869811be4f9328a37f1563dc9c48af8c0467cb681f9ed46/descript_audiotools-0.7.2-py2.py3-none-any.whl",
+      "bytes": 106704
+    },
+    "markdown": {
+      "version": "3.11",
+      "filename": "markdown-3.11-py3-none-any.whl",
+      "sha256": "cd6c89e7eb308c8b332ed673215a52d208a43f8bacc030b1419376129408719e",
+      "url": "https://files.pythonhosted.org/packages/ec/1e/32971905a7ab47f8b66866ed949fa48b104ba1c4a6fa57794c4f2c4b2cb8/markdown-3.11-py3-none-any.whl",
+      "bytes": 111296
+    },
+    "tensorboard": {
+      "version": "2.21.0",
+      "filename": "tensorboard-2.21.0-py3-none-any.whl",
+      "sha256": "7279316dcb6bd5bc391d623dea841531299cde1887310e8133bc34a996d32255",
+      "url": "https://files.pythonhosted.org/packages/37/4b/cd2eec9642781a8f5b2fb9994e3933a7b259ab18e9d49aeede9b5acf6311/tensorboard-2.21.0-py3-none-any.whl",
+      "bytes": 5516204
+    }
+  }
+}
