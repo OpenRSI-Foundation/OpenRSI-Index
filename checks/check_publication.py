@@ -37,6 +37,7 @@ MAX_TAR_HEADER = 1024**2
 # would escape package checks, so it is rejected.
 COLLECTIONS = {
     "rsi-tasks",
+    "rsi-tasks/SGNOMI",
     "rsi-tasks/signature-tasks",
     "rsi-logs",
     "rsi-logs/signature-tasks",
