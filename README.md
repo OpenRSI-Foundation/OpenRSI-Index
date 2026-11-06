@@ -45,7 +45,7 @@ We are witnessing the dawn of a new era: AI is entering a recursive self-improve
 
 We are actively developing this project and welcome [contributions](https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md) from the community. Tasks and execution logs are available in [rsi-tasks/](rsi-tasks/) and [OpenRSI-Index-Logs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs), respectively. Open the [RSI Logs Viewer](https://index.openrsi.foundation/logs/) to explore results visually. See [Quick Start](assets/docs/quick-start.md) for instructions on running these tasks.
 
-The [SGLang-Omni task collection](rsi-tasks/SGNOMI/) contains complete public task packages, including the final per-model streaming and non-streaming versions, the original multi-model task and related upstream pull requests.
+The [SGLang-Omni task collection](rsi-tasks/SGNOMI/) contains complete public task packages, organized by model with the final streaming and non-streaming versions and related upstream pull requests.
 
 <details>
 <summary><strong>View tasks</strong></summary>
@@ -67,7 +67,6 @@ The [SGLang-Omni task collection](rsi-tasks/SGNOMI/) contains complete public ta
 | [`reasonir-difficulty-curriculum`](rsi-tasks/reasonir-difficulty-curriculum/) | Public Task | Post-training | Optimize a fixed-budget retrieval LoRA through difficulty-aware curricula. | 4× H100 minimum |
 | [`isaaclab-peginsert-reward-search`](rsi-tasks/isaaclab-peginsert-reward-search/) | Public Task | Robotics      | Design bounded reward graphs for fixed-budget Isaac Lab peg insertion. | 4× H100         |
 | [`kev-decision-architecture`](rsi-tasks/kev-decision-architecture/) | Public Task | Post-training | Redesign a 0.5B decision architecture under a fixed training corpus and recipe. | 2× H100 minimum |
-| [`sglang-omni-tts-runtime`](rsi-tasks/SGNOMI/sglang-omni-tts-runtime/) | Public Task | MLSys | Improve CosyVoice3 TTS serving throughput with Qwen Base and MOSS regression checks. | 1 Work + 3 Judge GPUs; recorded on H200 |
 
 </details>
 

@@ -1,6 +1,6 @@
 # SGNOMI: SGLang-Omni tasks
 
-One task entry per model, with the final non-streaming and streaming task versions. The ten models below cover the eight model families in [OpenRSI × SGLang-Omni: Scaling RSI for AI Infra](https://claude.ai/artifact/QkFUUcF1qsLK7vwFWsGhPo); Qwen3-TTS Base 0.6B / 1.7B and Ming3-TTS 0.5B / Tiny each have their own entry. Historical iterations, reward-weight variants and objective ablations are omitted from the model index; the original multi-model task is listed separately below.
+One task entry per model, with the final non-streaming and streaming task versions. The ten models below cover the eight model families in [OpenRSI × SGLang-Omni: Scaling RSI for AI Infra](https://claude.ai/artifact/QkFUUcF1qsLK7vwFWsGhPo); Qwen3-TTS Base 0.6B / 1.7B and Ming3-TTS 0.5B / Tiny each have their own entry. Historical iterations, reward-weight variants and objective ablations are omitted.
 
 Each model has its own directory below. Task links open complete public copies containing `task.toml`, instructions, environment build files, the evaluator and its fixed assets. All twelve per-model packages are available in this repository; the original task directory names are retained inside the ten model directories.
 
@@ -24,10 +24,6 @@ The dual-mode tasks evaluate both modes in one task and require both throughput 
 Ming3 has one index entry per model, with the final package for each mode linked in that entry. Its existing packages have separate evaluators and baselines: non-streaming uses `ca9e8789fcd8`, while native streaming uses `0c663861d7d4` with the declared compatibility port. They are not a combined dual-mode evaluator; follow each package's own protocol and calibration.
 
 The TTS and ASR task families originate from proposals [#154](https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/154) and [#257](https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/257). Upstream PRs are related results for the model family, not measurements against every final task baseline.
-
-## Original multi-model task
-
-The [original TTS runtime task](sglang-omni-tts-runtime/) (task 2.0.0 / protocol v5) optimizes non-streaming CosyVoice3 throughput with Qwen3-TTS Base 1.7B and MOSS-TTS regression checks. It retains its original evaluator and [recorded research archive](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/SGNOMI/sglang-omni-tts-runtime), separately from the newer per-model tasks above.
 
 ## Run a task
 

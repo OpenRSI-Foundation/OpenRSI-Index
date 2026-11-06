@@ -66,6 +66,14 @@ reward semantics remain the task's declared scientific contract.
 - Require a corresponding public task; GPIC's historical log name is explicitly
   mapped in the policy. A newly added archive needs a README describing its
   source, recorded protocol and limitations.
+- Retained logs for retired tasks may use the trusted policy's `[task_snapshots]`
+  table, mapping a canonical task path relative to `rsi-tasks/` to a full lowercase
+  40-character commit SHA. Log aliases are resolved first. A configured snapshot
+  always takes precedence over the current task: the commit must exist in the
+  Index checkout and contain a regular `task.toml` at that path. Moving references,
+  unavailable commits and missing task files fail; fetch the pinned Index commit
+  when using a shallow checkout. This preserves log provenance without restoring
+  a retired task to the current index or claiming current-Harness compatibility.
 - Parse JSON/JSONL, including compressed structured records; reject duplicate
   JSON keys and non-finite JSON numbers. Raw unsuccessful outputs that are not
   JSON should be retained as `.txt`/`.log`, not rewritten to look successful.
