@@ -83,24 +83,30 @@ class PrimitiveTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(pub.CheckError):
                 pub.positive_number(value, "timeout")
 
-    def test_signature_task_and_log_detection(self):
-        root = "rsi-tasks/signature-tasks/my-task"
-        self.assertEqual(pub.task_root(root + "/tests/test.sh", {root}), root)
-        self.assertEqual(
-            pub.log_root("rsi-logs/signature-tasks/my-task/model/evolve_state.json"),
-            "rsi-logs/signature-tasks/my-task",
-        )
+    def test_nested_task_and_log_detection(self):
+        for collection in ("signature-tasks", "SGNOMI"):
+            root = f"rsi-tasks/{collection}/my-task"
+            self.assertEqual(pub.task_root(root + "/tests/test.sh", {root}), root)
+            self.assertEqual(
+                pub.log_root(f"rsi-logs/{collection}/my-task/model/evolve_state.json"),
+                f"rsi-logs/{collection}/my-task",
+            )
         nested = {"rsi-tasks/a", "rsi-tasks/a/b"}
         self.assertEqual(
             pub.task_root("rsi-tasks/a/b/task.toml", nested), "rsi-tasks/a/b"
         )
-        for loose in ("rsi-logs/run.jsonl", "rsi-logs/signature-tasks/x.json"):
+        for loose in (
+            "rsi-logs/run.jsonl",
+            "rsi-logs/signature-tasks/x.json",
+            "rsi-logs/SGNOMI/x.json",
+        ):
             self.assertIsNone(pub.log_root(loose))
 
     def test_collection_documentation(self):
         for path in (
             "rsi-logs/SANITIZATION.md",
             "rsi-logs/signature-tasks/README.md",
+            "rsi-logs/SGNOMI/README.md",
             "rsi-tasks/README.md",
             "rsi-tasks/SGNOMI/README.md",
             "rsi-tasks/signature-tasks/NOTES.MD",
@@ -109,6 +115,8 @@ class PrimitiveTests(unittest.TestCase):
         for path in (
             "rsi-logs/run.jsonl",
             "rsi-logs/README.txt",
+            "rsi-logs/SGNOMI/loose.json",
+            "rsi-logs/SGNOMI/stray/README.md",
             "rsi-tasks/stray/README.md",
             "rsi-tasks/SGNOMI/loose.json",
             "rsi-tasks/SGNOMI/stray/README.md",
@@ -1065,7 +1073,11 @@ class RepositoryTests(unittest.TestCase):
 
     def test_loose_log_data_files_fail(self):
         self.task()
-        for path in ("rsi-logs/run.jsonl", "rsi-logs/signature-tasks/x.json"):
+        for path in (
+            "rsi-logs/run.jsonl",
+            "rsi-logs/signature-tasks/x.json",
+            "rsi-logs/SGNOMI/x.json",
+        ):
             with self.subTest(path=path):
                 self.write(path, '{"x": 1}\n')
                 self.commit()
@@ -1076,10 +1088,11 @@ class RepositoryTests(unittest.TestCase):
     def test_collection_documentation_passes_and_is_scanned(self):
         self.write("rsi-logs/NOTES.md", "Notes\n")
         self.write("rsi-logs/signature-tasks/README.md", "Signature logs\n")
+        self.write("rsi-logs/SGNOMI/README.md", "SGLang-Omni logs\n")
         self.write("rsi-tasks/README.md", "Tasks\n")
         self.write("rsi-tasks/SGNOMI/README.md", "SGLang-Omni tasks\n")
         self.commit()
-        self.assertIn("PASS 4 published files", self.check())
+        self.assertIn("PASS 5 published files", self.check())
 
     def test_removing_a_loose_file_passes(self):
         self.write("rsi-logs/run.jsonl", "{}\n")
@@ -1679,6 +1692,7 @@ class LogsModeTests(unittest.TestCase):
         self.write(
             self.index, "rsi-tasks/signature-tasks/gpic_generation/task.toml", "x\n"
         )
+        self.write(self.index, "rsi-tasks/SGNOMI/my-task/task.toml", "x\n")
         self.task_ref = self.commit(self.index)
         self.write(self.repo, "README.md", "---\nlicense: other\n---\n# Logs\n")
         self.write(self.repo, "LICENSE", "License text\n")
@@ -1732,20 +1746,26 @@ class LogsModeTests(unittest.TestCase):
     # Layout and task correspondence
 
     def test_log_root_checked_against_index_task(self):
-        self.log()
-        self.write(self.repo, "demo-task/model/events.jsonl", '{"x": 1}\n')
-        self.commit()
-        output = self.check()
-        self.assertIn("NOTICE Logs mode", output)
-        self.assertIn("PASS 2 published files", output)
+        for slug in ("demo-task", "SGNOMI/my-task"):
+            with self.subTest(slug=slug):
+                self.git(self.repo, "reset", "-q", "--hard", self.base)
+                self.log(slug)
+                self.write(self.repo, slug + "/model/events.jsonl", '{"x": 1}\n')
+                self.commit()
+                output = self.check()
+                self.assertIn("NOTICE Logs mode", output)
+                self.assertIn("PASS 2 published files", output)
 
     def test_log_without_index_task_fails(self):
-        self.log("missing-task")
-        self.commit()
-        self.assertFails(
-            "^rsi-logs/missing-task: corresponding public task.toml not found in "
-            "the task repository; merge the task into OpenRSI-Index first"
-        )
+        for slug in ("missing-task", "SGNOMI/missing-task"):
+            with self.subTest(slug=slug):
+                self.git(self.repo, "reset", "-q", "--hard", self.base)
+                self.log(slug)
+                self.commit()
+                self.assertFails(
+                    f"^rsi-logs/{slug}: corresponding public task.toml not found in "
+                    "the task repository; merge the task into OpenRSI-Index first"
+                )
 
     def test_tasks_come_from_the_task_ref_only(self):
         self.git(self.index, "checkout", "-qb", "proposal")
@@ -1772,10 +1792,19 @@ class LogsModeTests(unittest.TestCase):
         output = self.check()
         self.assertIn("PASS 2 published files", output)
 
-    def test_new_log_requires_readme(self):
-        self.write(self.repo, "demo-task/model/agent_output.txt", "output\n")
+    def test_sgnomi_collection_documentation(self):
+        self.log("SGNOMI/my-task")
+        self.write(self.repo, "SGNOMI/README.md", "SGLang-Omni logs\n")
         self.commit()
-        self.assertFails("rsi-logs/demo-task: new log archive needs README.md")
+        self.assertIn("PASS 2 published files", self.check())
+
+    def test_new_log_requires_readme(self):
+        for slug in ("demo-task", "SGNOMI/my-task"):
+            with self.subTest(slug=slug):
+                self.git(self.repo, "reset", "-q", "--hard", self.base)
+                self.write(self.repo, slug + "/model/agent_output.txt", "output\n")
+                self.commit()
+                self.assertFails(f"rsi-logs/{slug}: new log archive needs README.md")
 
     def test_root_infrastructure_is_scanned_only(self):
         self.write(self.repo, ".gitattributes", "*.txt filter=lfs diff=lfs merge=lfs -text\n")
@@ -1786,14 +1815,14 @@ class LogsModeTests(unittest.TestCase):
         self.assertIn("PASS 4 published files", self.check())
 
     def test_other_root_files_fail(self):
-        for name in ("data.json", "notes.txt"):
+        for name in ("data.json", "notes.txt", "SGNOMI/data.json"):
             with self.subTest(name=name):
                 self.git(self.repo, "reset", "-q", "--hard", self.base)
                 self.write(self.repo, name, "{}\n")
                 self.commit()
                 self.assertFails(
-                    f"^rsi-logs/{re.escape(name)}: log files must be inside <task>/ "
-                    "or signature-tasks/<task>/ of the Logs repository"
+                    f"^rsi-logs/{re.escape(name)}: log files must be inside <task>/, "
+                    "signature-tasks/<task>/ or SGNOMI/<task>/ of the Logs repository"
                 )
 
     def test_unknown_top_level_directory_is_a_log_root_without_task(self):
@@ -1965,11 +1994,17 @@ class LogsModeTests(unittest.TestCase):
     def test_lfs_includes_cover_what_the_check_reads(self):
         self.log()
         self.log("signature-tasks/gpic-10m-autoresearch")
+        self.log("SGNOMI/my-task")
+        self.log("SGNOMI/unchanged")
         self.write(self.repo, "demo-task/m/a.txt", "a\n")
+        self.write(self.repo, "SGNOMI/my-task/m/c.txt", "c\n")
+        self.write(self.repo, "SGNOMI/unchanged/m/large.txt", LFS_POINTER_TEXT)
         self.base = self.commit()
         (self.repo / "demo-task/m/a.txt").unlink()
+        (self.repo / "SGNOMI/my-task/m/c.txt").unlink()
         self.write(self.repo, "signature-tasks/gpic-10m-autoresearch/m/b.txt", "b\n")
         self.write(self.repo, "signature-tasks/README.md", "docs\n")
+        self.write(self.repo, "SGNOMI/README.md", "docs\n")
         self.write(self.repo, "LICENSE", "new\n")
         self.commit()
         revisions = pub.Revisions(self.repo, self.base, "HEAD", False, "rsi-logs")
@@ -1977,11 +2012,14 @@ class LogsModeTests(unittest.TestCase):
             pub.lfs_includes(revisions),
             [
                 "LICENSE",
+                "SGNOMI/README.md",
+                "SGNOMI/my-task/**",
                 "demo-task/**",
                 "signature-tasks/README.md",
                 "signature-tasks/gpic-10m-autoresearch/**",
             ],
         )
+        self.check()
 
     # Manifests
 

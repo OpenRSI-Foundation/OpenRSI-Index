@@ -12,11 +12,12 @@ packages are checked; a run with no package change passes with “not applicable
 (`workflow_dispatch`) audits every published package (`--full`), and so does a
 forced push to `main` (for example after a history rewrite). A newer push to
 a PR cancels that PR's running check; runs for pushes to `main` and manual runs
-are never cancelled, so each push's changes are audited. Nested `signature-tasks/` paths are supported.
+are never cancelled, so each push's changes are audited. Nested `signature-tasks/`
+and `SGNOMI/` task and log paths are supported.
 
-Files directly under `rsi-tasks/`, `rsi-tasks/signature-tasks/`, `rsi-logs/` or
-`rsi-logs/signature-tasks/` belong to no package. Only Markdown documentation
-(`.md`) may sit there, and it is secret-scanned like package files; any other file
+Files directly under `rsi-tasks/`, `rsi-tasks/signature-tasks/`, `rsi-tasks/SGNOMI/`,
+`rsi-logs/`, `rsi-logs/signature-tasks/` or `rsi-logs/SGNOMI/` belong to no package.
+Only Markdown documentation (`.md`) may sit there, and it is secret-scanned like package files; any other file
 there fails, as does a file under `rsi-tasks/` with no enclosing `task.toml`.
 Removing such a file always passes. Failures name the task or log root and the
 file concerned.
