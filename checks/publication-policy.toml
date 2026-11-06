@@ -3,6 +3,10 @@
 "signature-tasks/gpic-10m-autoresearch" = "signature-tasks/gpic_generation"
 "sglang-omni-tts-runtime" = "SGNOMI/sglang-omni-tts-runtime"
 
+# Retained logs link to this published task snapshot after removal from main.
+[task_snapshots]
+"SGNOMI/sglang-omni-tts-runtime" = "c31e48c5293d0854bb09a2afa64b4e707842625b"
+
 [historical_tasks]
 "signature-tasks/gpic_generation" = "Published schema-1.3 archive; its runtime differs from the logged 10M continuation. See its README."
 "signature-tasks/pre-training-optimizer-update-geometry" = "Published scaling-ladder archive has no standard tests/test.sh; see its recorded Slurm evaluation protocol."

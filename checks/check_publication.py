@@ -1084,6 +1084,9 @@ def check(
         revisions.changed,
     )
     config = tomllib.loads(policy.read_text())
+    snapshots = config.get("task_snapshots", {})
+    if not isinstance(snapshots, dict):
+        raise CheckError("task_snapshots must be a table")
     if logs_mode:
         # Tasks come from the task repository (OpenRSI-Index main in CI), never
         # from the Logs repository under review.
@@ -1212,12 +1215,34 @@ def check(
             print(f"PASS {root}: log archive removed")
             continue
         slug = root.removeprefix("rsi-logs/")
-        matched = (
-            "rsi-tasks/"
-            + config.get("log_task_aliases", {}).get(slug, slug)
-            + "/task.toml"
-        )
-        if matched not in task_files:
+        canonical = config.get("log_task_aliases", {}).get(slug, slug)
+        matched = "rsi-tasks/" + canonical + "/task.toml"
+        if canonical in snapshots:
+            snapshot = snapshots[canonical]
+            if not isinstance(snapshot, str) or not re.fullmatch(r"[0-9a-f]{40}", snapshot):
+                raise CheckError(f"{root}: task snapshot must be a full lowercase 40-character commit SHA")
+            safe_relative(canonical)
+            snapshot_repo = task_repo.resolve() if logs_mode else repo
+            try:
+                if git(snapshot_repo, "cat-file", "-t", snapshot).strip() != b"commit":
+                    raise CheckError(f"{root}: task snapshot must name a commit object")
+                entry = git(
+                    snapshot_repo, "ls-tree", "-z", "--full-tree", snapshot,
+                    "--", f":(literal){matched}",
+                ).removesuffix(b"\0")
+            except subprocess.CalledProcessError as exc:
+                raise CheckError(
+                    f"{root}: task snapshot commit unavailable in the task repository; "
+                    "fetch the pinned commit into the Index checkout"
+                ) from exc
+            metadata, _, path = entry.partition(b"\t")
+            if (
+                metadata.split()[:2] not in ([b"100644", b"blob"], [b"100755", b"blob"])
+                or path != matched.encode()
+            ):
+                raise CheckError(f"{root}: task snapshot has no regular {matched}")
+            print(f"NOTICE {root}: retained logs match task snapshot {snapshot}")
+        elif matched not in task_files:
             if logs_mode:
                 raise CheckError(
                     f"{root}: corresponding public task.toml not found in the task "

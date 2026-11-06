@@ -725,7 +725,7 @@ class RepositoryTests(unittest.TestCase):
                 self.repo,
                 self.base,
                 "HEAD",
-                HERE / "publication-policy.toml",
+                options.pop("policy", HERE / "publication-policy.toml"),
                 **options,
             )
         return output.getvalue()
@@ -1113,6 +1113,20 @@ class RepositoryTests(unittest.TestCase):
         self.log("signature-tasks/gpic-10m-autoresearch")
         self.commit()
         self.check()
+
+    def test_task_snapshot_retains_logs_after_task_removal(self):
+        root = self.task("SGNOMI/my-task")
+        snapshot = self.commit()
+        shutil.rmtree(self.repo / root)
+        self.base = self.commit()
+        self.log("SGNOMI/my-task")
+        self.commit()
+        self.assertFails("corresponding public task.toml not found")
+        policy = self.write(
+            "snapshot-policy.toml",
+            f'[task_snapshots]\n"SGNOMI/my-task" = "{snapshot}"\n',
+        )
+        self.assertIn(f"task snapshot {snapshot}", self.check(policy=policy))
 
     def test_new_log_requires_readme(self):
         self.task()
@@ -1731,7 +1745,7 @@ class LogsModeTests(unittest.TestCase):
                 self.repo,
                 self.base if base is ... else base,
                 "HEAD",
-                HERE / "publication-policy.toml",
+                options.pop("policy", HERE / "publication-policy.toml"),
                 mount="rsi-logs",
                 task_repo=self.index,
                 task_ref=options.pop("task_ref", self.task_ref),
@@ -1784,6 +1798,61 @@ class LogsModeTests(unittest.TestCase):
         self.log()
         self.commit()
         self.assertFails("task repository revision not found", task_ref="no-such-ref")
+
+    def test_task_snapshot_and_alias_survive_current_task_removal(self):
+        snapshot = self.task_ref
+        shutil.rmtree(self.index / "rsi-tasks/SGNOMI/my-task")
+        self.task_ref = self.commit(self.index)
+        policy = Path(self.tmp.name) / "snapshot-policy.toml"
+        policy.write_text(
+            '[log_task_aliases]\n"old-task" = "SGNOMI/my-task"\n'
+            f'[task_snapshots]\n"SGNOMI/my-task" = "{snapshot}"\n'
+        )
+        for slug in ("SGNOMI/my-task", "old-task"):
+            with self.subTest(slug=slug):
+                self.git(self.repo, "reset", "-q", "--hard", self.base)
+                self.log(slug)
+                self.commit()
+                self.assertIn(f"task snapshot {snapshot}", self.check(policy=policy))
+
+    def test_task_snapshot_must_be_an_available_immutable_commit(self):
+        self.log("SGNOMI/my-task")
+        self.commit()
+        policy = Path(self.tmp.name) / "snapshot-policy.toml"
+        # The current task exists, so none of these pins may fall back to it.
+        cases = [
+            (value, "full lowercase 40-character commit SHA")
+            for value in ("HEAD", self.task_ref[:12], "", self.task_ref.upper(), 42)
+        ] + [
+            ("f" * 40, "commit unavailable"),
+            (self.base, "commit unavailable"),  # Present only in the Logs repository.
+            (self.git(self.index, "rev-parse", "HEAD^{tree}"), "commit object"),
+        ]
+        for snapshot, error in cases:
+            with self.subTest(snapshot=snapshot):
+                policy.write_text(
+                    f'[task_snapshots]\n"SGNOMI/my-task" = {json.dumps(snapshot)}\n'
+                )
+                self.assertFails(error, policy=policy)
+        policy.write_text("task_snapshots = []\n")
+        self.assertFails("task_snapshots must be a table", policy=policy)
+
+    def test_task_snapshot_requires_a_regular_task_file(self):
+        self.log("SGNOMI/my-task")
+        self.commit()
+        policy = Path(self.tmp.name) / "snapshot-policy.toml"
+        for kind in ("missing", "directory", "symlink"):
+            with self.subTest(kind=kind):
+                self.git(self.index, "reset", "-q", "--hard", self.task_ref)
+                task_file = self.index / "rsi-tasks/SGNOMI/my-task/task.toml"
+                task_file.unlink()
+                if kind == "directory":
+                    self.write(self.index, "rsi-tasks/SGNOMI/my-task/task.toml/child", "x\n")
+                elif kind == "symlink":
+                    task_file.symlink_to("../../../README.md")
+                snapshot = self.commit(self.index)
+                policy.write_text(f'[task_snapshots]\n"SGNOMI/my-task" = "{snapshot}"\n')
+                self.assertFails("task snapshot has no regular rsi-tasks/SGNOMI/my-task/task.toml", policy=policy)
 
     def test_historical_alias_and_signature_layout(self):
         self.log("signature-tasks/gpic-10m-autoresearch")
