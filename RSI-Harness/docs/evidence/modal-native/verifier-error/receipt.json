@@ -1,0 +1,57 @@
+{
+  "run_id": "d685ca7f40f24da1bcba3f6c8504b192",
+  "app_id": "ap-cc6tWUItirIVJZucQld5gq",
+  "segments": [
+    {
+      "run_id": "d685ca7f40f24da1bcba3f6c8504b192",
+      "segment": 1,
+      "result": {
+        "run_id": "d685ca7f40f24da1bcba3f6c8504b192",
+        "status": "no_valid_submission",
+        "total_rounds": 2,
+        "best_score": null,
+        "best_round": null,
+        "best_rewards": {},
+        "reports": [
+          {
+            "round_id": "agent-1",
+            "status": "verifier_error",
+            "rewards": {},
+            "score": null,
+            "output": "{\"fixture_score\": 0.0, \"isolation\": \"passed\"}\n",
+            "exit_code": 7,
+            "timed_out": false,
+            "verifier_output_required": true,
+            "full_output_captured": true,
+            "duration_seconds": 0.38189508900000035,
+            "error": "verifier exited with 7"
+          },
+          {
+            "round_id": "agent-2",
+            "status": "verifier_error",
+            "rewards": {},
+            "score": null,
+            "output": "{\"fixture_score\": 1.0, \"isolation\": \"passed\"}\n",
+            "exit_code": 7,
+            "timed_out": false,
+            "verifier_output_required": true,
+            "full_output_captured": true,
+            "duration_seconds": 0.422875511,
+            "error": "verifier exited with 7"
+          }
+        ],
+        "agent_exit_code": 0,
+        "artifacts_dir": "/__modal/volumes/vo-evK8iV3Fy4ipPoDcK00pVJ/logs/runs/d685ca7f40f24da1bcba3f6c8504b192/modal-native"
+      },
+      "deadline": 1793750438.9216123,
+      "reserved_compute_seconds": 179.99999451637268,
+      "segment_boundary": false,
+      "continue": false,
+      "gpu_uuids": [],
+      "image_id": "im-ReW3JPBnDLr926my4tBFtW",
+      "state_root": "/__modal/volumes/vo-evK8iV3Fy4ipPoDcK00pVJ",
+      "error": null,
+      "agent_diagnostic": ""
+    }
+  ]
+}

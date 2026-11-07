@@ -1,0 +1,105 @@
+{
+  "run_id": "3d9590143c76449b9c0f4ed028506e15",
+  "app_id": "ap-j6OHmQpsWH13GuvfwcJ3y4",
+  "segments": [
+    {
+      "run_id": "3d9590143c76449b9c0f4ed028506e15",
+      "segment": 1,
+      "result": {
+        "run_id": "3d9590143c76449b9c0f4ed028506e15",
+        "status": "cancelled",
+        "total_rounds": 1,
+        "best_score": 0.0,
+        "best_round": "agent-1",
+        "best_rewards": {
+          "reward": 0.0
+        },
+        "reports": [
+          {
+            "round_id": "agent-1",
+            "status": "completed",
+            "rewards": {
+              "reward": 0.0
+            },
+            "score": 0.0,
+            "output": "{\"fixture_score\": 0.0, \"isolation\": \"passed\"}\n",
+            "exit_code": 0,
+            "timed_out": false,
+            "verifier_output_required": true,
+            "full_output_captured": true,
+            "duration_seconds": 0.42118126099999964,
+            "error": null
+          }
+        ],
+        "agent_exit_code": null,
+        "artifacts_dir": "/__modal/volumes/vo-evK8iV3Fy4ipPoDcK00pVJ/logs/runs/3d9590143c76449b9c0f4ed028506e15/modal-native"
+      },
+      "deadline": 1793750439.1438942,
+      "reserved_compute_seconds": 90,
+      "segment_boundary": true,
+      "continue": true,
+      "gpu_uuids": [],
+      "image_id": "im-Ok9qfCWQvzKzVfcPiNl8a4",
+      "state_root": "/__modal/volumes/vo-evK8iV3Fy4ipPoDcK00pVJ",
+      "error": "_RunCancelled: received signal 15",
+      "agent_diagnostic": ""
+    },
+    {
+      "run_id": "3d9590143c76449b9c0f4ed028506e15",
+      "segment": 2,
+      "result": {
+        "run_id": "3d9590143c76449b9c0f4ed028506e15",
+        "status": "completed",
+        "total_rounds": 2,
+        "best_score": 1.0,
+        "best_round": "agent-2",
+        "best_rewards": {
+          "reward": 1.0
+        },
+        "reports": [
+          {
+            "round_id": "agent-1",
+            "status": "completed",
+            "rewards": {
+              "reward": 0.0
+            },
+            "score": 0.0,
+            "output": "",
+            "exit_code": 0,
+            "timed_out": false,
+            "verifier_output_required": true,
+            "full_output_captured": true,
+            "duration_seconds": 0.42118126099999964,
+            "error": null
+          },
+          {
+            "round_id": "agent-2",
+            "status": "completed",
+            "rewards": {
+              "reward": 1.0
+            },
+            "score": 1.0,
+            "output": "{\"fixture_score\": 1.0, \"isolation\": \"passed\"}\n",
+            "exit_code": 0,
+            "timed_out": false,
+            "verifier_output_required": true,
+            "full_output_captured": true,
+            "duration_seconds": 0.8914616010000005,
+            "error": null
+          }
+        ],
+        "agent_exit_code": 0,
+        "artifacts_dir": "/__modal/volumes/vo-evK8iV3Fy4ipPoDcK00pVJ/logs/runs/3d9590143c76449b9c0f4ed028506e15/modal-native"
+      },
+      "deadline": 1793750439.1438942,
+      "reserved_compute_seconds": 180,
+      "segment_boundary": false,
+      "continue": false,
+      "gpu_uuids": [],
+      "image_id": "im-Ok9qfCWQvzKzVfcPiNl8a4",
+      "state_root": "/__modal/volumes/vo-evK8iV3Fy4ipPoDcK00pVJ",
+      "error": null,
+      "agent_diagnostic": ""
+    }
+  ]
+}
