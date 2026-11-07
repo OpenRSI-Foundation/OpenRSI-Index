@@ -329,17 +329,21 @@ def test_slurm_inherits_the_submit_host_singularity_ce_refusal(tmp_path):
     profile = base.model_copy(
         update={
             "storage": local.storage,
-            "apptainer": local.apptainer,
+            "apptainer": local.apptainer.model_copy(
+                update={"network_isolation": "seccomp"}
+            ),
             "builder": local.builder,
         }
     )
     profile.apptainer.binary.write_text(
-        "#!/bin/sh\necho 'singularity-ce version 4.1.3'\n"
+        "#!/bin/sh\n"
+        '[ "$1" = buildcfg ] && echo SINGULARITY_SUID_INSTALL=1 && exit 0\n'
+        "echo 'singularity-ce version 4.5.0'\n"
     )
     scheduler = RecordingSlurmScheduler()
     adapter = SlurmClusterAdapter(profile, scheduler=scheduler)
 
-    with pytest.raises(SetupError, match="SingularityCE is not supported"):
+    with pytest.raises(SetupError, match="setuid SingularityCE cannot run with"):
         adapter.run(_request(tmp_path, dry_run=False))
 
     assert scheduler.events == []

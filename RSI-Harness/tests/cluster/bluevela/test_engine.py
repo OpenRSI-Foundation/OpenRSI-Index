@@ -167,7 +167,7 @@ def test_cpu_driver_omits_nvidia_preflight_and_clears_inherited_devices(
     assert "nvidia-smi" not in script
     assert "--nv" not in script
     assert "unset CUDA_VISIBLE_DEVICES" in script
-    assert 'APPTAINERENV_CUDA_VISIBLE_DEVICES=""' in script
+    assert 'export "${container_env}CUDA_VISIBLE_DEVICES="' in script
     assert "rsi_harness.cluster.bluevela.engine" in script
     assert "sha256sum -c" in script
     assert "required_tmp_kb" in script

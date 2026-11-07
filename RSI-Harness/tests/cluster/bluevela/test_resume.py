@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -237,6 +238,26 @@ def test_resume_closes_the_attempt_and_submits_the_next_under_the_run_id(
     assert "error" not in manifest and "job_ids" not in manifest
     final = json.loads((run.root / "final_result.json").read_text())
     assert (final["attempts"], final["best_round"]) == (2, "agent-3")
+
+
+def test_a_resumed_driver_checks_the_frozen_runtime(tmp_path: Path) -> None:
+    # The Engine runs the run's frozen Apptainer or SingularityCE, so the
+    # driver's preflight (which tells the Engine which one it is) checks that
+    # one, not a binary the profile names since.
+    run = _interrupted_run(tmp_path)
+    frozen = run.adapter.profile.apptainer.binary
+    run.adapter.profile = run.adapter.profile.model_copy(
+        update={
+            "apptainer": run.adapter.profile.apptainer.model_copy(
+                update={"binary": tmp_path / "since" / "singularity"}
+            )
+        }
+    )
+    plan = run.adapter.plan_resume(run.run_id, AttemptGrants())
+    run.adapter.resume(plan)
+    script = (run.run_dir / "control" / "attempts" / "2" / "run.sh").read_text()
+    assert f"apptainer={shlex.quote(str(frozen))}" in script
+    assert "since" not in script
 
 
 def test_resume_dry_run_changes_nothing(tmp_path: Path) -> None:

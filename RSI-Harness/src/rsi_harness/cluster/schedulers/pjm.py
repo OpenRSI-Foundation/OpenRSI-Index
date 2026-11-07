@@ -26,6 +26,7 @@ from __future__ import annotations
 import re
 import sys
 import time
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -67,6 +68,8 @@ _DAY = re.compile(r"\(?(?:\d{4}/)?\d{2}/\d{2}")
 _CLOCK = re.compile(r"\d{2}:\d{2}(?::\d{2})?\)?[<@#]?")
 _STARTED = re.compile(r"(?:(\d{4})/)?(\d{2})/(\d{2}) (\d{2}):(\d{2}):(\d{2})[<@#]?")
 _ELAPSED = re.compile(r"(\d+):([0-5]\d)(?::([0-5]\d))?")
+# A running job's elapsed time and its limit.
+_LIMITS = ("ELAPSE_TIM", "ELAPSE_LIM")
 
 
 class PJMJobSpec(BatchJobSpec):
@@ -80,6 +83,7 @@ class PJMJobSpec(BatchJobSpec):
 
 class PJMScheduler(BatchScheduler):
     label = "PJM"
+    job_id_variable = "PJM_JOBID"
     name_limit = 63
     transient_errors = (
         # PJM 0090/0190/0290 and 0091/0191/0291: the job manager did not
@@ -109,12 +113,14 @@ class PJMScheduler(BatchScheduler):
         submit_binary: str = "pjsub",
         status_binary: str = "pjstat",
         cancel_binary: str = "pjdel",
+        gpu_resource: str | None = "gpu",
         **kwargs: Any,
     ) -> None:
         super().__init__(**kwargs)
         self._submit_binary = submit_binary
         self._status_binary = status_binary
         self._cancel_binary = cancel_binary
+        self._gpu_resource = gpu_resource
 
     def _submit_argv(self, spec: BatchJobSpec, script: Path) -> tuple[str, ...]:
         assert isinstance(spec, PJMJobSpec)
@@ -223,6 +229,43 @@ class PJMScheduler(BatchScheduler):
                 return job_result(job_id, found[0], now=self._wall_clock())
         return None
 
+    def _walltime_left(self, job_id: str, environ: Mapping[str, str]) -> float | None:
+        completed = self._checked(
+            (self._status_binary, "-v", "--choose", "jid,st,elp,elpl", job_id),
+            f"query PJM job {job_id}",
+        )
+        rows = [
+            row
+            for row in _rows(completed.stdout, ("JOB_ID", "ST"), _LIMITS)
+            if row["JOB_ID"] == job_id
+        ]
+        if len(rows) != 1:
+            return None
+        # An adaptive limit ("min-max", "min-") is sure of its minimum only:
+        # past it, PJM may end the job for another.
+        minimum, ranged, _ = rows[0].get("ELAPSE_LIM", "-").partition("-")
+        mode = environ.get("PJM_ELAPSED_TIME_MODE", "fixed").strip().lower()
+        if mode != "fixed" and not ranged:
+            raise SetupError(
+                f"PJM job {job_id} has an adaptive elapse limit "
+                f"(PJM_ELAPSED_TIME_MODE={mode}) whose minimum pjstat does not "
+                "show: request a fixed elapse limit"
+            )
+        limit = _seconds(minimum)
+        used = _seconds(rows[0].get("ELAPSE_TIM", "-"))
+        if limit is None or used is None:
+            return None
+        return float(limit - used)
+
+    def _job_gpus(self, job_id: str, environ: Mapping[str, str]) -> int | None:
+        # The job's custom resources ("gpu/n=4,jobenv=singularity"; "/n":
+        # per node, without it the job's total); pjstat does not list them.
+        for item in environ.get("PJM_CUSTOM_RESOURCES", "").split(","):
+            name, _, value = item.partition("=")
+            if self._gpu_resource and name == f"{self._gpu_resource}/n":
+                return int(value) if value.isdigit() else None
+        return None
+
     def _delete_held(self, job_id: str) -> None:
         """Delete a job held for an error, which would otherwise stay queued
         (and keep its name taken) until someone deletes or releases it."""
@@ -313,6 +356,15 @@ def _number(job_id: str, name: str, value: str) -> int | None:
         return int(value)
     except ValueError:
         raise InfrastructureError(f"invalid PJM {name} for job {job_id}") from None
+
+
+def _seconds(value: str) -> int | None:
+    """``hhhh:mm:ss`` (``hhhh:mm`` when the column overflows) in seconds."""
+    match = _ELAPSED.fullmatch(value.strip())
+    if match is None:
+        return None
+    hours, minutes, seconds = match.groups()
+    return int(hours) * 3600 + int(minutes) * 60 + int(seconds or 0)
 
 
 def ended_at(row: dict[str, str], now: float) -> float | None:

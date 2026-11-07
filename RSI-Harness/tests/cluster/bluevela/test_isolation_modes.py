@@ -433,7 +433,7 @@ def test_the_default_profile_runs_no_site_checks(tmp_path, monkeypatch):
         # unprivileged Apptainer.
         (
             "ERROR  : Failed to set flags on interface: Operation not permitted",
-            "use an unprivileged Apptainer",
+            "use one installed without setuid",
         ),
     ],
 )

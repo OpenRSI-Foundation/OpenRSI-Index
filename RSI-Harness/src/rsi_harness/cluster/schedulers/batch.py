@@ -272,6 +272,8 @@ class BatchScheduler:
 
     label = "batch"
     name_limit = 63
+    # The variable the scheduler sets in each job to its ID (allocation launch).
+    job_id_variable = ""
     # Words of the client's error text that mean "did not answer", and of
     # those, the ones that mean the request never reached the scheduler.
     transient_errors: tuple[str, ...] = ()
@@ -599,6 +601,30 @@ class BatchScheduler:
 
     def _cancel(self, job_id: str) -> None:
         raise NotImplementedError
+
+    def _walltime_left(self, job_id: str, environ: Mapping[str, str]) -> float | None:
+        """Seconds until the running job reaches its walltime, or None when
+        the scheduler does not tell; ``environ`` as for job_gpus."""
+        raise NotImplementedError
+
+    def walltime_left(self, job_id: str, environ: Mapping[str, str]) -> float:
+        self._require_job_id(job_id)
+        left = self._retry(lambda: self._walltime_left(job_id, environ))
+        if left is None:
+            raise InfrastructureError(
+                f"cannot tell how much walltime {self.label} job {job_id} has left"
+            )
+        return left
+
+    def _job_gpus(self, job_id: str, environ: Mapping[str, str]) -> int | None:
+        raise NotImplementedError
+
+    def job_gpus(self, job_id: str, environ: Mapping[str, str]) -> int | None:
+        """The GPUs the running job requested, or None when the scheduler
+        does not tell; ``environ`` is that job's environment (this process
+        runs in it)."""
+        self._require_job_id(job_id)
+        return self._retry(lambda: self._job_gpus(job_id, environ))
 
     def _require_job_id(self, job_id: str) -> None:
         raise NotImplementedError

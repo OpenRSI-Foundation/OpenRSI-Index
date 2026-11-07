@@ -2939,6 +2939,46 @@ def test_final_result_records_the_agent_exit_code_and_timings(tmp_path) -> None:
     assert result.artifacts_dir is None
 
 
+def test_a_provider_stop_is_recorded_apart_from_other_agent_exits(tmp_path) -> None:
+    backend = ScriptedBackend(tmp_path)
+    backend.agent_result = AgentRunResult(
+        exit_code=1,
+        provider_error="rate_limited",
+        provider_retries=6,
+        provider_wait_seconds=1830.0,
+    )
+
+    result = RunCoordinator(
+        backend=backend,
+        lease_store=LeaseStore(tmp_path / "leases"),
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    ).run(RunRequest(task_dir=tmp_path))
+
+    assert backend.artifacts.finalized["agent_provider"] == {
+        "error": "rate_limited",
+        "retries": 6,
+        "wait_seconds": 1830.0,
+    }
+    assert result.agent_stopped_by == (
+        "model provider rate limited (HTTP 429) after 6 Harness retries"
+    )
+
+
+def test_an_agent_without_provider_errors_records_none(tmp_path) -> None:
+    backend = ScriptedBackend(tmp_path)
+
+    result = RunCoordinator(
+        backend=backend,
+        lease_store=LeaseStore(tmp_path / "leases"),
+        run_id_factory=lambda: "run-1",
+        clock=Clock(),
+    ).run(RunRequest(task_dir=tmp_path))
+
+    assert "agent_provider" not in backend.artifacts.finalized
+    assert result.agent_stopped_by is None
+
+
 def test_final_result_has_no_first_submission_without_a_round(tmp_path) -> None:
     class Silent(ScriptedBackend):
         def run_agent(self, prepared, work, timeout):

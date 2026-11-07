@@ -38,6 +38,7 @@ from rsi_harness.models import (
     GPURequirement,
     JudgeGPUMode,
     NetworkPolicy,
+    RunStatus,
     SubmissionReport,
     SubmissionStatus,
 )
@@ -124,6 +125,7 @@ class RecordingScheduler:
         self.events: list[str] = []
         self.specs: list[LSFJobSpec] = []
         self.renderer = LSFScheduler()
+        self.agent_provider: dict[str, object] | None = None
 
     def render_submit(self, spec: LSFJobSpec) -> tuple[str, ...]:
         return self.renderer.render_submit(spec)
@@ -172,7 +174,7 @@ class RecordingScheduler:
                     output="passed\n",
                 )
             )
-            writer.finalize()
+            writer.finalize(agent_provider=self.agent_provider)
         return LSFJobResult(job_id=job_id, state="DONE", exit_code=0)
 
 
@@ -353,12 +355,24 @@ def test_driven_agent_is_refused_before_cluster_runtime_or_storage(
 
 
 @pytest.mark.parametrize("dry_run", [True, False])
-def test_a_singularity_ce_the_submit_host_sees_is_refused_before_any_job(
-    tmp_path: Path, dry_run: bool
+@pytest.mark.parametrize("network_isolation", ["seccomp", "namespace"])
+def test_a_setuid_singularity_ce_cannot_isolate_by_seccomp(
+    tmp_path: Path, dry_run: bool, network_isolation: str
 ) -> None:
+    # Refused before any job where the submit host sees it; with network
+    # namespaces it runs.
     profile = _profile(tmp_path)
     profile.apptainer.binary.write_text(
-        "#!/bin/sh\necho 'singularity-ce version 4.1.3'\n"
+        "#!/bin/sh\n"
+        '[ "$1" = buildcfg ] && echo SINGULARITY_SUID_INSTALL=1 && exit 0\n'
+        "echo 'singularity-ce version 4.5.0'\n"
+    )
+    profile = profile.model_copy(
+        update={
+            "apptainer": profile.apptainer.model_copy(
+                update={"network_isolation": network_isolation}
+            )
+        }
     )
     scheduler = RecordingScheduler()
     events: list[tuple[str, object]] = []
@@ -368,7 +382,10 @@ def test_a_singularity_ce_the_submit_host_sees_is_refused_before_any_job(
         event_callback=lambda name, value: events.append((name, value)),
     )
 
-    with pytest.raises(SetupError, match="SingularityCE is not supported"):
+    if network_isolation == "namespace":
+        adapter.run(_request(tmp_path, dry_run=True))
+        return
+    with pytest.raises(SetupError, match="setuid SingularityCE cannot run with"):
         adapter.run(_request(tmp_path, dry_run=dry_run))
 
     assert events == []
@@ -810,6 +827,35 @@ def test_cache_miss_waits_for_build_then_run_and_records_manifest(
     assert manifest["resources"]["total_gpus"] == 4
     assert manifest["state"] == "completed"
     assert "auth.json" not in json.dumps(manifest)
+    assert result.agent_stopped_by is None
+
+
+@pytest.mark.parametrize(
+    ("error", "stopped_by"),
+    [
+        (
+            "rate_limited",
+            "model provider rate limited (HTTP 429) after 6 Harness retries",
+        ),
+        (None, None),
+    ],
+)
+def test_a_completed_run_reports_a_provider_stop(
+    tmp_path: Path, error: str | None, stopped_by: str | None
+) -> None:
+    scheduler = RecordingScheduler()
+    scheduler.agent_provider = {"error": error, "retries": 6, "wait_seconds": 1830}
+    adapter = BlueVelaClusterAdapter(
+        _profile(tmp_path),
+        scheduler=scheduler,
+        clock=lambda: datetime(2026, 8, 23, 12, 0, tzinfo=UTC),
+        agent_version_resolver=lambda _name: "0.149.0",
+    )
+
+    result = adapter.run(_request(tmp_path, dry_run=False))
+
+    assert result.status is RunStatus.COMPLETED
+    assert result.agent_stopped_by == stopped_by
 
 
 def test_a_cache_miss_installs_the_podman_bundle_before_the_build(

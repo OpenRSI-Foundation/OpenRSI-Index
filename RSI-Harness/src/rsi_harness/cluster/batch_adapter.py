@@ -2,18 +2,30 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from rsi_harness.cluster.base import ClusterRunRequest
+from rsi_harness.cluster.bluevela.adapter import ClusterResumePlan
 from rsi_harness.cluster.bluevela.resources import (
     _phase_gpu_counts,
     derive_resource_plan,
 )
-from rsi_harness.cluster.schedulers.batch import BatchJobSpec, remove_environment_files
+from rsi_harness.cluster.schedulers.allocation import AllocationScheduler
+from rsi_harness.cluster.schedulers.batch import (
+    BatchJobResult,
+    BatchJobSpec,
+    BatchScheduler,
+    remove_environment_files,
+)
 from rsi_harness.cluster.slurm.adapter import SlurmClusterAdapter
 from rsi_harness.errors import SetupError
 from rsi_harness.models import TaskDefinition
+
+if TYPE_CHECKING:
+    from rsi_harness.cluster.bluevela.engine import EnginePayload
+    from rsi_harness.runtime.recovery import AttemptGrants
 
 
 class OneHostBatchAdapter(SlurmClusterAdapter):
@@ -77,12 +89,72 @@ class OneHostBatchAdapter(SlurmClusterAdapter):
             )
 
     def _check_build_spec(self, spec: Any) -> None:
-        self._validate_capacity(spec, build=True)
+        # A build in the controller's own job takes that job's resources.
+        if self._allocation() is None:
+            self._validate_capacity(spec, build=True)
 
     def _run_spec(self, *args: Any, **kwargs: Any) -> BatchJobSpec:
         spec = super()._run_spec(*args, **kwargs)
         self._validate_capacity(spec)
         return spec
+
+    def _allocation(self) -> AllocationScheduler | None:
+        scheduler = self.scheduler
+        return scheduler if isinstance(scheduler, AllocationScheduler) else None
+
+    def _allocation_scheduler(self, host: BatchScheduler) -> Any:
+        """``host``, or with launch = "allocation" its jobs run inside the
+        controller's own job."""
+        if getattr(self.profile.scheduler, "launch", "submit") == "submit":
+            return host
+        return AllocationScheduler(host, record_root=self._local_records)
+
+    @property
+    def _local_records(self) -> Path:
+        return self.profile.storage.run_root / ".local-jobs"
+
+    def _job_finished(self, job_id: str) -> BatchJobResult | None:
+        # A run begun with allocation launch may resume without it.
+        scheduler = self._allocation() or AllocationScheduler(
+            self.scheduler, record_root=self._local_records
+        )
+        return scheduler.finished(job_id)
+
+    def _check_frozen_source(self, payload: EnginePayload) -> None:
+        # An Engine frozen before launch modes refuses the launch field.
+        if (
+            getattr(self.profile.scheduler, "launch", "submit") == "allocation"
+            and not (
+                payload.source_root / "src/rsi_harness/cluster/schedulers/allocation.py"
+            ).is_file()
+        ):
+            raise SetupError(
+                f"run {payload.run_id} began on a Harness without allocation "
+                'launch: resume it with scheduler.launch = "submit"'
+            )
+
+    def plan_resume(
+        self, run_id: str, grants: AttemptGrants, *, dry_run: bool = False
+    ) -> ClusterResumePlan:
+        plan = super().plan_resume(run_id, grants, dry_run=dry_run)
+        # The Engine binds its GPUs as the current launch runs it.
+        frozen = plan.payload.profile
+        scheduler = frozen.scheduler.model_copy(
+            update={"launch": getattr(self.profile.scheduler, "launch", "submit")}
+        )
+        payload = plan.payload.model_copy(
+            update={"profile": frozen.model_copy(update={"scheduler": scheduler})}
+        )
+        return dataclasses.replace(plan, payload=payload)
+
+    def _check_controller_machine(self) -> None:
+        super()._check_controller_machine()
+        if (allocation := self._allocation()) is not None:
+            allocation.allocation()
+
+    def _check_jobs_fit(self, specs: tuple[Any, ...]) -> None:
+        if (allocation := self._allocation()) is not None:
+            allocation.require_room(specs)
 
     def _jobs_ended(self, run_dir: Path) -> None:
         # A controller that died before its job started left the job's

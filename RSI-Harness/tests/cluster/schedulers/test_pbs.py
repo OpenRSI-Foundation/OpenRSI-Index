@@ -561,6 +561,22 @@ def test_pbs_times_are_read_as_local_time(value, expected):
 # --- Cancellation -----------------------------------------------------------
 
 
+def test_a_sigterm_to_the_controller_qdels_the_job_it_waits_for():
+    import os
+    import signal
+
+    from rsi_harness.cli import _terminate_as_interrupt
+
+    def terminated(_):
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    pbs_scheduler = scheduler(status("R"), completed(), sleeper=terminated)
+    with pytest.raises(KeyboardInterrupt, match="96979.jobm cancelled"):
+        with _terminate_as_interrupt():
+            pbs_scheduler.wait("96979.jobm")
+    assert pbs_scheduler._runner.calls[-1] == ("qdel", "96979.jobm")
+
+
 def test_interrupt_cancels_only_the_exact_job():
     def interrupt(_):
         raise KeyboardInterrupt
@@ -731,3 +747,43 @@ def test_without_an_outage_the_servers_end_record_stands():
     assert pbs_scheduler.wait("7.server").ended_at == pbs_time(
         "Wed Nov  4 22:25:26 2026"
     )
+
+
+# --- Allocation launch ------------------------------------------------------
+
+
+def test_walltime_left_is_the_jobs_limit_from_its_start():
+    started = datetime(2026, 11, 6, 10, 0, 0).timestamp()
+    pbs_scheduler = scheduler(
+        status(
+            "R",
+            stime="Fri Nov  6 10:00:00 2026",
+            Resource_List={"walltime": "05:00:00", "ngpus": 4},
+        ),
+        wall_clock=lambda: started + 3600,
+    )
+    assert pbs_scheduler.walltime_left("96979.jobm", {}) == 4 * 3600
+    assert pbs_scheduler._runner.calls[0][:4] == ("qstat", "-x", "-f", "-F")
+
+
+def test_walltime_left_must_be_told():
+    with pytest.raises(InfrastructureError, match="cannot tell how much walltime"):
+        scheduler(status("R")).walltime_left("96979.jobm", {})
+
+
+def test_job_gpus_are_the_jobs_ngpus_request_on_one_node():
+    requested = {"walltime": "05:00:00", "ngpus": 4, "nodect": 1}
+    assert (
+        scheduler(status("R", Resource_List=requested)).job_gpus("96979.jobm", {}) == 4
+    )
+    whole = scheduler(status("R", Resource_List={"walltime": "05:00:00", "nodect": 1}))
+    assert whole.job_gpus("96979.jobm", {}) is None
+
+
+@pytest.mark.parametrize("nodect", [2, None])
+def test_job_gpus_of_a_job_on_several_nodes_are_not_told(nodect):
+    # select=2:ngpus=2 on two hosts: ngpus is 4, this node holds 2.
+    requested = {"walltime": "05:00:00", "ngpus": 4, "nodect": nodect}
+    requested = {name: value for name, value in requested.items() if value}
+    pbs_scheduler = scheduler(status("R", Resource_List=requested))
+    assert pbs_scheduler.job_gpus("96979.jobm", {}) is None

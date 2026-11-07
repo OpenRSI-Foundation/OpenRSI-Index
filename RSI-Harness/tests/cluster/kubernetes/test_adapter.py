@@ -171,6 +171,14 @@ def test_paths_the_pod_cannot_see_are_refused_before_scheduling(tmp_path):
     assert adapter.scheduler.events == []
 
 
+def test_an_interpreter_started_by_a_relative_path_is_seen(tmp_path, monkeypatch):
+    """sys.executable keeps the ".." of the path Python was started by."""
+    prefix = Path(sys.prefix)
+    started = f"{prefix.parent}/../{prefix.parent.name}/{prefix.name}/bin/python"
+    monkeypatch.setattr(sys, "executable", started)
+    _adapter(_kubernetes(tmp_path)).run(_req(tmp_path, dry_run=True))
+
+
 def test_multinode_tasks_are_refused(tmp_path, monkeypatch):
     adapter = _adapter(_kubernetes(tmp_path))
     request = _req(tmp_path, dry_run=True)

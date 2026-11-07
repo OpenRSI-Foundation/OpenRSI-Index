@@ -37,7 +37,7 @@ from rsi_harness.cluster.bluevela.judge_llm import (
     _codex_candidates,
     preflight_cluster_judge_llm,
 )
-from rsi_harness.cluster.bluevela.preflight import refuse_singularity_ce
+from rsi_harness.cluster.bluevela.preflight import refuse_singularity_ce_conflict
 from rsi_harness.cluster.bluevela.resources import (
     ClusterResources,
     MultiNodeResources,
@@ -334,9 +334,56 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         clusters share their filesystem with the submit host."""
 
     def _check_container_runtime(self) -> None:
-        """Refuse a SingularityCE before submission where the submit host
-        sees the jobs' Apptainer; the jobs check again."""
-        refuse_singularity_ce(self.profile.apptainer.binary)
+        """Refuse before submission a setuid SingularityCE that cannot give
+        the profile's isolation, where the submit host sees the jobs'
+        runtime; the jobs check again."""
+        refuse_singularity_ce_conflict(
+            self.profile.apptainer.binary,
+            network_isolation=self.profile.apptainer.network_isolation,
+        )
+
+    def _check_jobs_fit(self, specs: tuple[Any, ...]) -> None:
+        """Refuse, before the run directory exists, jobs the scheduler can
+        already tell it cannot run."""
+
+    def _check_controller_machine(self) -> None:
+        """Refuse a controller whose Python the compute nodes cannot run:
+        the Engine in the run job runs with the controller's interpreter."""
+        wanted = self.profile.resources.node_machine
+        machine = platform.machine()
+        here = _MACHINES.get(machine.lower(), machine)
+        if wanted is not None and here != wanted:
+            raise SetupError(
+                f"this profile's compute nodes are {wanted}, but this controller "
+                f"runs on {here}: start rsi-harness in a job on a compute node, "
+                f"with a {wanted} Harness venv and Agent CLI"
+            )
+
+    def _check_frozen_source(self, payload: EnginePayload) -> None:
+        """Refuse, before the run is closed, a resume its frozen Engine
+        source cannot run as this profile asks."""
+
+    def _cancel_after_interrupt(
+        self, error: BaseException, job_ids: list[str], waited: list[str]
+    ) -> BaseException:
+        """An interrupt that lands between a submission and its wait leaves
+        that job running: cancel the latest job unless its wait began (a wait
+        cancels on its own interrupt; LSF and Slurm refuse a second cancel).
+        Returns the error to report, which names a job it failed to cancel."""
+        if (
+            not isinstance(error, KeyboardInterrupt)
+            or not job_ids
+            or job_ids[-1] in waited
+        ):
+            return error
+        try:
+            self.scheduler.cancel(job_ids[-1])
+        except Exception as failure:
+            return KeyboardInterrupt(
+                f"{str(error) or 'interrupted'}; cancelling job {job_ids[-1]} failed "
+                f"and it may still run: {redact_text(str(failure))}"
+            )
+        return error
 
     def run(self, request: ClusterRunRequest) -> ClusterRunResult:
         definition = self._compile(request)
@@ -365,6 +412,9 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             multi_node=resource_plan.multi_node is not None,
         )
         self._check_container_runtime()
+        if not request.dry_run:
+            # A dry run only plans, also from a login node of another architecture.
+            self._check_controller_machine()
         judge_llm = self._judge_llm(definition, request)
         sandbox = self._sandbox_grant(
             definition, request, multi_node=resource_plan.multi_node is not None
@@ -492,6 +542,9 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 log_dir=self.profile.storage.logs_root / "runs" / run_id,
             )
 
+        self._check_jobs_fit(
+            (run_spec,) if planned_image.cache_hit else (build_spec, run_spec)
+        )
         run_dir.mkdir(parents=True, mode=0o700, exist_ok=False)
         # Shown now, so a run that fails or is interrupted can be found.
         self.event_callback("run_started", {"run_id": run_id})
@@ -525,6 +578,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         manifest_path = run_dir / "RUN_INFO.json"
         _atomic_json(manifest_path, manifest)
         job_ids: list[str] = []
+        waited: list[str] = []
         try:
             if not image.cache_hit:
                 bundle = self.profile.builder.podman_bundle
@@ -542,6 +596,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 self.event_callback(
                     "job_submitted", {"stage": "build", "job_id": build_job_id}
                 )
+                waited.append(build_job_id)
                 build_result = self.scheduler.wait(
                     build_job_id,
                     poll_seconds=self.profile.scheduler.poll_seconds,
@@ -569,7 +624,10 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 EnginePayload,
                 render_engine_driver,
             )
-            from rsi_harness.cluster.bluevela.runtime import validate_native_artifacts
+            from rsi_harness.cluster.bluevela.runtime import (
+                native_agent_stop,
+                validate_native_artifacts,
+            )
 
             payload = EnginePayload(
                 run_id=run_id,
@@ -623,6 +681,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             manifest["state"] = "running"
             _atomic_json(manifest_path, manifest)
             self.event_callback("job_submitted", {"stage": "run", "job_id": run_job_id})
+            waited.append(run_job_id)
             run_result = self.scheduler.wait(
                 run_job_id,
                 poll_seconds=self.profile.scheduler.poll_seconds,
@@ -647,13 +706,17 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 status=RunStatus.COMPLETED,
                 log_dir=log_dir,
                 job_ids=tuple(job_ids),
+                agent_stopped_by=native_agent_stop(log_dir),
             )
         except BaseException as error:
+            reported = self._cancel_after_interrupt(error, job_ids, waited)
             manifest["state"] = "failed"
             # A Ctrl-C (KeyboardInterrupt) has no message.
-            manifest["error"] = redact_text(str(error) or type(error).__name__)
+            manifest["error"] = redact_text(str(reported) or type(reported).__name__)
             manifest["job_ids"] = job_ids
             _atomic_json(manifest_path, manifest)
+            if reported is not error:
+                raise reported from error
             raise
 
     def plan_resume(
@@ -675,6 +738,9 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         from rsi_harness.runtime.recovery import LeaseStore, RecoveryManager
         from rsi_harness.runtime.resume import plan_resume
 
+        if not dry_run:
+            # Before the unclean run is closed: nothing changes on refusal.
+            self._check_controller_machine()
         if _RUN_ID.fullmatch(run_id) is None:
             raise SetupError(f"invalid cluster run ID: {run_id!r}")
         run_dir = self.profile.storage.run_root / run_id
@@ -694,7 +760,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         job_id = manifest.get("run_job_id")
         if not isinstance(job_id, str):
             raise SetupError(f"run {run_id} never submitted its run job")
-        ended = self.scheduler.finished(job_id)
+        ended = self._job_finished(job_id)
         if ended is None:
             raise SetupError(
                 f"run {run_id} is still live in job {job_id}; resume it once "
@@ -720,6 +786,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             )
         payload = load_engine_payload(control / "run.json")
         _check_remote_host(payload.run_plan.sandbox)
+        self._check_frozen_source(payload)
         # The cache is shared: an evicted or rebuilt SIF is not the run's.
         if not validate_cached_image(
             SIFImagePlan(
@@ -820,6 +887,11 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             ),
         )
 
+    def _job_finished(self, job_id: str) -> LSFJobResult | None:
+        """The run job's end (None while it runs), whichever scheduler
+        launched it."""
+        return self.scheduler.finished(job_id)
+
     def _jobs_ended(self, run_dir: Path) -> None:
         """Called by resume once every job of the run has ended."""
 
@@ -832,13 +904,24 @@ class BlueVelaClusterAdapter(ClusterAdapter):
     def resume(self, plan: ClusterResumePlan) -> ClusterRunResult:
         """Submit the planned attempt under the run's ID and wait for it."""
         from rsi_harness.cluster.bluevela.engine import render_engine_driver
-        from rsi_harness.cluster.bluevela.runtime import validate_native_artifacts
+        from rsi_harness.cluster.bluevela.runtime import (
+            native_agent_stop,
+            validate_native_artifacts,
+        )
 
+        self._check_controller_machine()
+        self._check_jobs_fit((plan.spec,))
         payload = plan.payload
         manifest_path = payload.run_plan.paths.root / "RUN_INFO.json"
         manifest = json.loads(manifest_path.read_text())
         plan.spec.script_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-        render_engine_driver(payload, self.profile, plan.spec.script_path)
+        # The driver checks the runtime the frozen Engine runs (whether it is
+        # SingularityCE decides how the Engine passes variables).
+        render_engine_driver(
+            payload,
+            self.profile.model_copy(update={"apptainer": payload.profile.apptainer}),
+            plan.spec.script_path,
+        )
         # Both describe the attempt that failed last.
         manifest.pop("error", None)
         manifest.pop("job_ids", None)
@@ -846,6 +929,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         manifest["state"] = "ready"
         _atomic_json(manifest_path, manifest)
         job_ids: list[str] = []
+        waited: list[str] = []
         try:
             self.scheduler.require_name_available(plan.spec.name)
             run_job_id = self.scheduler.submit(plan.spec)
@@ -857,6 +941,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             manifest["state"] = "running"
             _atomic_json(manifest_path, manifest)
             self.event_callback("job_submitted", {"stage": "run", "job_id": run_job_id})
+            waited.append(run_job_id)
             run_result = self.scheduler.wait(
                 run_job_id,
                 poll_seconds=self.profile.scheduler.poll_seconds,
@@ -881,12 +966,16 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 status=RunStatus.COMPLETED,
                 log_dir=log_dir,
                 job_ids=tuple(job_ids),
+                agent_stopped_by=native_agent_stop(log_dir),
             )
         except BaseException as error:
+            reported = self._cancel_after_interrupt(error, job_ids, waited)
             manifest["state"] = "failed"
-            manifest["error"] = redact_text(str(error) or type(error).__name__)
+            manifest["error"] = redact_text(str(reported) or type(reported).__name__)
             manifest["job_ids"] = job_ids
             _atomic_json(manifest_path, manifest)
+            if reported is not error:
+                raise reported from error
             raise
 
     def _compile(self, request: ClusterRunRequest) -> TaskDefinition:

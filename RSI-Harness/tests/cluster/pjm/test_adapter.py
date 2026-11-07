@@ -188,8 +188,10 @@ def test_pjm_reuses_build_run_and_artifact_lifecycle(tmp_path, dry_run):
     manifest = json.loads((payload.run_plan.paths.root / "RUN_INFO.json").read_text())
     assert manifest["state"] == "completed"
     # The profile names no node-local scratch: the temp_roots stand.
-    assert "${PJM" not in build.script_path.read_text()
-    assert "${PJM" not in run.script_path.read_text()
+    assert "PJM_SSD_DIR" not in build.script_path.read_text()
+    assert "PJM_SSD_DIR" not in run.script_path.read_text()
+    # The build's partials are named after its job.
+    assert "PJM_JOBID" in build.script_path.read_text()
 
 
 def test_genkai_jobs_use_the_node_ssd_where_pjm_sets_it(tmp_path):
@@ -369,6 +371,40 @@ def _genkai_payload(tmp_path):
     return payload.model_copy(update={"profile": load_cluster_profile("genkai", ENV)})
 
 
+@pytest.mark.parametrize(
+    ("launch", "requested", "size"),
+    [("submit", None, 4), ("allocation", "4", 4), ("allocation", None, None)],
+)
+def test_genkai_jobs_own_the_gpus_they_requested(
+    tmp_path, monkeypatch, launch, requested, size
+):
+    # gpu=4 on a four-GPU node, CUDA_VISIBLE_DEVICES unset: a submitted job
+    # requested the plan's GPUs; the controller's own job, what PJM says.
+    from rsi_harness.cluster.bluevela.devices import AllocatedDevices
+    from rsi_harness.cluster.bluevela.engine import run_engine_payload
+    from rsi_harness.cluster.schedulers.allocation import JOB_GPUS_VARIABLE
+    from tests.cluster.bluevela.test_engine import _capture_engine
+
+    payload = _genkai_payload(tmp_path)
+    scheduler = payload.profile.scheduler.model_copy(update={"launch": launch})
+    profile = payload.profile.model_copy(update={"scheduler": scheduler})
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    monkeypatch.delenv(JOB_GPUS_VARIABLE, raising=False)
+    if requested is not None:
+        monkeypatch.setenv(JOB_GPUS_VARIABLE, requested)
+    sizes = []
+    monkeypatch.setattr(
+        "rsi_harness.cluster.bluevela.engine.allocated_cuda_devices",
+        lambda raw, *, exclusive, allocation_size: (
+            sizes.append(allocation_size)
+            or AllocatedDevices(("0", "1", "2", "3"), True)
+        ),
+    )
+    _capture_engine(monkeypatch)
+    run_engine_payload(payload.model_copy(update={"profile": profile}))
+    assert sizes == [size]
+
+
 def test_with_node_tmp_moves_temp_roots_to_the_jobs_scratch(tmp_path):
     payload = _genkai_payload(tmp_path)
     moved = with_node_tmp(payload, {"PJM_SSD_DIR": "/local/1006903"})
@@ -444,3 +480,52 @@ def test_the_engine_and_build_drivers_check_space_where_they_will_write(tmp_path
         plan_image(context, tmp_path / "cache"), payload.profile, context, build, 1024
     )
     assert 'builder_tmp_root="${PJM_SSD_DIR:-}"\n' in build.read_text()
+
+
+def test_allocation_launch_runs_jobs_inside_the_controllers_pjm_job(
+    tmp_path, monkeypatch
+):
+    from rsi_harness.cluster.schedulers.allocation import AllocationScheduler
+
+    profile = local_profile(tmp_path, "genkai", launch="allocation")
+    events: dict = {}
+    adapter = PJMClusterAdapter(
+        profile,
+        event_callback=lambda key, value: events.update({key: value}),
+        agent_version_resolver=lambda _: "0.149.0",
+    )
+    assert isinstance(adapter.scheduler, AllocationScheduler)
+    assert isinstance(adapter.scheduler.host, PJMScheduler)
+    monkeypatch.delenv("PJM_JOBID", raising=False)
+    adapter.run(_request(tmp_path, dry_run=True))
+    assert Path(events["dry_run"]["run_argv"][2]).name == "local_job.py"
+    with pytest.raises(SetupError, match="inside a PJM job"):
+        adapter.run(_request(tmp_path, dry_run=False))
+    calls = []
+
+    def pjstat(argv):
+        calls.append(argv)
+        return subprocess.CompletedProcess(
+            argv,
+            0,
+            "JOB_ID     ST  ELAPSE_TIM ELAPSE_LIM\n7243063    RUN 0:59:00    1:00:00\n",
+            "",
+        )
+
+    monkeypatch.setenv("PJM_JOBID", "7243063")
+    adapter.scheduler.host._runner = pjstat
+    with pytest.raises(SetupError, match="PJM job 7243063 has 0.02 h"):
+        adapter.run(_request(tmp_path, dry_run=False))
+    assert {argv[0] for argv in calls} == {"pjstat"}
+    assert not profile.storage.run_root.exists()
+
+
+def test_a_local_job_id_is_no_pjm_job_id(tmp_path):
+    # Resumed without allocation launch, a local job with no record is
+    # unknown; pjstat is not asked about it.
+    adapter = PJMClusterAdapter(
+        local_profile(tmp_path, "genkai"), agent_version_resolver=lambda _: "0.149.0"
+    )
+    assert isinstance(adapter.scheduler, PJMScheduler)
+    adapter.scheduler._runner = lambda argv: pytest.fail(f"ran {argv}")
+    assert adapter._job_finished("7243063.local-ab12cd34").state == "UNKNOWN"

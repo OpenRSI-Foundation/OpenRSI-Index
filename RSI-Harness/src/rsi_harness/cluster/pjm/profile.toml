@@ -25,6 +25,9 @@ exclusive = false
 poll_seconds = 10.0
 # Optional per-job limit, HH:MM:
 # run_walltime_limit = "12:00"
+# Run build and run jobs inside the controller's own PJM job, started
+# from a job script on a compute node, instead of submitting them:
+# launch = "allocation"
 
 # [scheduler.build]
 # resource_group = "cpu"

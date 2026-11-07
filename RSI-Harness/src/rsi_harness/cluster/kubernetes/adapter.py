@@ -162,8 +162,9 @@ class KubernetesClusterAdapter(SlurmClusterAdapter):
             profile.storage.logs_root,
             profile.storage.hf_home,
             profile.storage.hf_datasets_cache,
-            # The Engine runs with this interpreter, its venv and stdlib.
-            Path(sys.executable),
+            # The Engine runs with this interpreter, its venv and stdlib
+            # (a Python started by a relative path keeps its "..").
+            Path(os.path.abspath(sys.executable)),
             Path(sys.prefix),
             Path(sys.base_prefix),
             *agent_paths,

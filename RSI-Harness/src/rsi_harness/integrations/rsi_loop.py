@@ -18,6 +18,7 @@ from urllib.parse import unquote, urlsplit
 
 from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.models import (
+    PROVIDER_ERRORS,
     AgentHookRequest,
     AgentPrepareRequest,
     AgentResume,
@@ -48,15 +49,25 @@ _CONTAINER_PROMPT_PATH = PurePosixPath("/tmp/rsi-agent-prompt.md")
 # Next to agent_prompt.md: the next user turn of a continued session, which
 # is all its CLI reads from the container prompt path.
 _RESUME_PROMPT_NAME = "agent_resume_prompt.md"
-_CAPACITY_PROMPT_PATH = PurePosixPath("/tmp/rsi-agent-capacity-retry.md")
-_CAPACITY_PROMPT = (
-    "Your previous turn ended because the model service was temporarily at "
-    "capacity. Continue the same task and session. The Harness has NOT restarted "
+_PROVIDER_PROMPT_PATH = PurePosixPath("/tmp/rsi-agent-provider-retry.md")
+_PROVIDER_PROMPT = (
+    "Your previous turn ended because the model service was temporarily "
+    "{reason}. Continue the same task and session. The Harness has NOT restarted "
     "Work: background training and other jobs may still be running. Check their "
     "state before launching replacements. Existing submissions and the original "
     "time budget still apply.\n"
 )
-_CAPACITY_RETRY_DELAYS = (30, 60, 120, 240, 300)
+_PROVIDER_PROMPT_REASONS = {
+    "at_capacity": "at capacity",
+    "rate_limited": "rate limiting requests",
+    "unavailable": "unavailable",
+}
+# Exponential backoff before each consecutive retry of a provider error; once
+# they are spent, the Agent stops (the run can be resumed later). The waits
+# run inside the Agent's exec, so they count against its time budget.
+_PROVIDER_RETRY_DELAYS = (30, 60, 120, 240, 480, 900)
+# An exec that worked this long before failing again starts the backoff over.
+_PROVIDER_RETRY_RESET_SECONDS = 900
 _ANSI_SGR = re.compile(r"\x1b\[[0-9;]*m")
 _CODEX_ROLLOUT_DIAGNOSTIC = re.compile(
     r"\d{4}-\d\d-\d\dT\S+\s+ERROR codex_core::session: "
@@ -322,18 +333,46 @@ class _ControlBinding:
 
 
 @dataclass(frozen=True)
-class _CapacityRetry:
+class _ProviderRetry:
     command: tuple[str, ...]
     resume_command: Callable[[str], tuple[str, ...]]
     session_id_in: Callable[[str], str | None]
 
 
-def _codex_at_capacity(output: str) -> bool:
-    """Only an explicit terminal capacity error, not mentions in tool output."""
+# Codex's terminal errors once its own retries are spent, e.g.
+# "exceeded retry limit, last status: 429 Too Many Requests, request id: ..."
+# or "unexpected status 503 Service Unavailable: ...".
+_CODEX_RETRY_LIMIT = re.compile(r"exceeded retry limit, last status: (\d{3})\b.*")
+_CODEX_SERVER_ERROR = re.compile(r"unexpected status 5\d\d\b.*", re.DOTALL)
+# A 5xx body, e.g. a gateway's HTML page, can span lines. Only this much of the
+# output's end is searched for it, so an old mention in tool output is not read
+# as the terminal error.
+_CODEX_ERROR_TAIL_CHARS = 2000
+_CODEX_MESSAGES = {
+    "Selected model is at capacity. Please try a different model.": "at_capacity",
+    "Policy-restricted capacity is unavailable. Please try again later.": (
+        "at_capacity"
+    ),
+    "Flex capacity unavailable.": "at_capacity",
+    # HTTP 500.
+    "We're currently experiencing high demand, which may cause temporary errors.": (
+        "unavailable"
+    ),
+}
+_CODEX_JSON_ERRORS = {
+    "server_overloaded": "at_capacity",
+    "rate_limit_exceeded": "rate_limited",
+}
+
+
+def _codex_provider_error(output: str) -> str | None:
+    """The provider error (a PROVIDER_ERRORS key) Codex ended on: only its
+    explicit terminal error, not mentions in tool output. Quota and usage
+    limits are not retried: they do not lift within the backoff."""
 
     lines = _ANSI_SGR.sub("", output).splitlines()
     # Only skip the CLI's known footer/rollout shutdown diagnostics. An old
-    # capacity error inside tool output must not mask a different later failure.
+    # provider error inside tool output must not mask a different later failure.
     while lines:
         if not lines[-1].strip() or _CODEX_ROLLOUT_DIAGNOSTIC.fullmatch(lines[-1]):
             lines.pop()
@@ -345,22 +384,37 @@ def _codex_at_capacity(output: str) -> bool:
             del lines[-2:]
         else:
             break
-    if not lines or not lines[-1].startswith("ERROR: "):
-        return False
-    error = lines[-1][7:]
-    if error == "Selected model is at capacity. Please try a different model.":
-        return True
+    if not lines:
+        return None
+    if not lines[-1].startswith("ERROR: "):
+        tail = ("\n" + "\n".join(lines))[-_CODEX_ERROR_TAIL_CHARS:]
+        start = tail.rfind("\nERROR: ")
+        server_error = start >= 0 and _CODEX_SERVER_ERROR.fullmatch(tail[start + 8 :])
+        return "unavailable" if server_error else None
+    # Newer Codex releases print a typographic apostrophe.
+    error = lines[-1][7:].replace("\u2019", "'")
+    if (kind := _CODEX_MESSAGES.get(error)) is not None:
+        return kind
+    if _CODEX_SERVER_ERROR.fullmatch(error) is not None:
+        return "unavailable"
+    if (limit := _CODEX_RETRY_LIMIT.fullmatch(error)) is not None:
+        status = int(limit.group(1))
+        if status == 429:
+            return "rate_limited"
+        return "unavailable" if 500 <= status < 600 else None
     try:
         detail = json.loads(error)
     except ValueError:
-        return False
+        return None
     if not isinstance(detail, dict):
-        return False
+        return None
     detail = detail.get("error", detail)
-    return isinstance(detail, dict) and (
-        detail.get("code") == "server_overloaded"
-        or detail.get("codex_error_info") == "server_overloaded"
-    )
+    if not isinstance(detail, dict):
+        return None
+    for key in ("code", "codex_error_info"):
+        if (kind := _CODEX_JSON_ERRORS.get(str(detail.get(key)))) is not None:
+            return kind
+    return None
 
 
 class AgentRuntime(Protocol):
@@ -456,13 +510,13 @@ class RSILoopAgentAdapter:
         self._runtime = runtime
         self._logger = logger or logging.getLogger(__name__)
         self._control: _ControlBinding | None = None
-        self._capacity_retry: _CapacityRetry | None = None
+        self._provider_retry: _ProviderRetry | None = None
 
     def available_agents(self) -> tuple[str, ...]:
         return tuple(sorted(agent_class.name for agent_class in list_agent_classes()))
 
     def prepare(self, request: AgentPrepareRequest) -> PreparedAgent:
-        self._capacity_retry = None
+        self._provider_retry = None
         plan = request.run_plan
         agent_plan = plan.task.agent
         validate_agent_reasoning_effort(agent_plan.name, agent_plan.reasoning_effort)
@@ -518,7 +572,7 @@ class RSILoopAgentAdapter:
 
             def resume_command(session_id: str) -> tuple[str, ...]:
                 command = agent.format_run_cmd(
-                    str(_CAPACITY_PROMPT_PATH),
+                    str(_PROVIDER_PROMPT_PATH),
                     model=model,
                     cwd=str(plan.workdir),
                     internet=agent_plan.network.mode == "public",
@@ -532,7 +586,7 @@ class RSILoopAgentAdapter:
                     ),
                 )
 
-            self._capacity_retry = _CapacityRetry(
+            self._provider_retry = _ProviderRetry(
                 prepared.command, resume_command, agent.session_id_in
             )
         return prepared
@@ -638,7 +692,7 @@ class RSILoopAgentAdapter:
                 exec_options["output_callback"] = request.output_callback
             if request.on_exec_start is not None:
                 exec_options["on_exec_start"] = request.on_exec_start
-            result = self._exec_with_capacity_retry(request, runtime, exec_options)
+            result = self._exec_with_provider_retry(request, runtime, exec_options)
             safe_output = redact_exact_values(
                 result.output,
                 {
@@ -658,13 +712,13 @@ class RSILoopAgentAdapter:
         finally:
             self.clear_transient_bindings()
 
-    def _exec_with_capacity_retry(
+    def _exec_with_provider_retry(
         self,
         request: AgentRunRequest,
         runtime: AgentRuntime,
         exec_options: dict[str, Any],
     ) -> AgentRunResult:
-        retry = self._capacity_retry
+        retry = self._provider_retry
         command = request.prepared.command
         if (
             retry is None
@@ -683,8 +737,11 @@ class RSILoopAgentAdapter:
         truncated = False
         started = False
         session_id: str | None = None
-        retries = 0
+        retries = consecutive = 0
+        waited = delay = 0.0
+        stopped: str | None = None
         while True:
+            exec_started_at = time.monotonic()
             result = runtime.exec(request.container, command, **exec_options)
             outputs.append(result.output)
             captured = captured and result.full_output_captured
@@ -702,30 +759,53 @@ class RSILoopAgentAdapter:
                     ),
                     None,
                 )
-            if (
-                result.exit_code != 1
-                or not result.exec_started
-                or result.timed_out
-                or result.cancelled
-                or not _codex_at_capacity(result.output)
-                or session_id is None
-            ):
+            kind = (
+                _codex_provider_error(result.output)
+                if result.exit_code == 1
+                and result.exec_started
+                and not result.timed_out
+                and not result.cancelled
+                else None
+            )
+            if kind is None:
                 break
             if deadline is not None and time.monotonic() >= deadline:
                 result = replace(result, exit_code=None, timed_out=True)
                 break
-            if retries == 0:
-                with tempfile.TemporaryDirectory(prefix="rsi-capacity-retry-") as raw:
-                    prompt = Path(raw) / "prompt.md"
-                    prompt.write_text(_CAPACITY_PROMPT)
-                    runtime.copy_to(request.container, prompt, _CAPACITY_PROMPT_PATH)
-            delay = _CAPACITY_RETRY_DELAYS[
-                min(retries, len(_CAPACITY_RETRY_DELAYS) - 1)
+            if time.monotonic() - exec_started_at - delay >= (
+                _PROVIDER_RETRY_RESET_SECONDS
+            ):
+                consecutive = 0
+            delay = _PROVIDER_RETRY_DELAYS[
+                min(consecutive, len(_PROVIDER_RETRY_DELAYS) - 1)
             ]
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if (
+                session_id is None
+                or consecutive == len(_PROVIDER_RETRY_DELAYS)
+                or (remaining is not None and remaining <= delay)
+            ):
+                # Stopping keeps the rest of the budget for a later resume.
+                stopped = kind
+                self._logger.warning(
+                    "RSI Harness: Codex's model provider %s; the Agent stops after %d "
+                    "retries. Resume the run once the provider recovers.",
+                    PROVIDER_ERRORS[kind],
+                    retries,
+                )
+                break
+            with tempfile.TemporaryDirectory(prefix="rsi-provider-retry-") as raw:
+                prompt = Path(raw) / "prompt.md"
+                prompt.write_text(
+                    _PROVIDER_PROMPT.format(reason=_PROVIDER_PROMPT_REASONS[kind])
+                )
+                runtime.copy_to(request.container, prompt, _PROVIDER_PROMPT_PATH)
             retries += 1
+            consecutive += 1
+            waited += delay
             notice = (
-                f"RSI Harness: Codex model at capacity; retry {retries} in {delay}s "
-                "in the same session. Work is still running."
+                f"RSI Harness: Codex's model provider {PROVIDER_ERRORS[kind]}; retry "
+                f"{retries} in {delay}s in the same session. Work is still running."
             )
             self._logger.warning("%s", notice)
             resumed = retry.resume_command(session_id)
@@ -736,13 +816,10 @@ class RSILoopAgentAdapter:
                 f"printf '%s\\n' {shlex.quote(notice)}\nsleep {delay} &&\n{resumed[2]}",
             )
             if deadline is not None:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    result = replace(result, exit_code=None, timed_out=True)
-                    break
-                exec_options["timeout_seconds"] = remaining
+                # Measured after the copy, so the retry still ends by the deadline.
+                exec_options["timeout_seconds"] = deadline - time.monotonic()
             # A sandbox's Work deadline must only be activated once, never
-            # reset by a capacity retry. The remaining timeout includes sleep.
+            # reset by a provider retry. The remaining timeout includes sleep.
             exec_options.pop("on_exec_start", None)
 
         return replace(
@@ -751,6 +828,9 @@ class RSILoopAgentAdapter:
             exec_started=started,
             full_output_captured=captured,
             output_truncated=truncated,
+            provider_error=stopped,
+            provider_retries=retries,
+            provider_wait_seconds=waited,
         )
 
     @staticmethod
@@ -781,7 +861,7 @@ class RSILoopAgentAdapter:
         """Drop runtime-only submission authority on every cleanup path."""
 
         self._control = None
-        self._capacity_retry = None
+        self._provider_retry = None
 
     def _require_runtime(self) -> AgentRuntime:
         if self._runtime is None:

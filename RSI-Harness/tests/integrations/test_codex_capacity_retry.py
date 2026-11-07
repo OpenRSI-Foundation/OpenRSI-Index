@@ -48,13 +48,19 @@ class SequenceRuntime(RecordingAgentRuntime):
         self.results = list(results)
         self.start_callbacks: list[object] = []
         self.copied_text: dict[PurePosixPath, str] = {}
+        # Seconds each exec works before its result (2 when not given).
+        self.work_seconds: list[float] = []
+        self.copy_seconds = 0.0
+        self.exec_starts: list[float] = []
 
     def copy_to(self, container, source, target):
+        self.clock.now += self.copy_seconds
         self.copied_text[target] = source.read_text()
         super().copy_to(container, source, target)
 
     def exec(self, container, command, *, on_exec_start=None, **kwargs):
         self.start_callbacks.append(on_exec_start)
+        self.exec_starts.append(self.clock.now)
         if on_exec_start is not None:
             on_exec_start(self.clock.now)
         super().exec(container, command, **kwargs)
@@ -64,7 +70,8 @@ class SequenceRuntime(RecordingAgentRuntime):
             raise result
         script = command if isinstance(command, str) else command[-1]
         sleep = re.search(r"\bsleep\s+([0-9.]+)", script)
-        elapsed = 2.0 + (float(sleep.group(1)) if sleep else 0.0)
+        work = self.work_seconds.pop(0) if self.work_seconds else 2.0
+        elapsed = work + (float(sleep.group(1)) if sleep else 0.0)
         timeout = kwargs.get("timeout_seconds")
         if timeout is not None and elapsed > timeout:
             elapsed = timeout
@@ -187,7 +194,7 @@ def test_capacity_retries_same_session_without_clearing_work_or_control(
             assert 'model_reasoning_effort="max"' in command
             assert ('web_search="disabled"' in command) is (not public)
             assert f"sleep {30 * index}" in command
-    prompt = runtime.copied_text[PurePosixPath("/tmp/rsi-agent-capacity-retry.md")]
+    prompt = runtime.copied_text[PurePosixPath("/tmp/rsi-agent-provider-retry.md")]
     assert prompt.strip()
     assert "provider-secret" not in prompt and "control-secret" not in prompt
     full_log = output_path.read_text()
@@ -367,10 +374,26 @@ def test_backoff_never_extends_original_time_budget(
     result = adapter.run(replace(request, timeout_seconds=budget))
 
     assert clock.now <= 1000.0 + budget
-    assert result.timed_out
+    # Past the deadline it timed out; short of the next wait it stopped.
+    assert result.timed_out or result.provider_error == "at_capacity"
     assert len(runtime.executions) <= 2
     for execution in runtime.executions:
         assert 0 < execution["timeout_seconds"] <= budget
+
+
+def test_a_slow_retry_prompt_copy_does_not_extend_the_time_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, runtime, clock, request = make_adapter(
+        tmp_path, monkeypatch, [capacity_result(), AgentRunResult(exit_code=0)]
+    )
+    runtime.work_seconds = [2.0, 1000.0]
+    runtime.copy_seconds = 5.0
+
+    result = adapter.run(replace(request, timeout_seconds=100.0))
+
+    assert result.timed_out
+    assert clock.now == runtime.exec_starts[0] + 100.0
 
 
 def test_backoff_is_capped_and_can_recover_after_repeated_overloads(
@@ -389,8 +412,10 @@ def test_backoff_is_capped_and_can_recover_after_repeated_overloads(
         float(re.search(r"\bsleep\s+([0-9.]+)", call["command"][-1]).group(1))
         for call in runtime.executions[1:]
     ]
-    assert delays == [30, 60, 120, 240, 300, 300]
+    assert delays == [30, 60, 120, 240, 480, 900]
     assert clock.now == 1000 + sum(delays) + 2 * 7
+    assert result.provider_error is None
+    assert (result.provider_retries, result.provider_wait_seconds) == (6, 1830)
 
 
 @pytest.mark.parametrize("kind", ["other-agent", "custom-command", "unprepared"])
@@ -551,7 +576,7 @@ def test_generated_capacity_resume_shell_runs_with_exact_session_and_prompt(
         AgentRunRequest(
             prepared=prepared,
             container=work,
-            timeout_seconds=10.0,
+            timeout_seconds=100.0,
             output_path=output_path,
         )
     )
@@ -595,3 +620,187 @@ def test_apptainer_verbose_capacity_result_retries_same_session_within_budget(
     assert "sleep 30" in command
     assert CAPACITY in result.output
     assert "private-secret" not in result.output
+
+
+RATE_LIMITED = (
+    "ERROR: exceeded retry limit, last status: 429 Too Many Requests, "
+    "request id: req_0123"
+)
+
+
+def provider_result(error: str) -> AgentRunResult:
+    output = HEADER + "Reconnecting... 1/5\nReconnecting... 2/5\n" + error + "\n"
+    return AgentRunResult(exit_code=1, output=output, full_output_captured=True)
+
+
+@pytest.mark.parametrize(
+    ("error", "kind"),
+    [
+        (CAPACITY, "at_capacity"),
+        (RATE_LIMITED, "rate_limited"),
+        (
+            "ERROR: exceeded retry limit, last status: 429 Too Many Requests",
+            "rate_limited",
+        ),
+        (
+            "ERROR: exceeded retry limit, last status: 503 Service Unavailable",
+            "unavailable",
+        ),
+        ('ERROR: {"error": {"code": "rate_limit_exceeded"}}', "rate_limited"),
+        ("ERROR: exceeded retry limit, last status: 401 Unauthorized", None),
+        ("ERROR: You've hit your usage limit. Try again later.", None),
+        ("ERROR: Quota exceeded. Check your plan and billing details.", None),
+        ("ERROR: unexpected status 400 Bad Request: bad model", None),
+        (
+            "ERROR: unexpected status 503 Service Unavailable: upstream down, "
+            "request id: req_0123",
+            "unavailable",
+        ),
+        ("ERROR: unexpected status 502 Bad Gateway", "unavailable"),
+        (
+            "ERROR: We're currently experiencing high demand, which may cause "
+            "temporary errors.",
+            "unavailable",
+        ),
+        (
+            "ERROR: We\u2019re currently experiencing high demand, which may cause "
+            "temporary errors.",
+            "unavailable",
+        ),
+        (
+            "ERROR: unexpected status 502 Bad Gateway: <html>\n<body>\n"
+            "<h1>502 Bad Gateway</h1>\n</body>\n</html>, url: https://api.example/v1",
+            "unavailable",
+        ),
+        (
+            "ERROR: Policy-restricted capacity is unavailable. Please try again later.",
+            "at_capacity",
+        ),
+        ("ERROR: Flex capacity unavailable.", "at_capacity"),
+        ("ERROR: unexpected status 401 Unauthorized: bad key", None),
+    ],
+)
+def test_codex_provider_errors_are_recognized_from_the_terminal_error(error, kind):
+    from rsi_harness.integrations.rsi_loop import _codex_provider_error
+
+    assert _codex_provider_error(provider_result(error).output) == kind
+    # Only the terminal error counts, not a mention before a later one.
+    assert _codex_provider_error(HEADER + error + "\nERROR: HTTP 401\n") is None
+
+
+@pytest.mark.parametrize(
+    "after",
+    ["\n" + "x" * 2000 + "\nthread 'main' panicked", "\nERROR: HTTP 401\nsee the log"],
+)
+def test_an_earlier_server_error_mention_does_not_count(after):
+    from rsi_harness.integrations.rsi_loop import _codex_provider_error
+
+    mention = HEADER + "ERROR: unexpected status 503 Service Unavailable: down"
+    assert _codex_provider_error(mention + after + "\n") is None
+
+
+def test_rate_limits_back_off_exponentially_in_the_same_session(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, runtime, clock, request = make_adapter(
+        tmp_path,
+        monkeypatch,
+        [provider_result(RATE_LIMITED) for _ in range(3)]
+        + [AgentRunResult(exit_code=0, output="recovered\n")],
+    )
+
+    result = adapter.run(replace(request, timeout_seconds=3600.0))
+
+    assert result.exit_code == 0 and result.provider_error is None
+    assert (result.provider_retries, result.provider_wait_seconds) == (3, 210)
+    commands = [call["command"][-1] for call in runtime.executions[1:]]
+    assert [f"sleep {delay}" in c for c, delay in zip(commands, (30, 60, 120))] == [
+        True
+    ] * 3
+    assert all("codex exec resume" in c and SESSION in c for c in commands)
+    assert "provider rate limited (HTTP 429); retry 3 in 120s" in commands[-1]
+    prompt = runtime.copied_text[PurePosixPath("/tmp/rsi-agent-provider-retry.md")]
+    assert "temporarily rate limiting requests" in prompt
+    assert clock.now == 1000 + 210 + 2 * 4
+
+
+def test_spent_retries_stop_the_agent_on_the_provider_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog
+) -> None:
+    adapter, runtime, clock, request = make_adapter(
+        tmp_path, monkeypatch, [provider_result(RATE_LIMITED) for _ in range(7)]
+    )
+
+    result = adapter.run(replace(request, timeout_seconds=7200.0))
+
+    assert len(runtime.executions) == 7
+    assert result.exit_code == 1 and not result.timed_out
+    assert result.provider_error == "rate_limited"
+    assert (result.provider_retries, result.provider_wait_seconds) == (6, 1830)
+    # The rest of the budget stays for a later resume.
+    assert clock.now == 1000 + 1830 + 2 * 7 < 1000 + 7200
+    assert "stops after 6 retries" in caplog.text
+
+
+def test_a_budget_shorter_than_the_next_wait_stops_without_waiting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, runtime, clock, request = make_adapter(
+        tmp_path, monkeypatch, [provider_result(RATE_LIMITED) for _ in range(3)]
+    )
+
+    result = adapter.run(replace(request, timeout_seconds=80.0))
+
+    # 30 s, then 46 s are left for the next 60 s wait: two execs, one wait.
+    assert len(runtime.executions) == 2
+    assert result.provider_error == "rate_limited" and not result.timed_out
+    assert (result.provider_retries, result.provider_wait_seconds) == (1, 30)
+    assert clock.now == 1000 + 30 + 2 * 2
+
+
+def test_a_long_healthy_session_starts_the_backoff_over(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, runtime, _, request = make_adapter(
+        tmp_path,
+        monkeypatch,
+        [provider_result(RATE_LIMITED) for _ in range(3)]
+        + [AgentRunResult(exit_code=0)],
+    )
+    # The second session works 20 minutes before it is rate limited again.
+    runtime.work_seconds = [2.0, 1200.0, 2.0, 2.0]
+
+    adapter.run(replace(request, timeout_seconds=7200.0))
+
+    delays = [
+        float(re.search(r"\bsleep\s+([0-9.]+)", call["command"][-1]).group(1))
+        for call in runtime.executions[1:]
+    ]
+    assert delays == [30, 30, 60]
+
+
+def test_other_failures_record_no_provider_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, _, _, request = make_adapter(
+        tmp_path, monkeypatch, [provider_result("ERROR: HTTP 401 Unauthorized")]
+    )
+
+    result = adapter.run(request)
+
+    assert result.exit_code == 1
+    assert (result.provider_error, result.provider_retries) == (None, 0)
+
+
+def test_cancel_during_a_rate_limit_wait_propagates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    adapter, runtime, _, request = make_adapter(
+        tmp_path, monkeypatch, [provider_result(RATE_LIMITED), KeyboardInterrupt()]
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        adapter.run(request)
+
+    assert len(runtime.executions) == 2
+    assert "sleep 30" in runtime.executions[1]["command"][-1]

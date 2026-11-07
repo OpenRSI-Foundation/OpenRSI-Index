@@ -50,6 +50,7 @@ from rsi_harness.models import (
     RunResult,
     SubmissionReport,
     WorkQuiescence,
+    describe_provider_stop,
 )
 from rsi_harness.runtime.artifacts import RunArtifactWriter
 from rsi_harness.runtime.coordinator import (
@@ -1866,6 +1867,9 @@ class _ProductionRunComposition:
                 full_output_captured=result.full_output_captured,
                 cancelled=result.cancelled,
                 exec_started=result.exec_started,
+                provider_error=result.provider_error,
+                provider_retries=result.provider_retries,
+                provider_wait_seconds=result.provider_wait_seconds,
             )
             if not result.full_output_captured:
                 with self.artifacts.root.joinpath("agent_output.txt").open(
@@ -1879,6 +1883,15 @@ class _ProductionRunComposition:
                     "exit_code": result.exit_code,
                     "timed_out": result.timed_out,
                     "cancelled": result.cancelled,
+                    **(
+                        {}
+                        if result.provider_error is None
+                        else {
+                            "stopped_by": describe_provider_stop(
+                                result.provider_error, result.provider_retries
+                            )
+                        }
+                    ),
                 },
             )
         except Exception as error:

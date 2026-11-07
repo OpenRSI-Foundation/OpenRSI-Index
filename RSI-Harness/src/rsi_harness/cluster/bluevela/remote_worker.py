@@ -16,6 +16,7 @@ from rsi_harness.cluster.bluevela.apptainer_environment import (
     isolated_apptainer_environment,
 )
 from rsi_harness.cluster.bluevela.multinode import RemoteRequestControl
+from rsi_harness.cluster.bluevela.preflight import is_singularity_ce
 from rsi_harness.errors import InfrastructureError
 
 _SIZE_FLAGS = {"--nnodes", "--nproc-per-node", "--nproc_per_node"}
@@ -227,7 +228,9 @@ def build_apptainer_environment(
         "TEMP": "/tmp",
         "TMP": "/tmp",
     }
-    return isolated_apptainer_environment(values)
+    return isolated_apptainer_environment(
+        values, singularity_ce=is_singularity_ce(control.worker.apptainer_binary)
+    )
 
 
 def _pid_start_time(pid: int) -> str:

@@ -200,7 +200,9 @@ fi
 local_root="$(mktemp -d "$builder_tmp_root/rsi-harness-sif.XXXXXX")"
 # Podman 4.x to 5.0 refuse a runroot longer than 50 characters.
 podman_runroot="$(mktemp -d /tmp/rsi-run.XXXXXX)"
-job_tag="${{SLURM_JOB_ID:-${{LSB_JOBID:-$$}}}}"
+# Named after the build job (a job sees only its own scheduler's variables),
+# never a PID another node may reuse.
+job_tag="${{SLURM_JOB_ID:-${{LSB_JOBID:-${{PBS_JOBID:-${{PJM_JOBID:-$$}}}}}}}}"
 partial_sif="$cache_dir/.{plan.cache_key}.$job_tag.sif.partial"
 partial_sha="$cache_dir/.{plan.cache_key}.$job_tag.sha256.partial"
 cleanup() {{
@@ -318,8 +320,15 @@ fi
 export APPTAINER_BIND={_quote(profile.apptainer.dns_bind)}
 export APPTAINER_TMPDIR="$local_root/apptainer-tmp"
 export APPTAINER_CACHEDIR="$local_root/apptainer-cache"
-"$apptainer" build {apptainer_args} \
-  --mksquashfs-args {_quote(f"-processors {profile.builder.cpu_slots}")} \
+squashfs_args=(--mksquashfs-args {_quote(f"-processors {profile.builder.cpu_slots}")})
+if (( singularity_ce )); then
+  # SingularityCE reads only its own names and has no --mksquashfs-args.
+  export SINGULARITY_BIND="$APPTAINER_BIND"
+  export SINGULARITY_TMPDIR="$APPTAINER_TMPDIR"
+  export SINGULARITY_CACHEDIR="$APPTAINER_CACHEDIR"
+  squashfs_args=()
+fi
+"$apptainer" build {apptainer_args} ${{squashfs_args[@]+"${{squashfs_args[@]}}"}} \
   "$local_sif" "docker-archive://$local_archive"
 "$apptainer" inspect "$local_sif" >/dev/null
 test -s "$local_sif"

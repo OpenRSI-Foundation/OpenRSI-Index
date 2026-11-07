@@ -26,6 +26,9 @@ poll_seconds = 10.0
 # Optional per-job limit, HH:MM. Single-node research can resume under the
 # same total budget after an early signal drains Judge and closes Work.
 # run_walltime_limit = "12:00"
+# Run build and run jobs inside the controller's own PBS job, started
+# from a job script on a compute node, instead of submitting them:
+# launch = "allocation"
 
 # Image builds can use another queue, account or project, or request a GPU
 # where the build queue rejects GPU-less jobs. CPU and memory still come from

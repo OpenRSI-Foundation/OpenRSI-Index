@@ -5,11 +5,14 @@ from __future__ import annotations
 import json
 import re
 import shlex
+import signal
+import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Literal, Protocol
 
 import typer
 from pydantic import ValidationError
@@ -219,6 +222,11 @@ class _RunConsole:
                 f"exit_code={details.get('exit_code')} "
                 f"timed_out={details.get('timed_out', False)}"
             )
+            if details.get("stopped_by"):
+                typer.echo(
+                    f"Agent stopped: {details['stopped_by']}; resume the run "
+                    "once the provider recovers"
+                )
         elif name == "judge_started":
             round_id = self._round_id(value)
             typer.echo(f"Judge {round_id}: snapshotting Work...")
@@ -345,6 +353,41 @@ class _ClusterConsole:
 
 def _field(label: str, value: object) -> str:
     return f"  {label:<18}{value}"
+
+
+@contextmanager
+def _terminate_as_interrupt() -> Iterator[None]:
+    """SIGTERM or SIGHUP to the controller cancels the jobs it submitted, as
+    Ctrl-C does: the scheduler's wait, or the adapter between a submission
+    and its wait, cancels on KeyboardInterrupt. A batch scheduler ends a
+    controller job (walltime, qdel, scancel, bkill) with SIGTERM, which would
+    otherwise end Python and leave the run job, Agent and all, running. A
+    signal the controller inherited as ignored (nohup) stays ignored."""
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+    previous: dict[signal.Signals, Any] = {}
+
+    def ignore(signum: int, frame: object) -> None:
+        del signum, frame
+
+    def interrupt(signum: int, frame: object) -> None:
+        del signum, frame
+        # Once: a later signal (LSF's bkill sends SIGINT then SIGTERM) must
+        # not interrupt the cancellation. A Python handler, not SIG_IGN, so
+        # the processes the cancellation starts do not inherit it.
+        for selected in previous:
+            signal.signal(selected, ignore)
+        raise KeyboardInterrupt
+
+    try:
+        for selected in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP):
+            if signal.getsignal(selected) is not signal.SIG_IGN:
+                previous[selected] = signal.signal(selected, interrupt)
+        yield
+    finally:
+        for selected, handler in previous.items():
+            signal.signal(selected, handler)
 
 
 def _fail(error: BaseException, *, verbose: bool) -> None:
@@ -592,7 +635,8 @@ def run_command(
                 event_callback=_ClusterConsole(),
             )
             started = time.monotonic()
-            cluster_result = adapter.run(cluster_request)
+            with _terminate_as_interrupt():
+                cluster_result = adapter.run(cluster_request)
         except BaseException as error:
             _fail(error, verbose=verbose)
             return
@@ -693,6 +737,8 @@ def _echo_cluster_result(result: ClusterRunResult, elapsed: float) -> None:
     typer.echo(_field("Status:", result.status.value))
     typer.echo(_field("Job IDs:", ", ".join(result.job_ids)))
     typer.echo(_field("Logs:", result.log_dir))
+    if result.agent_stopped_by is not None:
+        typer.echo(_field("Agent stopped:", result.agent_stopped_by))
     if result.status in {RunStatus.FAILED, RunStatus.CANCELLED}:
         raise typer.Exit(1)
 
@@ -712,6 +758,8 @@ def _echo_result(result: RunResult, roots: RuntimeRoots, elapsed: float) -> None
         typer.echo(_field("Artifacts:", result.artifacts_dir))
     if result.agent_exit_code is not None:
         typer.echo(_field("Agent exit code:", result.agent_exit_code))
+    if result.agent_stopped_by is not None:
+        typer.echo(_field("Agent stopped:", result.agent_stopped_by))
     if result.reports:
         typer.echo()
         typer.echo("Judge rounds:")
@@ -803,7 +851,8 @@ def resume_command(
         typer.echo()
         started = time.monotonic()
         try:
-            cluster_result = adapter.resume(plan)
+            with _terminate_as_interrupt():
+                cluster_result = adapter.resume(plan)
         except BaseException as error:
             _fail(error, verbose=verbose)
             return

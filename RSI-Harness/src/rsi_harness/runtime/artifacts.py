@@ -7,6 +7,7 @@ import math
 import os
 import stat
 import uuid
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from tempfile import NamedTemporaryFile
@@ -216,6 +217,7 @@ class RunArtifactWriter:
         agent_runtime_seconds: float | None = None,
         first_submission_seconds: float | None = None,
         attempts: int | None = None,
+        agent_provider: Mapping[str, object] | None = None,
     ) -> None:
         """Write ``final_result.json``.
 
@@ -223,7 +225,8 @@ class RunArtifactWriter:
         ``first_submission_seconds`` the time from its start to the start of
         the first Judge round that returned a report; both are None when
         there was none. A resumed run gives its number of ``attempts``, and
-        its Agent seconds summed over them.
+        its Agent seconds summed over them. ``agent_provider`` records the
+        retries of model provider errors and the error the Agent ended on.
         """
         if self._submitted_earlier:
             # Measured in the earlier attempt that first submitted.
@@ -246,6 +249,8 @@ class RunArtifactWriter:
         }
         if attempts is not None:
             payload["attempts"] = attempts
+        if agent_provider is not None:
+            payload["agent_provider"] = dict(agent_provider)
         self._atomic_write_json(self.root / "final_result.json", payload)
 
     def record_engine_error(self, error: str) -> None:

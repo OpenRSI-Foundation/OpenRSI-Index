@@ -56,8 +56,11 @@ def test_cache_hit_requires_matching_nonempty_sif_and_sidecar(tmp_path: Path) ->
     assert plan_image(context, tmp_path / "cache").cache_hit is False
 
 
+@pytest.mark.parametrize(
+    "version", ["apptainer version 1.5.5", "singularity-ce version 4.5.0"]
+)
 def test_build_driver_executes_archive_conversion_and_publishes_atomically(
-    tmp_path: Path,
+    tmp_path: Path, version: str
 ) -> None:
     context = _context(tmp_path, "FROM ubuntu:22.04\nRUN apt-get update\n")
     calls = tmp_path / "calls.log"
@@ -76,8 +79,11 @@ def test_build_driver_executes_archive_conversion_and_publishes_atomically(
     )
     apptainer = _executable(
         tmp_path / "apptainer",
+        f'[[ "$1" == --version ]] && echo {version!r} && exit 0\n'
         f"printf 'apptainer %s\\n' \"$*\" >> {calls}\n"
         'if [[ "$1" == "build" ]]; then\n'
+        f'  printf "env %s %s %s\\n" "${{SINGULARITY_BIND-}}" '
+        f'"${{SINGULARITY_TMPDIR-}}" "${{SINGULARITY_CACHEDIR-}}" >> {calls}\n'
         "  shift\n"
         '  while [[ "$1" == --* ]]; do\n'
         '    if [[ "$1" == "--mksquashfs-args" ]]; then shift 2; else shift; fi\n'
@@ -128,7 +134,20 @@ def test_build_driver_executes_archive_conversion_and_publishes_atomically(
     assert " build --isolation rootless " in calls.read_text()
     assert " save " in calls.read_text()
     assert "docker-archive://" in calls.read_text()
-    assert "--mksquashfs-args -processors 64" in calls.read_text()
+    singularity_ce = version.startswith("singularity")
+    # SingularityCE reads its own names and has no --mksquashfs-args.
+    assert ("--mksquashfs-args -processors 64" in calls.read_text()) is not (
+        singularity_ce
+    )
+    environment = next(
+        line for line in calls.read_text().splitlines() if line.startswith("env ")
+    ).split()[1:]
+    if singularity_ce:
+        assert environment[0] == "/etc/resolv.conf"
+        assert environment[1].endswith("/apptainer-tmp")
+        assert environment[2].endswith("/apptainer-cache")
+    else:
+        assert environment == []
     assert "system reset --force" in calls.read_text()
     assert "/etc/apt/apt.conf.d/99-rsi-rootless.conf:ro" in calls.read_text()
     assert "--ipc host" in calls.read_text()
@@ -387,3 +406,38 @@ def test_default_build_driver_renders_the_existing_storage_and_namespaces(
     assert "--signature-policy" not in script and "CONTAINERS_CONF" not in script
     assert "--format docker \\\n" in script
     assert "for ns in net uts; do" in script
+
+
+@pytest.mark.parametrize(
+    "environment",
+    [
+        {"SLURM_JOB_ID": "41"},
+        {"LSB_JOBID": "42"},
+        {"PBS_JOBID": "43.jobm"},
+        {"PJM_JOBID": "44"},
+        {},
+    ],
+)
+def test_build_partials_are_named_after_the_batch_job(
+    tmp_path: Path, environment: dict[str, str]
+) -> None:
+    # Two builds never share a partial SIF: each is named after its job, not
+    # after a PID another node may reuse.
+    context = _context(tmp_path)
+    plan = plan_image(context, tmp_path / "cache")
+    driver = tmp_path / "job.sh"
+    render_build_driver(
+        plan, load_cluster_profile("bluevela", {"USER": "alice"}), context, driver, 1
+    )
+    line = next(
+        text for text in driver.read_text().splitlines() if text.startswith("job_tag=")
+    )
+    completed = subprocess.run(
+        ["/bin/bash", "-c", f'{line}; printf "%s %s" "$job_tag" "$$"'],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ["PATH"], **environment},
+        check=True,
+    )
+    job_tag, pid = completed.stdout.split()
+    assert job_tag == next(iter(environment.values()), pid)
