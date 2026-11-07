@@ -739,3 +739,70 @@ def test_wait_ends_on_a_held_job_once_deleted():
     )
     assert pjm_scheduler.wait(JOB).state == "FAILED"
     assert pjm_scheduler._runner.calls[-1] == ("pjdel", JOB)
+
+
+# --- Allocation launch ------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("limit", "left"),
+    [
+        ("6:00:00", 5 * 3600 - 75),
+        # An adaptive limit is sure of its minimum only.
+        ("2:00:00-6:00:00", 3600 - 75),
+        ("2:00:00-", 3600 - 75),
+    ],
+)
+def test_walltime_left_is_the_elapse_limit_less_the_time_used(limit, left):
+    header = ("JOB_ID", "ST", "ELAPSE_TIM", "ELAPSE_LIM")
+    pjm = scheduler(*[table((JOB, "RUN", "1:01:15", limit), header=header)] * 2)
+    assert pjm.walltime_left(JOB, {}) == left
+    assert pjm.walltime_left(JOB, {"PJM_ELAPSED_TIME_MODE": "fixed"}) == left
+    assert pjm._runner.calls[0] == (
+        "pjstat",
+        "-v",
+        "--choose",
+        "jid,st,elp,elpl",
+        JOB,
+    )
+
+
+def test_walltime_left_of_a_job_pjstat_does_not_list_must_be_told():
+    with pytest.raises(InfrastructureError, match="cannot tell how much walltime"):
+        scheduler(*([NONE] * 3)).walltime_left(JOB, {})
+
+
+@pytest.mark.parametrize(("limit", "left"), [("6:00:00", None), ("2:00:00-", 3525)])
+def test_an_adaptive_elapse_limit_needs_its_minimum(limit, left):
+    # The job's environment says the limit is adaptive; pjstat may show only
+    # the maximum, which PJM may not give.
+    header = ("JOB_ID", "ST", "ELAPSE_TIM", "ELAPSE_LIM")
+    pjm = scheduler(table((JOB, "RUN", "1:01:15", limit), header=header))
+    environ = {"PJM_ELAPSED_TIME_MODE": "adaptive"}
+    if left is None:
+        with pytest.raises(SetupError, match="adaptive elapse limit"):
+            pjm.walltime_left(JOB, environ)
+    else:
+        assert pjm.walltime_left(JOB, environ) == left
+
+
+@pytest.mark.parametrize(
+    ("resources", "gpus"),
+    [
+        # Genkai's listing: the per-node resources end in "/n".
+        ("rsc015=0,gpu/n=4,jobenv=singularity,shared/n=true", 4),
+        ("gpu/n=2", 2),
+        # A job-wide total is not this node's share.
+        ("gpu=2", None),
+        ("jobenv=singularity", None),
+        ("", None),
+    ],
+)
+def test_job_gpus_are_the_jobs_gpu_resource(resources, gpus):
+    pjm = scheduler()
+    assert pjm.job_gpus(JOB, {"PJM_CUSTOM_RESOURCES": resources}) == gpus
+    assert pjm._runner.calls == []
+    assert (
+        scheduler(gpu_resource=None).job_gpus(JOB, {"PJM_CUSTOM_RESOURCES": "gpu/n=2"})
+        is None
+    )

@@ -715,6 +715,14 @@ class AgentRunRequest:
         )
 
 
+# Why an Agent's model provider stopped it, by the name results record.
+PROVIDER_ERRORS = {
+    "at_capacity": "at capacity",
+    "rate_limited": "rate limited (HTTP 429)",
+    "unavailable": "unavailable (server errors past the CLI's own retries)",
+}
+
+
 @dataclass(frozen=True, slots=True)
 class AgentRunResult:
     exit_code: int | None
@@ -724,6 +732,23 @@ class AgentRunResult:
     full_output_captured: bool = False
     timed_out: bool = False
     cancelled: bool = False
+    # The provider error (a PROVIDER_ERRORS key) the Agent ended on, once its
+    # retries were spent; and the retries and waits the Harness spent on
+    # provider errors in this exec.
+    provider_error: str | None = None
+    provider_retries: int = 0
+    provider_wait_seconds: float = 0.0
+
+    def __post_init__(self) -> None:
+        if self.provider_error is not None and self.provider_error not in (
+            PROVIDER_ERRORS
+        ):
+            raise ValueError(f"unknown provider error {self.provider_error!r}")
+
+
+def describe_provider_stop(error: str, retries: int) -> str:
+    """How a provider error that ended the Agent reads in results."""
+    return f"model provider {PROVIDER_ERRORS[error]} after {retries} Harness retries"
 
 
 @dataclass(frozen=True, slots=True)
@@ -771,3 +796,6 @@ class RunResult(PersistedModel):
     # the directory holding final_result.json and the rounds' reports.
     agent_exit_code: int | None = None
     artifacts_dir: Path | None = None
+    # Set when the Agent ended on its model provider's error
+    # (describe_provider_stop), not on its own or at its time budget.
+    agent_stopped_by: str | None = None

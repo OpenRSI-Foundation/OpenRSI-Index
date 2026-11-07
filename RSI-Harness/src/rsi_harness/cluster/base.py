@@ -41,6 +41,8 @@ class ClusterRunResult(PersistedModel):
     status: RunStatus
     log_dir: Path
     job_ids: tuple[str, ...] = ()
+    # How a model provider error stopped the Agent, as final_result.json records.
+    agent_stopped_by: str | None = None
 
 
 class ClusterAdapter(Protocol):

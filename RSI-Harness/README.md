@@ -175,11 +175,17 @@ from logs, while ordinary settings remain unchanged. For credentials with
 nonstandard names, list the variable names in `RSI_AGENT_SECRET_ENV_NAMES`
 (comma-separated).
 
-During a run, an explicit Codex model-capacity error is retried automatically
-in the same session, with waits of 30, 60, 120, 240, then at most 300 seconds.
-Work is not restarted, and waiting counts toward the original Agent timeout.
-This does not retry normal completion, cancellation, or other errors, and
-requires a session ID from Codex. It does not create a new Harness attempt.
+During a run, a Codex exit on an explicit model provider error (model at
+capacity, HTTP 429 or a server error once Codex's own retries are spent) is
+retried automatically in the same session, with waits of 30, 60, 120, 240, 480
+and 900 seconds; a session that works 15 minutes starts the waits over. Work is
+not restarted, and waiting counts toward the original Agent timeout. After the
+sixth retry, or when less time is left than the next wait, the Agent stops and
+the run ends: `final_result.json` records `agent_provider` (`error`, `retries`,
+`wait_seconds`) and the console names the provider error; resume the run once
+the provider recovers. Usage or quota limits, normal completion, cancellation
+and other errors are not retried, and a retry requires a session ID from Codex.
+Retries do not create a new Harness attempt.
 
 ### Agents
 
@@ -485,7 +491,7 @@ expects for its baseline. Under `logs/runs/<run_id>/<task_id>/`:
 
 | File | Contents |
 | --- | --- |
-| `final_result.json` | `status` (`completed`, `no_valid_submission`, `failed` or `cancelled`), `best_score`, `best_rewards`, `best_round`, `total_rounds`, `timed_out`, `runtime_seconds`, and for every run: `agent_exit_code` (here `solve.sh`'s), `agent_runtime_seconds` (the Agent's exec) and `first_submission_seconds` (from the Agent's start to the start of the first Judge round, or `null`) |
+| `final_result.json` | `status` (`completed`, `no_valid_submission`, `failed` or `cancelled`), `best_score`, `best_rewards`, `best_round`, `total_rounds`, `timed_out`, `runtime_seconds`, and for every run: `agent_exit_code` (here `solve.sh`'s), `agent_runtime_seconds` (the Agent's exec) and `first_submission_seconds` (from the Agent's start to the start of the first Judge round, or `null`); `agent_provider` where the Agent met model provider errors |
 | `submissions/agent-N/report.json` | The round's `status` (`completed`, `verifier_error`, `verifier_timeout`, `infrastructure_error` or `submission_error`), `metrics`, `score`, `exit_code` of `test.sh`, `timed_out`, `runtime_seconds` (the whole round: snapshot, Judge start, `test.sh` and reward) and `error` |
 | `submissions/agent-N/test_output.txt`, `feedback/agent-N.log` | The round's complete Judge stdout and stderr |
 | `verifier/agent-N/` | The round's `/logs/verifier` (`reward.json` and whatever `test.sh` wrote; root-owned under `sudo`) |
@@ -544,12 +550,16 @@ minutes for `sbatch`.
 Set `apptainer.binary` to an absolute path on the compute nodes. Profile loading
 rejects relative paths; it does not require the binary to exist on the submit
 host. Build and Engine jobs check its executable permissions on their nodes,
-including when using a cached SIF. It must be Apptainer: SingularityCE is
-refused by the jobs and, when the submit host sees the same file, before any
-job. Where a site ships only SingularityCE, install an unprivileged Apptainer
-(upstream `install-unprivileged.sh`) under your storage. The submit host needs
-scheduler commands, task/configuration files, shared staging storage and any Agent
-CLI/credentials to stage; Oracle needs no Work model CLI. A research Agent's CLI
+including when using a cached SIF. It may be Apptainer or SingularityCE, which
+gets container variables as `SINGULARITYENV_*` and builds SIFs without
+`--mksquashfs-args`. A setuid SingularityCE is refused with
+`network_isolation = "seccomp"` (the filter's no_new_privs disables setuid) and
+inside a user namespace (a userns Kubernetes Pod), where setuid gives it no
+privileges; the submit host refuses the first before any job when it sees the
+same file. There, install a runtime without setuid, such as an unprivileged
+Apptainer (upstream `install-unprivileged.sh`), under your storage. The submit
+host needs scheduler commands, task/configuration files, shared staging storage
+and any Agent CLI/credentials to stage; Oracle needs no Work model CLI. A research Agent's CLI
 must also run inside the task container: its `--version` probe runs before model
 calls. Host-only wrappers and undeclared dependencies are not installed for it.
 Both probes run the resolved native binary (see below) and require one distinct
@@ -574,7 +584,9 @@ needs `nvidia-smi` on the job's `PATH`. Where the variable is unset, the job
 uses the GPUs it can open, but only when a device cgroup visibly fences it (a
 GPU the driver lists cannot be opened) or the job is exclusive; otherwise it
 stops. PJM `gpu=N` jobs can also use an unfenced inventory when it contains
-exactly the requested N GPUs, including Genkai's four-GPU allocation.
+exactly the requested N GPUs, including Genkai's four-GPU allocation; under
+`launch = "allocation"` that is the controller job's request (PJM's per-node
+`gpu`, PBS `ngpus` of a one-node job).
 Phases then get `CUDA_DEVICE_ORDER=PCI_BUS_ID`, so CUDA counts as
 `nvidia-smi` does; a profile environment that sets another order stops the
 job. An unknown or ambiguous UUID, a listed GPU the job cannot open, or a GPU
@@ -643,6 +655,8 @@ Remove `--dry-run` to submit the job. GPU counts come from the task; for
 multi-node tasks, the adapter maps the Work and Judge requirements to full-node
 LSF or Slurm allocations using the profile's GPUs-per-node setting. `--gpus` is
 only for local runs, and `gpus = "all"` needs a numeric cluster override.
+Interrupting the controller (Ctrl-C, or the SIGTERM or SIGHUP a scheduler sends
+a controller job it ends) cancels the build or run job it submitted.
 
 Slurm uses `sbatch` for build/run jobs, `squeue` for active status, `sacct` for the
 exact allocation's final state and exit code, and `scancel` on interruption.
@@ -668,9 +682,10 @@ a host location does not require editing task code. Judge data should be listed
 only in `judge_binds`. These binds (or a legacy profile's `extra_binds`) are the
 only way data reaches a phase: the Harness ignores `APPTAINER_*` and
 `SINGULARITY_*` variables in the operator's shell, except `APPTAINER_TMPDIR` and
-`APPTAINER_CACHEDIR`. The cluster Agent CLI must be a native binary on shared
-storage; a script launcher is refused at submit, and an npm-installed Codex
-resolves to its bundled binary.
+`APPTAINER_CACHEDIR` (for SingularityCE, `SINGULARITY_TMPDIR` and
+`SINGULARITY_CACHEDIR`, which those fill in where unset). The cluster Agent CLI
+must be a native binary on shared storage; a script launcher is refused at
+submit, and an npm-installed Codex resolves to its bundled binary.
 
 Enabling `mount_policy = "scoped"` on an existing installation is a separate,
 explicit migration. Remove nonempty `extra_binds` (rejected in scoped mode) and
@@ -887,9 +902,10 @@ on Slurm. Multi-node tasks are refused. Start from
   resources such as `jobenv=singularity`. `exclusive` asks for `node=1`.
   Ended jobs are read from `pjstat -H`; a job held for an error (`ERR`) is
   deleted and fails.
-- A whole-node job (a PBS chunk without `ngpus`, or an exclusive PBS or PJM
-  job) may hold more GPUs than the task plans: the Engine uses the planned
-  number, lowest index first, and leaves the rest idle.
+- A whole-node job (a PBS chunk without `ngpus`, an exclusive PBS or PJM
+  job, or the controller's own job under `launch = "allocation"`) may hold
+  more GPUs than the task plans: the Engine uses the planned number, lowest
+  index first, and leaves the rest idle.
 - Fixed-size queues declare `scheduler.capacity` with `cpu_slots` and
   `memory_mb` (MiB), and `per_gpu = true` when that capacity is per allocated
   GPU. The planner rejects a task that needs more CPU/RAM before submitting
@@ -898,10 +914,26 @@ on Slurm. Multi-node tasks are refused. Start from
 - `resources.node_tmp_variable` names a variable each job sets to its
   node-local scratch (`PJM_SSD_DIR`, for example); jobs then use it in place
   of the builder's and Apptainer's `temp_root`.
+- `resources.node_machine` (`x86_64` or `aarch64`) names the compute nodes'
+  architecture where a submit host's may differ; a controller on another
+  architecture is refused before it submits a job (a dry run still plans).
 - `run_walltime_limit` segments a long run: the job sends the Engine SIGTERM
   as long before its walltime as the Judge drain needs, as Slurm's advance
   signal does, and `resume` continues it.
 - Cancelling the submit command deletes the job (`qdel`, `pjdel`).
+- `launch = "allocation"` runs the build and run jobs inside the
+  controller's own PBS or PJM job instead of submitting them, so a run
+  queues once: start `rsi-harness` from a job script on a compute node. One
+  job at a time runs there, with the job's GPUs and environment; it must fit
+  the job's GPUs (`CUDA_VISIBLE_DEVICES`, or else its GPU request) and its
+  remaining walltime (to the minimum of a PJM `elapse=min-max`; an adaptive
+  limit without one is refused) less five minutes, which is checked before
+  anything starts. A
+  runner ends each job at its walltime with all it started, and keeps a
+  heartbeat and an end record in the job's directory, so `resume` from
+  another controller job can tell whether it still runs; `resume` may
+  continue a run in either launch mode (a run begun on a Harness without
+  launch modes, only in `submit`). `scheduler.build` overrides do not apply.
 
 Packaged site profiles (see [installation and profile setup](docs/cluster-sites.md)):
 
@@ -916,8 +948,10 @@ Packaged site profiles (see [installation and profile setup](docs/cluster-sites.
   Harness venv and Agent CLI; its walltime must cover the run job's queue
   waits and the whole run, or the run is resumed from a new controller job.
   Compute nodes reach the internet only through the job's HTTP proxy, used
-  by the Agent and independent Judge-model brokers. It needs an unprivileged Apptainer at
-  `/data/$USER/rsi/apptainer`.
+  by the Agent and independent Judge-model brokers. Install an unprivileged
+  Apptainer at `/data/$USER/rsi/apptainer`; the nodes' setuid SingularityCE
+  (`/usr/bin/singularity`) works only where a job can create network
+  namespaces, so check it with an Oracle run first.
 - `--cluster genkai`: Kyushu University Genkai, node group B (PJM, x86-64
   H100, `gpu=N` jobs in `b-batch`, `jobenv=singularity`). Run it on a login
   node. Jobs use `$PJM_SSD_DIR` for scratch. It needs an unprivileged

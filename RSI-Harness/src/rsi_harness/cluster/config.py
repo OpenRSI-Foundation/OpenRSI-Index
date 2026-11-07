@@ -201,6 +201,9 @@ class PBSSchedulerProfile(SchedulerProfile):
     build: PBSBuildProfile | None = None
     run_walltime_limit: str | None = None
     capacity: BatchCapacity | None = None
+    # "allocation": build and run jobs run inside the controller's own job
+    # (schedulers/allocation.py), which may hold more GPUs than planned.
+    launch: Literal["submit", "allocation"] = "submit"
 
     @field_validator("run_walltime_limit")
     @classmethod
@@ -209,7 +212,11 @@ class PBSSchedulerProfile(SchedulerProfile):
 
     @property
     def whole_node(self) -> bool:
-        return self.exclusive or "ngpus" not in self.chunk_resources
+        return (
+            self.launch == "allocation"
+            or self.exclusive
+            or "ngpus" not in self.chunk_resources
+        )
 
     @field_validator("select_binary")
     @classmethod
@@ -262,6 +269,8 @@ class PJMSchedulerProfile(SchedulerProfile):
     build: PJMBuildProfile | None = None
     run_walltime_limit: str | None = None
     capacity: BatchCapacity | None = None
+    # As for PBS.
+    launch: Literal["submit", "allocation"] = "submit"
 
     @field_validator("run_walltime_limit")
     @classmethod
@@ -270,7 +279,9 @@ class PJMSchedulerProfile(SchedulerProfile):
 
     @property
     def whole_node(self) -> bool:
-        return self.exclusive or self.gpu_resource is None
+        return (
+            self.launch == "allocation" or self.exclusive or self.gpu_resource is None
+        )
 
     @field_validator("resources")
     @classmethod
@@ -688,6 +699,10 @@ class ResourceProfile(_ProfileModel):
     gpus_per_node: int = Field(gt=0)
     walltime_margin_seconds: int = Field(ge=0)
     all_gpus_override: int | None = Field(default=None, gt=0)
+    # The compute nodes' architecture, where a submit host's may differ: the
+    # Engine runs there with the controller's Python, so a controller on
+    # another architecture is refused before any job is submitted.
+    node_machine: Literal["x86_64", "aarch64"] | None = None
     # A variable the scheduler sets in each job to its node-local scratch
     # (PJM_SSD_DIR, for example): where it is set, jobs use it instead of the
     # builder's and Apptainer's temp_root.

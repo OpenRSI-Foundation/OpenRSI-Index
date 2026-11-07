@@ -65,6 +65,9 @@ _STATUS_ATTRIBUTES = (
     "obittime",
     "stime",
     "resources_used.walltime",
+    "Resource_List.walltime",
+    "Resource_List.ngpus",
+    "Resource_List.nodect",
 )
 # An attribute line of plain `qstat -f`; continuations start with a tab.
 _TEXT_ATTRIBUTE = re.compile(r" {4}([A-Za-z_][A-Za-z0-9_.]*) = (.*)")
@@ -82,6 +85,7 @@ class PBSJobSpec(BatchJobSpec):
 
 class PBSScheduler(BatchScheduler):
     label = "PBS"
+    job_id_variable = "PBS_JOBID"
     # PBS Pro allows longer names; 63 keeps them readable in qstat.
     name_limit = 63
     transient_errors = (
@@ -221,18 +225,9 @@ class PBSScheduler(BatchScheduler):
         raise InfrastructureError(f"cannot cancel PBS job {job_id}: {detail}")
 
     def _status(self, job_id: str) -> BatchJobResult | None:
-        completed = self._query(job_id, "-F", "json")
-        if completed is None:
+        attributes = self._attributes(job_id)
+        if attributes is None:
             return None
-        try:
-            attributes = json_attributes(job_id, completed)
-        except ValueError:
-            # Some servers escape unusual variable values badly in JSON; the
-            # plain listing has the same attributes.
-            text = self._query(job_id)
-            if text is None:
-                return None
-            attributes = text_attributes(job_id, text)
         result = job_result(job_id, attributes)
         if result.state not in ACTIVE_STATES:
             self._walltime_ends[job_id] = walltime_end(attributes)
@@ -247,6 +242,37 @@ class PBSScheduler(BatchScheduler):
         if last_running is not None:
             estimate = max(estimate, last_running)
         return result.model_copy(update={"ended_at": min(estimate, result.ended_at)})
+
+    def _attributes(self, job_id: str) -> Mapping[str, Any] | None:
+        """The job's attributes, or None for a job the server does not know.
+        Some servers escape unusual variable values badly in JSON; the plain
+        listing has the same attributes."""
+        completed = self._query(job_id, "-F", "json")
+        if completed is None:
+            return None
+        try:
+            return json_attributes(job_id, completed)
+        except ValueError:
+            text = self._query(job_id)
+            return None if text is None else text_attributes(job_id, text)
+
+    def _walltime_left(self, job_id: str, environ: Mapping[str, str]) -> float | None:
+        attributes = self._attributes(job_id)
+        if attributes is None:
+            return None
+        started = pbs_time(attributes.get("stime"))
+        seconds = _clock_seconds(_requested(attributes, "walltime"))
+        if started is None or seconds is None:
+            return None
+        return started + seconds - self._wall_clock()
+
+    def _job_gpus(self, job_id: str, environ: Mapping[str, str]) -> int | None:
+        # ngpus sums all the job's chunks: this node's share only on one node.
+        attributes = self._attributes(job_id)
+        if attributes is None or str(_requested(attributes, "nodect")) != "1":
+            return None
+        gpus = _requested(attributes, "ngpus")
+        return int(gpus) if str(gpus).isdigit() else None
 
     def _query(self, job_id: str, *options: str) -> str | None:
         completed = self._runner((self._status_binary, "-x", "-f", *options, job_id))
@@ -368,6 +394,23 @@ def job_result(job_id: str, attributes: Mapping[str, Any]) -> BatchJobResult:
     )
 
 
+def _requested(attributes: Mapping[str, Any], name: str) -> Any:
+    """A ``Resource_List`` value, from either listing."""
+    limits = attributes.get("Resource_List")
+    if isinstance(limits, Mapping):
+        return limits.get(name)
+    return attributes.get(f"Resource_List.{name}")
+
+
+def _clock_seconds(value: Any) -> int | None:
+    """A PBS duration (``HH:MM:SS``) in seconds, or None."""
+    match = re.fullmatch(r"(\d+):([0-5]\d):([0-5]\d)", str(value or "").strip())
+    if match is None:
+        return None
+    hours, minutes, seconds = (int(part) for part in match.groups())
+    return hours * 3600 + minutes * 60 + seconds
+
+
 def walltime_end(attributes: Mapping[str, Any]) -> float | None:
     """Start plus walltime used: when a job ended whose end notice (obittime)
     a server outage delayed. A suspended job's walltime leaves out the time
@@ -378,8 +421,7 @@ def walltime_end(attributes: Mapping[str, Any]) -> float | None:
     walltime = used.get("walltime") if isinstance(used, Mapping) else None
     if walltime is None:
         walltime = attributes.get("resources_used.walltime")
-    match = re.fullmatch(r"(\d+):([0-5]\d):([0-5]\d)", str(walltime or "").strip())
-    if ended is None or started is None or match is None:
+    seconds = _clock_seconds(walltime)
+    if ended is None or started is None or seconds is None:
         return ended
-    hours, minutes, seconds = (int(part) for part in match.groups())
-    return min(ended, started + hours * 3600 + minutes * 60 + seconds)
+    return min(ended, started + seconds)

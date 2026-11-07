@@ -839,7 +839,9 @@ class KubernetesScheduler:
     @staticmethod
     def _interrupt_on_termination() -> Callable[[], None]:
         """SIGTERM or SIGHUP to the submit command cancels the Job as Ctrl-C
-        does, instead of leaving it running untracked."""
+        does, instead of leaving it running untracked. Only a signal at its
+        default: one the caller handles (the CLI) or ignores (nohup) is left
+        to the caller, whose handler a restore must not re-arm."""
         if threading.current_thread() is not threading.main_thread():
             return lambda: None
 
@@ -849,6 +851,7 @@ class KubernetesScheduler:
         previous = {
             number: signal.signal(number, interrupt)
             for number in (signal.SIGTERM, signal.SIGHUP)
+            if signal.getsignal(number) is signal.SIG_DFL
         }
 
         def restore() -> None:

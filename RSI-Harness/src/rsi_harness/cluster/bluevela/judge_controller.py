@@ -17,6 +17,7 @@ from rsi_harness.cluster.bluevela.apptainer_environment import (
     isolated_apptainer_environment,
 )
 from rsi_harness.cluster.bluevela.multinode import RemoteWorkerTemplate
+from rsi_harness.cluster.bluevela.preflight import is_singularity_ce
 from rsi_harness.errors import InfrastructureError
 from rsi_harness.models import PersistedModel
 
@@ -140,7 +141,10 @@ def build_apptainer_environment(
 ) -> dict[str, str]:
     """Build the clean host environment used to inject Judge values."""
 
-    return isolated_apptainer_environment(_environment_values(control))
+    return isolated_apptainer_environment(
+        _environment_values(control),
+        singularity_ce=is_singularity_ce(control.worker.apptainer_binary),
+    )
 
 
 def _run(control: JudgeControllerControl) -> int:

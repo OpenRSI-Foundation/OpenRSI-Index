@@ -60,8 +60,9 @@ min_tmp_mb = 71680
 
 [apptainer]
 mount_policy = "scoped"
-# The nodes have only a setuid SingularityCE: install an unprivileged
-# Apptainer (its install-unprivileged.sh) here.
+# An unprivileged Apptainer (its install-unprivileged.sh) installed here. The
+# nodes' setuid SingularityCE (/usr/bin/singularity) works only where a job can
+# create network namespaces: check it with an Oracle run first.
 binary = "/data/${USER}/rsi/apptainer/bin/apptainer"
 dns_bind = "/etc/resolv.conf"
 # The task's data, for example:
@@ -86,3 +87,5 @@ min_runtime_tmp_mb = 71680
 gpus_per_node = 4
 all_gpus_override = 4
 walltime_margin_seconds = 900
+# GPU nodes; the x86-64 login nodes cannot run the controller.
+node_machine = "aarch64"

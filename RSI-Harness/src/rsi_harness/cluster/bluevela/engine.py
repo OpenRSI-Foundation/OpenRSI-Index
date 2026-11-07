@@ -27,11 +27,13 @@ from rsi_harness.cluster.bluevela.allocation import (
 )
 from rsi_harness.cluster.bluevela.apptainer_environment import (
     OPERATOR_APPTAINER_NAMES,
+    OPERATOR_SINGULARITY_NAMES,
 )
 from rsi_harness.cluster.bluevela.devices import allocated_cuda_devices
 from rsi_harness.cluster.bluevela.judge_llm import ClusterJudgeLLM
 from rsi_harness.cluster.bluevela.preflight import (
     apptainer_preflight,
+    job_runtime_is_singularity_ce,
     node_tmp_assignment,
 )
 from rsi_harness.cluster.bluevela.resources import MultiNodeResources
@@ -41,6 +43,7 @@ from rsi_harness.cluster.config import (
     PJMSchedulerProfile,
     SlurmSchedulerProfile,
 )
+from rsi_harness.cluster.schedulers.allocation import JOB_GPUS_VARIABLE
 from rsi_harness.cluster.slurm.allocation import discover_slurm_inventory
 from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.judge_agent.judge_isolation import PR_SET_DUMPABLE
@@ -223,13 +226,24 @@ def _quote(value: str | Path) -> str:
 
 
 # Binds, mount options and container variables come from the profile alone,
-# never from the submit shell (Slurm's --export=ALL carries it here).
+# never from the submit shell (Slurm's --export=ALL carries it here). After
+# apptainer_preflight, which sets singularity_ce: SingularityCE keeps the
+# operator's scratch settings under its own names.
 _SCRUB_APPTAINER_ENVIRONMENT = f"""for name in $(compgen -e); do
   case "$name" in
     {"|".join(OPERATOR_APPTAINER_NAMES)}) ;;
+    {"|".join(OPERATOR_SINGULARITY_NAMES)}) (( singularity_ce )) || unset "$name" ;;
     APPTAINER*|SINGULARITY*) unset "$name" ;;
   esac
-done"""
+done
+if (( singularity_ce )); then
+  if [[ -v APPTAINER_TMPDIR && ! -v SINGULARITY_TMPDIR ]]; then
+    export SINGULARITY_TMPDIR="$APPTAINER_TMPDIR"
+  fi
+  if [[ -v APPTAINER_CACHEDIR && ! -v SINGULARITY_CACHEDIR ]]; then
+    export SINGULARITY_CACHEDIR="$APPTAINER_CACHEDIR"
+  fi
+fi"""
 
 
 def _atomic_model(path: Path, value: PersistedModel) -> None:
@@ -269,6 +283,8 @@ def render_engine_driver(
     scheduler = serialized["profile"]["scheduler"]
     for name in ("request_tmp", "build", "run_walltime_limit", "gpu_option"):
         scheduler.pop(name, None)
+    if scheduler.get("launch") == "submit":
+        scheduler.pop("launch")
     builder = serialized["profile"]["builder"]
     for name in (
         "conmon",
@@ -285,6 +301,8 @@ def render_engine_driver(
         if apptainer.get(name) == ApptainerProfile.model_fields[name].default:
             apptainer.pop(name, None)
     resources = serialized["profile"]["resources"]
+    # Checked by the controller only, before it submits anything.
+    resources.pop("node_machine", None)
     if resources.get("node_tmp_variable") is None:
         resources.pop("node_tmp_variable", None)
     payload_path.write_text(json.dumps(serialized, indent=2))
@@ -320,7 +338,7 @@ test -s {_quote(leaf / "final_result.json")}
         if payload.resources.total_gpus:
             # Unset: the Engine finds the GPUs the job can open.
             device_environment = """if [[ -v CUDA_VISIBLE_DEVICES ]]; then
-  export APPTAINERENV_CUDA_VISIBLE_DEVICES="$CUDA_VISIBLE_DEVICES"
+  export "${container_env}CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
 fi"""
             device_preflight = f"""{_quote(profile.apptainer.binary)} \
   exec --nv --containall --no-mount hostfs --writable-tmpfs {bind_args} \
@@ -338,7 +356,7 @@ fi"""
         else:
             # Discard inherited selectors before binding the empty CPU pool.
             device_environment = '''unset CUDA_VISIBLE_DEVICES
-export APPTAINERENV_CUDA_VISIBLE_DEVICES=""'''
+export "${container_env}CUDA_VISIBLE_DEVICES="'''
             device_preflight = ""
         script = f"""#!/usr/bin/env bash
 set -euo pipefail
@@ -439,7 +457,15 @@ def _usable_image(payload: EnginePayload) -> EnginePayload:
             str(sandbox),
             str(payload.sif_path),
         ),
-        env={**os.environ, "APPTAINER_TMPDIR": str(scratch / "apptainer-tmp")},
+        env={
+            **os.environ,
+            "APPTAINER_TMPDIR": str(scratch / "apptainer-tmp"),
+            **(
+                {"SINGULARITY_TMPDIR": str(scratch / "apptainer-tmp")}
+                if job_runtime_is_singularity_ce()
+                else {}
+            ),
+        },
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
@@ -525,13 +551,18 @@ def run_engine_payload(payload: EnginePayload) -> None:
             scheduler = payload.profile.scheduler
             # PJM gpu=N owns N GPUs even when N is every GPU on a node;
             # such a job has no outside GPU to demonstrate its device fence.
-            allocation_size = (
-                payload.resources.total_gpus
-                if isinstance(scheduler, PJMSchedulerProfile)
+            # A controller's own job may hold more GPUs than planned: it
+            # owns those it requested.
+            allocation_size: int | None = None
+            if getattr(scheduler, "launch", "submit") == "allocation":
+                requested = os.environ.get(JOB_GPUS_VARIABLE, "")
+                allocation_size = int(requested) if requested.isdigit() else None
+            elif (
+                isinstance(scheduler, PJMSchedulerProfile)
                 and scheduler.gpu_resource is not None
                 and not scheduler.exclusive
-                else None
-            )
+            ):
+                allocation_size = payload.resources.total_gpus
             devices, derived = allocated_cuda_devices(
                 raw,
                 exclusive=scheduler.exclusive,

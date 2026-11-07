@@ -178,6 +178,10 @@ def test_writes_exact_rsi_loop_tree_and_complete_multi_reward_payloads(
     assert not (root / "submission.tar.gz").exists()
     assert not (root / "final_archive.tar.gz").exists()
     assert float((root / "started_at").read_text().splitlines()[-1]) == 1767225600.0
+    provider = {"error": None, "retries": 2, "wait_seconds": 90.0}
+    writer.finalize(status=RunStatus.COMPLETED, agent_provider=provider)
+    final = json.loads((root / "final_result.json").read_text())
+    assert final["agent_provider"] == provider
 
 
 def test_sudo_run_artifacts_belong_to_invoking_user(

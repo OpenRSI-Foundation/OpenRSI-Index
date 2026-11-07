@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import platform
 from importlib import resources
 from pathlib import Path
 
@@ -408,3 +409,285 @@ def test_failed_jobs_fail_the_run_with_their_log(tmp_path):
     PBSClusterAdapter._require_success(
         "run", BatchJobResult(job_id="1.s", state="COMPLETED", exit_code=0)
     )
+
+
+def test_flow2_controllers_must_run_on_the_aarch64_gpu_nodes(tmp_path, monkeypatch):
+    # The Engine runs on the GPU nodes with the controller's Python, so a
+    # controller on an x86-64 login node is refused before any job; a dry run
+    # still plans there.
+    for name in ("flow2", "flow2-node"):
+        assert load_cluster_profile(name, ENV).resources.node_machine == "aarch64"
+    profile = local_profile(tmp_path, "flow2-node")
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    adapter = _adapter(profile)
+    with pytest.raises(SetupError, match="compute nodes are aarch64.* runs on x86_64"):
+        adapter.run(_request(tmp_path, dry_run=False))
+    assert adapter.scheduler.events == [] and adapter.scheduler.specs == []
+    assert _dry_run(profile, _request(tmp_path, dry_run=True))
+
+
+def test_profiles_without_a_node_machine_accept_any_controller(tmp_path, monkeypatch):
+    profile = local_profile(tmp_path, "pbs")
+    assert profile.resources.node_machine is None
+    monkeypatch.setattr(platform, "machine", lambda: "riscv64")
+    adapter = _adapter(profile)
+    adapter._check_controller_machine()
+
+
+def test_an_interrupt_between_submission_and_wait_cancels_the_job(tmp_path):
+    # A SIGTERM (as KeyboardInterrupt) that lands after qsub returned but
+    # before the wait began would otherwise leave the run job running.
+    cancelled = []
+
+    def interrupted(key, value):
+        if key == "job_submitted" and value["stage"] == "run":
+            raise KeyboardInterrupt
+
+    adapter = PBSClusterAdapter(
+        local_profile(tmp_path, "pbs"),
+        scheduler=RecordingBatchScheduler(PBSScheduler(token=lambda: "a1b2c3")),
+        event_callback=interrupted,
+        agent_version_resolver=lambda _: "0.149.0",
+    )
+    adapter.scheduler.cancel = cancelled.append
+    with pytest.raises(KeyboardInterrupt):
+        adapter.run(_request(tmp_path, dry_run=False))
+    assert adapter.scheduler.events[-1] == "submit-run"
+    assert cancelled == [str(100 + len(adapter.scheduler.specs))]
+
+
+def test_an_interrupted_wait_is_not_cancelled_again(tmp_path):
+    # The wait cancels on its own interrupt; LSF and Slurm refuse a second
+    # cancel of an ended job, which would hide the interrupt.
+    cancelled = []
+
+    class Interrupted(RecordingBatchScheduler):
+        def wait(self, job_id, **kwargs):
+            if self.events[-1] == "submit-run":
+                raise KeyboardInterrupt(f"interrupted; job {job_id} cancelled")
+            return super().wait(job_id, **kwargs)
+
+    adapter = PBSClusterAdapter(
+        local_profile(tmp_path, "pbs"),
+        scheduler=Interrupted(PBSScheduler(token=lambda: "a1b2c3")),
+        event_callback=lambda *_: None,
+        agent_version_resolver=lambda _: "0.149.0",
+    )
+    adapter.scheduler.cancel = cancelled.append
+    with pytest.raises(KeyboardInterrupt, match="cancelled"):
+        adapter.run(_request(tmp_path, dry_run=False))
+    assert cancelled == []
+
+
+def test_a_failed_cancel_after_an_interrupt_is_reported(tmp_path):
+    def interrupted(key, value):
+        if key == "job_submitted" and value["stage"] == "run":
+            raise KeyboardInterrupt
+
+    def cancel(job_id):
+        raise InfrastructureError(f"cannot cancel PBS job {job_id}: no server")
+
+    profile = local_profile(tmp_path, "pbs")
+    adapter = PBSClusterAdapter(
+        profile,
+        scheduler=RecordingBatchScheduler(PBSScheduler(token=lambda: "a1b2c3")),
+        event_callback=interrupted,
+        agent_version_resolver=lambda _: "0.149.0",
+    )
+    adapter.scheduler.cancel = cancel
+    with pytest.raises(KeyboardInterrupt) as raised:
+        adapter.run(_request(tmp_path, dry_run=False))
+    job_id = str(100 + len(adapter.scheduler.specs))
+    message = (
+        f"interrupted; cancelling job {job_id} failed and it may still run: "
+        f"cannot cancel PBS job {job_id}: no server"
+    )
+    assert str(raised.value) == message
+    (manifest,) = profile.storage.run_root.glob("*/RUN_INFO.json")
+    assert json.loads(manifest.read_text())["error"] == message
+
+
+def test_resume_refuses_another_architecture_before_closing_the_run(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(platform, "machine", lambda: "x86_64")
+    adapter = _adapter(local_profile(tmp_path, "flow2-node"))
+    with pytest.raises(SetupError, match="compute nodes are aarch64"):
+        adapter.plan_resume("20261106T000000Z-task-0123abcd", None)
+
+
+# --- Allocation launch ------------------------------------------------------
+
+
+def _allocation_adapter(profile, events=None):
+    events = {} if events is None else events
+    return PBSClusterAdapter(
+        profile,
+        event_callback=lambda key, value: events.update({key: value}),
+        agent_version_resolver=lambda _: "0.149.0",
+    )
+
+
+def test_allocation_launch_plans_local_jobs_anywhere(tmp_path, monkeypatch):
+    from rsi_harness.cluster.schedulers.allocation import AllocationScheduler
+
+    monkeypatch.delenv("PBS_JOBID", raising=False)
+    profile = local_profile(tmp_path, "pbs", launch="allocation")
+    assert profile.scheduler.whole_node
+    events: dict = {}
+    adapter = _allocation_adapter(profile, events)
+    assert isinstance(adapter.scheduler, AllocationScheduler)
+    assert isinstance(adapter.scheduler.host, PBSScheduler)
+    adapter.run(_request(tmp_path, dry_run=True))
+    run = events["dry_run"]["run_argv"]
+    assert run[1] == "-I" and Path(run[2]).name == "local_job.py"
+    assert "qsub" not in run
+    assert not profile.storage.run_root.exists()
+
+
+def test_allocation_launch_is_refused_outside_a_pbs_job(tmp_path, monkeypatch):
+    monkeypatch.delenv("PBS_JOBID", raising=False)
+    profile = local_profile(tmp_path, "pbs", launch="allocation")
+    with pytest.raises(SetupError, match="inside a PBS job"):
+        _allocation_adapter(profile).run(_request(tmp_path, dry_run=False))
+    assert not profile.storage.run_root.exists()
+
+
+def test_allocation_launch_checks_the_jobs_walltime_before_the_run(
+    tmp_path, monkeypatch
+):
+    import subprocess
+    import time
+    from datetime import datetime
+
+    monkeypatch.setenv("PBS_JOBID", "97400.jobm")
+    monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+    profile = local_profile(tmp_path, "pbs", launch="allocation")
+    adapter = _allocation_adapter(profile)
+    calls = []
+    started = datetime.fromtimestamp(time.time() - 60)
+
+    def qstat(argv):
+        calls.append(argv)
+        job = {
+            "job_state": "R",
+            "stime": started.strftime("%a %b %d %H:%M:%S %Y"),
+            "Resource_List": {"walltime": "01:00:00"},
+        }
+        return subprocess.CompletedProcess(
+            argv, 0, json.dumps({"Jobs": {argv[-1]: job}}), ""
+        )
+
+    adapter.scheduler.host._runner = qstat
+    with pytest.raises(SetupError, match="PBS job 97400.jobm has 0.98 h"):
+        adapter.run(_request(tmp_path, dry_run=False))
+    # Nothing was submitted, nothing created.
+    assert {argv[0] for argv in calls} == {"qstat"}
+    assert not profile.storage.run_root.exists()
+
+
+@pytest.mark.parametrize("launch", ["submit", "allocation"])
+def test_the_payload_carries_the_launch_only_when_set(tmp_path, launch):
+    profile = local_profile(tmp_path, "pbs", launch=launch)
+    adapter = _adapter(profile)
+    adapter.run(_request(tmp_path, dry_run=False))
+    payload_path = adapter.scheduler.specs[-1].script_path.with_suffix(".json")
+    scheduler = json.loads(payload_path.read_text())["profile"]["scheduler"]
+    assert scheduler.get("launch") == (None if launch == "submit" else launch)
+    # The controller's own job may hold more GPUs than the run plans.
+    loaded = load_engine_payload(payload_path).profile.scheduler
+    assert loaded.whole_node is (launch == "allocation")
+
+
+def test_a_local_job_is_read_whatever_the_launch(tmp_path):
+    """A run begun with allocation launch resumes without it: its local
+    job's record tells, and a submitted job is the scheduler's."""
+    import subprocess
+    import time
+
+    from rsi_harness.cluster.schedulers.allocation import LocalJob
+
+    adapter = _allocation_adapter(local_profile(tmp_path, "pbs"))
+    assert isinstance(adapter.scheduler, PBSScheduler)
+    calls = []
+
+    def qstat(argv):
+        calls.append(argv)
+        job = {"job_state": "R"}
+        return subprocess.CompletedProcess(
+            argv, 0, json.dumps({"Jobs": {argv[-1]: job}}), ""
+        )
+
+    adapter.scheduler._runner = qstat
+    job_id = "97400.jobm.local-ab12cd34"
+    records = adapter.profile.storage.run_root / ".local-jobs"
+    records.mkdir(parents=True)
+    end = tmp_path / "end"
+    job = LocalJob(
+        job_id=job_id,
+        name="rsi-task-run-alice",
+        allocation="97400.jobm",
+        host="another-node",
+        pid=1,
+        start_ticks=None,
+        deadline=time.time() + 3600,
+        end_path=end,
+        heartbeat_path=tmp_path / "heartbeat",
+    )
+    (records / f"{job_id}.json").write_text(job.model_dump_json())
+    # On another node, it runs while its batch job does.
+    assert adapter._job_finished(job_id) is None
+    assert calls[-1][-1] == "97400.jobm"
+    end.write_text(f"0 {time.time():.3f} done\n")
+    assert adapter._job_finished(job_id).state == "COMPLETED"
+    assert adapter._job_finished("97401.jobm") is None
+    assert calls[-1][-1] == "97401.jobm"
+
+
+def test_allocation_resume_needs_a_frozen_engine_that_knows_it(tmp_path):
+    from tests.cluster.bluevela.test_engine import _payload
+
+    source = tmp_path / "engine-source"
+    payload = _payload(tmp_path).model_copy(update={"source_root": source})
+    with pytest.raises(SetupError, match='resume it with scheduler.launch = "submit"'):
+        _adapter(
+            local_profile(tmp_path, "flow2", launch="allocation")
+        )._check_frozen_source(payload)
+    _adapter(local_profile(tmp_path, "flow2"))._check_frozen_source(payload)
+    allocation = source / "src/rsi_harness/cluster/schedulers/allocation.py"
+    allocation.parent.mkdir(parents=True)
+    allocation.touch()
+    _adapter(
+        local_profile(tmp_path, "flow2", launch="allocation")
+    )._check_frozen_source(payload)
+
+
+@pytest.mark.parametrize(
+    ("started", "resumed"), [("submit", "allocation"), ("allocation", "submit")]
+)
+def test_resume_runs_the_engine_as_the_current_launch(
+    tmp_path, monkeypatch, started, resumed
+):
+    from rsi_harness.cluster.bluevela.adapter import (
+        BlueVelaClusterAdapter,
+        ClusterResumePlan,
+    )
+    from rsi_harness.cluster.bluevela.engine import render_engine_driver
+    from tests.cluster.bluevela.test_engine import _payload
+
+    # flow2 shares a node: a submitted job holds the planned GPUs alone.
+    frozen = local_profile(tmp_path, "flow2", launch=started)
+    payload = _payload(tmp_path).model_copy(update={"profile": frozen})
+    monkeypatch.setattr(
+        BlueVelaClusterAdapter,
+        "plan_resume",
+        lambda *_, **__: ClusterResumePlan(context=None, payload=payload, spec=None),
+    )
+    current = local_profile(tmp_path, "flow2", launch=resumed)
+    plan = _adapter(current).plan_resume("20261106T000000Z-task-0123abcd", None)
+    assert plan.payload.profile.scheduler.whole_node is (resumed == "allocation")
+    output = tmp_path / "attempt" / "run.sh"
+    output.parent.mkdir()
+    render_engine_driver(plan.payload, current, output)
+    loaded = load_engine_payload(output.with_suffix(".json")).profile.scheduler
+    assert loaded.launch == resumed

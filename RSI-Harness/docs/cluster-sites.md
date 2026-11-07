@@ -171,12 +171,17 @@ environment for offline checks and pass the compute executable to the skill
 planner's `--controller-executable`. Both environments must use the same
 Harness revision and shared task/profile paths. The controller job needs PBS
 commands and Git access; budget it separately and give it enough walltime for
-the run job's queue waits and execution. Do not use `qsub -V` to copy credentials
+the run job's queue waits and execution. A controller job that ends first
+cancels its run job; continue with `rsi-harness resume RUN_ID --cluster
+PROFILE` from a new controller job. Do not use `qsub -V` to copy credentials
 into the scheduler's job records. On Genkai, run the controller on a login node.
-These native PBS/PJM adapters submit separate build and run jobs; they do not
-reuse a current allocation through the original adaptation's user-space Slurm
-wrapper. Genkai uses `pjsub`, `pjstat` and `pjdel` directly and needs no
-user-space Slurm or MariaDB setup.
+The PBS/PJM adapters submit separate build and run jobs. To queue once
+instead, set `scheduler.launch = "allocation"` in a profile copy: the
+controller job then runs the build and run jobs itself, so request the GPUs
+the task plans and walltime for the build (unless its image is cached), the
+run and five minutes more. Neither mode needs the original adaptation's
+user-space Slurm or MariaDB; Genkai uses `pjsub`, `pjstat` and `pjdel`
+directly.
 
 Inside an ordinary compute allocation, run the cluster skill's site check with
 the selected runtime and built task image:

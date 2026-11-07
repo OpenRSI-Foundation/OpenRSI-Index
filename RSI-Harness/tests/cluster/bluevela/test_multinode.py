@@ -346,6 +346,16 @@ def test_remote_worker_builds_only_the_broker_owned_apptainer_shape(
         'PS1="Apptainer> "; unset PROMPT_COMMAND'
     )
     assert environment["APPTAINERENV_TRAINING_PROFILE"] == 'E3,"quoted"'
+    monkeypatch.setattr(remote, "is_singularity_ce", lambda _binary: True)
+    singularity = remote.build_apptainer_environment(
+        control,
+        request_id="b" * 32,
+        pool_rank=0,
+        node_rank=0,
+        current_host="work-0",
+    )
+    assert singularity["SINGULARITYENV_TRAINING_PROFILE"] == 'E3,"quoted"'
+    assert not any(name.startswith("APPTAINERENV_") for name in singularity)
     python_offset = command.index("/opt/venv/bin/python")
     distributed = command[python_offset:]
     assert distributed[:3] == (
@@ -475,6 +485,11 @@ def test_judge_controller_uses_argv_safe_clean_apptainer_environment(
         "/run/rsi-harness/torchrun"
     )
     assert environment["APPTAINERENV_PREPEND_PATH"] == "/usr/local/bin"
+    # SingularityCE, as the node's runtime says: its own variable names.
+    monkeypatch.setattr(judge, "is_singularity_ce", lambda _binary: True)
+    environment = judge.build_apptainer_environment(control)
+    assert environment["SINGULARITYENV_PREPEND_PATH"] == "/usr/local/bin"
+    assert not any(name.startswith("APPTAINERENV_") for name in environment)
 
 
 @pytest.mark.parametrize(

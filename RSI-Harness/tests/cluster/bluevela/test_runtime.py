@@ -2543,3 +2543,22 @@ def test_cancelled_judge_keeps_evidence_without_resuming_work(
     assert "fail" in runtime.events
     assert "snapshot_released" not in dict(observer.events)
     assert (runtime.rounds / "agent-1/workspace/answer.py").is_file()
+
+
+def test_an_engine_stopped_by_the_provider_says_so():
+    from rsi_harness.cluster.bluevela.runtime import _unfinished_engine
+    from rsi_harness.models import RunResult, RunStatus, describe_provider_stop
+
+    stopped = RunResult(
+        run_id="run-1",
+        status=RunStatus.NO_VALID_SUBMISSION,
+        agent_stopped_by=describe_provider_stop("rate_limited", 6),
+    )
+    assert _unfinished_engine(stopped) == (
+        "native Engine ended in no_valid_submission: 0 submissions; the Agent "
+        "stopped: model provider rate limited (HTTP 429) after 6 Harness retries; "
+        "resume the run once the provider recovers"
+    )
+    assert _unfinished_engine(
+        stopped.model_copy(update={"agent_stopped_by": None})
+    ) == ("native Engine ended in no_valid_submission: 0 submissions")

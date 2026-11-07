@@ -23,12 +23,15 @@ class PJMClusterAdapter(OneHostBatchAdapter):
         assert isinstance(scheduler, PJMSchedulerProfile)
         return scheduler
 
-    def _make_scheduler(self) -> PJMScheduler:
+    def _make_scheduler(self) -> Any:
         scheduler = self._pjm
-        return PJMScheduler(
-            submit_binary=scheduler.submit_binary,
-            status_binary=scheduler.status_binary,
-            cancel_binary=scheduler.cancel_binary,
+        return self._allocation_scheduler(
+            PJMScheduler(
+                submit_binary=scheduler.submit_binary,
+                status_binary=scheduler.status_binary,
+                cancel_binary=scheduler.cancel_binary,
+                gpu_resource=scheduler.gpu_resource,
+            )
         )
 
     def _job_spec(self, **values: Any) -> PJMJobSpec:
@@ -49,7 +52,8 @@ class PJMClusterAdapter(OneHostBatchAdapter):
         )
         assert isinstance(spec, PJMJobSpec)
         overrides = self._pjm.build
-        if overrides is None:
+        # A build in the controller's own job takes that job's resources.
+        if overrides is None or self._pjm.launch == "allocation":
             return spec
         values = spec.model_dump()
         if overrides.resource_group is not None:

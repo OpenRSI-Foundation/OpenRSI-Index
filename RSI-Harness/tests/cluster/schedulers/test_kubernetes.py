@@ -1004,3 +1004,38 @@ def test_invalid_job_names_never_reach_kubectl(job_id):
 def test_profile_rejects_unsafe_values(values, match):
     with pytest.raises(ValueError, match=match):
         _profile(**values)
+
+
+@pytest.mark.parametrize("first", ["SIGTERM", "SIGINT"])
+@pytest.mark.parametrize("controller", ["cli", "library"])
+def test_a_signal_during_the_wait_cancels_once_and_never_rearms(first, controller):
+    # Under the CLI, its one-shot handler stays in charge: after the first
+    # signal, a second one cannot interrupt the adapter's own cancellation.
+    import contextlib
+    import signal
+
+    from rsi_harness.cli import _terminate_as_interrupt
+
+    runner = Kubectl(get_job=_job(), get_pods=_pod(), patch_job="")
+    scheduler = KubernetesScheduler(
+        _profile(),
+        owner="alice",
+        runner=runner,
+        sleeper=lambda _s: os.kill(os.getpid(), getattr(signal, first)),
+    )
+    numbers = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    before = {number: signal.getsignal(number) for number in numbers}
+    outer = (
+        _terminate_as_interrupt() if controller == "cli" else contextlib.nullcontext()
+    )
+    with outer:
+        with pytest.raises(KeyboardInterrupt, match=f"Job {NAME} cancelled"):
+            scheduler.wait(NAME)
+        if controller == "cli":
+            try:
+                os.kill(os.getpid(), signal.SIGTERM)
+                os.kill(os.getpid(), signal.SIGHUP)
+            except KeyboardInterrupt:
+                pytest.fail("a second signal interrupted the cancellation")
+    assert runner.calls[-1][-5:-2] == ("patch", "job", NAME)
+    assert {number: signal.getsignal(number) for number in numbers} == before

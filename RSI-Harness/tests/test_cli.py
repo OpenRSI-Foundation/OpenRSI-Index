@@ -706,6 +706,74 @@ def test_run_console_prints_lifecycle_progress(capsys) -> None:
     assert "Judge agent-1: running /tests/test.sh" in output
     assert "Judge agent-1 finished: completed score=1.0 runtime=2.50s" in output
     assert "Agent finished: exit_code=0 timed_out=False" in output
+    assert "Agent stopped" not in output
+
+
+def test_run_console_says_when_the_provider_stopped_the_agent(capsys) -> None:
+    from rsi_harness.cli import _RunConsole
+
+    _RunConsole()(
+        "agent_finished",
+        {
+            "exit_code": 1,
+            "timed_out": False,
+            "stopped_by": "model provider rate limited (HTTP 429) after 6 "
+            "Harness retries",
+        },
+    )
+
+    assert (
+        "Agent stopped: model provider rate limited (HTTP 429) after 6 "
+        "Harness retries; resume the run once the provider recovers"
+    ) in capsys.readouterr().out
+
+
+def test_a_run_result_names_a_provider_stop(cli, tmp_path: Path) -> None:
+    result = _run_oracle(
+        cli,
+        tmp_path,
+        _oracle_result(
+            agent_exit_code=1,
+            agent_stopped_by="model provider at capacity after 6 Harness retries",
+        ),
+    )
+
+    assert "Agent stopped:" in result.output
+    assert "model provider at capacity after 6 Harness retries" in result.output
+
+
+def test_a_cluster_run_result_names_a_provider_stop(
+    cli, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cli_module, _local_services = cli
+    task = tmp_path / "task"
+    task.mkdir()
+
+    class ClusterAdapter:
+        def run(self, request):
+            return ClusterRunResult(
+                run_id="cluster-123",
+                status=RunStatus.COMPLETED,
+                log_dir=tmp_path.resolve(),
+                agent_stopped_by="model provider at capacity after 6 Harness retries",
+            )
+
+    monkeypatch.setattr(
+        cli_module,
+        "build_cluster_adapter",
+        lambda name, event_callback=None: ClusterAdapter(),
+    )
+
+    result = CliRunner().invoke(
+        cli_module.app,
+        ["run", str(task), "--cluster", "bluevela", "--agent-auth", "local"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (
+        "Agent stopped:" in result.output
+        and "model provider at capacity after 6 Harness retries" in result.output
+    )
 
 
 def test_run_console_never_prints_raw_process_output(capsys) -> None:
@@ -1620,3 +1688,82 @@ def test_resume_on_a_cluster_refuses_gpus(cli, monkeypatch) -> None:
 
     assert result.exit_code == 2
     assert "--gpus is local-only" in result.output
+
+
+@pytest.mark.parametrize("command", ["run", "resume"])
+@pytest.mark.parametrize("name", ["SIGTERM", "SIGHUP"])
+def test_a_sigterm_to_the_controller_cancels_its_cluster_job(
+    cli, tmp_path: Path, monkeypatch, command, name
+) -> None:
+    # A batch scheduler ends a controller job with SIGTERM (walltime, qdel):
+    # the scheduler's wait sees it as an interrupt and cancels the run job, and
+    # a second signal during that cancellation does not stop it.
+    import os
+    import signal
+
+    cli_module, _services = cli
+    task = tmp_path / "task"
+    task.mkdir()
+    events: list[str] = []
+    numbers = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
+    before = {number: signal.getsignal(number) for number in numbers}
+
+    def wait_for_job() -> None:
+        try:
+            os.kill(os.getpid(), getattr(signal, name))
+            events.append("not interrupted")
+        except KeyboardInterrupt:
+            os.kill(os.getpid(), signal.SIGTERM)
+            os.kill(os.getpid(), signal.SIGINT)
+            events.append("cancelled 7.jobm")
+            raise KeyboardInterrupt("interrupted; PBS job 7.jobm cancelled") from None
+
+    class Plan:
+        context = None
+        spec = type("Spec", (), {"walltime": "01:00:00"})()
+
+    class Adapter:
+        def run(self, _request):
+            wait_for_job()
+
+        def plan_resume(self, *_args, **_kwargs):
+            return Plan()
+
+        def resume(self, _plan):
+            wait_for_job()
+
+    monkeypatch.setattr(
+        cli_module, "build_cluster_adapter", lambda *_a, **_k: Adapter()
+    )
+    if command == "run":
+        arguments = ["run", str(task), "--agent", "codex", "--cluster", "flow2"]
+    else:
+        monkeypatch.setattr(cli_module, "_echo_resume", lambda _context: None)
+        monkeypatch.setattr(cli_module, "_field", lambda *_a: "")
+        arguments = ["resume", "run-1", "--cluster", "flow2"]
+    result = CliRunner().invoke(cli_module.app, arguments)
+
+    assert result.exit_code == 1, result.output
+    assert events == ["cancelled 7.jobm"]
+    assert "interrupted; PBS job 7.jobm cancelled" in result.output
+    assert {number: signal.getsignal(number) for number in numbers} == before
+
+
+@pytest.mark.parametrize("name", ["SIGINT", "SIGHUP"])
+def test_a_signal_the_controller_inherited_as_ignored_stays_ignored(name) -> None:
+    # nohup, or a background job of a non-interactive shell: a hangup on
+    # logout must not cancel the cluster jobs.
+    import os
+    import signal
+
+    from rsi_harness.cli import _terminate_as_interrupt
+
+    number = getattr(signal, name)
+    before = signal.signal(number, signal.SIG_IGN)
+    try:
+        with _terminate_as_interrupt():
+            assert signal.getsignal(number) is signal.SIG_IGN
+            os.kill(os.getpid(), number)
+        assert signal.getsignal(number) is signal.SIG_IGN
+    finally:
+        signal.signal(number, before)

@@ -31,6 +31,7 @@ from rsi_harness.models import (
     SubmissionStatus,
     TaskDefinition,
     WorkQuiescence,
+    describe_provider_stop,
 )
 from rsi_harness.runtime.mount_topology import validate_run_plan_mount_topology
 from rsi_harness.runtime.recovery import (
@@ -86,6 +87,20 @@ _ALLOWED = {
 
 class _RunCancelled(BaseException):
     pass
+
+
+def _agent_provider_record(result: AgentRunResult | None) -> dict[str, object]:
+    """final_result.json's ``agent_provider``, where the Agent met model
+    provider errors: the retries, their waits, and the error it ended on."""
+    if result is None or (not result.provider_retries and not result.provider_error):
+        return {}
+    return {
+        "agent_provider": {
+            "error": result.provider_error,
+            "retries": result.provider_retries,
+            "wait_seconds": result.provider_wait_seconds,
+        }
+    }
 
 
 @contextmanager
@@ -1791,6 +1806,7 @@ class RunCoordinator:
                                 else max(0.0, first_round - agent_started_at)
                             ),
                             **({} if resume is None else {"attempts": attempt}),
+                            **_agent_provider_record(agent_result),
                         )
                     except BaseException as error:
                         cleanup_errors.append(self._error(error))
@@ -1842,6 +1858,15 @@ class RunCoordinator:
                             artifacts.root
                             if isinstance(getattr(artifacts, "root", None), Path)
                             else None
+                        ),
+                        "agent_stopped_by": (
+                            None
+                            if agent_result is None
+                            or agent_result.provider_error is None
+                            else describe_provider_stop(
+                                agent_result.provider_error,
+                                agent_result.provider_retries,
+                            )
                         ),
                     }
                 )

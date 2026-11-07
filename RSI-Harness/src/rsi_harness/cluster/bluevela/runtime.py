@@ -23,7 +23,7 @@ import sys
 import tempfile
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
@@ -57,6 +57,11 @@ from rsi_harness.cluster.bluevela.network import (
     JudgeProviderBroker,
     UpstreamProxy,
     judge_proxy_environment,
+)
+from rsi_harness.cluster.bluevela.preflight import (
+    job_runtime_is_singularity_ce,
+    runtime_conf,
+    singularity_ce_conflict,
 )
 from rsi_harness.cluster.bluevela.sandbox import ClusterSandbox
 from rsi_harness.cluster.snapshots import DirectorySnapshot
@@ -108,10 +113,12 @@ from rsi_harness.models import (
     RootfsSnapshotMode,
     RunPlan,
     RunRequest,
+    RunResult,
     RunStatus,
     SubmissionReport,
     SubmissionStatus,
     WorkQuiescence,
+    describe_provider_stop,
 )
 from rsi_harness.runtime.artifacts import (
     RunArtifactWriter,
@@ -455,14 +462,83 @@ def _box_outer(root: int, table: dict[int, tuple[int, str, str]]) -> int | None:
     return outer[0] if outer else None
 
 
+def create_nested_mount_points(
+    binds: Sequence[tuple[Path, PurePosixPath, bool]],
+) -> None:
+    """Create the missing mount point of each bind nested in a writable one
+    (a copied input at /tmp/<file> under Work's /tmp bind) in that bind's
+    host directory: an empty file or directory, as its source is.
+
+    SingularityCE refuses such a bind ("destination /tmp/rsi-agent-prompt.md
+    doesn't exist in container"); Apptainer creates the mount point itself.
+    Nothing existing is changed, no symlink is followed and a read-only
+    bind's source is never written; a mount point that cannot be created is
+    left to the runtime to report.
+    """
+    for source, target, _read_only in binds:
+        enclosing = [
+            (outer_source, outer_target, outer_read_only)
+            for outer_source, outer_target, outer_read_only in binds
+            if outer_target in target.parents
+        ]
+        if not enclosing:
+            continue
+        outer_source, outer_target, outer_read_only = max(
+            enclosing, key=lambda item: len(item[1].parts)
+        )
+        if outer_read_only:
+            continue
+        *parents, name = target.relative_to(outer_target).parts
+        try:
+            # The enclosing source is the Harness's or the profile's; below
+            # it, nothing Work may have made a link is followed.
+            directory = os.open(outer_source, os.O_RDONLY | os.O_DIRECTORY)
+        except OSError:
+            continue
+        try:
+            for part in parents:
+                with contextlib.suppress(FileExistsError):
+                    os.mkdir(part, 0o700, dir_fd=directory)
+                child = os.open(
+                    part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory
+                )
+                os.close(directory)
+                directory = child
+            if Path(source).is_dir():
+                os.mkdir(name, 0o700, dir_fd=directory)
+            else:
+                os.close(
+                    os.open(
+                        name,
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        0o600,
+                        dir_fd=directory,
+                    )
+                )
+        except OSError:
+            pass  # it exists, or the enclosing source is not writable
+        finally:
+            os.close(directory)
+
+
 def _site_bind_paths(binary: Path) -> tuple[Path, ...]:
-    """The ``bind path`` sources of the site's apptainer.conf, except the
-    two Apptainer still mounts under --containall."""
+    """The ``bind path`` sources of the site's apptainer.conf (SingularityCE's
+    singularity.conf), except the two Apptainer still mounts under
+    --containall."""
     prefix = Path(binary).resolve().parent.parent
-    for conf in (
+    candidates: tuple[Path | None, ...] = (
         prefix / "etc/apptainer/apptainer.conf",
         Path("/etc/apptainer/apptainer.conf"),
-    ):
+    )
+    if job_runtime_is_singularity_ce():
+        candidates = (
+            runtime_conf(binary),
+            prefix / "etc/singularity/singularity.conf",
+            Path("/etc/singularity/singularity.conf"),
+        )
+    for conf in candidates:
+        if conf is None:
+            continue
         try:
             text = conf.read_text()
         except OSError:
@@ -811,6 +887,7 @@ class ApptainerAgentRuntime:
         self._copies[PurePosixPath("/usr/local/bin/rsi-netns-relay")] = relay
         if self.allocated_pools is not None:
             self._materialize_multinode_torchrun()
+        self._require_runtime_mode()
         self._require_site_isolation()
         if not kept:
             self._seed()
@@ -889,8 +966,9 @@ class ApptainerAgentRuntime:
         if "Failed to set flags on interface" in result.output:
             # Seccomp mode needs an unprivileged (non-setuid) Apptainer.
             return (
-                "\nthis setuid Apptainer cannot set up network namespaces; use "
-                "an unprivileged Apptainer with [apptainer] network_isolation "
+                "\nthis setuid Apptainer or SingularityCE cannot set up network "
+                "namespaces; use one installed without setuid, with "
+                "[apptainer] network_isolation "
                 '= "seccomp"'
             )
         if "create network namespace" in result.output:
@@ -899,6 +977,25 @@ class ApptainerAgentRuntime:
                 '[apptainer] network_isolation = "seccomp"'
             )
         return ""
+
+    @property
+    def singularity_ce(self) -> bool:
+        """Whether the profile's runtime is SingularityCE on this node."""
+        return job_runtime_is_singularity_ce()
+
+    def _require_runtime_mode(self) -> None:
+        """Refuse a setuid SingularityCE that cannot give the profile's
+        isolation here, before any container starts."""
+        if not self.singularity_ce:
+            return
+        binary = self.profile.apptainer.binary
+        conflict = singularity_ce_conflict(
+            binary,
+            network_isolation=self.profile.apptainer.network_isolation,
+            user_namespace=_in_user_namespace(),
+        )
+        if conflict is not None:
+            raise SetupError(f"apptainer.binary {binary}: {conflict}")
 
     def _require_site_isolation(self) -> None:
         """Prove the profile's isolation modes on this node before task code
@@ -2407,6 +2504,9 @@ class ApptainerAgentRuntime:
             authority = self._judge_authority_bind()
             if authority is not None:
                 binds.append(authority)
+        if self.singularity_ce:
+            # Apptainer creates these mount points itself.
+            create_nested_mount_points(binds)
         for source, target, read_only in binds:
             suffix = ":ro" if read_only else ""
             command.extend(("--bind", f"{source}:{target}{suffix}"))
@@ -2423,7 +2523,8 @@ class ApptainerAgentRuntime:
         phase: Literal["work", "judge"] = "work",
     ) -> dict[str, str]:
         """The phase's container variables, which _run passes as
-        APPTAINERENV_* (never argv, and never split at commas)."""
+        APPTAINERENV_* (SINGULARITYENV_* for SingularityCE; never argv, and
+        never split at commas)."""
         multi_node = self.allocated_pools is not None
         scoped = self.profile.apptainer.mount_policy == "scoped"
         profile_environment = self.profile.apptainer.environment
@@ -2589,7 +2690,9 @@ class ApptainerAgentRuntime:
             values["RSI_SUBMIT_SOCKET"] = "/run/rsi-harness/network/submit.sock"
         # As on remote workers: inherited APPTAINER*/SINGULARITY* settings
         # (binds, mount options, container variables) never reach the exec.
-        child_env = isolated_apptainer_environment(values)
+        child_env = isolated_apptainer_environment(
+            values, singularity_ce=self.singularity_ce
+        )
         child_env["CUDA_VISIBLE_DEVICES"] = ",".join(devices)
         # Open before spawning: an unavailable output sink must not leave a
         # child running without a reader or a tracked lifetime.
@@ -3382,7 +3485,21 @@ class NativeEngineComposition:
             self.runtime.close_agent_network()
         safe = _safe_output(result.output, self.secrets)
         (self.artifacts.root / "run_agent.log").write_text(safe)
-        self._event("agent_finished", {"exit_code": result.exit_code})
+        self._event(
+            "agent_finished",
+            {
+                "exit_code": result.exit_code,
+                **(
+                    {}
+                    if result.provider_error is None
+                    else {
+                        "stopped_by": describe_provider_stop(
+                            result.provider_error, result.provider_retries
+                        )
+                    }
+                ),
+            },
+        )
         return replace(result, output=safe)
 
     def evaluate(self, request: EvaluationRequest, observer: Any) -> SubmissionReport:
@@ -3468,6 +3585,31 @@ def validate_native_artifacts(
         time.sleep(min(1.0, remaining))
 
 
+def native_agent_stop(root: Path) -> str | None:
+    """The provider stop a validated run's ``final_result.json`` records."""
+    try:
+        provider = json.loads((root / "final_result.json").read_text())[
+            "agent_provider"
+        ]
+        return describe_provider_stop(provider["error"], provider["retries"])
+    except (OSError, ValueError, LookupError, TypeError):
+        return None
+
+
+def _unfinished_engine(result: RunResult) -> str:
+    """Why a native Engine run did not complete, as the job reports it."""
+    message = (
+        f"native Engine ended in {result.status.value}: "
+        f"{result.total_rounds} submissions"
+    )
+    if result.agent_stopped_by is not None:
+        message += (
+            f"; the Agent stopped: {result.agent_stopped_by}; resume the run "
+            "once the provider recovers"
+        )
+    return message
+
+
 def run_native_engine(
     payload: Any,
     plan: RunPlan,
@@ -3512,10 +3654,7 @@ def run_native_engine(
         if failures:
             raise InfrastructureError("Oracle check failed: " + "; ".join(failures))
     if result.status is not RunStatus.COMPLETED:
-        raise InfrastructureError(
-            f"native Engine ended in {result.status.value}: "
-            f"{result.total_rounds} submissions"
-        )
+        raise InfrastructureError(_unfinished_engine(result))
     validate_native_artifacts(plan, payload.run_id)
 
 

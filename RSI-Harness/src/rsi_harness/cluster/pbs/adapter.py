@@ -22,13 +22,15 @@ class PBSClusterAdapter(OneHostBatchAdapter):
         assert isinstance(scheduler, PBSSchedulerProfile)
         return scheduler
 
-    def _make_scheduler(self) -> PBSScheduler:
+    def _make_scheduler(self) -> Any:
         scheduler = self._pbs
-        return PBSScheduler(
-            submit_binary=scheduler.submit_binary,
-            status_binary=scheduler.status_binary,
-            cancel_binary=scheduler.cancel_binary,
-            select_binary=scheduler.select_binary,
+        return self._allocation_scheduler(
+            PBSScheduler(
+                submit_binary=scheduler.submit_binary,
+                status_binary=scheduler.status_binary,
+                cancel_binary=scheduler.cancel_binary,
+                select_binary=scheduler.select_binary,
+            )
         )
 
     def _job_spec(self, **values: Any) -> PBSJobSpec:
@@ -48,7 +50,8 @@ class PBSClusterAdapter(OneHostBatchAdapter):
         )
         assert isinstance(spec, PBSJobSpec)
         overrides = self._pbs.build
-        if overrides is None:
+        # A build in the controller's own job takes that job's resources.
+        if overrides is None or self._pbs.launch == "allocation":
             return spec
         values = spec.model_dump()
         for source, target in (
