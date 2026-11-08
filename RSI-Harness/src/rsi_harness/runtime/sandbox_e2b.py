@@ -10,6 +10,13 @@ sandbox_remote applies the rest from the image's registry. ``image_build``
 steps come from sandbox_e2b_dockerfile. Processes start through envd
 without a login shell.
 
+A create E2B refuses for capacity (429: the team's concurrent sandbox
+limit or a rate limit; 503 with no node of enough capacity) is a
+``ProviderCapacityError`` only once a listing by the create's metadata
+proves nothing was made. One the listing finds, or one the listing cannot
+read, is a plain InfrastructureError, whose sandbox sandbox_remote finds
+by metadata and kills.
+
 The API key lives only here: the broker reads it (``read_api_key``) and
 hands it to the SDK; leases, plans, sandbox metadata, capabilities and
 logs carry where the key is, never the key. The SDK (``e2b==2.52.0``, the
@@ -22,14 +29,20 @@ import importlib.metadata
 import logging
 import math
 import os
+import re
 import shlex
 import threading
+import time
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
 from typing import Any
 
 from rsi_harness.errors import InfrastructureError, SetupError
-from rsi_harness.runtime.sandbox_contracts import EnvE2BHost, SandboxError
+from rsi_harness.runtime.sandbox_contracts import (
+    EnvE2BHost,
+    ProviderCapacityError,
+    SandboxError,
+)
 from rsi_harness.runtime.sandbox_remote import (
     ChunkReader,
     RemoteBackend,
@@ -70,6 +83,13 @@ _NOT_IMAGE_ENV = frozenset(
     }
 )
 MEMORY_STEP_MB = 512
+# A 503 on create that is capacity: no node has room for the sandbox right
+# now (E2B's placement "capacity_unavailable"). Other 503s (an unsupported
+# feature, no compatible node) are not: waiting never helps them.
+_CAPACITY_503 = re.compile(r"not enough capacity", re.IGNORECASE)
+# Waits before the listing that proves a refused create made nothing is
+# read again, when a read fails.
+LISTED_RETRY_SEC = (1.0, 2.0, 4.0)
 
 
 def read_api_key(settings: EnvE2BHost, environ: Mapping[str, str] | None = None) -> str:
@@ -398,13 +418,18 @@ class SdkE2BClient:
         )
 
     def create(self, template, *, timeout, metadata, allow_internet, allow_out=()):
+        """The sandbox's id. A refusal for capacity (``_capacity``) is a
+        ProviderCapacityError only once a listing by ``metadata`` proves
+        nothing was made (``_made``); every other failure, and a refusal
+        whose sandbox is listed or whose listing fails, is an
+        InfrastructureError (sandbox_remote kills what it lists)."""
         # Inbound only with the traffic token, which nobody gets.
         network: dict[str, Any] = {"allow_public_traffic": False}
         if allow_out:
             # E2B's allow beats its deny, so this is an allowlist.
             network.update(allow_out=list(allow_out), deny_out=["0.0.0.0/0"])
-        box = self._call(
-            lambda: self._e2b.Sandbox.create(
+        try:
+            box = self._e2b.Sandbox.create(
                 template,
                 timeout=timeout,
                 metadata=dict(metadata),
@@ -413,10 +438,56 @@ class SdkE2BClient:
                 lifecycle={"on_timeout": "kill"},
                 **self._opts,
             )
-        )
+        except (SandboxError, FileNotFoundError, InfrastructureError):
+            raise
+        except Exception as error:
+            if not self._capacity(error):
+                raise self._clean(error) from None
+            text = self._hide(str(error))[:512]
+            try:
+                made = self._made(metadata)
+            except Exception as failure:
+                raise InfrastructureError(
+                    f"e2b refused the sandbox ({text}), and whether it was "
+                    f"made is unknown: {self._clean(failure)}"
+                ) from None
+            if made:
+                raise InfrastructureError(
+                    f"e2b sandbox {', '.join(made)} was made, then its create "
+                    f"was refused: {text}"
+                ) from None
+            raise ProviderCapacityError(
+                f"e2b refused the sandbox for capacity: {text}"
+            ) from None
         with self._lock:
             self._boxes[box.sandbox_id] = box
         return box.sandbox_id
+
+    def _capacity(self, error: BaseException) -> bool:
+        """Whether a refused create is E2B's capacity: a 429 (the team's
+        concurrent sandbox limit, refused before E2B reserves anything, or
+        a rate limit) or a 503 naming no capacity. Whether anything was made
+        is proven by ``create``."""
+        status = getattr(error, "status_code", None)
+        if status == 429 or isinstance(error, self._e2b.RateLimitException):
+            return True
+        busy = status == 503 or isinstance(error, self._e2b.ServiceBusyException)
+        return busy and bool(_CAPACITY_503.search(str(error)))
+
+    def _made(self, metadata: Mapping[str, str]) -> list[str]:
+        """The ids a listing by the create's ``metadata`` finds (its env's
+        own, unique), read again while the read fails; a read failing every
+        time raises its error."""
+        failure: BaseException | None = None
+        for wait in (0.0, *LISTED_RETRY_SEC):
+            if wait:
+                time.sleep(wait)
+            try:
+                return [sandbox_id for sandbox_id, _ in self._listing(metadata)]
+            except Exception as error:
+                failure = error
+        assert failure is not None
+        raise failure
 
     def image_env(self, sandbox_id, image_env):
         return recorded_image_env(self, sandbox_id)
@@ -455,17 +526,19 @@ class SdkE2BClient:
         with self._lock:
             self._boxes[sandbox_id] = box
 
-    def list(self, metadata):
-        def listing() -> list[tuple[str, dict[str, str]]]:
-            query = self._e2b.SandboxQuery(metadata=dict(metadata))
-            pages = self._e2b.Sandbox.list(query=query, **self._opts)
-            found = []
-            while pages.has_next:
-                for info in pages.next_items():
-                    found.append((info.sandbox_id, dict(info.metadata or {})))
-            return found
+    def _listing(self, metadata: Mapping[str, str]) -> list[tuple[str, dict[str, str]]]:
+        """Running and paused sandboxes with ``metadata`` (the SDK's default
+        states), unwrapped errors."""
+        query = self._e2b.SandboxQuery(metadata=dict(metadata))
+        pages = self._e2b.Sandbox.list(query=query, **self._opts)
+        found = []
+        while pages.has_next:
+            for info in pages.next_items():
+                found.append((info.sandbox_id, dict(info.metadata or {})))
+        return found
 
-        return self._call(listing)
+    def list(self, metadata):
+        return self._call(lambda: self._listing(metadata))
 
     def write_file(self, sandbox_id, path, data):
         box = self._box(sandbox_id)
