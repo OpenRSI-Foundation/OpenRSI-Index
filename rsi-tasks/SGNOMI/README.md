@@ -1,6 +1,6 @@
 # SGNOMI: SGLang-Omni tasks
 
-One task entry per model, with the final non-streaming and streaming task versions. The ten models below cover the eight model families in [OpenRSI × SGLang-Omni: Scaling RSI for AI Infra](https://claude.ai/artifact/QkFUUcF1qsLK7vwFWsGhPo); Qwen3-TTS Base 0.6B / 1.7B and Ming3-TTS 0.5B / Tiny each have their own entry. Historical iterations, reward-weight variants and objective ablations are omitted.
+One task entry per model, with the final non-streaming and streaming task versions. The ten models below cover the eight model families in [OpenRSI × SGLang-Omni: Scaling RSI for AI Infra](https://claude.ai/artifact/TJ3xRTHHpt23suwjjKUvEW); Qwen3-TTS Base 0.6B / 1.7B and Ming3-TTS 0.5B / Tiny each have their own entry. Historical iterations, reward-weight variants and objective ablations are omitted.
 
 Each model has its own directory below. Task links open complete public copies containing `task.toml`, instructions, environment build files, the evaluator and its fixed assets. All twelve per-model packages are available in this repository; the original task directory names are retained inside the ten model directories.
 
