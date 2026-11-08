@@ -106,9 +106,11 @@ How it works, on each:
   [Daytona](#daytona)), kill them and check that none is left. When the
   provider is unreachable they keep the lease for another try.
 - When the provider refuses a sandbox for capacity (on Daytona a rate limit,
-  the organization's quota, or no runner within the queue timeout) and the
-  backend proved that nothing landed (on Daytona a read of the sandbox's
-  name finds nothing), the env is rolled back and `env_create` answers
+  the organization's quota, or no runner within the queue timeout; on E2B
+  a 429, the team's concurrent sandbox limit or a rate limit, or a 503 for
+  no node with enough capacity) and the backend proved that nothing landed
+  (on Daytona a read of the sandbox's name finds nothing, on E2B a listing
+  by the create's metadata), the env is rolled back and `env_create` answers
   `quota` with the field `provider_capacity`: nothing remains, and a later
   request may succeed. A refusal after the sandbox existed (a poll while it
   started), or one whose landing cannot be read, is an ordinary failed

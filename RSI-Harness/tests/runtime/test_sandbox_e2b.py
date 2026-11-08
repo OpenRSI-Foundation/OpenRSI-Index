@@ -2117,6 +2117,170 @@ def test_a_template_exists_only_with_a_ready_default_build(
     assert asked == ([("t1", "b-default")] if status else [])
 
 
+# E2B's answer to a create past the team's concurrent sandbox limit (its
+# API, packages/api/internal/orchestrator/create_instance.go), and a 503 of
+# its placement (placement_errors.go).
+CONCURRENCY_LIMIT = (
+    429,
+    "you have reached the maximum number of concurrent E2B sandboxes (100). "
+    "If you need more, please visit 'https://e2b.dev/docs/billing'",
+)
+NO_CAPACITY = (
+    503,
+    "Failed to place sandbox: not enough capacity for the requested "
+    "resources right now, please retry shortly",
+)
+UNSUPPORTED = (
+    503,
+    "Failed to place sandbox: no available orchestrator at version 0.9 or "
+    "above for a feature the request asked for",
+)
+ENV_METADATA = {"rsi_run_id": "run-1", "rsi_env_id": "env-1", "rsi_service": "main"}
+
+
+def api_refusal(status, message):
+    """The SDK's own exception for an API answer (handle_api_exception)."""
+    from types import SimpleNamespace
+
+    from e2b.api import handle_api_exception
+
+    response = SimpleNamespace(
+        status_code=status, content=json.dumps({"code": status, "message": message})
+    )
+    return handle_api_exception(response)
+
+
+def refusing_client(monkeypatch, refusal, listings):
+    """An SdkE2BClient whose SDK refuses every create with ``refusal`` and
+    answers each listing with the next of ``listings`` (an exception is
+    raised); the calls, in order."""
+    from types import SimpleNamespace
+
+    import e2b
+
+    monkeypatch.setattr(sandbox_e2b, "LISTED_RETRY_SEC", (0.0, 0.0, 0.0))
+    calls = []
+    answers = iter(listings)
+
+    class Pages:
+        def __init__(self, ids):
+            self.has_next, self._ids = True, ids
+
+        def next_items(self):
+            self.has_next = False
+            return [
+                SimpleNamespace(sandbox_id=sandbox_id, metadata=ENV_METADATA)
+                for sandbox_id in self._ids
+            ]
+
+    class Sandbox:
+        @staticmethod
+        def create(template, **options):
+            calls.append(("create", template, options["metadata"]))
+            raise refusal
+
+        @staticmethod
+        def list(query, **options):
+            calls.append(("list", query.metadata, options["api_key"] == KEY))
+            answer = next(answers)
+            if isinstance(answer, BaseException):
+                raise answer
+            return Pages(answer)
+
+    client = sandbox_e2b.SdkE2BClient(KEY)
+    client._e2b = SimpleNamespace(
+        Sandbox=Sandbox,
+        SandboxQuery=e2b.SandboxQuery,
+        RateLimitException=e2b.RateLimitException,
+        ServiceBusyException=e2b.ServiceBusyException,
+    )
+    return client, calls
+
+
+def create_env(client):
+    return client.create(
+        "rsi-x", timeout=600, metadata=ENV_METADATA, allow_internet=False
+    )
+
+
+@pytest.mark.parametrize("answer", [CONCURRENCY_LIMIT, NO_CAPACITY])
+def test_an_e2b_capacity_refusal_that_made_nothing_is_provider_capacity(
+    monkeypatch, answer
+):
+    pytest.importorskip("e2b")
+    refusal = api_refusal(*answer)
+    client, calls = refusing_client(monkeypatch, refusal, [[]])
+    with pytest.raises(ProviderCapacityError) as refused:
+        create_env(client)
+    assert answer[1] in str(refused.value)
+    # Proven by a listing of the create's own metadata, with the key.
+    assert calls == [
+        ("create", "rsi-x", ENV_METADATA),
+        ("list", ENV_METADATA, True),
+    ]
+
+
+def test_the_sdks_concurrency_refusal_is_a_rate_limit_exception():
+    e2b = pytest.importorskip("e2b")
+    refusal = api_refusal(*CONCURRENCY_LIMIT)
+    assert isinstance(refusal, e2b.RateLimitException)
+    assert refusal.status_code == 429
+    assert "maximum number of concurrent E2B sandboxes" in str(refusal)
+    busy = api_refusal(*NO_CAPACITY)
+    assert isinstance(busy, e2b.ServiceBusyException) and busy.status_code == 503
+
+
+def test_a_capacity_refusal_whose_sandbox_is_listed_is_a_failed_create(
+    monkeypatch,
+):
+    pytest.importorskip("e2b")
+    client, _ = refusing_client(
+        monkeypatch, api_refusal(*CONCURRENCY_LIMIT), [["sb-1"]]
+    )
+    with pytest.raises(InfrastructureError) as failed:
+        create_env(client)
+    assert not isinstance(failed.value, ProviderCapacityError)
+    assert "e2b sandbox sb-1 was made" in str(failed.value)
+
+
+def test_a_capacity_refusal_is_proven_by_a_listing_read_again(monkeypatch):
+    pytest.importorskip("e2b")
+    refusal = api_refusal(*CONCURRENCY_LIMIT)
+    client, calls = refusing_client(
+        monkeypatch, refusal, [RuntimeError("reset"), RuntimeError("reset"), []]
+    )
+    with pytest.raises(ProviderCapacityError):
+        create_env(client)
+    assert [call[0] for call in calls] == ["create", "list", "list", "list"]
+    # A listing that never reads leaves it unknown: a failed create, whose
+    # sandbox sandbox_remote looks for and kills.
+    unread = [RuntimeError(f"down with {KEY}")] * 4
+    client, calls = refusing_client(monkeypatch, refusal, unread)
+    with pytest.raises(InfrastructureError) as failed:
+        create_env(client)
+    assert not isinstance(failed.value, ProviderCapacityError)
+    assert "whether it was made is unknown" in str(failed.value)
+    assert KEY not in str(failed.value)
+    assert [call[0] for call in calls] == ["create", *["list"] * 4]
+
+
+def test_other_create_failures_stay_infrastructure_errors_unlisted(monkeypatch):
+    e2b = pytest.importorskip("e2b")
+    for refusal in (
+        api_refusal(*UNSUPPORTED),
+        api_refusal(400, "Template 'rsi-x' not found"),
+        api_refusal(500, f"internal error for {KEY}"),
+        e2b.TimeoutException("Request timed out"),
+        e2b.AuthenticationException("401: Unauthorized"),
+    ):
+        client, calls = refusing_client(monkeypatch, refusal, [])
+        with pytest.raises(InfrastructureError) as failed:
+            create_env(client)
+        assert not isinstance(failed.value, ProviderCapacityError)
+        assert KEY not in str(failed.value)
+        assert [call[0] for call in calls] == ["create"]
+
+
 def sdk_installed(
     monkeypatch, version: str | None = SDK_VERSION, missing: tuple[str, ...] = ()
 ) -> None:
