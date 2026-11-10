@@ -170,6 +170,7 @@ jobs:
           REUSED_DECISION: ${{ steps.reuse.outputs.decision }}
           PYTHONUNBUFFERED: "1"
           # Proposal review only; PR publication checks never use these credentials.
+          REVIEW_FAILURE_DETAIL: ${{ runner.temp }}/review-provider-error.txt
           OPENAI_API_KEY: ${{ secrets.RUBRIC_API_KEY }}
           OPENAI_BASE_URL: ${{ vars.RUBRIC_BASE_URL || secrets.RUBRIC_BASE_URL }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -422,7 +423,7 @@ jobs:
 
       - name: Create failure comment Discussion App token
         id: failure-token
-        if: always() && !cancelled() && steps.publish-review.outcome != 'success' && steps.reuse.outputs.current != 'false' && env.RSI_GITHUB_RETRYABLE != 'true' && env.RSI_GITHUB_SETUP_FAILURE != 'true'
+        if: always() && steps.publish-review.outcome != 'success' && steps.reuse.outputs.current != 'false' && env.RSI_GITHUB_RETRYABLE != 'true' && env.RSI_GITHUB_SETUP_FAILURE != 'true'
         continue-on-error: true
         uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1
         with:
@@ -433,7 +434,7 @@ jobs:
           permission-discussions: write
 
       - name: Post or update failed review comment
-        if: always() && !cancelled() && steps.publish-review.outcome != 'success' && steps.failure-token.outcome == 'success' && steps.reuse.outputs.current != 'false' && env.RSI_GITHUB_RETRYABLE != 'true' && env.RSI_GITHUB_SETUP_FAILURE != 'true'
+        if: always() && steps.publish-review.outcome != 'success' && steps.failure-token.outcome == 'success' && steps.reuse.outputs.current != 'false' && env.RSI_GITHUB_RETRYABLE != 'true' && env.RSI_GITHUB_SETUP_FAILURE != 'true'
         continue-on-error: true
         env:
           GH_TOKEN: ${{ steps.failure-token.outputs.token }}
@@ -441,26 +442,45 @@ jobs:
           DISCUSSION_ID: ${{ github.event.discussion.node_id }}
           PROGRESS_COMMENT_ID: ${{ steps.progress.outputs.comment_id }}
           FAILURE_KIND: ${{ steps.review.outputs.failure_kind }}
+          REVIEW_CANCELLED: ${{ cancelled() }}
+          REVIEW_FAILURE_DETAIL: ${{ runner.temp }}/review-provider-error.txt
         run: |
           set -euo pipefail
           case "$FAILURE_KIND" in
             provider_authentication)
               FAILURE_MESSAGE="The review service could not authenticate with its provider. A maintainer must repair the service credentials and rerun this workflow. Your proposal has not been evaluated; no proposal edit is needed."
               ;;
-            provider)
+            provider_refusal)
+              FAILURE_MESSAGE="The model service declined the review. See the service reason below; this is not a scientific Reject. A maintainer should investigate before retrying."
+              ;;
+            provider_quota)
+              FAILURE_MESSAGE="The model service has a quota or billing error; a maintainer must resolve it before retrying."
+              ;;
+            provider|provider_transient)
               FAILURE_MESSAGE="The review service could not complete the provider request. A maintainer can rerun this workflow once the service is available. Your proposal has not been evaluated; no proposal edit is needed."
               ;;
             *)
               FAILURE_MESSAGE="A maintainer can inspect the workflow run and rerun it after resolving the error."
               ;;
           esac
+          STATUS=failed
+          DETAIL=""
+          if [ -f "${REVIEW_FAILURE_DETAIL:-}" ]; then DETAIL=$(cat "${REVIEW_FAILURE_DETAIL:-}"); fi
+          if [ "${REVIEW_CANCELLED:-false}" = true ]; then
+            [ -n "$PROGRESS_COMMENT_ID" ] || exit 0
+            STATUS=cancelled
+            FAILURE_MESSAGE="This review was cancelled before completion. No new scientific decision was recorded."
+            DETAIL=""
+          fi
           RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/attempts/${GITHUB_RUN_ATTEMPT}"
           BODY=$(cat <<COMMENT_EOF
           <!-- rubric-review-bot -->
-          <!-- rubric-review-status:failed -->
+          <!-- rubric-review-status:$STATUS -->
           ## 📋 Task Proposal Rubric Review
 
-          ⚠️ Proposal review failed before completion. $FAILURE_MESSAGE
+          ⚠️ Proposal review did not complete. $FAILURE_MESSAGE
+
+          $DETAIL
 
           [View workflow run]($RUN_URL)
           COMMENT_EOF

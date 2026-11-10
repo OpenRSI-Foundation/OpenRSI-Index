@@ -201,7 +201,7 @@ def test_review_workflow_replaces_only_current_progress_with_generic_failure():
         "name": "Create failure comment Discussion App token",
         "id": "failure-token",
         "if": (
-            "always() && !cancelled() && "
+            "always() && "
             "steps.publish-review.outcome != 'success'"
             " && steps.reuse.outputs.current != 'false'"
             " && env.RSI_GITHUB_RETRYABLE != 'true'"
@@ -218,7 +218,7 @@ def test_review_workflow_replaces_only_current_progress_with_generic_failure():
         },
     }
     assert failure["if"] == (
-        "always() && !cancelled() && "
+        "always() && "
         "steps.publish-review.outcome != 'success' && "
         "steps.failure-token.outcome == 'success'"
         " && steps.reuse.outputs.current != 'false'"
@@ -234,7 +234,7 @@ def test_review_workflow_replaces_only_current_progress_with_generic_failure():
         step_named("Dispatch passed proposal privately")
     )
     assert steps.index(failure) == steps.index(failure_token) + 1
-    assert "Proposal review failed before completion" in failure["run"]
+    assert "Proposal review did not complete" in failure["run"]
     assert "Edit the proposal to retry" not in failure["run"]
     assert "updateDiscussionComment" in failure["run"]
     assert "addDiscussionComment" in failure["run"]
@@ -678,3 +678,53 @@ def test_dispatch_eligibility_relies_on_the_successful_current_run_publication()
     assert "proposal_pass_dispatch.py" in script
     assert "proposal-pass-live.json" not in script
     assert "viewerDidAuthor" not in script
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_terminal_comment_exposes_reason_or_cancellation(tmp_path, cancelled):
+    progress_id="current-review-comment"
+    kind="provider_refusal"
+    expected="cancelled before completion" if cancelled else "service declined this review"
+    detail=tmp_path/"detail.txt"
+    detail.write_text("<pre>The service declined this review.</pre>")
+    failure = step_named("Post or update failed review comment")
+    python = tmp_path / "python3"
+    python.write_text(
+        f"#!{sys.executable}\n"
+        "import json, pathlib, sys\n"
+        "bodies = [arg[5:] for arg in sys.argv if arg.startswith('body=')]\n"
+        "if bodies:\n"
+        "    pathlib.Path('published.json').write_text(json.dumps(bodies))\n"
+        "else:\n"
+        "    print('<!-- rubric-review-status:running -->')\n"
+    )
+    python.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-e", "-c", failure["run"]],
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}",
+            "FAILURE_KIND": kind,
+            "REVIEW_CANCELLED": str(cancelled).lower(),
+            "REVIEW_FAILURE_DETAIL": str(detail),
+            "PROGRESS_COMMENT_ID": progress_id,
+            "DISCUSSION_ID": "discussion-id",
+            "GITHUB_SERVER_URL": "https://github.com",
+            "GITHUB_REPOSITORY": "OpenRSI-Foundation/OpenRSI-Index",
+            "GITHUB_RUN_ID": "37943648243",
+            "GITHUB_RUN_ATTEMPT": "2",
+        },
+        capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    [body] = json.loads((tmp_path / "published.json").read_text())
+    assert expected in body.lower()
+    assert "<!-- rubric-review-status:" + ("cancelled" if cancelled else "failed") + " -->" in body
+    assert "actions/runs/37943648243/attempts/2" in body
+    assert "Edit the proposal to retry" not in body
+    if cancelled:
+        assert "<pre>" not in body
+    else:
+        assert "<pre>The service declined this review.</pre>" in body
+    assert failure["env"]["FAILURE_KIND"] == "${{ steps.review.outputs.failure_kind }}"

@@ -13,6 +13,10 @@ from collections.abc import Awaitable, Callable
 from typing import TypeVar
 
 from openai import APIConnectionError, APIStatusError
+if __package__:
+    from .provider_errors import failure_kind
+else:
+    from provider_errors import failure_kind
 
 INITIAL_DELAY_SECONDS = 5
 MAX_DELAY_SECONDS = 300
@@ -60,6 +64,8 @@ def _server_delay(error: APIStatusError) -> float:
 def _retry_wait(error: APIConnectionError | APIStatusError, attempt: int, deadline: float) -> float | None:
     status = getattr(error, "status_code", None)
     if isinstance(error, APIStatusError):
+        if failure_kind(error) in {"provider_refusal", "provider_authentication", "provider_quota"}:
+            return None
         # Quota/billing errors also use 429, but waiting cannot repair them.
         if status == 429:
             if error.code in _PERMANENT_QUOTA_CODES or error.type in _PERMANENT_QUOTA_CODES:
