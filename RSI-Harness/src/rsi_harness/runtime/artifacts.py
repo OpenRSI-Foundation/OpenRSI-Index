@@ -17,6 +17,7 @@ from rsi_harness.models import (
     RunStatus,
     SubmissionReport,
     SubmissionStatus,
+    scored_reports,
 )
 from rsi_harness.runtime.protocols import Clock
 from rsi_harness.runtime.redaction import redact_text
@@ -60,6 +61,20 @@ def recorded_submissions(root: Path) -> tuple[tuple[SubmissionReport, float], ..
             )
         )
     return tuple(recorded)
+
+
+# A final-judge round's origin: the Agent's own rsi-submit or the Harness's
+# round when the Agent's time ended.
+FINAL_ROUND_FILE = "final_judge.json"
+
+
+def final_round_requested_by(root: Path, round_id: str) -> str | None:
+    """Who asked for a final-judge round: "agent", "harness", or None."""
+    path = root / "submissions" / round_id / FINAL_ROUND_FILE
+    if not path.is_file():
+        return None
+    value = json.loads(path.read_text()).get("requested_by")
+    return value if value in ("agent", "harness") else None
 
 
 def _sudo_invoking_owner() -> tuple[int, int] | None:
@@ -197,6 +212,17 @@ class RunArtifactWriter:
         self._submitted_at[report.round_id] = submitted_at
         self.record_state(report)
 
+    def record_final_round(self, round_id: str, requested_by: str) -> None:
+        """Record who asked for a final-judge round, once it has a report."""
+        if requested_by not in ("agent", "harness"):
+            raise ValueError("a final round is requested by the agent or harness")
+        submission_dir = self._submission_dir(round_id)
+        self._ensure_directory(submission_dir)
+        self._atomic_write_json(
+            submission_dir / FINAL_ROUND_FILE,
+            {"round": round_id, "requested_by": requested_by},
+        )
+
     def record_state(self, report: SubmissionReport) -> None:
         """Upsert a report's RSI Loop submission-state entry."""
         self._validate_report(report)
@@ -280,10 +306,17 @@ class RunArtifactWriter:
             },
         )
 
+    def _scored(self) -> tuple[SubmissionReport, ...]:
+        """Every round, or with one final judge per attempt the newest."""
+        return scored_reports(
+            tuple(self._reports.values()),
+            self._run_plan.task.verifier.final_judge,
+        )
+
     def _best_report(self) -> SubmissionReport | None:
         scored = [
             report
-            for report in self._reports.values()
+            for report in self._scored()
             if report.status == SubmissionStatus.COMPLETED
             and report.score is not None
             and math.isfinite(report.score)
@@ -302,7 +335,7 @@ class RunArtifactWriter:
     def _best_rewards(self) -> dict[str, float]:
         valid = tuple(
             report
-            for report in self._reports.values()
+            for report in self._scored()
             if report.status == SubmissionStatus.COMPLETED
         )
         keys = sorted({key for report in valid for key in report.rewards})

@@ -362,7 +362,7 @@ CHECK
             RunRequest(
                 task_dir=task,
                 agent_name="oracle",
-                options=CompileOptions(agent_name="oracle", max_submissions=1),
+                options=CompileOptions(agent_name="oracle"),
                 judge_llm=JudgeLLMRequest(auth=JudgeLLMAuth.API, base_url=base_url),
             )
         )
@@ -409,7 +409,7 @@ def test_native_desktop_rejected_archive_is_unscored_and_cleaned(tmp_path, inval
             RunRequest(
                 task_dir=task,
                 agent_name="oracle",
-                options=CompileOptions(agent_name="oracle", max_submissions=1),
+                options=CompileOptions(agent_name="oracle"),
             )
         )
         assert result.best_score is None, result
@@ -452,7 +452,7 @@ def test_native_desktop_failed_judge_keeps_evidence_without_score(tmp_path, fail
             RunRequest(
                 task_dir=task,
                 agent_name="oracle",
-                options=CompileOptions(agent_name="oracle", max_submissions=1),
+                options=CompileOptions(agent_name="oracle"),
             )
         )
         assert result.status != RunStatus.COMPLETED
@@ -503,7 +503,7 @@ def test_native_desktop_nonroot_judge_writes_private_volume(tmp_path, public):
             RunRequest(
                 task_dir=task,
                 agent_name="oracle",
-                options=CompileOptions(agent_name="oracle", max_submissions=1),
+                options=CompileOptions(agent_name="oracle"),
             )
         )
         assert result.status == RunStatus.COMPLETED, result

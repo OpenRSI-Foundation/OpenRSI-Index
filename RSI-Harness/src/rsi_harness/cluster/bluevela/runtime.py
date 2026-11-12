@@ -678,6 +678,13 @@ class ApptainerAgentRuntime:
         self.feedback = (
             plan.paths.logs / "runs" / payload.run_id / plan.task.task_id / "feedback"
         )
+        # What Work sees as its feedback: in a final-judge run an empty
+        # directory, so no attempt reads an earlier attempt's Judge output.
+        self.work_feedback = (
+            plan.paths.root / "final-judge-feedback"
+            if plan.task.verifier.final_judge
+            else self.feedback
+        )
         self._copies: dict[PurePosixPath, Path] = {}
         self._copied_inputs: dict[PurePosixPath, tempfile.TemporaryDirectory[str]] = {}
         self._oracle_solution: Path | None = None
@@ -2259,6 +2266,19 @@ class ApptainerAgentRuntime:
         self._require_work(container)
         with self._lock:
             process = self._process
+            if (
+                process is not None
+                and process.poll() is not None
+                and self.plan.task.verifier.final_judge
+            ):
+                # A final-judge run's last round, after the Agent's time
+                # ended: what its group left is killed, as Work stops on
+                # Docker; an exited Harness box holds nothing.
+                if self.profile.apptainer.process_namespaces != "harness":
+                    with contextlib.suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                self._paused = True
+                return
             if process is None or process.poll() is not None:
                 raise InfrastructureError("Agent process is not running at submission")
             self._stop_work(process)
@@ -2453,8 +2473,12 @@ class ApptainerAgentRuntime:
             binds.append((self.work_tmp, PurePosixPath("/tmp"), False))
         if mount_workspace:
             binds.append((self.workspace, self.plan.workdir, False))
+            if self.work_feedback != self.feedback:
+                self.work_feedback.mkdir(parents=True, mode=0o755, exist_ok=True)
+                if any(self.work_feedback.iterdir()):
+                    raise SetupError(f"{self.work_feedback} must be empty")
             binds.append(
-                (self.feedback, PurePosixPath("/run/rsi-harness/feedback"), True)
+                (self.work_feedback, PurePosixPath("/run/rsi-harness/feedback"), True)
             )
             if self.public_tests:
                 binds.append(
@@ -3232,6 +3256,7 @@ class NativeEngineComposition:
             agent_preparer=self.prepare_agent,
             agent_runner=self.run_agent,
             agent_stopper=self.stop_agent,
+            agent_ender=self.runtime.stop,
             work_quiescer=self.runtime.quiescence,
             retained_work_planner=self.plan_retained,
             work_retainer=self.retain,
@@ -3437,6 +3462,7 @@ class NativeEngineComposition:
                         attempt=self.resume.attempt,
                         message=self.resume.message,
                         agent_output=self.artifacts.root / "agent_output.txt",
+                        seconds_left=self.resume.agent_seconds_left,
                     )
                 ),
             )
@@ -3650,7 +3676,10 @@ def run_native_engine(
         result.model_dump_json(indent=2)
     )
     if plan.task.agent.name == "oracle":
-        failures = oracle_failures(result, payload.options.max_submissions or 1)
+        failures = oracle_failures(
+            result,
+            plan.task.verifier.max_submissions or payload.options.max_submissions or 1,
+        )
         if failures:
             raise InfrastructureError("Oracle check failed: " + "; ".join(failures))
     if result.status is not RunStatus.COMPLETED:

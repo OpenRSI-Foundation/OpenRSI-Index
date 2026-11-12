@@ -1165,6 +1165,7 @@ class _ProductionRunComposition:
             agent_preparer=self.prepare_agent,
             agent_runner=self.run_agent,
             agent_stopper=self.stop_agent,
+            agent_ender=self.end_agent,
             work_quiescer=self.quiesce_work,
             retained_work_planner=self.plan_retained_work,
             work_retainer=self.retain_work,
@@ -1522,7 +1523,7 @@ class _ProductionRunComposition:
             network=self.work_network,
             network_policy_enforcer=self.enforcer,
             staging_dir=self.data_root / self.run_id / "staging",
-            work_feedback_dir=self.artifacts.feedback_root,
+            work_feedback_dir=self._work_feedback_dir(plan),
             **({"sandbox_socket_dir": endpoint.directory} if endpoint else {}),
             work_public_tests=plan.task.verifier.visibility == "public",
         )
@@ -1633,7 +1634,7 @@ class _ProductionRunComposition:
                     ),
                     mounts=(
                         ContainerMount(
-                            source=self.artifacts.feedback_root,
+                            source=self._work_feedback_dir(plan),
                             target=WORK_FEEDBACK_ROOT,
                             read_only=True,
                         ),
@@ -1656,6 +1657,21 @@ class _ProductionRunComposition:
             )
         except Exception as error:
             raise self._agent_failure(error) from None
+
+    def _work_feedback_dir(self, plan: Any) -> Path:
+        """What Work sees at /run/rsi-harness/feedback: the run's feedback
+        logs, or in a final-judge run an empty directory, so no attempt reads
+        an earlier attempt's Judge output."""
+        if self.artifacts is None:
+            raise RuntimeError("Work feedback artifacts were not initialized")
+        if not plan.task.verifier.final_judge:
+            return self.artifacts.feedback_root
+        empty = self.data_root / self.run_id / "final-judge-feedback"
+        empty.mkdir(mode=0o755, exist_ok=True)
+        empty.chmod(0o755)
+        if any(empty.iterdir()):
+            raise SetupError(f"{empty} must be empty")
+        return empty
 
     def attest_work_feedback_mount(self, work: ContainerRef) -> None:
         if self.work_runtime is None:
@@ -1772,6 +1788,7 @@ class _ProductionRunComposition:
                             attempt=self.resume.attempt,
                             message=self.resume.message,
                             agent_output=self.artifacts.root / "agent_output.txt",
+                            seconds_left=self.resume.agent_seconds_left,
                         )
                     ),
                 )
@@ -1911,6 +1928,17 @@ class _ProductionRunComposition:
         cleanup_error = self._clear_agent_bindings()
         if cleanup_error is not None:
             raise cleanup_error from None
+
+    def end_agent(self, work: ContainerRef) -> None:
+        """Stop Work under a running Agent exec, which then returns; its
+        bindings stay for run_agent to clear. The round is done, so Work gets
+        no grace period to exit."""
+        try:
+            if self.work_runtime is None:
+                raise RuntimeError("Work runtime is unavailable")
+            self.work_runtime.stop(work, timeout_seconds=0)
+        except Exception as error:
+            raise self._agent_failure(error) from None
 
     def quiesce_work(self, work: ContainerRef) -> WorkQuiescence:
         """Pause a running Work container or prove it is already stopped."""

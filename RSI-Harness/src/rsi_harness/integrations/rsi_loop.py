@@ -12,6 +12,7 @@ import time
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 from urllib.parse import unquote, urlsplit
@@ -525,9 +526,23 @@ class RSILoopAgentAdapter:
         )
         model = agent_plan.model or self._config.agent_model or agent.default_model
         request.prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        final_judge = plan.task.verifier.final_judge
         if request.resume is None or not request.prompt_path.exists():
             request.prompt_path.write_text(
-                self._prompt(
+                self._final_judge_prompt(
+                    plan.task.instruction,
+                    plan.gpu_plan,
+                    (
+                        request.resume.seconds_left
+                        if request.resume is not None
+                        and request.resume.seconds_left is not None
+                        else agent_plan.timeout_seconds
+                    ),
+                    public_tests=plan.task.verifier.visibility == "public",
+                    stop_hook=agent_plan.install_stop_hook,
+                )
+                if final_judge
+                else self._prompt(
                     plan.task.instruction,
                     plan.gpu_plan,
                     request.max_submissions,
@@ -539,7 +554,7 @@ class RSILoopAgentAdapter:
         prompt_path, session_id = request.prompt_path, _run_session_id(plan)
         if request.resume is not None:
             prompt_path, session_id = self._resume_prompt(
-                agent, request.prompt_path, request.resume
+                agent, request.prompt_path, request.resume, final_judge=final_judge
             )
         try:
             command = agent.format_run_cmd(
@@ -558,7 +573,10 @@ class RSILoopAgentAdapter:
         command = _apply_reasoning_effort(agent, command, agent_plan.reasoning_effort)
         environment = self._agent_environment(agent, model)
         if getattr(agent, "runs_task_solution", False):
-            environment[SUBMISSIONS_ENV] = str(request.max_submissions or 1)
+            # A final-judge run's one round is the Harness's, after solve.sh.
+            environment[SUBMISSIONS_ENV] = (
+                "0" if final_judge else str(request.max_submissions or 1)
+            )
             # Explicitly override task-image/host values. Only a backend with
             # a native pre-Judge cleanup barrier may defer solution removal.
             environment["RSI_ORACLE_SOLUTION_CLEANUP"] = "launcher"
@@ -592,16 +610,27 @@ class RSILoopAgentAdapter:
         return prepared
 
     def _resume_prompt(
-        self, agent: Agent, prompt_path: Path, resume: AgentResume
+        self,
+        agent: Agent,
+        prompt_path: Path,
+        resume: AgentResume,
+        *,
+        final_judge: bool = False,
     ) -> tuple[Path, str | None]:
         """Add the attempt's message to the prompt; return what the CLI reads.
 
         The Agent continues the last session the run's output names with the
         message as its next user turn. Without one it starts a new session
-        with the whole prompt, the message included.
+        with the whole prompt, the message included. A final-judge attempt's
+        message also gives its new deadline.
         """
 
         message = resume.message.rstrip() + "\n"
+        if final_judge and resume.seconds_left is not None:
+            message += (
+                f"New deadline: {_deadline(resume.seconds_left)} (check with "
+                "`date -u`); it replaces any earlier deadline.\n"
+            )
         # Appended, never rewritten: Judge trajectory copies are byte ranges
         # of this file.
         with prompt_path.open("a") as prompt:
@@ -923,6 +952,68 @@ Each submission stores complete Judge stdout and stderr in
 {tests_guidance}
 {gpu_guidance}
 """
+
+    @staticmethod
+    def _final_judge_prompt(
+        instruction: str,
+        gpu_plan: RunGPUPlan,
+        seconds: float,
+        *,
+        public_tests: bool = False,
+        stop_hook: bool = True,
+    ) -> str:
+        """The Evaluation section of a run with one final judge."""
+        tests_guidance = (
+            "The Judge's tests are public: `/tests` holds, read-only, exactly the\n"
+            "files the Judge runs as `/tests/test.sh`.\n"
+            if public_tests
+            else ""
+        )
+        gpu_guidance = (
+            "Every Work GPU process must exit before rsi-submit; a rejected\n"
+            "preflight does not use up your one call.\n"
+            if gpu_plan.judge_mode is JudgeGPUMode.RELEASE_ALL
+            else ""
+        )
+        stop_guidance = (
+            ""
+            if stop_hook
+            else "If you stop earlier, the Judge evaluates the WORKDIR when you stop.\n"
+        )
+        budget = (
+            f"Time budget: {_duration(seconds)} of wall-clock time; "
+            f"deadline {_deadline(seconds)}"
+        )
+        return f"""{instruction.rstrip()}
+
+## Evaluation
+
+This run has exactly one final judge. It evaluates the entire WORKDIR once,
+and that one result is the score of the run.
+You may call `rsi-submit` once to be judged early: the Judge then evaluates
+the WORKDIR as it is at that moment, you receive the result, and the run
+ends. Otherwise the Judge evaluates the WORKDIR automatically when your
+time ends.
+{stop_guidance}{budget}
+(check with `date -u`). Work stops at the deadline, so keep the WORKDIR
+in a state you want judged.
+Checks you run yourself score nothing; only the final judge does.
+{tests_guidance}{gpu_guidance}"""
+
+
+def _deadline(seconds: float) -> str:
+    """When an Agent budget that starts now ends, in UTC to the minute."""
+    return f"{datetime.now(UTC) + timedelta(seconds=seconds):%Y-%m-%d %H:%M} UTC"
+
+
+def _duration(seconds: float) -> str:
+    """6 h, 90 min or 45 s: the largest unit that states the budget exactly."""
+    whole = round(seconds)
+    if whole and whole % 3600 == 0:
+        return f"{whole // 3600} h"
+    if whole and whole % 60 == 0:
+        return f"{whole // 60} min"
+    return f"{whole} s"
 
 
 __all__ = [

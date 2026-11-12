@@ -422,7 +422,8 @@ def test_finished_run_resumes_only_with_more_submissions(
 
     services = _services(tmp_path, request)
     task = _task(tmp_path, _SOLVE_PLAIN)
-    first = services.run(_oracle_request(task, 1))
+    # A budget of 2: a budget of 1 is one final judge per attempt.
+    first = services.run(_oracle_request(task, 2))
     assert first.status is RunStatus.COMPLETED
     run_id = first.run_id
     run_root = first.artifacts_dir
@@ -451,7 +452,7 @@ def test_finished_run_resumes_only_with_more_submissions(
         cli.app, ["resume", run_id, "--add-submissions", "1", "--dry-run", *roots]
     )
     assert dry.exit_code == 0, dry.output
-    assert "Next round:" in dry.output and "agent-2" in dry.output
+    assert "Next round:" in dry.output and "agent-3" in dry.output
     resumed = CliRunner().invoke(
         cli.app, ["resume", run_id, "--add-submissions", "1", *roots]
     )
@@ -459,14 +460,18 @@ def test_finished_run_resumes_only_with_more_submissions(
     assert resumed.exit_code == 0, resumed.output
     assert f"Resuming run {run_id} as attempt 2" in resumed.output
     final = _read(run_root / "final_result.json")
-    assert final["attempts"] == 2 and final["total_rounds"] == 2
+    assert final["attempts"] == 2 and final["total_rounds"] == 3
     earlier = _read(run_root / "attempts" / "1" / "final_result.json")
-    assert "attempts" not in earlier and earlier["total_rounds"] == 1
+    assert "attempts" not in earlier and earlier["total_rounds"] == 2
     output = (run_root / "agent_output.txt").read_text()
     assert output.count("rsi-resume: solved") == 2
     assert "\n--- rsi-harness: attempt 2 ---\n" in output
     state = _read(run_root / "evolve_state.json")
-    assert [entry["round"] for entry in state["submissions"]] == ["agent-1", "agent-2"]
+    assert [entry["round"] for entry in state["submissions"]] == [
+        "agent-1",
+        "agent-2",
+        "agent-3",
+    ]
     # Nothing is left now, the grant spent.
     with pytest.raises(SetupError, match="no submissions left"):
         services.plan_resume(run_id, AttemptGrants())
@@ -476,7 +481,12 @@ def test_finished_run_resumes_only_with_more_submissions(
         services.plan_resume(run_id, AttemptGrants(add_submissions=1))
     )
     assert third.status is RunStatus.COMPLETED
-    assert [r.round_id for r in third.reports] == ["agent-1", "agent-2", "agent-3"]
+    assert [r.round_id for r in third.reports] == [
+        "agent-1",
+        "agent-2",
+        "agent-3",
+        "agent-4",
+    ]
     assert _read(run_root / "final_result.json")["attempts"] == 3
     assert (run_root / "attempts" / "2" / "final_result.json").exists()
     chain = tuple(

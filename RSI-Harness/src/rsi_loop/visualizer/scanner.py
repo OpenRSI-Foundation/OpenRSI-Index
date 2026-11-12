@@ -496,6 +496,14 @@ def _select_best_submission(
     return max(submissions, key=lambda s: s.pass_rate)
 
 
+def _final_judge_run(task_dir: Path) -> bool:
+    """Whether the run's plan has a submission budget of 1: one final judge
+    per attempt, and the newest round is the score."""
+    plan = _safe_load_json(task_dir / "run-plan.json") or {}
+    verifier = (plan.get("task") or {}).get("verifier") or {}
+    return verifier.get("max_submissions") == 1
+
+
 def _build_run(
     run_id: str,
     task_dir: Path,
@@ -538,11 +546,15 @@ def _build_run(
                     sub.submitted_at = float(ts)
 
     submissions.sort(key=lambda s: (s.submitted_at, s.seq))
+    # A run with one final judge per attempt scores its newest round only.
+    scored_subs = (
+        submissions[-1:] if submissions and _final_judge_run(task_dir) else submissions
+    )
 
     # Rescaled 0-100 is always higher-is-better (each rescale kind maps the
     # best raw score to 100), so the best rescaled score is simply the max
     # across submissions — regardless of the raw task's score_direction.
-    _rescaled = [s.score_0_100 for s in submissions if s.score_0_100 is not None]
+    _rescaled = [s.score_0_100 for s in scored_subs if s.score_0_100 is not None]
     best_score_0_100 = max(_rescaled) if _rescaled else None
 
     if final is None:
@@ -550,8 +562,8 @@ def _build_run(
         if not is_score_task and any(s.score is not None for s in submissions):
             is_score_task = True
 
-        best = _select_best_submission(submissions, score_direction) if is_score_task else (
-            max(submissions, key=lambda s: s.pass_rate) if submissions else None
+        best = _select_best_submission(scored_subs, score_direction) if is_score_task else (
+            max(scored_subs, key=lambda s: s.pass_rate) if scored_subs else None
         )
 
         ABORT_THRESHOLD_SEC = int(os.environ.get("RSI_VIZ_ABORT_THRESHOLD", "7200"))
@@ -633,8 +645,8 @@ def _build_run(
         is_score_task = True
 
     # If score task but best_score/best_round missing, recompute from submissions
-    if is_score_task and submissions:
-        scored = [s for s in submissions if s.score is not None]
+    if is_score_task and scored_subs:
+        scored = [s for s in scored_subs if s.score is not None]
         if scored:
             if score_direction == "minimize":
                 best_sub = min(scored, key=lambda s: s.score)

@@ -10,6 +10,7 @@ import threading
 from collections.abc import Sequence
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 from fastapi import Body, Depends, FastAPI, Header, HTTPException, Request
@@ -76,13 +77,17 @@ class SubmissionService:
         clock: Clock,
     ) -> None:
         self._evaluator = evaluator
-        self._artifact_writer = artifact_writer
+        self._artifact_writer: Any = artifact_writer
         self._clock = clock
         self._session: SubmissionSessionState | None = None
         self._run_plan: RunPlan | None = None
         self._work_container: ContainerRef | None = None
         self._max_submissions: int | None = None
         self._cooldown_seconds = 0.0
+        self._final_judge = False
+        # Set once a final-judge run's one round has a report, which ends
+        # the run: the coordinator then ends the Agent.
+        self.final_round_done = threading.Event()
         self._reports: list[SubmissionReport] = []
         self._prior_reports: tuple[SubmissionReport, ...] = ()
         self._round_lock = threading.Lock()
@@ -100,11 +105,15 @@ class SubmissionService:
         rounds_allocated: int = 0,
         last_allocated_at: datetime | None = None,
         prior_reports: Sequence[SubmissionReport] = (),
+        final_judge: bool = False,
     ) -> str:
         """Register exactly one run and return its runtime-only bearer token.
 
         A resumed run continues its earlier attempts' round count, cooldown
-        and history; ``reports`` holds only this attempt's rounds.
+        and history; ``reports`` holds only this attempt's rounds. With
+        ``final_judge`` the attempt has one round, the Agent's one
+        ``rsi-submit`` or the Harness's ``judge_final``; there is no cooldown
+        and no history.
         """
         if not run_id:
             raise ValueError("run_id must not be empty")
@@ -131,6 +140,7 @@ class SubmissionService:
             self._work_container = work_container
             self._max_submissions = max_submissions
             self._cooldown_seconds = cooldown_seconds
+            self._final_judge = final_judge
             return token
 
     @property
@@ -149,6 +159,43 @@ class SubmissionService:
     def submit(self, token: str) -> str:
         """Synchronously evaluate and persist one serialized Agent round."""
         self._authenticate(token)
+        report, remaining = self._round()
+        if self._final_judge:
+            # Recorded before the result reaches the Agent: a run judged on
+            # its Agent's own call is finished and cannot be resumed.
+            self._artifact_writer.record_final_round(report.round_id, "agent")
+            rendered = _render_final_feedback(report)
+            self.final_round_done.set()
+            return rendered
+        return _render_feedback(report, remaining_budget=remaining)
+
+    def judge_final(self) -> SubmissionReport | None:
+        """Judge the WORKDIR as the Agent's time left it: a final-judge
+        attempt's round when the Agent did not call ``rsi-submit``. None when
+        the attempt already has its round."""
+        with self._state_lock:
+            if not self._final_judge:
+                raise RuntimeError("this run has no final judge")
+        try:
+            report, _ = self._round()
+        except FinalRoundUsedError:
+            return None
+        self._artifact_writer.record_final_round(report.round_id, "harness")
+        self.final_round_done.set()
+        return report
+
+    def attempt_has_round(self, earlier_rounds: int) -> bool:
+        """Whether this attempt allocated a round, kept even while in flight."""
+        with self._state_lock:
+            return self._require_session().rounds_allocated > earlier_rounds
+
+    def wait_for_round(self) -> None:
+        """Wait until no round is in flight: it then has a report, or a
+        retryable rejection gave its allocation back."""
+        with self._round_lock:
+            pass
+
+    def _round(self) -> tuple[SubmissionReport, int | None]:
         with self._state_lock:
             if not self._accepting:
                 raise SubmissionClosedError("submission service is closed")
@@ -163,8 +210,10 @@ class SubmissionService:
                     self._max_submissions is not None
                     and session.rounds_allocated >= self._max_submissions
                 ):
+                    if self._final_judge:
+                        raise FinalRoundUsedError(FINAL_ROUND_USED)
                     raise SubmissionClosedError("submission budget is exhausted")
-                if session.last_allocated_at is not None:
+                if session.last_allocated_at is not None and not self._final_judge:
                     elapsed = (now - session.last_allocated_at).total_seconds()
                     if elapsed < self._cooldown_seconds:
                         remaining = self._cooldown_seconds - elapsed
@@ -193,6 +242,7 @@ class SubmissionService:
                         verifier_output=_verifier_output(
                             plan, session.run_id, round_id
                         ),
+                        final=self._final_judge,
                     )
                 )
             except RetryableSubmissionError:
@@ -216,11 +266,15 @@ class SubmissionService:
             ):
                 with self._state_lock:
                     self._accepting = False
-            return _render_feedback(report, remaining_budget=remaining_budget)
+            return report, remaining_budget
 
     def history(self, token: str) -> str:
         """Return only the registered run's completed submission feedback."""
         self._authenticate(token)
+        with self._state_lock:
+            if self._final_judge:
+                # No earlier attempt's result reaches the Agent.
+                raise SubmissionUnavailableError(FINAL_JUDGE_NO_HISTORY)
         with self._round_lock:
             reports = (*self._prior_reports, *self._reports)
             if not reports:
@@ -284,6 +338,25 @@ class SubmissionService:
         return self._work_container
 
 
+class FinalRoundUsedError(SubmissionClosedError):
+    """A final-judge attempt already has its one round."""
+
+
+class SubmissionUnavailableError(Exception):
+    """The request is not part of this run's submission protocol."""
+
+
+FINAL_ROUND_USED = (
+    "rsi-submit can be called once in this run, and it was already called: "
+    "the one final judge has evaluated the WORKDIR and the run is ending"
+)
+FINAL_JUDGE_NO_HISTORY = (
+    "rsi-submit --list is not available in this run: it has one final judge "
+    "and no earlier results"
+)
+FINAL_FEEDBACK_END = "This was the run's one final judge; the run ends now."
+
+
 def create_submission_app(service: SubmissionService) -> FastAPI:
     """Build the narrow FastAPI surface owned by an EmbeddedJudgeServer."""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
@@ -332,6 +405,8 @@ def create_submission_app(service: SubmissionService) -> FastAPI:
                 detail="invalid submission token",
                 headers={"WWW-Authenticate": "Bearer"},
             ) from error
+        except SubmissionUnavailableError as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
 
     return app
 
@@ -536,6 +611,36 @@ def _render_feedback(report: SubmissionReport, *, remaining_budget: int | None) 
     return f"Full verifier output: {output_path}\n" + "\n".join(footer) + "\n"
 
 
+def _render_final_feedback(report: SubmissionReport) -> str:
+    """The one final judge's result; the run ends, so no log path, no
+    remaining count."""
+    reward = (
+        None
+        if report.error is not None and not report.rewards
+        else dict(report.rewards)
+    )
+    lines = [
+        "--- rsi-harness submission ---",
+        f"round: {report.round_id}",
+        f"status: {report.status.value}",
+        "reward: "
+        + json.dumps(reward, sort_keys=True, ensure_ascii=False, allow_nan=False),
+    ]
+    if report.score is not None:
+        lines.append(f"score: {report.score}")
+    lines.extend(
+        (
+            f"exit_code: {_json_scalar(report.exit_code)}",
+            f"timed_out: {_json_scalar(report.timed_out)}",
+            f"duration_seconds: {_json_scalar(report.duration_seconds)}",
+        )
+    )
+    if report.error is not None:
+        lines.append(f"error: {report.error}")
+    lines.append(FINAL_FEEDBACK_END)
+    return "\n".join(lines) + "\n"
+
+
 def _json_scalar(value: object) -> str:
     return json.dumps(value, ensure_ascii=False, allow_nan=False)
 
@@ -563,8 +668,12 @@ def _bind_server_socket(host: str, port: int) -> socket.socket:
 
 
 __all__ = [
+    "FINAL_FEEDBACK_END",
+    "FINAL_JUDGE_NO_HISTORY",
+    "FINAL_ROUND_USED",
     "EmbeddedJudgeServer",
     "EmptySubmission",
+    "FinalRoundUsedError",
     "JudgeEndpoint",
     "SubmissionClosedError",
     "SubmissionService",

@@ -20,7 +20,8 @@ task's ``solution/`` at ``/solution`` in Work, owned by the Work user;
 every Agent gets, removes ``/solution`` (or empties it when that user cannot
 unlink it from ``/``), submits through ``rsi-submit`` and exits with ``solve.sh``'s
 status. Like Harbor's oracle it submits even after ``solve.sh`` fails, so the
-Judge's output is there to read.
+Judge's output is there to read. In a run with one final judge it leaves that
+round to the Harness, unless ``solve.sh`` failed.
 
 No model, no credential and no CLI: the Work image is the task image with the
 standard Work layer and the launcher.
@@ -34,7 +35,7 @@ from rsi_loop.harness.agent.base import Agent
 
 ORACLE_LAUNCHER = "/usr/local/bin/rsi-oracle"
 SOLUTION_DIR = "/solution"
-# How many times rsi-oracle submits, set by the Harness.
+# How many times rsi-oracle submits, set by the Harness; 0 with one final judge.
 SUBMISSIONS_ENV = "RSI_ORACLE_SUBMISSIONS"
 
 

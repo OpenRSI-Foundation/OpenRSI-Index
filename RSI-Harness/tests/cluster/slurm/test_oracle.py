@@ -603,16 +603,18 @@ def test_no_network_oracle_work_submits_through_the_socket(
 
 
 @pytest.mark.parametrize(
-    "updates,expected,reason",
+    "updates,expected,task_budget,reason",
     [
-        ({}, 1, None),
-        ({"agent_exit_code": 7}, 1, "solve.sh exited 7"),
-        ({}, 2, "expected 2"),
-        ({"agent_exit_code": None}, 1, "no exit code"),
+        ({}, 1, None, None),
+        ({"agent_exit_code": 7}, 1, None, "solve.sh exited 7"),
+        ({}, 2, None, "expected 2"),
+        ({"agent_exit_code": None}, 1, None, "no exit code"),
+        ({}, 3, 3, "expected 3"),
+        ({}, 1, 1, None),
     ],
 )
 def test_native_engine_applies_oracle_result_checks(
-    tmp_path, monkeypatch, updates, expected, reason
+    tmp_path, monkeypatch, updates, expected, task_budget, reason
 ):
     from rsi_harness.cluster.bluevela import runtime as module
     from rsi_harness.errors import InfrastructureError
@@ -623,7 +625,13 @@ def test_native_engine_applies_oracle_result_checks(
     plan = plan.model_copy(
         update={
             "task": plan.task.model_copy(
-                update={"agent": plan.task.agent.model_copy(update={"name": "oracle"})}
+                update={
+                    "agent": plan.task.agent.model_copy(update={"name": "oracle"}),
+                    # A task's own budget, which the run plan records.
+                    "verifier": plan.task.verifier.model_copy(
+                        update={"max_submissions": task_budget}
+                    ),
+                }
             )
         }
     )
@@ -632,7 +640,10 @@ def test_native_engine_applies_oracle_result_checks(
     payload = SimpleNamespace(
         run_id="oracle",
         resume=None,
-        options=CompileOptions(agent_name="oracle", max_submissions=expected),
+        options=CompileOptions(
+            agent_name="oracle",
+            max_submissions=None if task_budget is not None else expected,
+        ),
     )
     composition = SimpleNamespace(
         backend=lambda: None,

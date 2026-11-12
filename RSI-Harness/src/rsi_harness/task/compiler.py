@@ -40,6 +40,7 @@ _VERIFIER_METADATA_FIELDS = frozenset(
         "gpus",
         "judge_model",
         "judge_model_effort",
+        "max_submissions",
         "model_access",
         "visibility",
     }
@@ -129,6 +130,7 @@ class HarborTaskCompiler:
                     model_access=self._verifier_model_access(task),
                     **self._verifier_judge_model(task),
                     clean_image=self._verifier_clean_image(task),
+                    max_submissions=self._max_submissions(task, options),
                 ),
                 agent=AgentPlan(
                     name=options.agent_name,
@@ -156,6 +158,7 @@ class HarborTaskCompiler:
             raise UnsupportedTaskError(
                 f"invalid Harbor WORKDIR or plan: {error}"
             ) from error
+        self._refuse_final_judge_conflicts(definition)
         return definition
 
     def finalize(
@@ -404,6 +407,44 @@ class HarborTaskCompiler:
                 f"metadata.rsi_harness.verifier.visibility must be {expected}"
             )
         return value
+
+    @classmethod
+    def _max_submissions(cls, task: Task, options: CompileOptions) -> int | None:
+        """--max-submissions over the task's budget, which is checked even
+        then; neither is unlimited."""
+        declared = cls._verifier_max_submissions(task)
+        if options.max_submissions is not None:
+            return options.max_submissions
+        return declared
+
+    @classmethod
+    def _verifier_max_submissions(cls, task: Task) -> int | None:
+        expected = "a positive integer"
+        value = cls._verifier_metadata(task, "max_submissions", expected)
+        if value is None:
+            return None
+        if type(value) is not int or value < 1:
+            raise UnsupportedTaskError(
+                f"metadata.rsi_harness.verifier.max_submissions must be {expected}"
+            )
+        return value
+
+    @staticmethod
+    def _refuse_final_judge_conflicts(definition: TaskDefinition) -> None:
+        """A budget of 1 is one final judge, which may judge a stopped Work:
+        not yet with managed sandboxes or a Judge with model access."""
+        if not definition.verifier.final_judge:
+            return
+        if definition.sandbox is not None:
+            raise UnsupportedTaskError(
+                "a submission budget of 1 (one final judge) does not support "
+                "metadata.rsi_harness.sandbox"
+            )
+        if definition.verifier.model_access:
+            raise UnsupportedTaskError(
+                "a submission budget of 1 (one final judge) does not support "
+                "metadata.rsi_harness.verifier.model_access"
+            )
 
     @classmethod
     def _verifier_model_access(cls, task: Task) -> bool:

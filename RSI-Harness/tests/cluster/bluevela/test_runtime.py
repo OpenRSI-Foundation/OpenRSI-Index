@@ -2562,3 +2562,119 @@ def test_an_engine_stopped_by_the_provider_says_so():
     assert _unfinished_engine(
         stopped.model_copy(update={"agent_stopped_by": None})
     ) == ("native Engine ended in no_valid_submission: 0 submissions")
+
+
+def _final_judge_plan(plan, budget=1):
+    verifier = plan.task.verifier.model_copy(update={"max_submissions": budget})
+    return plan.model_copy(
+        update={"task": plan.task.model_copy(update={"verifier": verifier})}
+    )
+
+
+def test_a_final_round_after_the_agent_exits_kills_what_its_group_left(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The Harness's final judge runs after the Agent's time ended: pause()
+    accepts the exited Agent and nothing it left runs during the round."""
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    runtime.plan = _final_judge_plan(runtime.plan)
+    leader = subprocess.Popen(
+        ["sh", "-c", "trap '' TERM; sleep 300 & echo $!"],
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    child = int(leader.stdout.readline())
+    try:
+        leader.wait(timeout=10)
+        runtime._process = leader
+
+        runtime.pause(runtime.work_ref)
+
+        assert runtime._paused is True
+        deadline = time.monotonic() + 10
+        while _process_state(child) not in (None, "Z"):
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        # Then the round's unpause and the run's stop are no-ops.
+        runtime.unpause(runtime.work_ref)
+        runtime.stop(runtime.work_ref)
+        assert runtime._paused is False
+    finally:
+        try:
+            os.kill(child, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def test_other_budgets_still_refuse_a_round_after_the_agent_exits(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    runtime.plan = _final_judge_plan(runtime.plan, budget=2)
+    runtime._process = SimpleNamespace(pid=100, poll=lambda: 0)
+
+    with pytest.raises(InfrastructureError, match="not running at submission"):
+        runtime.pause(runtime.work_ref)
+
+
+def test_an_exited_harness_box_is_paused_without_a_signal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    runtime.plan = _final_judge_plan(runtime.plan)
+    runtime.profile = runtime.profile.model_copy(
+        update={
+            "apptainer": runtime.profile.apptainer.model_copy(
+                update={"process_namespaces": "harness"}
+            )
+        }
+    )
+    runtime._process = SimpleNamespace(pid=100, poll=lambda: 0)
+
+    def no_signal(*_args):
+        raise AssertionError("an exited box holds nothing to signal")
+
+    monkeypatch.setattr("os.killpg", no_signal)
+    monkeypatch.setattr("os.kill", no_signal)
+
+    runtime.pause(runtime.work_ref)
+
+    assert runtime._paused is True
+
+
+def test_a_final_judge_work_sees_an_empty_feedback_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """No attempt reads an earlier attempt's Judge output."""
+    monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(tmp_path / "node-tmp"))
+    plan = _final_judge_plan(make_run_plan(tmp_path))
+    runtime = ApptainerAgentRuntime(
+        SimpleNamespace(
+            profile=load_cluster_profile("bluevela"),
+            run_id="final",
+            sif_path=tmp_path / "task.sif",
+        ),
+        plan,
+    )
+    runtime.feedback.mkdir(parents=True)
+    (runtime.feedback / "agent-1.log").write_text("hidden Judge output\n")
+
+    command = runtime._base_command(
+        devices=(),
+        extra_binds=(),
+        mount_workspace=True,
+        mount_agent_home=True,
+        network_mode="no-network",
+    )
+
+    mounts = {
+        value
+        for option, value in zip(command, command[1:], strict=False)
+        if option == "--bind"
+    }
+    empty = plan.paths.root / "final-judge-feedback"
+    assert runtime.work_feedback == empty
+    assert f"{empty}:/run/rsi-harness/feedback:ro" in mounts
+    assert f"{runtime.feedback}:/run/rsi-harness/feedback:ro" not in mounts
+    assert list(empty.iterdir()) == []

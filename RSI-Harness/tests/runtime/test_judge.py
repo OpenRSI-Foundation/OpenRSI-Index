@@ -2807,3 +2807,69 @@ def test_trajectory_copy_is_kept_while_the_judge_is_retained(tmp_path):
 
     directory = run_root / "judge-trajectory" / "agent-1"
     assert (directory / "agent_output.txt").read_text() == "output\n"
+
+
+def _round(request, *, final: bool):
+    from rsi_harness.models import EvaluationRequest
+
+    plan, work, log_dir = request
+    return EvaluationRequest(
+        run_plan=plan,
+        work_container=work,
+        round_id="agent-1",
+        verifier_logs=log_dir / "agent-1",
+        verifier_output=(
+            plan.paths.logs / "runs" / "run-1" / plan.task.task_id / "feedback"
+        )
+        / "agent-1.log",
+        final=final,
+    )
+
+
+def _stopped(runtime):
+    from rsi_harness.models import WorkQuiescence
+
+    def inspect(container):
+        runtime.events.append(("inspect_quiescence", container.container_id))
+        return WorkQuiescence.STOPPED
+
+    runtime.inspect_quiescence = inspect
+
+
+def test_a_final_round_judges_stopped_work_as_it_is(tmp_path):
+    """The Agent's time ended and Work stopped: no pause, and it stays
+    stopped after the round."""
+    runner, runtime, _snapshot, artifacts, request = make_harness(tmp_path)
+    _stopped(runtime)
+
+    report = runner.evaluate(_round(request, final=True))
+
+    assert report.status is SubmissionStatus.COMPLETED
+    names = [name for name, _ in runtime.events]
+    assert "pause" not in names and "unpause" not in names
+    assert names.index("inspect_quiescence") < names.index("judge_create")
+    assert artifacts.reports[-1].round_id == "agent-1"
+
+
+def test_a_final_round_of_running_work_pauses_it_as_any_round(tmp_path):
+    runner, runtime, _snapshot, _artifacts, request = make_harness(tmp_path)
+
+    report = runner.evaluate(_round(request, final=True))
+
+    assert report.status is SubmissionStatus.COMPLETED
+    names = [name for name, _ in runtime.events]
+    assert names.index("pause") < names.index("judge_create")
+    assert "unpause" in names
+
+
+def test_other_rounds_never_skip_the_pause(tmp_path):
+    runner, runtime, _snapshot, _artifacts, request = make_harness(tmp_path)
+    _stopped(runtime)
+
+    runner.evaluate(_round(request, final=False))
+
+    names = [name for name, _ in runtime.events]
+    assert "pause" in names
+    assert ("inspect_quiescence", "work-1") not in runtime.events[
+        : names.index("pause")
+    ]

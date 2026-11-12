@@ -814,7 +814,9 @@ def _run_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode: Mode) -> No
                 options=CompileOptions(
                     agent_name="codex",
                     primary_reward="reward",
-                    max_submissions=1,
+                    # Not 1, which would be one final judge: the Agent's
+                    # rounds are under test here.
+                    max_submissions=2,
                 ),
             )
         )

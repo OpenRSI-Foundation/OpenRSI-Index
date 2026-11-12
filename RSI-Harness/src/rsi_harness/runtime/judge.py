@@ -783,16 +783,25 @@ class JudgeRunner:
                         f"{_error_text(error, verifier_error_secrets)}"
                     ) from error
                 family_frozen = True
-            self._observe(
-                "work_pause_planned",
-                work_container_id=request.work_container.container_id,
-            )
-            paused = True
-            self._work_runtime.pause(request.work_container)
-            self._observe(
-                "work_paused",
-                work_container_id=request.work_container.container_id,
-            )
+            if (
+                request.final
+                and self._work_runtime.inspect_quiescence(request.work_container)
+                is WorkQuiescence.STOPPED
+            ):
+                # A final-judge run's Work, stopped when the Agent's time
+                # ended: already quiescent, and it stays stopped.
+                work_ended = True
+            else:
+                self._observe(
+                    "work_pause_planned",
+                    work_container_id=request.work_container.container_id,
+                )
+                paused = True
+                self._work_runtime.pause(request.work_container)
+                self._observe(
+                    "work_paused",
+                    work_container_id=request.work_container.container_id,
+                )
             if plan.gpu_plan.judge_mode is JudgeGPUMode.RELEASE_ALL:
                 try:
                     self._quiescence_checker(plan.gpu_plan.work, request.work_container)

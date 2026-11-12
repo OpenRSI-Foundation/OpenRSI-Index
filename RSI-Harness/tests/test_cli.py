@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
@@ -1487,6 +1488,40 @@ def test_oracle_run_with_n_completed_rounds_passes(cli, tmp_path: Path) -> None:
     assert result.exit_code == 0, result.output
 
 
+@pytest.mark.parametrize(("budget", "passes"), [(3, False), (1, True), (None, True)])
+def test_oracle_run_expects_the_tasks_budget_from_its_run_plan(
+    cli, tmp_path: Path, budget, passes
+) -> None:
+    artifacts = tmp_path / "logs" / "runs" / "oracle-run" / "task"
+    artifacts.mkdir(parents=True)
+    (artifacts / "run-plan.json").write_text(
+        json.dumps({"task": {"verifier": {"max_submissions": budget}}})
+    )
+
+    result = _run_oracle(cli, tmp_path, _oracle_result(artifacts_dir=artifacts))
+
+    assert (result.exit_code == 0) is passes, result.output
+    if not passes:
+        assert "1 Judge round(s) ran, expected 3" in result.output
+
+
+def test_the_console_names_one_final_judge_and_an_unjudged_attempt(
+    capsys,
+) -> None:
+    """Whether the budget of 1 came from the task or --max-submissions."""
+    from rsi_harness.cli import _RunConsole
+
+    console = _RunConsole()
+    console("final_judge_planned", None)
+    console("agent_ended_early", "the Agent exited with code 137; resume the run")
+
+    output = capsys.readouterr().out
+    assert output.startswith("Final judge: submission budget 1;")
+    assert "Attempt not judged: the Agent exited with code 137; resume the run\n" in (
+        output
+    )
+
+
 def test_model_agent_exit_code_ignores_its_own_exit_code(cli, tmp_path: Path) -> None:
     cli_module, services = cli
     task = tmp_path / "task"
@@ -1767,3 +1802,30 @@ def test_a_signal_the_controller_inherited_as_ignored_stays_ignored(name) -> Non
         assert signal.getsignal(number) is signal.SIG_IGN
     finally:
         signal.signal(number, before)
+
+
+@pytest.mark.parametrize("final_judge", [True, False])
+def test_the_resume_summary_of_a_final_judge_run(capsys, final_judge) -> None:
+    from types import SimpleNamespace
+
+    from rsi_harness import cli as cli_module
+
+    cli_module._echo_resume(
+        SimpleNamespace(
+            run_id="run-1",
+            attempt=2,
+            salvage_pending=False,
+            agent_seconds_used=30.0,
+            agent_seconds_left=600.0,
+            submissions_left=1,
+            charged_rounds=1,
+            next_round_id="agent-2",
+            final_judge=final_judge,
+            base_image_ref=None,
+        )
+    )
+
+    output = capsys.readouterr().out
+    assert ("Final judge:" in output) is final_judge
+    assert ("agent-2 ends the attempt" in output) is final_judge
+    assert ("Submissions:" in output) is not final_judge

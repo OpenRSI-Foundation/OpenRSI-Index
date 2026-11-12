@@ -9,7 +9,9 @@
 # parent, empties) SOLUTION_DIR so no Judge snapshot carries it, then submits
 # $RSI_ORACLE_SUBMISSIONS times (default 1) through rsi-submit. It submits
 # even when solve.sh fails, so the Judge output is there to read, and exits
-# with solve.sh's status.
+# with solve.sh's status. 0, in a run with one final judge, leaves that round
+# to the Harness, which judges the WORKDIR once the launcher exits 0; after a
+# failed solve.sh it submits once itself.
 set -u
 
 if [ "$#" -ne 2 ]; then
@@ -28,8 +30,9 @@ case "$cleanup" in
         ;;
 esac
 case "$submissions" in
+    0) ;;
     '' | *[!0-9]* | 0*)
-        echo "rsi-oracle: RSI_ORACLE_SUBMISSIONS must be a positive integer" >&2
+        echo "rsi-oracle: RSI_ORACLE_SUBMISSIONS must be a non-negative integer" >&2
         exit 2
         ;;
 esac
@@ -63,6 +66,9 @@ elif ! removal=$(rm -rf -- "$solution" 2>&1); then
     fi
 fi
 
+if [ "$submissions" -eq 0 ] && [ "$status" -ne 0 ]; then
+    submissions=1
+fi
 i=1
 while [ "$i" -le "$submissions" ]; do
     echo "rsi-oracle: submission $i/$submissions"

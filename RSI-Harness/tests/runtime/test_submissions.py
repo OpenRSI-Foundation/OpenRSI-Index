@@ -850,3 +850,169 @@ def test_occupied_port_is_typed_startup_failure_without_lifecycle_leak(
         replacement.bind(("127.0.0.1", port))
     finally:
         replacement.close()
+
+
+def final_service(
+    tmp_path, *, rounds_allocated: int = 0, cooldown_seconds: float = 0.0, **kwargs
+) -> tuple[SubmissionService, str, FakeEvaluator]:
+    """A final-judge attempt: one round, after ``rounds_allocated`` earlier."""
+    writer = FakeArtifactWriter()
+    evaluator = FakeEvaluator(make_report(), artifact_writer=writer, **kwargs)
+    service = SubmissionService(
+        evaluator=evaluator, artifact_writer=writer, clock=FakeClock()
+    )
+    token = service.register(
+        run_id="run-a",
+        run_plan=make_run_plan(tmp_path),
+        work_container=ContainerRef(container_id="work-a", role="work"),
+        max_submissions=rounds_allocated + 1,
+        cooldown_seconds=cooldown_seconds,
+        rounds_allocated=rounds_allocated,
+        last_allocated_at=datetime.now(UTC) if rounds_allocated else None,
+        prior_reports=tuple(
+            make_report(f"agent-{number}") for number in range(1, rounds_allocated + 1)
+        ),
+        final_judge=True,
+    )
+    return service, token, evaluator
+
+
+def test_final_judge_agent_submits_once_and_a_second_call_is_refused(tmp_path):
+    service, token, evaluator = final_service(tmp_path)
+    client = TestClient(create_submission_app(service))
+    headers = {"Authorization": f"Bearer {token}"}
+
+    first = client.post("/api/v1/submit", headers=headers)
+    second = client.post("/api/v1/submit", headers=headers)
+
+    assert first.status_code == 200
+    assert first.text == (
+        "--- rsi-harness submission ---\n"
+        "round: agent-1\n"
+        "status: completed\n"
+        'reward: {"reward": 0.5}\n'
+        "score: 0.5\n"
+        "exit_code: 3\n"
+        "timed_out: false\n"
+        "duration_seconds: 1.2\n"
+        "This was the run's one final judge; the run ends now.\n"
+    )
+    assert service.final_round_done.is_set()
+    assert second.status_code == 429
+    assert second.json() == {
+        "detail": "rsi-submit can be called once in this run, and it was "
+        "already called: the one final judge has evaluated the WORKDIR and "
+        "the run is ending"
+    }
+    assert evaluator.round_ids == ["agent-1"]
+    assert all(request.final for request in evaluator.requests)
+    # Recorded as the Agent's own, which a resume then refuses.
+    assert evaluator.artifact_writer.final_rounds == [("agent-1", "agent")]
+    # The Harness's own round is not run on top of the Agent's.
+    assert service.judge_final() is None
+    assert evaluator.round_ids == ["agent-1"]
+    assert evaluator.artifact_writer.final_rounds == [("agent-1", "agent")]
+
+
+def test_final_judge_history_is_refused_so_no_earlier_result_reaches_the_agent(
+    tmp_path,
+):
+    service, token, _ = final_service(tmp_path, rounds_allocated=1)
+    client = TestClient(create_submission_app(service))
+
+    response = client.get(
+        "/api/v1/history", headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert response.status_code == 403
+    assert "not available in this run" in response.json()["detail"]
+    assert "agent-1" not in response.text
+
+
+def test_final_judge_round_of_the_harness_after_earlier_attempts(tmp_path):
+    """A resumed attempt's own round follows the charged ones and ignores
+    cooldown; it is refused once the service closed."""
+    service, _, evaluator = final_service(
+        tmp_path, rounds_allocated=2, cooldown_seconds=3600
+    )
+    assert not service.attempt_has_round(2)
+
+    report = service.judge_final()
+
+    assert report is not None and report.round_id == "agent-3"
+    assert evaluator.round_ids == ["agent-3"]
+    assert evaluator.artifact_writer.final_rounds == [("agent-3", "harness")]
+    assert evaluator.requests[0].final is True
+    assert service.attempt_has_round(2)
+    assert service.final_round_done.is_set()
+    assert service.judge_final() is None
+
+    closed, _, closed_evaluator = final_service(tmp_path / "closed")
+    closed.close()
+    with pytest.raises(SubmissionClosedError, match="closed"):
+        closed.judge_final()
+    assert closed_evaluator.round_ids == []
+
+
+def test_final_judge_round_in_flight_counts_as_the_attempts_round(tmp_path):
+    release = threading.Event()
+    service, token, evaluator = final_service(tmp_path, release=release)
+    worker = threading.Thread(target=service.submit, args=(token,))
+    worker.start()
+    assert evaluator.started.wait(5)
+
+    assert service.attempt_has_round(0)
+    assert not service.final_round_done.is_set()
+    waited = threading.Event()
+    waiter = threading.Thread(
+        target=lambda: (service.wait_for_round(), waited.set()), daemon=True
+    )
+    waiter.start()
+    # wait_for_round returns only once the round in flight has its report.
+    assert not waited.wait(0.2)
+    release.set()
+    worker.join(5)
+    assert waited.wait(5)
+    assert service.final_round_done.is_set()
+
+
+def test_a_retryable_final_round_leaves_the_round_unused(tmp_path):
+    class Busy(FakeEvaluator):
+        def evaluate(self, request):
+            self.round_ids.append(request.round_id)
+            raise RetryableSubmissionError("release all Work GPU processes")
+
+    writer = FakeArtifactWriter()
+    service = SubmissionService(
+        evaluator=Busy(make_report()), artifact_writer=writer, clock=FakeClock()
+    )
+    token = service.register(
+        run_id="run-a",
+        run_plan=make_run_plan(tmp_path),
+        work_container=ContainerRef(container_id="work-a", role="work"),
+        max_submissions=1,
+        final_judge=True,
+    )
+
+    with pytest.raises(RetryableSubmissionError):
+        service.submit(token)
+
+    assert not service.attempt_has_round(0)
+    assert not service.final_round_done.is_set()
+    assert writer.final_rounds == []
+
+
+def test_judge_final_is_only_for_a_final_judge_run(tmp_path):
+    service, token, evaluator, _ = registered_service(tmp_path, max_submissions=1)
+
+    with pytest.raises(RuntimeError, match="no final judge"):
+        service.judge_final()
+    # Not a final-judge run: rounds, feedback and history are as before.
+    feedback = service.submit(token)
+    assert feedback.startswith("Full verifier output: /run/rsi-harness/feedback/")
+    assert "remaining: 0" in feedback
+    assert evaluator.requests[0].final is False
+    with pytest.raises(SubmissionClosedError, match="budget is exhausted"):
+        service.submit(token)
+    assert "round: agent-1" in service.history(token)
+    assert not service.final_round_done.is_set()

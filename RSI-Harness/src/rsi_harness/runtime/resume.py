@@ -24,9 +24,10 @@ from rsi_harness.models import (
     RunRequest,
     SandboxPolicySource,
     SubmissionReport,
+    SubmissionStatus,
     TaskDefinition,
 )
-from rsi_harness.runtime.artifacts import recorded_submissions
+from rsi_harness.runtime.artifacts import final_round_requested_by, recorded_submissions
 from rsi_harness.runtime.recovery import (
     AttemptGrants,
     LeaseStore,
@@ -83,6 +84,12 @@ class ResumeContext:
     salvage_pending: bool
     # The Agent's next user turn.
     message: str
+
+    @property
+    def final_judge(self) -> bool:
+        """The run's own plan decides: each attempt ends with one judged
+        round, and the newest is the score."""
+        return self.plan.task.verifier.final_judge
 
     @property
     def next_round_id(self) -> str:
@@ -229,7 +236,16 @@ def _plan_locked(
         raise SetupError(f"run {run_id} has no run-plan.json in {root}")
     raw = json.loads((root / "run-plan.json").read_text())
     plan = RunPlan.model_validate(strict_sandboxes(raw))
-    definition = compile_task(record.request)
+    # The run compiles again with its plan's own budget, so a run started
+    # before the task field keeps its old behaviour.
+    request = record.request.model_copy(
+        update={
+            "options": record.request.options.model_copy(
+                update={"max_submissions": plan.task.verifier.max_submissions}
+            )
+        }
+    )
+    definition = compile_task(request)
     for field in _TASK_DIGESTS:
         if getattr(definition, field) != getattr(plan.task, field):
             name = field.removesuffix("_digest")
@@ -251,6 +267,20 @@ def _plan_locked(
         ),
         default=0,
     )
+    final_judge = plan.task.verifier.final_judge
+    if final_judge and charged:
+        newest = f"agent-{charged}"
+        judged = any(
+            report.round_id == newest
+            and report.status is not SubmissionStatus.INFRASTRUCTURE_ERROR
+            for report, _ in recorded
+        )
+        if judged and final_round_requested_by(root, newest) == "agent":
+            # The Agent saw that result: another attempt would be a retry.
+            raise SetupError(
+                f"run {run_id} was judged on its Agent's own rsi-submit "
+                f"({newest}), its one final judge; it cannot be resumed"
+            )
     used = _agent_seconds_used(lease, open_attempt_ended_at)
     granted = [entry.grants for entry in lease.attempts if entry.grants is not None]
     granted.append(grants)
@@ -263,10 +293,22 @@ def _plan_locked(
             f"run {run_id} has no Agent time left ({used:.0f}s of {budget:.0f}s "
             "used); grant more with --add-time SECONDS"
         )
-    maximum = record.request.options.max_submissions
+    # The plan's budget, which compile took from --max-submissions or the
+    # task; a plan written before the field has only the run option's.
+    maximum = plan.task.verifier.max_submissions
+    if maximum is None:
+        maximum = record.request.options.max_submissions
+    if final_judge and grants.add_submissions:
+        raise SetupError(
+            f"run {run_id} has one final judge per attempt; "
+            "--add-submissions does not apply"
+        )
     if maximum is None and grants.add_submissions:
         raise SetupError(f"run {run_id} has no submission limit to add to")
-    if maximum is not None:
+    if final_judge:
+        # Each attempt ends with its own judged round.
+        maximum = charged + 1
+    elif maximum is not None:
         maximum += sum(entry.add_submissions for entry in granted)
         if maximum <= charged:
             raise SetupError(
@@ -325,7 +367,7 @@ def _plan_locked(
     return ResumeContext(
         run_id=run_id,
         attempt=attempt,
-        request=record.request.model_copy(update={"gpu_selectors": selectors}),
+        request=request.model_copy(update={"gpu_selectors": selectors}),
         sandbox_policy=record.sandbox_policy,
         plan=plan,
         gpu_plan=lease.gpu_plan,
@@ -351,6 +393,7 @@ def _plan_locked(
             submissions_left=None if maximum is None else maximum - charged,
             work_envs=isinstance(plan.sandbox, SandboxEnvGrant)
             and plan.sandbox.environments.work is not None,
+            final_judge=final_judge,
         ),
     )
 
@@ -425,8 +468,20 @@ def _message(
     seconds_left: float,
     submissions_left: int | None,
     work_envs: bool,
+    final_judge: bool = False,
 ) -> str:
     lines = [f"rsi-harness: the run stopped and resumes now as attempt {attempt}."]
+    if final_judge:
+        # Nothing about earlier rounds: no earlier result reaches the Agent.
+        lines.append("Background processes and GPU state are gone; files are kept.")
+        lines.append(f"Agent time left: {seconds_left:.0f} seconds.")
+        lines.append(
+            "This attempt ends with one final judge, and only it scores the "
+            "run. You may call `rsi-submit` once to be judged early, which "
+            "ends the run; otherwise the Judge evaluates the WORKDIR when "
+            "this time ends."
+        )
+        return "\n".join(lines) + "\n"
     lines.extend(
         f"Round {round_id} was in flight when the run stopped: it counts as a "
         "submission and has no score; its partial output was withheld."
