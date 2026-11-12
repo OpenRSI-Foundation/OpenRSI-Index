@@ -13,7 +13,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from rsi_harness.errors import InfrastructureError, SetupError, StateTransitionError
+from rsi_harness.errors import (
+    InfrastructureError,
+    RetryableSubmissionError,
+    SetupError,
+    StateTransitionError,
+)
 from rsi_harness.models import (
     AgentRunResult,
     ContainerRef,
@@ -32,6 +37,7 @@ from rsi_harness.models import (
     TaskDefinition,
     WorkQuiescence,
     describe_provider_stop,
+    scored_reports,
 )
 from rsi_harness.runtime.mount_topology import validate_run_plan_mount_topology
 from rsi_harness.runtime.recovery import (
@@ -87,6 +93,86 @@ _ALLOWED = {
 
 class _RunCancelled(BaseException):
     pass
+
+
+# How long the Agent keeps running after its one final-judge round returned,
+# so rsi-submit prints the result into its session before the Harness ends it.
+FINAL_FEEDBACK_GRACE_SECONDS = 10.0
+# A final round that a busy Work rejects is tried again this often.
+FINAL_ROUND_ATTEMPTS = 3
+FINAL_ROUND_RETRY_SECONDS = 5.0
+
+
+class AgentEndedEarlyError(RuntimeError):
+    """A final-judge attempt whose Agent failed before its time ended."""
+
+
+def _judged_end(result: AgentRunResult) -> bool:
+    """Whether a final-judge attempt's Agent ended in a way that is judged:
+    its time ran out, its model provider stopped it, or it exited cleanly."""
+    return (
+        result.timed_out or result.provider_error is not None or result.exit_code == 0
+    )
+
+
+def _judge_final(service: Any) -> None:
+    """Run the Harness's final round off the main thread: a signal then
+    interrupts only the wait, and the service drain finishes the round."""
+    outcome: list[BaseException] = []
+
+    def judge() -> None:
+        try:
+            for attempt in range(1, FINAL_ROUND_ATTEMPTS + 1):
+                try:
+                    service.judge_final()
+                    return
+                except RetryableSubmissionError:
+                    if attempt == FINAL_ROUND_ATTEMPTS:
+                        raise
+                    time.sleep(FINAL_ROUND_RETRY_SECONDS)
+        except BaseException as error:
+            outcome.append(error)
+
+    worker = threading.Thread(target=judge, name="rsi-final-judge", daemon=True)
+    worker.start()
+    while worker.is_alive():
+        worker.join(0.5)
+    if outcome:
+        raise outcome[0]
+
+
+class _FinalRoundEnder:
+    """End a final-judge Agent once its one rsi-submit round has returned
+    and FINAL_FEEDBACK_GRACE_SECONDS have passed. The Harness ends it, so no
+    stop hook can keep it working on what can no longer count."""
+
+    def __init__(self, round_done: threading.Event, end: Callable[[], None]) -> None:
+        self._round_done = round_done
+        self._end = end
+        self._finished = threading.Event()
+        self.ended = False
+        self.error: BaseException | None = None
+        self._thread = threading.Thread(
+            target=self._watch, name="rsi-final-round-end", daemon=True
+        )
+        self._thread.start()
+
+    def _watch(self) -> None:
+        while not self._round_done.wait(0.2):
+            if self._finished.is_set():
+                return
+        if self._finished.wait(FINAL_FEEDBACK_GRACE_SECONDS):
+            return
+        try:
+            self._end()
+            self.ended = True
+        except BaseException as error:
+            self.error = error
+
+    def finish(self) -> None:
+        """The Agent's exec returned: stop watching, after any end in progress."""
+        self._finished.set()
+        self._thread.join()
 
 
 def _agent_provider_record(result: AgentRunResult | None) -> dict[str, object]:
@@ -269,6 +355,11 @@ class CoordinatorBackend(Protocol):
 
     def stop_agent(self, work: ContainerRef) -> None: ...
 
+    def end_agent(self, work: ContainerRef) -> None:
+        """End the Agent's processes while its exec is still being awaited:
+        a final-judge run's Agent once its one round returned."""
+        ...
+
     def quiesce_work(self, work: ContainerRef) -> WorkQuiescence: ...
 
     def plan_retained_work(self, plan: Any, work: ContainerRef) -> str: ...
@@ -351,6 +442,8 @@ class ProductionCoordinatorBackend:
     workdir_volume_adopter: (
         Callable[[Any, str, ManagedWorkdirVolume], ManagedWorkdirVolume] | None
     ) = None
+    # Only a backend that runs final-judge tasks ends an Agent early.
+    agent_ender: Callable[[ContainerRef], None] | None = None
 
     def compile(self, request: RunRequest) -> Any:
         if self.preparation is not None:
@@ -475,6 +568,11 @@ class ProductionCoordinatorBackend:
 
     def stop_agent(self, work: ContainerRef) -> None:
         self.agent_stopper(work)
+
+    def end_agent(self, work: ContainerRef) -> None:
+        if self.agent_ender is None:
+            raise SetupError("this runtime cannot end an Agent early")
+        self.agent_ender(work)
 
     def quiesce_work(self, work: ContainerRef) -> WorkQuiescence:
         return self.work_quiescer(work)
@@ -895,6 +993,9 @@ class RunCoordinator:
         started_at = time.monotonic()
         lease: ResourceLease | None = None
         plan: Any = None
+        final_judge = False
+        # The attempt's round was the Harness's, not the Agent's rsi-submit.
+        harness_judged = False
         artifacts: Any = None
         evaluator: _RoundEvaluator | None = None
         server: StartedSubmissionServer | None = None
@@ -1465,6 +1566,23 @@ class RunCoordinator:
                         definition, images, gpu_plan, request, run_id
                     )
                     validate_run_plan_mount_topology(plan)
+                    if resume is not None and (
+                        plan.task.verifier.max_submissions
+                        != resume.plan.task.verifier.max_submissions
+                    ):
+                        # The run's own plan decides: one final judge or not.
+                        raise SetupError(
+                            f"run {run_id}'s submission budget differs from "
+                            "its run plan"
+                        )
+                    final_judge = plan.task.verifier.final_judge
+                    if final_judge and resume is None:
+                        self._backend.record_event("final_judge_planned", None)
+                    budget = (
+                        plan.task.verifier.max_submissions
+                        if plan.task.verifier.max_submissions is not None
+                        else request.options.max_submissions
+                    )
                     agent_timeout = (
                         plan.task.agent.timeout_seconds
                         if resume is None
@@ -1692,10 +1810,9 @@ class RunCoordinator:
                         run_plan=plan,
                         work_container=work,
                         max_submissions=(
-                            request.options.max_submissions
-                            if resume is None
-                            else resume.max_submissions
+                            budget if resume is None else resume.max_submissions
                         ),
+                        final_judge=final_judge,
                         cooldown_seconds=(
                             request.options.cooldown_seconds
                             if resume is None
@@ -1710,21 +1827,64 @@ class RunCoordinator:
                     self._backend.install_hooks(plan, work, server.endpoint.url, token)
                     prepared = self._backend.prepare_agent(
                         plan,
-                        (
-                            request.options.max_submissions
-                            if resume is None
-                            else resume.submissions_left
-                        ),
+                        budget if resume is None else resume.submissions_left,
                     )
                     transition(RunStatus.AGENT_RUNNING)
                     resources.callback(emergency_cleanup)
-                    agent_started_at = time.monotonic()
-                    agent_result = self._backend.run_agent(
-                        prepared, work, agent_timeout
+                    ender = (
+                        _FinalRoundEnder(
+                            server.service.final_round_done,
+                            lambda: self._backend.end_agent(work),
+                        )
+                        if final_judge
+                        else None
                     )
+                    agent_started_at = time.monotonic()
+                    try:
+                        agent_result = self._backend.run_agent(
+                            prepared, work, agent_timeout
+                        )
+                    finally:
+                        if ender is not None:
+                            ender.finish()
                     agent_runtime_seconds = max(
                         0.0, time.monotonic() - agent_started_at
                     )
+                    if ender is not None and ender.error is not None:
+                        raise ender.error
+                    if final_judge and not agent_result.cancelled:
+                        # A round the Agent started may still be in flight,
+                        # and a busy Work may yet give it back.
+                        server.service.wait_for_round()
+                        if ender is not None and ender.ended:
+                            self._backend.record_event(
+                                "agent_ended_after_final_judge", None
+                            )
+                        elif server.service.attempt_has_round(
+                            0 if resume is None else resume.charged_rounds
+                        ):
+                            pass
+                        elif _judged_end(agent_result):
+                            # Work stops first: the judged state is the one
+                            # the Agent's time left, with nothing running.
+                            # Its time closes before the round, which runs
+                            # outside the Agent budget.
+                            self._backend.stop_agent(work)
+                            agent_stopped = True
+                            close_attempt()
+                            self._backend.record_event("final_judge_started", None)
+                            harness_judged = True
+                            _judge_final(server.service)
+                        else:
+                            error = AgentEndedEarlyError(
+                                "the Agent exited with code "
+                                f"{agent_result.exit_code} before its time "
+                                "ended; in a run with one final judge that "
+                                "attempt is not judged; resume the run to "
+                                "continue it"
+                            )
+                            self._backend.record_event("agent_ended_early", str(error))
+                            raise error
                 except (KeyboardInterrupt, _RunCancelled) as error:
                     cancelled = True
                     captured = error
@@ -1761,9 +1921,10 @@ class RunCoordinator:
                 # The stop hook blocks voluntary exits, so exhausting the Agent
                 # budget is the normal end of a run; timed_out stays recorded
                 # in final_result.json and the outcome follows the submissions.
+                # With one final judge per attempt the newest round decides.
                 elif any(
                     report.status == SubmissionStatus.COMPLETED
-                    for report in all_reports
+                    for report in scored_reports(all_reports, final_judge)
                 ):
                     terminal = RunStatus.COMPLETED
                 else:
@@ -1802,7 +1963,9 @@ class RunCoordinator:
                             ),
                             first_submission_seconds=(
                                 None
-                                if first_round is None or agent_started_at is None
+                                if first_round is None
+                                or agent_started_at is None
+                                or harness_judged
                                 else max(0.0, first_round - agent_started_at)
                             ),
                             **({} if resume is None else {"attempts": attempt}),
@@ -1849,6 +2012,7 @@ class RunCoordinator:
                         "maximize" if plan is None else plan.task.score_direction
                     ),
                     terminal=state.status,
+                    final_judge=final_judge,
                 ).model_copy(
                     update={
                         "agent_exit_code": (
@@ -1992,11 +2156,15 @@ def aggregate_result(
     primary_reward: str | None,
     direction: Literal["maximize", "minimize"],
     terminal: RunStatus | None = None,
+    final_judge: bool = False,
 ) -> RunResult:
-    """Aggregate valid rewards per key without inventing a multi-objective scalar."""
+    """Aggregate valid rewards per key without inventing a multi-objective
+    scalar; a final-judge run's from its newest round only."""
     history = tuple(reports)
     valid = tuple(
-        report for report in history if report.status == SubmissionStatus.COMPLETED
+        report
+        for report in scored_reports(history, final_judge)
+        if report.status == SubmissionStatus.COMPLETED
     )
     keys = {key for report in valid for key in report.rewards}
     selected = primary_reward

@@ -507,9 +507,13 @@ class ArtifactRecorder:
         self.reports: list[SubmissionReport] = []
         self.engine_errors: list[str] = []
         self.finalized: dict | None = None
+        self.final_rounds: list[tuple[str, str]] = []
 
     def record_submission(self, report) -> None:
         self.reports.append(report)
+
+    def record_final_round(self, round_id: str, requested_by: str) -> None:
+        self.final_rounds.append((round_id, requested_by))
 
     def record_engine_error(self, error: str) -> None:
         self.engine_errors.append(error)

@@ -227,6 +227,17 @@ class _RunConsole:
                     f"Agent stopped: {details['stopped_by']}; resume the run "
                     "once the provider recovers"
                 )
+        elif name == "final_judge_planned":
+            typer.echo(
+                "Final judge: submission budget 1; the Agent's one rsi-submit, "
+                "else the Harness when its time ends, judges the WORKDIR once"
+            )
+        elif name == "agent_ended_early":
+            typer.echo(f"Attempt not judged: {value}")
+        elif name == "agent_ended_after_final_judge":
+            typer.echo("Agent ended by the Harness after its one final judge")
+        elif name == "final_judge_started":
+            typer.echo("Work stopped; the final judge evaluates the WORKDIR")
         elif name == "judge_started":
             round_id = self._round_id(value)
             typer.echo(f"Judge {round_id}: snapshotting Work...")
@@ -721,7 +732,15 @@ def run_command(
         return
     _echo_result(result, roots, time.monotonic() - start)
     if oracle:
-        failures = _oracle_failures(result, max_submissions or 1)
+        failures = _oracle_failures(
+            result,
+            (
+                max_submissions
+                if max_submissions is not None
+                else _planned_submissions(result)
+            )
+            or 1,
+        )
         if failures:
             typer.echo(f"\nOracle check failed: {'; '.join(failures)}", err=True)
             raise typer.Exit(1)
@@ -729,6 +748,18 @@ def run_command(
         return
     if result.status in {RunStatus.FAILED, RunStatus.CANCELLED}:
         raise typer.Exit(1)
+
+
+def _planned_submissions(result: RunResult) -> int | None:
+    """The submission budget the task gave the run, from its run plan."""
+    if result.artifacts_dir is None:
+        return None
+    plan = result.artifacts_dir / "run-plan.json"
+    if not plan.exists():
+        return None
+    verifier = json.loads(plan.read_text()).get("task", {}).get("verifier", {})
+    value = verifier.get("max_submissions")
+    return value if type(value) is int else None
 
 
 def _echo_cluster_result(result: ClusterRunResult, elapsed: float) -> None:
@@ -896,14 +927,17 @@ def _echo_resume(context: ResumeContext) -> None:
             f"{context.agent_seconds_left:.0f}s left",
         )
     )
-    typer.echo(
-        _field(
-            "Submissions:",
-            f"{context.charged_rounds} used, "
-            + ("unlimited" if left is None else f"{left} left"),
+    if context.final_judge:
+        typer.echo(_field("Final judge:", f"{context.next_round_id} ends the attempt"))
+    else:
+        typer.echo(
+            _field(
+                "Submissions:",
+                f"{context.charged_rounds} used, "
+                + ("unlimited" if left is None else f"{left} left"),
+            )
         )
-    )
-    typer.echo(_field("Next round:", context.next_round_id))
+        typer.echo(_field("Next round:", context.next_round_id))
     if context.base_image_ref is not None:
         typer.echo(_field("Base image:", context.base_image_ref))
         if context.workdir_volume is not None:

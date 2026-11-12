@@ -72,8 +72,18 @@ class Run:
         *,
         max_submissions: int | None = 8,
         sandbox: str | None = None,
+        plan_budget: int | None = None,
     ) -> None:
         self.plan = make_run_plan(tmp_path)
+        if plan_budget is not None:
+            verifier = self.plan.task.verifier.model_copy(
+                update={"max_submissions": plan_budget}
+            )
+            self.plan = self.plan.model_copy(
+                update={
+                    "task": self.plan.task.model_copy(update={"verifier": verifier})
+                }
+            )
         if sandbox is not None:
             self.plan = self.plan.model_copy(
                 update={"sandbox": e2b_grant(tmp_path, task=sandbox)}
@@ -637,3 +647,174 @@ def test_a_run_on_shared_storage_resumes_without_a_retained_image(tmp_path) -> N
     assert (context.base_image_ref, context.base_image_id) == (None, None)
     assert context.base_image_round_id is None
     assert context.workdir_volume == run.volume
+
+
+@pytest.mark.parametrize("flag", [1, None], ids=["flag", "task"])
+def test_a_final_judge_attempt_gets_its_own_round_whatever_was_used(
+    tmp_path, flag
+) -> None:
+    run = Run(tmp_path, max_submissions=flag, plan_budget=1)
+    run.record("agent-1", 0.9)
+
+    context = run.plan_resume()
+
+    assert context.final_judge
+    assert context.max_submissions == 2
+    assert context.submissions_left == 1
+    assert context.next_round_id == "agent-2"
+    message = context.message
+    assert "Agent time left: 22 seconds." in message
+    assert "This attempt ends with one final judge" in message
+    assert "`rsi-submit` once" in message
+    # No earlier result and no submission count reach the Agent.
+    assert "agent-1" not in message and "0.9" not in message
+    assert "Submissions left" not in message
+
+
+def test_a_final_judge_attempt_after_an_interrupted_round_says_nothing_of_it(
+    tmp_path,
+) -> None:
+    run = Run(tmp_path, max_submissions=None, plan_budget=1)
+    (run.writer.root / "verifier" / "agent-1").mkdir(parents=True)
+
+    context = run.plan_resume()
+
+    assert context.next_round_id == "agent-2"
+    assert "in flight" not in context.message and "agent-1" not in context.message
+
+
+def test_a_final_judge_run_refuses_added_submissions(tmp_path) -> None:
+    run = Run(tmp_path, max_submissions=1, plan_budget=1)
+
+    with pytest.raises(SetupError, match="one final judge per attempt"):
+        run.plan_resume(AttemptGrants(add_submissions=1))
+
+
+def test_a_plan_from_before_the_budget_field_keeps_its_old_behaviour(
+    tmp_path,
+) -> None:
+    """--max-submissions 1 before the upgrade: the saved plan has no budget,
+    so the run keeps its rsi-submit rounds and refuses a used-up budget."""
+    run = Run(tmp_path, max_submissions=1)
+    plan = json.loads((run.writer.root / "run-plan.json").read_text())
+    assert plan["task"]["verifier"].pop("max_submissions") is None
+    (run.writer.root / "run-plan.json").write_text(json.dumps(plan))
+
+    context = run.plan_resume()
+
+    assert not context.final_judge
+    assert context.submissions_left == 1
+    assert "Submissions left: 1." in context.message
+    run.record("agent-1", 0.5)
+    with pytest.raises(SetupError, match="no submissions left"):
+        run.plan_resume()
+
+
+def test_a_task_budget_in_the_plan_limits_a_run_without_the_flag(tmp_path) -> None:
+    run = Run(tmp_path, max_submissions=None, plan_budget=3)
+    run.record("agent-1", 0.5)
+
+    context = run.plan_resume()
+
+    assert not context.final_judge
+    assert context.submissions_left == 2
+    assert "Submissions left: 2." in context.message
+
+
+def test_a_run_judged_on_its_agents_own_rsi_submit_cannot_be_resumed(
+    tmp_path,
+) -> None:
+    """The Agent saw that result in its session; another attempt would be a
+    retry of the one final judge."""
+    run = Run(tmp_path, max_submissions=None, plan_budget=1)
+    run.record("agent-1", 0.9)
+    run.writer.record_final_round("agent-1", "agent")
+
+    with pytest.raises(SetupError, match="own rsi-submit \\(agent-1\\)"):
+        run.plan_resume(AttemptGrants(add_time_seconds=60.0))
+
+
+@pytest.mark.parametrize(
+    ("requested_by", "status"),
+    [
+        ("harness", SubmissionStatus.COMPLETED),
+        ("agent", SubmissionStatus.INFRASTRUCTURE_ERROR),
+    ],
+    ids=["harness-round", "agent-round-infrastructure-error"],
+)
+def test_a_final_judge_run_resumes_when_the_agent_saw_no_judged_result(
+    tmp_path, requested_by, status
+) -> None:
+    run = Run(tmp_path, max_submissions=None, plan_budget=1)
+    run.writer.record_submission(
+        SubmissionReport(
+            round_id="agent-1",
+            status=status,
+            score=0.9 if status is SubmissionStatus.COMPLETED else None,
+            rewards={"reward": 0.9} if status is SubmissionStatus.COMPLETED else {},
+            output="ok\n",
+            error=None if status is SubmissionStatus.COMPLETED else "Judge died",
+        )
+    )
+    run.writer.record_final_round("agent-1", requested_by)
+
+    context = run.plan_resume()
+
+    assert context.final_judge
+    assert context.next_round_id == "agent-2"
+
+
+@pytest.mark.parametrize("plan_budget", [None, 1, 3])
+def test_a_resume_compiles_with_its_plans_own_budget(tmp_path, plan_budget) -> None:
+    """Whatever --max-submissions the run was started with; a plan written
+    before the field (None) compiles as unlimited and keeps its old budget."""
+    run = Run(tmp_path, max_submissions=2, plan_budget=plan_budget)
+    if plan_budget is None:
+        plan = json.loads((run.writer.root / "run-plan.json").read_text())
+        plan["task"]["verifier"].pop("max_submissions")
+        (run.writer.root / "run-plan.json").write_text(json.dumps(plan))
+    compiled: list[int | None] = []
+
+    def compile_task(request):
+        compiled.append(request.options.max_submissions)
+        return run.plan.task
+
+    context = run.plan_resume(compile_task=compile_task)
+
+    assert compiled == [plan_budget]
+    assert context.request.options.max_submissions == plan_budget
+    assert context.final_judge is (plan_budget == 1)
+    assert context.submissions_left == (1 if plan_budget == 1 else plan_budget or 2)
+
+
+def test_a_pre_field_budget_one_run_with_a_sandbox_still_resumes(tmp_path) -> None:
+    """Budget 1 with a sandbox is refused for runs the field governs only."""
+    from rsi_harness.errors import UnsupportedTaskError
+    from rsi_harness.runtime.run_request import read_run_request
+    from rsi_harness.task.compiler import HarborTaskCompiler
+    from tests.sandbox_helpers import sandbox_toml
+    from tests.task.test_compiler import DEFAULT_TASK_TOML, write_harbor_task
+
+    task = write_harbor_task(
+        tmp_path / "task", task_toml=DEFAULT_TASK_TOML + sandbox_toml()
+    )
+    run = Run(tmp_path / "run", max_submissions=1)
+    plan = json.loads((run.writer.root / "run-plan.json").read_text())
+    plan["task"]["verifier"].pop("max_submissions")
+    (run.writer.root / "run-plan.json").write_text(json.dumps(plan))
+    compiler = HarborTaskCompiler()
+    compiled = []
+
+    def compile_task(request):
+        compiled.append(compiler.compile(task, request.options))
+        return run.plan.task
+
+    context = run.plan_resume(compile_task=compile_task)
+
+    assert compiled[0].verifier.max_submissions is None
+    assert not context.final_judge
+    assert context.submissions_left == 1
+    # The saved options alone, as before this fix, are refused.
+    saved = read_run_request(run.data_root / "run-1").request.options
+    with pytest.raises(UnsupportedTaskError, match="does not support"):
+        compiler.compile(task, saved)

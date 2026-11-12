@@ -420,3 +420,38 @@ def test_in_progress_coding_agent_run_shows_agent_model_and_trajectory(
     assert page.status_code == 200
     assert "zcode 3.15.1" in page.text
     assert "Working on it." in page.text
+
+
+@pytest.mark.parametrize("budget", [1, 2])
+@pytest.mark.parametrize("finished", [True, False], ids=["finished", "live"])
+def test_a_final_judge_run_shows_its_newest_round_as_the_best(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, budget: int, finished: bool
+) -> None:
+    """A budget of 1 scores the newest round; other budgets the best one."""
+    monkeypatch.setattr(scanner_module, "_docker_status_map", lambda: {})
+    task_dir = tmp_path / "run-x" / "task"
+    for number, score, rescaled in ((1, 3.0, 90.0), (2, 0.0, 0.0)):
+        round_dir = task_dir / "submissions" / f"agent-{number}"
+        round_dir.mkdir(parents=True)
+        (round_dir / "report.json").write_text(
+            json.dumps(
+                {"submitted_at": number, "score": score, "score_0_100": rescaled}
+            )
+        )
+    (task_dir / "run-plan.json").write_text(
+        json.dumps({"task": {"verifier": {"max_submissions": budget}}})
+    )
+    (task_dir / "run_agent.log").write_text("")
+    if finished:
+        best = "agent-2" if budget == 1 else "agent-1"
+        (task_dir / "final_result.json").write_text(
+            json.dumps({"best_round": best, "best_score": 0.0 if budget == 1 else 3.0})
+        )
+
+    run = scanner_module._build_run(
+        "run-x", task_dir, {"task": {"is_score_task": True}}
+    )
+
+    assert run.best_score_0_100 == (0.0 if budget == 1 else 90.0)
+    assert run.best_round == ("agent-2" if budget == 1 else "agent-1")
+    assert run.total_rounds == 2

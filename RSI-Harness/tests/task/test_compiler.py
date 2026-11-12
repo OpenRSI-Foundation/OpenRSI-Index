@@ -960,3 +960,81 @@ def test_a_task_cannot_set_an_operator_judge_variable(tmp_path, anchor, name):
 
     with pytest.raises(UnsupportedTaskError, match="RSI_JUDGE_"):
         HarborTaskCompiler().compile(task_dir, CompileOptions())
+
+
+@pytest.mark.parametrize(
+    ("value", "flag", "expected"),
+    [
+        (None, None, None),
+        (None, 2, 2),
+        (None, 1, 1),
+        ("1", None, 1),
+        ("1", 2, 2),
+        ("3", None, 3),
+        ("3", 1, 1),
+    ],
+)
+def test_submission_budget_is_the_flag_else_the_task(tmp_path, value, flag, expected):
+    """--max-submissions overrides the task's budget; neither is unlimited,
+    and a budget of 1 is one final judge."""
+    metadata = (
+        ""
+        if value is None
+        else f"\n[metadata.rsi_harness.verifier]\nmax_submissions = {value}\n"
+    )
+    task = write_harbor_task(tmp_path, task_toml=DEFAULT_TASK_TOML + metadata)
+
+    definition = HarborTaskCompiler().compile(
+        task, CompileOptions(max_submissions=flag)
+    )
+
+    assert definition.verifier.max_submissions == expected
+    assert definition.verifier.final_judge is (expected == 1)
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "true", '"1"', "1.5", "{}"])
+@pytest.mark.parametrize("flag", [None, 2])
+def test_submission_budget_must_be_a_positive_integer(tmp_path, value, flag):
+    task = write_harbor_task(
+        tmp_path,
+        task_toml=DEFAULT_TASK_TOML
+        + f"\n[metadata.rsi_harness.verifier]\nmax_submissions = {value}\n",
+    )
+
+    with pytest.raises(
+        UnsupportedTaskError,
+        match=r"metadata\.rsi_harness\.verifier\.max_submissions must be a "
+        "positive integer",
+    ):
+        HarborTaskCompiler().compile(task, CompileOptions(max_submissions=flag))
+
+
+@pytest.mark.parametrize("flag", [None, 1])
+def test_one_final_judge_refuses_a_managed_sandbox(tmp_path, flag):
+    from tests.sandbox_helpers import sandbox_toml
+
+    metadata = (
+        "" if flag else "\n[metadata.rsi_harness.verifier]\nmax_submissions = 1\n"
+    )
+    task = write_harbor_task(
+        tmp_path, task_toml=DEFAULT_TASK_TOML + metadata + sandbox_toml()
+    )
+
+    with pytest.raises(UnsupportedTaskError, match="does not support metadata"):
+        HarborTaskCompiler().compile(task, CompileOptions(max_submissions=flag))
+    # Any other budget keeps its sandbox.
+    definition = HarborTaskCompiler().compile(task, CompileOptions(max_submissions=2))
+    assert definition.sandbox is not None
+
+
+@pytest.mark.parametrize("flag", [None, 1])
+def test_one_final_judge_refuses_judge_model_access(tmp_path, flag):
+    metadata = "\n[metadata.rsi_harness.verifier]\nmodel_access = true\n" + (
+        "" if flag else "max_submissions = 1\n"
+    )
+    task = write_harbor_task(tmp_path, task_toml=DEFAULT_TASK_TOML + metadata)
+
+    with pytest.raises(UnsupportedTaskError, match="model_access"):
+        HarborTaskCompiler().compile(task, CompileOptions(max_submissions=flag))
+    definition = HarborTaskCompiler().compile(task, CompileOptions(max_submissions=2))
+    assert definition.verifier.model_access is True

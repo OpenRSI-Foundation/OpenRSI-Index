@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path, PurePosixPath
@@ -399,6 +399,17 @@ class VerifierPlan(PersistedModel):
     # effort is then None too.
     judge_model: str | None = None
     judge_model_effort: str | None = None
+    # The run's Judge rounds: --max-submissions, else the task's
+    # metadata.rsi_harness.verifier.max_submissions; None is unlimited. A
+    # budget of 1 is one final judge per attempt (final_judge). Plans written
+    # before the field load as None and keep their run options' budget.
+    max_submissions: Annotated[int | None, Field(strict=True, ge=1)] = None
+
+    @property
+    def final_judge(self) -> bool:
+        """One judged round per attempt: the Agent's one rsi-submit, else
+        the Harness's on the WORKDIR as the Agent's time left it."""
+        return self.max_submissions == 1
 
     @field_validator("output_limit_bytes")
     @classmethod
@@ -669,6 +680,8 @@ class AgentResume:
     attempt: int
     message: str
     agent_output: Path
+    # The attempt's Agent seconds, for its deadline in a final-judge run.
+    seconds_left: float | None = None
 
     def __post_init__(self) -> None:
         if self.attempt < 2:
@@ -758,6 +771,9 @@ class EvaluationRequest:
     round_id: str
     verifier_logs: Path
     verifier_output: Path
+    # A round of a final-judge run: Work may already be stopped, because the
+    # Agent's time ended; it is then judged as it is, without a pause.
+    final: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "verifier_logs", _runtime_path(self.verifier_logs))
@@ -782,6 +798,21 @@ class SubmissionReport(PersistedModel):
     full_output_captured: bool = False
     duration_seconds: float | None = None
     error: str | None = None
+
+
+def scored_reports(
+    reports: Sequence[SubmissionReport], final_judge: bool
+) -> tuple[SubmissionReport, ...]:
+    """The rounds a run's score comes from: all of them, or in a final-judge
+    run only the newest, since each attempt ends with its own."""
+    if not final_judge or not reports:
+        return tuple(reports)
+    return (max(reports, key=lambda report: _round_number(report.round_id)),)
+
+
+def _round_number(round_id: str) -> int:
+    _, _, number = round_id.rpartition("-")
+    return int(number) if number.isdigit() else 0
 
 
 class RunResult(PersistedModel):

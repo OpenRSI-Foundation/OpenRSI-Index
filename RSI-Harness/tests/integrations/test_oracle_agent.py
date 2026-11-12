@@ -536,7 +536,35 @@ def test_launcher_without_solve_sh_still_submits_and_fails(tmp_path: Path) -> No
     assert (tmp_path / "submits").exists()
 
 
-@pytest.mark.parametrize("count", ["0", "x", "01", "-1"])
+@pytest.mark.parametrize(
+    ("body", "status", "submits"), [("touch solved", 0, 0), ("exit 7", 7, 1)]
+)
+def test_launcher_leaves_a_final_judge_round_to_the_harness(
+    tmp_path: Path, body: str, status: int, submits: int
+) -> None:
+    """With 0 the Harness judges after a clean exit; a failed solve.sh still
+    submits once, so the Judge output is there to read."""
+    workdir = tmp_path / "work"
+    workdir.mkdir()
+    solution = _solve(tmp_path, body)
+
+    completed = subprocess.run(
+        ["/bin/bash", str(LAUNCHER), str(workdir), str(solution)],
+        env={**_launcher_env(tmp_path), "RSI_ORACLE_SUBMISSIONS": "0"},
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert completed.returncode == status, completed.stderr
+    assert not solution.exists()
+    submitted = tmp_path / "submits"
+    assert (
+        len(submitted.read_text().splitlines()) if submitted.exists() else 0
+    ) == submits
+
+
+@pytest.mark.parametrize("count", ["x", "01", "00", "-1"])
 def test_launcher_refuses_a_bad_submission_count(tmp_path: Path, count: str) -> None:
     workdir = tmp_path / "work"
     workdir.mkdir()

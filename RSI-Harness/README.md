@@ -426,7 +426,11 @@ before its last submission. The sandbox samples
    it from `/`) so no Judge snapshot carries it.
 3. Calls `rsi-submit` once, or N times with `--max-submissions N` (for
    timing). It submits even when `solve.sh` failed, so the Judge's output is
-   there to read, and exits with `solve.sh`'s status.
+   there to read, and exits with `solve.sh`'s status. With a budget of 1 (one
+   final judge, see
+   [`max_submissions`](docs/harbor-task-authoring/task-toml.md#max_submissions))
+   it leaves that round to the Harness, which judges the WORKDIR after
+   `solve.sh` exits 0.
 
 No API key, base URL, model, `RSI_AGENT_EXTRA_ENV` value or provider endpoint
 reaches Work; the proxy settings do, and a no-network Work reaches only the
@@ -475,7 +479,8 @@ The [cluster setup and preflight](#run-multi-node-tasks-on-a-cluster) below appl
 to Oracle too. CPU/GPU totals come from the task, including separate Judge GPUs.
 
 The command exits 0 only when the run completed, `solve.sh` exited 0, exactly
-N Judge rounds ran (1 without `--max-submissions`) and every round's status is
+N Judge rounds ran (N from `--max-submissions`, else the task's
+`max_submissions`, else 1) and every round's status is
 `completed`, whatever its score. Otherwise it exits nonzero. Local Docker prints `Oracle check failed: <reasons>`;
 on Slurm this diagnostic is also retained in the Engine job log and the job fails. Its summary names the
 artifacts directory and, per round, the score, `test.sh`'s exit code and the
@@ -1062,7 +1067,7 @@ above.
 | `--judge-llm-proxy URL` | HTTP(S) proxy the Judge uses to reach the Judge model. | The run's proxy settings (`RSI_HTTPS_PROXY`, `RSI_HTTP_PROXY`, `RSI_NO_PROXY` or their unprefixed forms) |
 | `--judge-llm-codex-home DIR` | Codex home holding `auth.json` for `codex-login`. | `$CODEX_HOME`, then `~/.codex` |
 | `--timeout SECONDS` | Override the Agent time limit. | Task `agent.timeout_sec`, or 60 seconds if unset |
-| `--max-submissions N` | Limit how many Judge submissions the Agent may make. The `oracle` submits exactly N times. | Unlimited; the `oracle` submits once |
+| `--max-submissions N` | Limit how many Judge submissions the Agent may make; overrides the task's [`max_submissions`](docs/harbor-task-authoring/task-toml.md#max_submissions). `1` gives the run one final judge: one `rsi-submit`, which ends the run, else the Harness judges the WORKDIR when the Agent's time ends. The `oracle` submits exactly N times (with 1, the Harness judges after it). | The task's `max_submissions`, else unlimited; the `oracle` submits once |
 | `--cooldown SECONDS` | Require a minimum delay between submissions. | `0.0` |
 | `--primary-reward KEY` | Select the reward key used as the primary score. | `reward`, or the only reward key when exactly one exists |
 | `--score-direction DIRECTION` | Choose whether the best score is the maximum or minimum: `maximize` or `minimize`. | `maximize` |

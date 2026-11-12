@@ -1064,9 +1064,10 @@ class DockerContainerRuntime:
             return None
         raise InfrastructureError("Docker returned ambiguous Work quiescence")
 
-    def stop(self, container: ContainerRef) -> None:
+    def stop(self, container: ContainerRef, *, timeout_seconds: int = 10) -> None:
+        """Stop the container: SIGTERM, then SIGKILL after the timeout."""
         try:
-            self._container(container).stop(timeout=10)
+            self._container(container).stop(timeout=timeout_seconds)
         except NotFound:
             return
         except APIError as error:

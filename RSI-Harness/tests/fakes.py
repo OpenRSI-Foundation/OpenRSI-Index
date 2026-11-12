@@ -363,6 +363,10 @@ class FakeJudgeSnapshotBackend:
 class FakeArtifactWriter:
     def __init__(self) -> None:
         self.reports: list[SubmissionReport] = []
+        self.final_rounds: list[tuple[str, str]] = []
+
+    def record_final_round(self, round_id: str, requested_by: str) -> None:
+        self.final_rounds.append((round_id, requested_by))
 
     def record_submission(self, report: SubmissionReport) -> None:
         for index, current in enumerate(self.reports):

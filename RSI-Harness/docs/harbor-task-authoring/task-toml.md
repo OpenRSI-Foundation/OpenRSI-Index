@@ -773,6 +773,50 @@ workspace never reach it there and `run-plan.json` records
 `clean_image: true`. A cluster Judge also runs as the invoking user, not
 root (see [Judges that are not root](#judges-that-are-not-root)).
 
+### `max_submissions`
+
+```toml
+[metadata.rsi_harness.verifier]
+max_submissions = 1
+```
+
+- Type: positive integer.
+- Default when the table or field is absent: unlimited.
+- Meaning: how many Judge rounds a run gets.
+- The CLI `--max-submissions` value overrides this field.
+
+A budget of `1`, from this field or from `--max-submissions 1`, gives the run
+one final judge:
+
+- the Agent may call `rsi-submit` once. The Judge evaluates the WORKDIR as it
+  is at that moment, the Agent receives the result, and RSI Harness ends the
+  Agent about ten seconds later. A second call is refused. A run judged on the
+  Agent's own call is finished and cannot be resumed;
+- if the Agent does not call it, RSI Harness stops Work when the Agent's time
+  ends and judges the WORKDIR as it was left. It does the same when the
+  Agent's model provider stops it, or when the Agent exits with status 0.
+  This round runs outside the Agent's time budget;
+- an Agent that exits with another status before its time ends is not
+  judged: the attempt ends `failed`, and `rsi-harness resume` continues it;
+- `submissions/agent-N/final_judge.json` records who asked for the round
+  (`agent` or `harness`); `first_submission_seconds` is set only for the
+  Agent's own call;
+- the prompt says all of this, with the time budget and the deadline in UTC.
+  `rsi-submit --list` and the feedback logs under `/run/rsi-harness/feedback`
+  are not available;
+- each resumed attempt (after a crash, a cancel, an early exit or the
+  Harness's own round) ends with its own judged round, and the newest round
+  is the score (`best_score` and `best_round` in `final_result.json`).
+  `--cooldown` and `resume --add-submissions` do not apply;
+- the oracle runs `solve.sh` and leaves the round to RSI Harness.
+
+A run started by an RSI Harness without this field keeps its old meaning of
+`--max-submissions 1` when it is resumed.
+
+A budget of `1` cannot be combined with `metadata.rsi_harness.sandbox` or with
+`model_access = true`. Any other budget works as before: the Agent may call
+`rsi-submit` up to that many times, and the best valid round is the score.
+
 ### `model_access`
 
 ```toml
