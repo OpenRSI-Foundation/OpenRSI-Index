@@ -282,6 +282,51 @@ image does the same job inside pi. For these five Agents:
 - **Local Docker only.** These five Agents need files baked into their Work
   image, which cluster images do not carry yet, so `--cluster` refuses them.
 
+### Same model, no account tools
+
+Every run of every Agent, in Work and in a Judge's `rsi-agent` call, follows
+two rules. There is no option to turn them off.
+
+- **One model**: the main session and every subagent use the run's model,
+  from `--model`, `RSI_AGENT_MODEL` or the Agent's default. Settings, agent
+  definitions or extensions in the working directory or under `$HOME`
+  cannot pick another one, nor can a tool call. Claude Code and Codex can
+  run on a login without a model: Claude Code then keeps its default for the
+  login, while Codex takes the model its config files name, which the Agent
+  can write; name a model to fix it.
+- **No account-level tools.** Tools that come with a login and act outside
+  Work are off: the account's connectors, plugins and MCP servers, cloud
+  agents, scheduled jobs, notifications, messages to other sessions, and
+  hosted tools that use another model.
+
+System-wide managed config outranks every flag below. Before each launch,
+the Agent's (`/etc/claude-code`, `/etc/codex/managed_config.toml` and
+`requirements.toml`, `/etc/opencode`) is removed, with `sudo -n` when
+needed, and the launch fails if it cannot be.
+
+| Agent | Subagents and models | Account-level tools |
+| --- | --- | --- |
+| `codex` | Off: `-c agents.enabled=false -c features.multi_agent_v2=false`. Its spawn tool accepts any model of its catalog, and no setting limits it to the main one | `-c features.apps=false`, and `plugins`, `remote_plugin`, `tool_suggest`, `image_generation` and `memories` likewise |
+| `claude-code` | `CLAUDE_CODE_SUBAGENT_MODEL` (the run's model, or `inherit`) with `CLAUDE_CODE_SUBAGENT_MODEL_FORCE=1`, `CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP=1`, `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` and `CLAUDE_CODE_NO_MODEL_FALLBACK=1`; `model`, `ANTHROPIC_MODEL` and the alias variables (`ANTHROPIC_DEFAULT_*_MODEL`, `ANTHROPIC_SMALL_FAST_MODEL`) pinned to the run's model or the operator's value, else `""` (the CLI's own). All in the environment and in the launch's `--settings`, which outranks every settings file | `--disallowedTools` with the list in [`claude_code.py`](src/rsi_loop/harness/agent/claude_code.py) (cloud routines, projects, artifacts, notifications, connectors, plugin and skill catalogs, other sessions, scheduled jobs, workflows, worktrees, feedback), `--strict-mcp-config`, and the connector, org memory, Remote Control, workflow and artifact switches in the same `--settings` |
+| `qwen-code` | Denied: `agent`, `workflow`, `team_create`, `send_message`, `create_sub_session`; Qwen cannot pin a subagent's model. Pinned in a system settings file (`QWEN_CODE_SYSTEM_SETTINGS_PATH`), above the working directory's: the main, fast, compaction, fallback, advisor, image, vision, voice and Explore models, and empty `modelProviders` and `providerProtocol`, so no image turn goes to another model | Denied: `advisor`, `image_gen`, and `web_search` on every network; omni media tools off |
+| `kimi-code` | `[secondary_model]` forced to the run's model; `KIMI_CODE_WATCH=0`, so a config the Agent edits loads only at the next launch, which rewrites it | None: a run gets no Kimi login |
+| `opencode` | The provider's `whitelist` holds only the run's model, under its own `id` | None: a run gets no OpenCode login |
+| `zcode` | Its provider registry holds only the run's model, and a definition naming another fails with `model-not-found` | `OffPeakList` and `ReplyToChannel` denied with the driver's own list. That list reaches the main session only: a subagent still offers `ReplyToChannel`, which has no bot conversation to reply to. A run gets no Z.ai login |
+| `pi` | pi has none; `--no-extensions --no-approve` keep out every extension but the Harness's own, and the working directory's trust-gated files | None in pi itself; extensions would bring them |
+
+A Claude Code subagent cannot be continued once it finishes, because
+`SendMessage` is denied. What no flag stops, from the Agent's shell:
+
+- starting a second copy of its CLI, or calling the endpoint directly, with
+  the credentials Work gives it; only an endpoint that serves the run's
+  model alone prevents that;
+- editing ZCode's provider file (its path is in Work's environment), which
+  ZCode reloads live: a model added there is open to subagents;
+- as root (or with sudo), writing managed config while the CLI runs (Claude
+  Code reloads its managed settings), or rewriting what the Harness bakes
+  into the image (the driver, pi's extension), which a later launch in the
+  same Work loads.
+
 ## Run a Harbor task
 
 This mode runs a Harbor task locally with Docker on a single node. For cluster

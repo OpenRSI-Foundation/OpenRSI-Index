@@ -28,6 +28,7 @@ from rsi_loop.harness.agent.base import (
     Agent,
     OneShotCommand,
     link_session_store,
+    remove_managed_config,
 )
 from rsi_loop.harness.backend import ContainerBackend, ContainerHandle
 
@@ -35,6 +36,105 @@ from rsi_loop.harness.backend import ContainerBackend, ContainerHandle
 # session by its transcript alone.
 _SESSIONS = (".claude/projects", ".claude-projects")
 _SESSION_STORE = link_session_store(*_SESSIONS)
+_WEB_TOOLS = ("WebSearch", "WebFetch")
+# Tools that come with a claude.ai login (some with an API key too) and act
+# outside Work: cloud routines, claude.ai projects, designs and artifacts,
+# notifications, the account's MCP connectors and registry, files or messages
+# to other sessions, the user's browser; and tools that start turns or work
+# outside this process: scheduled jobs, workflows, worktrees. Denied tools
+# stay out of subagents too. Without SendMessage a finished subagent cannot
+# be continued. (SendToProject and SendToProjectContext of older releases are
+# Projects in the pinned one.) The claude.ai plugin and skill catalogs,
+# connector suggestions, team onboarding links, linked inboxes and feedback
+# reach the account as well. Names a release does not have are ignored.
+_ACCOUNT_TOOLS = (
+    "RemoteTrigger",
+    "Projects",
+    "ClaudeDesign",
+    "DesignSync",
+    "PushNotification",
+    "Artifact",
+    "ArtifactComments",
+    "ArtifactData",
+    "ArtifactCheck",
+    "AppifactRepl",
+    "ReadNotifications",
+    "ListConnectors",
+    "SearchMcpRegistry",
+    "SendFile",
+    "SendUserFile",
+    "OfferChromeSetup",
+    "ListAgents",
+    "SendMessage",
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "ScheduleWakeup",
+    "Workflow",
+    "EnterWorktree",
+    "ExitWorktree",
+    "ShareOnboardingGuide",
+    "SearchPlugins",
+    "SearchSkills",
+    "ListPlugins",
+    "ListSkills",
+    "SuggestPluginInstall",
+    "SuggestSkills",
+    "PublishPlugin",
+    "SuggestConnectors",
+    "FetchInboxMessage",
+    "SendFeedback",
+)
+# The same switches for what is not a tool: claude.ai MCP connectors, org
+# memory, the Remote Control bridge, workflows and artifacts.
+_ACCOUNT_SETTINGS = {
+    "disableClaudeAiConnectors": True,
+    "disableRemoteControl": True,
+    "remoteControlAtStartup": False,
+    "disableWorkflows": True,
+    "disableArtifact": True,
+}
+_ACCOUNT_ENV = {
+    "ENABLE_CLAUDEAI_MCP_SERVERS": "false",
+    "CLAUDE_CODE_DISABLE_ORG_MEMORY": "1",
+    "CLAUDE_CODE_DISABLE_ARTIFACT": "1",
+    "CLAUDE_CODE_DISABLE_CRON": "1",
+    "CLAUDE_CODE_DISABLE_WORKFLOWS": "1",
+}
+
+# The model, its default and the aliases (opus, sonnet, haiku, fable, the
+# small fast model) a settings file's ``env`` could point at another model.
+# Pinned to the operator's value from the run's environment, or to "", which
+# Claude Code reads as unset: its own default and alias resolution.
+_MODEL_ENV = (
+    "ANTHROPIC_DEFAULT_MODEL",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "ANTHROPIC_DEFAULT_FABLE_MODEL",
+    "ANTHROPIC_SMALL_FAST_MODEL",
+)
+# Managed settings, MCP servers and memory outrank --settings.
+_MANAGED_CONFIG = remove_managed_config("/etc/claude-code")
+
+
+def _same_model_env(model: str | None) -> dict[str, str]:
+    """Every subagent runs on the main model.
+
+    FORCE drops the model an Agent tool call, an agent definition's
+    ``model:`` or a workflow names, and removes the tool's ``model``
+    parameter; subagents then take CLAUDE_CODE_SUBAGENT_MODEL, the run's
+    model (``inherit``, the main model, when the run names none). Explore's
+    own cap and the advisor tool, which consults another model, are off, and
+    so is the main model's substitution when it hits a usage limit.
+    """
+    return {
+        "CLAUDE_CODE_SUBAGENT_MODEL": model or "inherit",
+        "CLAUDE_CODE_SUBAGENT_MODEL_FORCE": "1",
+        "CLAUDE_CODE_DISABLE_EXPLORE_INHERIT_CAP": "1",
+        "CLAUDE_CODE_DISABLE_ADVISOR_TOOL": "1",
+        "CLAUDE_CODE_NO_MODEL_FALLBACK": "1",
+    }
 
 
 class ClaudeCodeAgent(Agent):
@@ -82,6 +182,55 @@ class ClaudeCodeAgent(Agent):
             env["CLAUDE_CODE_ATTRIBUTION_HEADER"] = "0"
         if not self._config.agent_api_base_url and self._config.agent_api_key:
             env["ANTHROPIC_API_KEY"] = self._config.agent_api_key
+        # After RSI_AGENT_EXTRA_ENV, which cannot undo them. The launch's
+        # --settings repeats them, over any settings file the Agent writes.
+        env.update(self._guard_env(model))
+
+    def _effective_model(self, model: str | None) -> str | None:
+        return model or self._config.agent_model or self.default_model
+
+    def _main_model(self, model: str | None) -> str:
+        """The run's model, the operator's ANTHROPIC_MODEL, or "" (the CLI's
+        default for the login)."""
+        return self._effective_model(model) or self._config.agent_extra_env.get(
+            "ANTHROPIC_MODEL", ""
+        )
+
+    def _guard_env(self, model: str | None) -> dict[str, str]:
+        extra = self._config.agent_extra_env
+        return {
+            "ANTHROPIC_MODEL": self._main_model(model),
+            **{key: str(extra.get(key, "")) for key in _MODEL_ENV},
+            **_same_model_env(self._effective_model(model)),
+            **_ACCOUNT_ENV,
+        }
+
+    def _guard_flags(
+        self, model: str | None, *, internet: bool, work: bool = False
+    ) -> str:
+        """The flags every launch takes: no account-level tools, MCP servers
+        only from this command line (none), and one --settings.
+
+        Flag settings rank above user, project and local settings, whose
+        ``env`` and ``model`` would otherwise override the process
+        environment: an Agent could write ``.claude/settings.json`` turning
+        the subagent pin off, remapping an alias or naming another model for
+        a run without ``--model``. Only managed settings rank higher, and the
+        launch removes them.
+        """
+        denied = [*_ACCOUNT_TOOLS, *(() if internet else _WEB_TOOLS)]
+        settings: dict[str, object] = {
+            "model": self._main_model(model),
+            "env": self._guard_env(model),
+            **_ACCOUNT_SETTINGS,
+        }
+        if work and self._config.claude_cache_opt:
+            settings["includeGitInstructions"] = False
+        text = json.dumps(settings, separators=(",", ":"))
+        return (
+            f" --strict-mcp-config --disallowedTools {','.join(denied)}"
+            f" --settings {shlex.quote(text)}"
+        )
 
     def format_run_cmd(
         self,
@@ -107,22 +256,15 @@ class ClaudeCodeAgent(Agent):
             if not resume and session_id is not None:
                 cmd += f" --session-id {shlex.quote(session_id)}"
 
-        effective_model = (
-            model or self._config.agent_model or self.default_model
-        )
+        effective_model = self._effective_model(model)
         if effective_model:
             cmd += f" --model {shlex.quote(effective_model)}"
 
-        if not internet:
-            cmd += " --disallowedTools WebSearch,WebFetch"
-
         if self._config.claude_cache_opt:
-            cmd += (
-                " --exclude-dynamic-system-prompt-sections"
-                """ --settings '{"includeGitInstructions":false}'"""
-            )
+            cmd += " --exclude-dynamic-system-prompt-sections"
 
-        return f"{_SESSION_STORE} &&\nexec {cmd}"
+        cmd += self._guard_flags(effective_model, internet=internet, work=True)
+        return f"{_SESSION_STORE} && {_MANAGED_CONFIG} &&\nexec {cmd}"
 
     def format_oneshot_cmd(
         self,
@@ -139,13 +281,12 @@ class ClaudeCodeAgent(Agent):
             " --dangerously-skip-permissions --safe-mode --setting-sources user"
             " {schema_option}"
         )
-        effective_model = model or self._config.agent_model or self.default_model
+        effective_model = self._effective_model(model)
         if effective_model:
             cmd += f" --model {shlex.quote(effective_model)}"
-        if not internet:
-            cmd += " --disallowedTools WebSearch,WebFetch"
+        cmd += self._guard_flags(effective_model, internet=internet)
         return OneShotCommand(
-            command=cmd,
+            command=f"{_MANAGED_CONFIG} &&\nexec {cmd}",
             schema_option='--json-schema "$(cat {schema_file})"',
             output="stdout-json",
             output_fields=("structured_output", "result"),
@@ -153,8 +294,8 @@ class ClaudeCodeAgent(Agent):
         )
 
     def apply_reasoning_effort(self, command: str, effort: str) -> str:
-        # The launch is the last line, after the session store step of a Work
-        # command; a one-shot command is the launch alone.
+        # The launch is the last line, after the session store and managed
+        # config steps; a bare command is the launch alone.
         prelude, newline, launch = command.rpartition("\n")
         marker = "exec claude " if newline else "claude "
         if not launch.startswith(marker):

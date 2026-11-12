@@ -120,6 +120,11 @@ class KimiCodeAgent(DrivenAgent):
         env["KIMI_CODE_MODEL_CATALOG_REFRESH_INTERVAL_MS"] = "0"
         env["KIMI_DISABLE_CRON"] = "1"
         env["KIMI_CODE_INFINITE_RETRY"] = "1"
+        # Kimi reloads config.toml (and MCP servers, skills and agent
+        # profiles) live when a file changes; off, so a config the Agent
+        # edits cannot add another model for subagents before the next
+        # launch rewrites it. What the Agent adds loads at the next launch.
+        env["KIMI_CODE_WATCH"] = "0"
 
     def config_toml(self, *, model: str, internet: bool) -> str:
         """Return the non-secret ``config.toml`` for a run."""
@@ -143,6 +148,13 @@ class KimiCodeAgent(DrivenAgent):
                 f"max_context_size = {window}",
                 f"max_output_size = {output}",
                 _CAPABILITIES,
+                "",
+                # Subagents (Agent, AgentSwarm) run on the main model: forced,
+                # a call cannot name another one, and the Agent tool offers
+                # no model parameter. Profiles carry no model of their own.
+                "[secondary_model]",
+                f"model = {_toml_string(_PROVIDER)}",
+                "force = true",
                 "",
                 "[tools]",
                 f"disabled = {json.dumps(disabled)}",

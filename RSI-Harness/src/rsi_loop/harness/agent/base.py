@@ -79,6 +79,24 @@ def link_session_store(link: str, store: str) -> str:
     )
 
 
+def remove_managed_config(*paths: str) -> str:
+    """Return a bash step that removes a CLI's system-wide managed config.
+
+    Managed config outranks every flag a launch passes, and an Agent with
+    root (or sudo) can write it, or a task image ship it; a resumed Work
+    keeps it. Each *path* is removed, with ``sudo -n`` when needed, and the
+    launch fails when one cannot be.
+    """
+    return (
+        f"for rsi_managed in {shlex.join(paths)}; do"
+        ' if [ -e "$rsi_managed" ] || [ -L "$rsi_managed" ]; then'
+        ' rm -rf -- "$rsi_managed" 2>/dev/null'
+        ' || sudo -n rm -rf -- "$rsi_managed" 2>/dev/null'
+        ' || { echo "rsi-harness: cannot remove $rsi_managed, managed config'
+        ' that outranks the launch flags" >&2; exit 1; }; fi; done'
+    )
+
+
 # Where NODE_INSTALL_CMD puts the pinned node. Agents run node by this path,
 # never by name: a task image may put its own node first on PATH.
 NODE_BIN = "/usr/local/bin/node"

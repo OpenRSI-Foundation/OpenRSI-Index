@@ -548,10 +548,18 @@ def test_claude_takes_structured_output_and_its_own_flags(judge, tmp_path):
     assert argv[argv.index("--output-format") + 1] == "json"
     assert argv[argv.index("--setting-sources") + 1] == "user"
     assert argv[argv.index("--model") + 1] == "claude-test"
-    assert argv[argv.index("--disallowedTools") + 1] == "WebSearch,WebFetch"
+    # Work's account-tool denials and subagent pin, through rsi-agent.
+    denied = argv[argv.index("--disallowedTools") + 1].split(",")
+    assert denied[0] == "RemoteTrigger"
+    assert denied[-2:] == ["WebSearch", "WebFetch"]
+    assert "--strict-mcp-config" in argv
+    settings = json.loads(argv[argv.index("--settings") + 1])
+    assert settings["env"]["CLAUDE_CODE_SUBAGENT_MODEL"] == "claude-test"
+    assert settings["env"]["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"] == "1"
     assert json.loads(argv[argv.index("--json-schema") + 1]) == SCHEMA
     assert call["env"]["ANTHROPIC_AUTH_TOKEN"] == API_KEY
     assert call["env"]["IS_SANDBOX"] == "1"
+    assert call["env"]["CLAUDE_CODE_SUBAGENT_MODEL_FORCE"] == "1"
     assert call["cwd"] == str(work)
     assert json.loads((tmp_path / "out").read_text()) == {
         "verdict": "clear",
@@ -975,7 +983,7 @@ def test_zcode_answers_in_print_mode_with_its_own_config(tmpfs_judge, tmp_path):
         "yolo",
         "--disallowed-tools",
         "AskUserQuestion,EnterPlanMode,ExitPlanMode,CronList,CronUpdate,"
-        "CronCreate,CronDelete,OffPeakCreate,Skill,Agent,SendMessage,WebFetch",
+        "OffPeakList,ReplyToChannel,CronCreate,CronDelete,OffPeakCreate,Skill,Agent,SendMessage,WebFetch",
     ]
     assert call["prompt"].startswith("Review the evidence.\n\n")
     assert "JSON Schema" in call["prompt"]
@@ -1469,7 +1477,9 @@ def test_the_launch_spec_names_the_agent_user_and_protected_paths():
         spec["protected"]
     )
     assert spec["redact"] == [API_KEY]
-    assert shlex.split(spec["command"].replace("{", "").replace("}", ""))[:2] == [
+    launch = spec["command"].splitlines()[-1]
+    assert shlex.split(launch.replace("{", "").replace("}", ""))[:3] == [
+        "exec",
         "codex",
         "exec",
     ]

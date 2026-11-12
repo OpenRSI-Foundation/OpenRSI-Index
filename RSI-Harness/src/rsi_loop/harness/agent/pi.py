@@ -66,6 +66,13 @@ fs.writeFileSync(process.argv[3], JSON.stringify(config, null, 2) + '\\n');
 # no AGENTS.md or CLAUDE.md from it or its parents, and no extension, skill
 # or prompt template from anywhere, so a prompt starting with ``/`` is sent
 # as plain text.
+# pi itself has no subagents and no account tools; an extension can add
+# both (a subagent extension starts ``pi --model <any>`` processes, the MCP
+# one the servers of an account login, codemode other providers' models).
+# Work loads no extension but its own (an explicit -e still loads) and none
+# of the working directory's trust-gated files, whatever an earlier attempt
+# wrote under the agent directory or the project.
+_WORK_FLAGS = ("--no-extensions", "--no-approve")
 _ONESHOT_FLAGS = (
     "--no-session",
     "--no-approve",
@@ -210,6 +217,7 @@ class PiAgent(Agent):
             "pi",
             "--offline",
             "-p",
+            *_WORK_FLAGS,
             "-e",
             EXTENSION_PATH,
             "--provider",

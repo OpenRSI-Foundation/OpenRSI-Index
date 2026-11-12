@@ -65,13 +65,17 @@ _NO_EFFORT = "default"
 _SECRET_ROOT = "/dev/shm"
 # Tools a headless run must not reach: nobody answers questions, plan mode
 # waits for a user to leave it, and cron jobs need the desktop host. The
-# driver denies the other desktop-only tools itself.
+# driver denies the other desktop-only tools itself. Off-peak jobs and
+# channel replies belong to a Z.ai account, which a run never has. The
+# driver's list reaches the main session only, not ZCode's subagents.
 _DENIED_TOOLS = (
     "AskUserQuestion",
     "EnterPlanMode",
     "ExitPlanMode",
     "CronList",
     "CronUpdate",
+    "OffPeakList",
+    "ReplyToChannel",
 )
 _WEB_TOOLS = ("WebFetch",)
 # The desktop-host tools the driver denies in Work.
@@ -226,7 +230,11 @@ class ZCodeAgent(DrivenAgent):
         """Return the provider config without the endpoint and key.
 
         The prelude fills those in from the environment when it writes the
-        file.
+        file. The run's model is the registry's only one, so subagents and
+        workflows run on it: ZCode resolves an agent definition's ``model:``
+        against this registry and refuses any other (``model-not-found``),
+        and its account providers need a Z.ai login a run never has. ZCode
+        reloads the file live, though, and the Agent can edit it.
         """
         window, output = self.context_limits()
         return {

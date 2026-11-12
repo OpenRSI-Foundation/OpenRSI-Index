@@ -45,6 +45,7 @@ DOCKER_TESTS = (
     "tests/integration/test_driven_agents_docker.py",
     "tests/integration/test_agent_one_shot_docker.py",
     "tests/integration/test_judge_model_access_docker.py",
+    "tests/integration/test_agent_fairness_docker.py",
 )
 # Makes a Docker case that cannot run (no Docker, no cached base image) fail
 # instead of skip: pytest exits 0 when every selected case skipped, which

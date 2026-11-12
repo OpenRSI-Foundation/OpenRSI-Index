@@ -26,7 +26,12 @@ import json
 import shlex
 
 from rsi_loop.harness.agent import versions
-from rsi_loop.harness.agent.base import NODE_INSTALL_CMD, OneShotCommand, select_arch
+from rsi_loop.harness.agent.base import (
+    NODE_INSTALL_CMD,
+    OneShotCommand,
+    remove_managed_config,
+    select_arch,
+)
 from rsi_loop.harness.agent.driven import DrivenAgent, in_scratch_dir
 
 # The platform package for the image's architecture (opencode-linux-x64 or
@@ -54,6 +59,9 @@ RIPGREP_PATH = f"{_RIPGREP_DIR}/rg"
 _PROVIDER = "rsi"
 # OpenCode's own config directory, honouring XDG_CONFIG_HOME as it does.
 _CONFIG_DIR = '"${XDG_CONFIG_HOME:-$HOME/.config}/opencode"'
+# Managed config, merged after OPENCODE_CONFIG_CONTENT: it could widen the
+# whitelist or rename the model.
+_MANAGED_CONFIG = remove_managed_config("/etc/opencode")
 # Where OpenCode looks for ripgrep after PATH, so a task's own rg still wins.
 _BIN_DIR = '"${XDG_CACHE_HOME:-$HOME/.cache}/opencode/bin"'
 # OpenCode installs its plugin SDK into every writable config directory at
@@ -174,6 +182,12 @@ class OpenCodeAgent(DrivenAgent):
                 _PROVIDER: {
                     "npm": "@ai-sdk/openai-compatible",
                     "name": _PROVIDER,
+                    # The run's model is the provider's only one. A subagent
+                    # (the task tool) runs on its agent's own model or the
+                    # caller's, and an agent definition in the working
+                    # directory may name another model of this endpoint; the
+                    # whitelist removes every other model, so that call fails.
+                    "whitelist": [model],
                     "options": {
                         "baseURL": f"{{env:{self.api_base_env}}}",
                         "apiKey": f"{{env:{self.api_key_env}}}",
@@ -185,6 +199,10 @@ class OpenCodeAgent(DrivenAgent):
                     },
                     "models": {
                         model: {
+                            # The id sent to the endpoint: without it an
+                            # opencode.json in the working directory could
+                            # set another, merged into this entry.
+                            "id": model,
                             "name": model,
                             "tool_call": True,
                             "limit": {"context": window, "output": output},
@@ -202,10 +220,13 @@ class OpenCodeAgent(DrivenAgent):
                 f"Agent {self.name!r} needs a model; set RSI_AGENT_MODEL or --model"
             )
         content = json.dumps(self.config(model=model, internet=internet))
-        # OPENCODE_CONFIG_CONTENT is merged last, so an opencode.json the task
-        # ships cannot change the model, provider or permissions.
+        # OPENCODE_CONFIG_CONTENT is merged after every config but the
+        # managed one in /etc/opencode, which the launch removes, so an
+        # opencode.json the task ships cannot change the model, provider or
+        # permissions.
         return " && ".join(
             [
+                _MANAGED_CONFIG,
                 f"mkdir -p {_CONFIG_DIR}/node_modules {_BIN_DIR}",
                 f"ln -sf {RIPGREP_PATH} {_BIN_DIR}/rg",
                 f"printf '%s' {shlex.quote(_SKIP_PLUGIN_INSTALL)}"
