@@ -142,8 +142,9 @@ metadata to fill in these fields:
 - `apptainer.workspace_target`: the effective image `WORKDIR`, including an
   inherited value. The template's `/workspace` is an example.
 - `apptainer.container_python`: an actual Python 3.8+ executable in the task
-  image. Resolve it inside the built image if the Dockerfile does not settle
-  its absolute path; it is separate from the host Harness Python.
+  image. Every cluster run needs it: `rsi-box` wraps every Work process.
+  Resolve it inside the built image if the Dockerfile does not settle its
+  absolute path; it is separate from the host Harness Python.
 - `apptainer.work_binds` and `judge_binds`: actual shared host files required by
   the task's assets, with the declared container targets and phase access.
   Keep the lists empty for assets already in the image. Mount hidden Judge

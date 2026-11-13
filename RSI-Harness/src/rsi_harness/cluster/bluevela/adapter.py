@@ -1397,7 +1397,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             work_digest=f"sha256:{image.cache_key}",
             judge_digest=f"sha256:{image.cache_key}",
         )
-        # Every cluster Judge starts from the task SIF with a copy of the
+        # Every cluster Judge starts from the task SIF with a copy of Work's
         # workspace, never from Work's rootfs, whatever clean_image says:
         # record the Judge this run really uses.
         definition = definition.model_copy(

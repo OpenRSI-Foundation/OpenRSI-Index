@@ -316,9 +316,12 @@ When the effective WORKDIR is non-root, RSI Harness uses split-WORKDIR mode:
   exact effective WORKDIR;
 - Docker copies the image's existing files at that directory into the fresh
   volume on first use, so a pre-populated `/testbed` is preserved;
-- every Judge receives a read-only CoW snapshot of that volume at the same
-  path;
-- Judge writes cannot modify Work or later Judge rounds;
+- every Judge reads that volume read-only at the same path while Work is
+  paused, so it cannot write there; a Judge that needs to change files
+  copies them first, for example to `/tmp`;
+- a submission is refused, and not counted, while the WORKDIR holds a FIFO,
+  socket or device, since the Judge's code could pass data to Work through
+  it;
 - large checkpoints inside the WORKDIR are not copied into every rootfs image;
 - the Judge starts from the clean image, so what the Agent changed outside the
   WORKDIR does not reach it, unless the task sets
@@ -770,8 +773,10 @@ records `clean_image: false` next to `rootfs_snapshot_mode: "full-rootfs"`.
 On a cluster, every Judge starts from the task image with a copy of the
 workspace, whatever this field says, so the Agent's changes outside the
 workspace never reach it there and `run-plan.json` records
-`clean_image: true`. A cluster Judge also runs as the invoking user, not
-root (see [Judges that are not root](#judges-that-are-not-root)).
+`clean_image: true`. A Judge must not write into `WORKDIR`: it reads it
+read-only on Docker, with a non-root `WORKDIR`, and on a cluster. A cluster
+Judge also runs as the invoking user, not root (see
+[Judges that are not root](#judges-that-are-not-root)).
 
 ### `max_submissions`
 

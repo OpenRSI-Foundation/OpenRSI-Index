@@ -4,6 +4,7 @@ Opt in with RSI_ACCEPTANCE=1, RSI_APPTAINER_TEST_PROFILE (site TOML), and
 RSI_APPTAINER_TEST_IMAGE (SIF containing bash and the profile's Python).
 Run inside the site's CPU allocation. This tests the native evaluator and
 runtime, not image building, the model CLI, or the Engine resume command.
+The Judge reads a read-only copy; a later round links unchanged files.
 """
 
 import errno
@@ -23,6 +24,7 @@ from rsi_harness.cluster.bluevela.runtime import (
     NativeJudgeEvaluator,
 )
 from rsi_harness.cluster.config import load_cluster_profile
+from rsi_harness.cluster.snapshots import RETAINED, can_link
 from rsi_harness.errors import InfrastructureError
 from rsi_harness.models import EvaluationRequest, GPURequirement, SubmissionStatus
 from rsi_harness.runtime.artifacts import RunArtifactWriter
@@ -81,13 +83,16 @@ def native(tmp_path, monkeypatch):
     (tests / "test.sh").write_text(
         "#!/bin/bash\nset -eu\n"
         "echo judge-started\n"
+        # The Judge's copy is read-only.
+        "if mkdir /workspace/readonly 2>/dev/null; then\n"
+        "  echo judge-wrote-workspace\n"
+        "else echo judge-workspace-read-only; fi\n"
+        "echo judge > /workspace/candidate.txt 2>/dev/null || true\n"
         "case $(cat /workspace/mode) in\n"
         "  error) exit 3;;\n"
         "  timeout|interrupt) sleep 120;;\n"
         "  *) printf '0.75\\n' > /logs/verifier/reward.txt;;\n"
         "esac\n"
-        # The snapshot can have restrictive directories after a Judge.
-        "mkdir /workspace/readonly; chmod 500 /workspace/readonly\n"
     )
     (runtime.workspace / "candidate.txt").write_text("candidate-source\n")
     runtime._require_site_isolation()
@@ -137,7 +142,7 @@ class Observer:
             stream.write(json.dumps({"event": name, **values}) + "\n")
 
 
-def evaluate(runtime, writer, name, observer):
+def evaluate(runtime, writer, name, observer, evaluator=None):
     request = EvaluationRequest(
         run_plan=runtime.plan,
         work_container=runtime.work_ref,
@@ -145,20 +150,25 @@ def evaluate(runtime, writer, name, observer):
         verifier_logs=writer.root / "verifier" / name,
         verifier_output=writer.feedback_root / f"{name}.log",
     )
-    return NativeJudgeEvaluator(runtime, writer).evaluate(request, observer)
+    evaluator = evaluator or NativeJudgeEvaluator(runtime, writer)
+    return evaluator.evaluate(request, observer)
 
 
-def test_real_apptainer_releases_each_finished_round(native):
+def test_real_apptainer_keeps_one_copy_and_links_unchanged_files(native):
     runtime, writer, work = native
     # Existing interrupted evidence is not swept by a later round.
     old = runtime.rounds / "previous-attempt" / "workspace"
     old.mkdir(parents=True)
     (old / "keep").write_text("recovery evidence")
+    evaluator = NativeJudgeEvaluator(runtime, writer)
+    # Only a verified full stop on one node, off tmpfs, links unchanged files.
+    reuse = runtime.judge_copy_reuse and can_link(runtime.workspace, runtime.rounds)
+    copied = None
     for index, mode in enumerate(("success", "success", "error", "timeout")):
         name = f"agent-{index + 1}"
         (runtime.workspace / "mode").write_text(mode)
         observer = Observer(runtime, writer.root / "acceptance-events.jsonl")
-        report = evaluate(runtime, writer, name, observer)
+        report = evaluate(runtime, writer, name, observer, evaluator)
         expected = {
             "success": SubmissionStatus.COMPLETED,
             "error": SubmissionStatus.VERIFIER_ERROR,
@@ -168,16 +178,31 @@ def test_real_apptainer_releases_each_finished_round(native):
         if mode == "success":
             assert report.score == 0.75
         assert not (runtime.rounds / name).exists()
-        assert list(runtime.rounds.iterdir()) == [old.parent]
+        assert sorted(path.name for path in runtime.rounds.iterdir()) == (
+            [RETAINED, old.parent.name] if reuse else [old.parent.name]
+        )
         assert (old / "keep").read_text() == "recovery evidence"
         assert (writer.root / "submissions" / name / "report.json").is_file()
-        assert "judge-started" in (writer.feedback_root / f"{name}.log").read_text()
+        feedback = (writer.feedback_root / f"{name}.log").read_text()
+        assert "judge-started" in feedback
+        assert "judge-workspace-read-only" in feedback
         assert observer.events.index("snapshot_released") < observer.events.index(
             "work_unpaused"
         )
+        if reuse:
+            candidate = (runtime.rounds / RETAINED / "candidate.txt").stat()
+            work_candidate = (runtime.workspace / "candidate.txt").stat()
+            assert candidate.st_ino != work_candidate.st_ino
+            if copied is not None:
+                # Unchanged in Work: linked from the previous round's copy.
+                assert candidate.st_ino == copied
+            copied = candidate.st_ino
         assert not work.done()
+    evaluator.close()
+    assert not (runtime.rounds / RETAINED).exists()
     assert "work-ready" in (writer.root / "agent_output.txt").read_text()
     assert (runtime.workspace / "candidate.txt").read_text() == "candidate-source\n"
+    assert not (runtime.workspace / "readonly").exists()
 
 
 def test_real_apptainer_interruption_retains_uncommitted_snapshot(native):
@@ -207,6 +232,7 @@ def test_real_apptainer_interruption_retains_uncommitted_snapshot(native):
         work.result(timeout=20)
     assert runtime._process.poll() is not None
     assert (runtime.rounds / "agent-1/workspace/candidate.txt").is_file()
+    assert (runtime.workspace / "candidate.txt").read_text() == "candidate-source\n"
     assert "recovery_required" in observer.events
     assert "snapshot_released" not in observer.events
     assert "work_unpaused" not in observer.events
@@ -244,6 +270,7 @@ def test_real_apptainer_output_failure_requires_recovery(native, monkeypatch):
         work.result(timeout=20)
     assert runtime._process.poll() is not None
     assert (runtime.rounds / "agent-1/workspace/candidate.txt").is_file()
+    assert (runtime.workspace / "candidate.txt").read_text() == "candidate-source\n"
     assert "recovery_required" in observer.events
     assert "snapshot_released" not in observer.events
     assert "work_unpaused" not in observer.events

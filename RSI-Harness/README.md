@@ -573,10 +573,8 @@ It reads `$SCRATCH`, `$OAK` and `$GROUP_HOME`, turns on `network_isolation =
 "seccomp"`, `process_namespaces = "harness"` and a VFS Podman build with host
 network and UTS namespaces, and requests GPUs with `-G`. The Harness installs
 its static Podman in `$GROUP_HOME/rsi-harness/podman` before the first build.
-It needs python3 3.8 or later at `container_python` in the task image. Copy it
-from
-`src/rsi_harness/cluster/slurm/sherlock.toml` to add the task's data binds or
-to use the `gpu` partition.
+Copy it from `src/rsi_harness/cluster/slurm/sherlock.toml` to add the task's
+data binds or to use the `gpu` partition.
 
 For a new configuration, start from the portable example:
 
@@ -588,8 +586,10 @@ chmod 600 "$HOME/.config/rsi-harness/profiles/cluster.local.toml"
 ```
 
 Edit that copy to set your storage roots, installed Apptainer/Podman/fakeroot
-tools, and LSF queue/group. Keep only the data binds needed by the task. Profile
-values also accept `${ENV_VAR}` references; missing variables cause a setup error.
+tools, and LSF queue/group. Keep only the data binds needed by the task. Every
+cluster run needs python3 3.8 or later at `apptainer.container_python` in the
+task image: `rsi-box` wraps every Work process. Profile values also accept
+`${ENV_VAR}` references; missing variables cause a setup error.
 Files ending in `.local.toml` are ignored by Git as an additional safeguard.
 For Slurm, copy `src/rsi_harness/cluster/slurm/profile.toml` instead and set
 `scheduler.partition`, `scheduler.account` (optional), and optionally `qos` and
@@ -752,14 +752,24 @@ phases continue using their private `/tmp/.cache/huggingface` cache. Common
 `apptainer.environment` values are combined with phase environment overrides;
 use `RSI_SHARED_DATA_ROOT = "/rsi-data"` for the sample mappings.
 
-Every cluster Judge starts from the task image with a copy of the workspace,
-as a clean-image Judge does locally: nothing the Agent changed outside the
-workspace reaches it, `clean_image = false` has no effect there, and the run
-plan records `clean_image: true`.
+Every cluster Judge starts from the task image with a read-only copy of the
+workspace, as a clean-image Judge does locally: nothing the Agent changed
+outside the workspace reaches it, `clean_image = false` has no effect there,
+and the run plan records `clean_image: true`.
 
-Completed cluster Judge workspace copies are removed after scoring artifacts
-are committed and the Judge has stopped, before Work resumes. Trajectories and
-feedback remain available. See [snapshot lifecycle and failure recovery](docs/cluster-snapshot-lifecycle.md).
+Unchanged files are reused only with `process_namespaces = "harness"` on a
+single node; the default process mode, whose pause does not wait for a running
+write to end, copies the whole workspace every round. In harness mode, each
+round copies only the files that changed since the previous round and
+hard-links the rest from that round's copy, which is kept until the next round
+or the end of the run; a resumed run removes it and copies everything once. A
+file written after the pause signal is copied again next round. Multi-node runs
+and a run directory on tmpfs also copy everything and keep nothing. FIFOs,
+sockets, devices, files the Harness cannot read and directories more than 200
+levels deep are left out of the copy. A failed round's copy is kept for
+inspection.
+Trajectories and feedback remain available. See [snapshot lifecycle and failure
+recovery](docs/cluster-snapshot-lifecycle.md).
 
 Two operator-only `[apptainer]` keys serve sites whose Apptainer cannot give
 phases namespaces of their own. `network_isolation = "seccomp"` (default
@@ -773,10 +783,9 @@ environments, and runs Apptainer with `no_new_privs`, so it needs Apptainer's
 non-setuid (user namespace) mode. `process_namespaces = "harness"` (default
 `"apptainer"`) runs Work, the seed and the Judge in `rsi-box`, which gives them
 their own PID, IPC and mount namespaces inside the container; Work then cannot
-create namespaces (Chrome needs `--no-sandbox`). Both need `container_python`
-(3.8 or later) in the task image and refuse multi-node runs. A no-network Work
-submits over a Unix socket (`RSI_SUBMIT_SOCKET`), and every Judge gets
-`RSI_JUDGE_NETNS` (`private` or `shared`).
+create namespaces (Chrome needs `--no-sandbox`). Both refuse multi-node runs.
+A no-network Work submits over a Unix socket (`RSI_SUBMIT_SOCKET`), and every
+Judge gets `RSI_JUDGE_NETNS` (`private` or `shared`).
 
 Before the Agent starts, each cluster run checks Work's isolation with Work's
 own command line: the hidden tests, run and log roots, image cache and

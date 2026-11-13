@@ -18,6 +18,7 @@ from rsi_harness.cluster.bluevela.apptainer_environment import (
 from rsi_harness.cluster.bluevela.multinode import RemoteRequestControl
 from rsi_harness.cluster.bluevela.preflight import is_singularity_ce
 from rsi_harness.errors import InfrastructureError
+from rsi_harness.judge_agent import JUDGE_BOX_TARGET, judge_box_command
 
 _SIZE_FLAGS = {"--nnodes", "--nproc-per-node", "--nproc_per_node"}
 _TORCHRUN_VALUE_FLAGS = {
@@ -185,9 +186,16 @@ def build_apptainer_command(
         suffix = ":ro" if binding.read_only else ""
         command.extend(("--bind", f"{binding.source}:{binding.target}{suffix}"))
     command.extend(("--bind", f"{expected_tmp}:/tmp"))
+    command.append(str(control.worker.sif_path))
+    if control.phase == "work":
+        # Work ranks run without file watches, as Work does on its own node.
+        if not any(b.target == JUDGE_BOX_TARGET for b in control.worker.binds):
+            raise InfrastructureError("remote Work worker has no rsi-box bind")
+        command.extend(
+            judge_box_command(str(control.worker.container_python), "work-filter", [])
+        )
     command.extend(
         (
-            str(control.worker.sif_path),
             str(control.worker.container_python),
             "-m",
             "torch.distributed.run",

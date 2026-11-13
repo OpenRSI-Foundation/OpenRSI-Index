@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath
 
 import docker as docker_sdk
 import pytest
+import requests
 from docker.errors import APIError, NotFound
 from docker.types import DeviceRequest, Mount
 
@@ -2237,7 +2238,10 @@ def test_exec_returns_at_wall_clock_timeout_when_stream_blocks(tmp_path):
     assert result.timed_out is True
     assert result.exec_started is True
     container = client.containers.by_id["work"]
-    assert "stop" in container.events
+    # Work gets SIGKILL alone: a Judge round may have paused it, and docker
+    # stop would unpause it to deliver SIGTERM.
+    assert "kill:SIGKILL" in container.events
+    assert "stop" not in container.events
     assert container.attrs["State"]["Running"] is False
     assert client.api.stream_closed is True
     assert client.api.response_closed is True
@@ -2261,7 +2265,7 @@ def test_exec_timeout_contains_container_when_stream_close_raises(tmp_path):
 
     assert result.timed_out is True
     container = client.containers.by_id["work"]
-    assert "stop" in container.events
+    assert "kill:SIGKILL" in container.events
     assert container.attrs["State"]["Running"] is False
     assert client.api.response_closed is True
     assert not any(thread.name == "exec-exec-1" for thread in threading.enumerate())
@@ -2463,7 +2467,7 @@ def test_network_create_api_error_with_unproved_cleanup_is_recovery_required(
 
 def test_stop_and_remove_are_safe_repeatable_cleanup_operations(tmp_path):
     client = FakeDockerClient()
-    client.containers.by_id["work"] = FakeDockerContainer("work")
+    client.containers.by_id["work"] = FakeDockerContainer("work", pause_states=())
     runtime = make_runtime(client, tmp_path)
     ref = ContainerRef(container_id="work", role="work")
 
@@ -2471,8 +2475,60 @@ def test_stop_and_remove_are_safe_repeatable_cleanup_operations(tmp_path):
     runtime.remove(ref)
 
     container = client.containers.by_id["work"]
-    assert container.events == ["stop", "remove"]
+    assert container.events == ["reload", "stop", "remove"]
     assert container.removed_kwargs == {"force": True, "v": True}
+
+
+def test_a_paused_container_is_killed_not_unpaused_to_stop(tmp_path):
+    """docker stop unpauses a paused container to deliver SIGTERM, so its
+    processes would run during the grace; SIGKILL is pending before Docker
+    unpauses it, so nothing runs."""
+    client = FakeDockerClient()
+    client.containers.by_id["work"] = FakeDockerContainer("work", pause_states=(True,))
+    runtime = make_runtime(client, tmp_path)
+
+    runtime.stop(ContainerRef(container_id="work", role="work"))
+
+    container = client.containers.by_id["work"]
+    assert container.events == ["reload", "kill:SIGKILL"]
+    assert container.attrs["State"]["Running"] is False
+
+
+def test_killing_a_container_that_already_stopped_is_fine(tmp_path):
+    client = FakeDockerClient()
+    container = FakeDockerContainer("work", pause_states=(True,))
+    client.containers.by_id["work"] = container
+    runtime = make_runtime(client, tmp_path)
+
+    def stopped(**_kwargs):
+        response = requests.Response()
+        response.status_code = 409
+        raise APIError("container is not running", response=response)
+
+    container.kill = stopped
+    runtime.stop(ContainerRef(container_id="work", role="work"))
+
+
+@pytest.mark.parametrize("role", ["work", "judge"])
+def test_a_timed_out_exec_kills_work_and_stops_a_judge(tmp_path, role):
+    """A Judge round may pause Work at any moment while its exec runs, so a
+    timed-out Work exec ends Work with SIGKILL alone, never docker stop."""
+    client = FakeDockerClient(chunks=(b"output",), chunk_delay_seconds=0.5)
+    client.containers.by_id[role] = FakeDockerContainer(role, pause_states=())
+    runtime = make_runtime(client, tmp_path, role=role, pause_timeout_seconds=0.1)
+
+    result = runtime.exec(
+        ContainerRef(container_id=role, role=role),
+        ("blocked-command",),
+        timeout_seconds=0.01,
+    )
+
+    assert result.timed_out is True
+    events = client.containers.by_id[role].events
+    if role == "work":
+        assert "kill:SIGKILL" in events and "stop" not in events
+    else:
+        assert "stop" in events and "kill:SIGKILL" not in events
 
 
 @pytest.mark.parametrize("operation", ["stop", "remove"])

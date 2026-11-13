@@ -92,6 +92,7 @@ judge_binds = []
 build_args = []
 workspace_target = "/testbed"
 temp_root = "/scratch"
+# python3 3.8 or later in the task image: rsi-box wraps every Work process.
 container_python = "/usr/bin/python3"
 rdma_binds = []
 

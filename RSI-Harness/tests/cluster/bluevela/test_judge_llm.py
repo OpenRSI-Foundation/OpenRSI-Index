@@ -1044,6 +1044,7 @@ def test_the_refresh_happens_before_work_pauses(tmp_path):
 
     apptainer = SimpleNamespace(
         rounds=tmp_path,
+        judge_copy_reuse=False,
         pause=pause,
         renew_operator_login=lambda round_id: events.append(f"renew {round_id}"),
     )

@@ -1,7 +1,16 @@
 #!/bin/bash
 set -uo pipefail
 
-cd /testbed
+# A cluster Judge reads /testbed read-only: evaluate a copy then, since this
+# script changes it.
+TESTBED=/testbed
+if [ ! -w /testbed ]; then
+    TESTBED="${TMPDIR:-/tmp}/rsi-testbed"
+    rm -rf "$TESTBED"
+    cp -a /testbed "$TESTBED" && chmod -R u+w "$TESTBED" \
+        || { echo "cannot copy /testbed" >&2; exit 1; }
+fi
+cd "$TESTBED"
 
 # Activate the conda environment (pytest and deps live here)
 source /opt/miniconda3/bin/activate testbed
@@ -49,12 +58,12 @@ if [ -s /tmp/setup_patch.diff ]; then
 else
     # lv2: FB-aligned eval flow
     # 1. Install agent's code (non-fatal, matching FB)
-    cd /testbed && pip install . 2>&1 || true
+    cd "$TESTBED" && pip install . 2>&1 || true
     # 2. Restore original project from backup
-    rm -rf /testbed/* /testbed/.[!.]* /testbed/..?*
-    tar xzf /tmp/.hb_solution.tar.gz -C /testbed/
+    rm -rf "$TESTBED"/* "$TESTBED"/.[!.]* "$TESTBED"/..?*
+    tar xzf /tmp/.hb_solution.tar.gz -C "$TESTBED"/
     # 3. Forward apply test_patch (tests → agent_code.* imports)
-    cd /testbed && (git apply /tmp/test_patch.diff || patch --fuzz=5 -p1 -i /tmp/test_patch.diff || true)
+    cd "$TESTBED" && (git apply /tmp/test_patch.diff || patch --fuzz=5 -p1 -i /tmp/test_patch.diff || true)
 fi
 
 # Repo-specific setup commands

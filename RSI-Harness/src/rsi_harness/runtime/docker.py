@@ -90,6 +90,7 @@ from rsi_harness.runtime.network import (
 from rsi_harness.runtime.output import BoundedBytes as _BoundedBytes
 from rsi_harness.runtime.redaction import redact_exact_values, redact_text
 from rsi_harness.runtime.trajectory import TRAJECTORY_DIRECTORY
+from rsi_harness.runtime.work_seccomp import work_seccomp_option
 from rsi_harness.runtime.workdir_volume import DockerWorkdirVolumeBackend
 
 _STAGING_TARGET = PurePosixPath("/run/rsi-harness/staging")
@@ -346,6 +347,15 @@ class _RawOutputWriter:
             return
         self._directory_descriptor = -1
         os.close(descriptor)
+
+
+def _kill(docker_container: Any) -> None:
+    """SIGKILL; a container that already stopped (409) is fine."""
+    try:
+        docker_container.kill(signal="SIGKILL")
+    except APIError as error:
+        if error.status_code != 409:
+            raise
 
 
 def _close_docker_stream(stream: object) -> None:
@@ -643,9 +653,15 @@ class DockerContainerRuntime:
         }
         if spec.shm_size is not None:
             kwargs["shm_size"] = spec.shm_size
+        security_opt = []
         if spec.read_only_rootfs:
             kwargs["read_only"] = True
-            kwargs["security_opt"] = ["no-new-privileges:true"]
+            security_opt.append("no-new-privileges:true")
+        if self._role == "work":
+            # No file watches in Work: see work_seccomp.
+            security_opt.append(work_seccomp_option())
+        if security_opt:
+            kwargs["security_opt"] = security_opt
         if spec.extra_hosts:
             kwargs["extra_hosts"] = [
                 f"{hostname}:{address}" for hostname, address in spec.extra_hosts
@@ -919,8 +935,13 @@ class DockerContainerRuntime:
         if self._network_policy_enforcer is None:
             raise SetupError("container start has no authoritative policy enforcer")
         self._network_policy_enforcer.attest(lease)
+        handle = self._container(container)
+        if self._role == "work" and work_seccomp_option() not in (
+            handle.attrs.get("HostConfig", {}).get("SecurityOpt") or ()
+        ):
+            raise SetupError("Work container lacks its seccomp profile")
         try:
-            self._container(container).start()
+            handle.start()
         except APIError as error:
             raise InfrastructureError(
                 f"failed to start {self._role.title()} container: {error}"
@@ -1065,9 +1086,20 @@ class DockerContainerRuntime:
         raise InfrastructureError("Docker returned ambiguous Work quiescence")
 
     def stop(self, container: ContainerRef, *, timeout_seconds: int = 10) -> None:
-        """Stop the container: SIGTERM, then SIGKILL after the timeout."""
+        """Stop the container: SIGTERM, then SIGKILL after the timeout. A
+        paused Work gets SIGKILL alone: docker stop would unpause it to
+        deliver SIGTERM, and its processes would run again."""
         try:
-            self._container(container).stop(timeout=timeout_seconds)
+            docker_container = self._container(container)
+            if self._role == "work":
+                docker_container.reload()
+            if (
+                self._role == "work"
+                and docker_container.attrs.get("State", {}).get("Paused") is True
+            ):
+                _kill(docker_container)
+            else:
+                docker_container.stop(timeout=timeout_seconds)
         except NotFound:
             return
         except APIError as error:
@@ -1075,6 +1107,17 @@ class DockerContainerRuntime:
                 f"failed to stop {self._role.title()} container "
                 f"{container.container_id}: {error}"
             ) from error
+
+    def _halt(self, docker_container: Any) -> None:
+        """End a container whose exec timed out or lost its output. Work is
+        killed at once: a Judge round may pause it at any moment, and docker
+        stop would then unpause it to deliver SIGTERM, so Work would run
+        while the Judge reads its WORKDIR. Docker queues SIGKILL before it
+        unpauses, so Work's processes die instead of running on."""
+        if self._role == "work":
+            _kill(docker_container)
+        else:
+            docker_container.stop(timeout=1)
 
     def is_stopped_or_gone(self, container: ContainerRef) -> bool:
         """Authoritatively prove a container is no longer executing."""
@@ -1503,7 +1546,7 @@ class DockerContainerRuntime:
             # daemon-side containment, also when the controller is on macOS.
             try:
                 failed_container = self._container(container)
-                failed_container.stop(timeout=1)
+                self._halt(failed_container)
                 end = time.monotonic() + self._pause_timeout_seconds
                 while True:
                     failed_container.reload()
@@ -1535,7 +1578,7 @@ class DockerContainerRuntime:
         elif timed_out:
             try:
                 docker_container = self._container(container)
-                docker_container.stop(timeout=1)
+                self._halt(docker_container)
             except APIError as error:
                 abort_output_drain()
                 raise InfrastructureError(

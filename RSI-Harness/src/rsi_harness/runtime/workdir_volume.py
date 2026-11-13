@@ -9,6 +9,7 @@ from pathlib import PurePosixPath
 from typing import Any
 
 from docker.errors import NotFound
+from docker.types import Mount
 from pydantic import ValidationError
 
 from rsi_harness.errors import InfrastructureError, SetupError
@@ -17,6 +18,12 @@ from rsi_harness.models import (
     ManagedWorkdirVolume,
     RootfsSnapshotMode,
 )
+from rsi_harness.runtime.gpu import (
+    NVIDIA_VISIBLE_DEVICES_ENV,
+    NVIDIA_VISIBLE_DEVICES_VOID,
+)
+from rsi_harness.runtime.image_authority import is_immutable_image_ref
+from rsi_harness.runtime.special_files import SPECIAL_FILE_LIMIT
 
 _ROLE = "workdir-volume"
 _PREFIX = "rsi-harness-workdir-"
@@ -26,6 +33,13 @@ _ROLE_LABEL = "rsi-harness.role"
 _SNAPSHOT_MODE_LABEL = "rsi-harness.snapshot-mode"
 _TARGET_LABEL = "rsi-harness.workdir-target"
 _FRESHNESS_LABEL = "rsi-harness.freshness-nonce"
+_SCAN_ROOT = "/run/rsi-harness-scan"
+# Print at most RSI_SCAN_LIMIT FIFOs, sockets and devices; a walk that fails
+# (an unreadable directory, no find) prints RSI_SCAN_FAILED.
+_SCAN_SCRIPT = """\
+{ find "$RSI_SCAN_ROOT" -xdev \\( -type p -o -type s -o -type c -o -type b \\) \\
+    -print || echo "$RSI_SCAN_FAILED"; } | head -n "$RSI_SCAN_LIMIT"
+"""
 
 
 def _digest(*values: str) -> str:
@@ -269,6 +283,74 @@ class DockerWorkdirVolumeBackend:
             self._require_absent_after_removal(expected, error)
             return
         self._require_absent_after_removal(expected, None)
+
+    def special_files(
+        self, volume: ManagedWorkdirVolume, image: str
+    ) -> list[tuple[PurePosixPath, str]]:
+        """Up to SPECIAL_FILE_LIMIT FIFOs, sockets and devices in the volume,
+        as paths below its root (special_files.py says why). ``image`` is the
+        clean Work image, which the Agent cannot change: a helper from it
+        walks the volume read-only, with no network, as root that may read
+        every directory but write none."""
+        expected = self._canonical(volume)
+        if not is_immutable_image_ref(image):
+            raise InfrastructureError("special-file check needs an immutable image")
+        failed = f"rsi-scan-failed-{secrets.token_hex(8)}"
+        try:
+            output = self._client.containers.run(
+                image,
+                [_SCAN_SCRIPT],
+                name=f"{expected.name}-scan-{secrets.token_hex(4)}",
+                entrypoint=["/bin/sh", "-c"],
+                user="root",
+                working_dir="/",
+                environment={
+                    NVIDIA_VISIBLE_DEVICES_ENV: NVIDIA_VISIBLE_DEVICES_VOID,
+                    "RSI_SCAN_ROOT": _SCAN_ROOT,
+                    "RSI_SCAN_LIMIT": str(SPECIAL_FILE_LIMIT),
+                    "RSI_SCAN_FAILED": failed,
+                },
+                mounts=[
+                    Mount(
+                        target=_SCAN_ROOT,
+                        source=expected.name,
+                        type="volume",
+                        read_only=True,
+                        no_copy=True,
+                    )
+                ],
+                network_mode="none",
+                privileged=False,
+                cap_drop=["ALL"],
+                cap_add=["DAC_READ_SEARCH"],
+                labels={
+                    _RUN_LABEL: expected.run_id,
+                    _TASK_LABEL: expected.task_id,
+                    _ROLE_LABEL: "helper",
+                },
+                remove=True,
+            )
+        except Exception as error:
+            raise InfrastructureError(
+                f"WORKDIR special-file check failed: {error}"
+            ) from error
+        lines = [
+            line
+            for line in bytes(output or b"").decode(errors="replace").splitlines()
+            if line
+        ]
+        if failed in lines:
+            raise InfrastructureError("WORKDIR special-file check could not finish")
+        prefix = f"{_SCAN_ROOT}/"
+        return [
+            (
+                PurePosixPath(line.removeprefix(prefix))
+                if line.startswith(prefix)
+                else PurePosixPath(repr(line)),
+                "FIFO, socket or device",
+            )
+            for line in lines
+        ]
 
     def _require_fresh_absence(self, expected: ManagedWorkdirVolume) -> None:
         try:

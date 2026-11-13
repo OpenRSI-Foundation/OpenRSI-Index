@@ -601,3 +601,102 @@ def test_real_docker_rejects_unexpected_helper_volume_reference() -> None:
         if volume is not None:
             backend.remove(volume)
     _assert_real_volume_absent(client, planned.name)
+
+
+def _scan_volume() -> ManagedWorkdirVolume:
+    backend = DockerWorkdirVolumeBackend(FakeClient(), nonce_factory=lambda: "f" * 64)
+    return backend.plan(
+        run_id="run-1", task_id="task-1", target=PurePosixPath("/workspace")
+    )
+
+
+def test_special_file_check_walks_the_volume_read_only_from_the_clean_image() -> None:
+    client = FakeClient()
+    runs = []
+
+    def run(image, command, **options):
+        runs.append((image, command, options))
+        return b"/run/rsi-harness-scan/src/pipe\n/run/rsi-harness-scan/control.sock\n"
+
+    client.containers = type("Containers", (), {"run": staticmethod(run)})()
+    volume = _scan_volume()
+    image = "sha256:" + "a" * 64
+
+    found = DockerWorkdirVolumeBackend(client).special_files(volume, image)
+
+    assert found == [
+        (PurePosixPath("src/pipe"), "FIFO, socket or device"),
+        (PurePosixPath("control.sock"), "FIFO, socket or device"),
+    ]
+    [(used, _command, options)] = runs
+    assert used == image
+    [mount] = options["mounts"]
+    assert mount["Source"] == volume.name and mount["ReadOnly"] is True
+    assert options["network_mode"] == "none"
+    assert options["cap_drop"] == ["ALL"] and options["cap_add"] == ["DAC_READ_SEARCH"]
+    assert options["labels"]["rsi-harness.role"] == "helper"
+    assert options["remove"] is True
+    assert options["environment"]["RSI_SCAN_LIMIT"] == "5"
+
+
+@pytest.mark.parametrize("outcome", ["unfinished", "error", "mutable-image"])
+def test_special_file_check_fails_closed(outcome) -> None:
+    client = FakeClient()
+
+    def run(_image, _command, **options):
+        if outcome == "error":
+            raise APIError("no such image")
+        return f"{options['environment']['RSI_SCAN_FAILED']}\n".encode()
+
+    client.containers = type("Containers", (), {"run": staticmethod(run)})()
+    image = "task:latest" if outcome == "mutable-image" else "sha256:" + "a" * 64
+
+    with pytest.raises(InfrastructureError, match="special-file check"):
+        DockerWorkdirVolumeBackend(client).special_files(_scan_volume(), image)
+
+
+@pytest.mark.integration
+def test_real_docker_special_file_check_finds_fifos_and_devices() -> None:
+    client = _real_docker_client()
+    image = None
+    for candidate in ("alpine:latest", "alpine:3.21", "busybox:latest"):
+        try:
+            image = client.images.get(candidate).id
+            break
+        except Exception:
+            continue
+    if image is None:
+        pytest.skip("no cached Alpine or BusyBox image")
+    suffix = uuid4().hex
+    backend = DockerWorkdirVolumeBackend(client)
+    planned = backend.plan(
+        run_id=f"special-real-{suffix}",
+        task_id="task",
+        target=PurePosixPath("/workspace"),
+    )
+    volume = None
+    try:
+        volume = backend.create(planned)
+        script = (
+            "set -e; cd /w; echo x > file; mkdir -p sub/deep; "
+            "mkfifo sub/deep/pipe; mknod null c 1 3; ln -s /dev/null link"
+        )
+        client.containers.run(
+            image,
+            ["/bin/sh", "-c", script],
+            name=f"rsi-special-real-{suffix}",
+            volumes={planned.name: {"bind": "/w", "mode": "rw"}},
+            network_mode="none",
+            remove=True,
+        )
+
+        found = backend.special_files(volume, image)
+
+        assert sorted(path for path, _kind in found) == [
+            PurePosixPath("null"),
+            PurePosixPath("sub/deep/pipe"),
+        ]
+    finally:
+        if volume is not None:
+            backend.remove(volume)
+    _assert_real_volume_absent(client, planned.name)

@@ -368,6 +368,7 @@ class _Apptainer:
         self.rounds = root / "rounds"
         self.rounds.mkdir()
         self.payload = SimpleNamespace(run_id="run-1")
+        self.judge_copy_reuse = True
         self.events: list[str] = []
         self.kit = kit
         self.work_env = work_env

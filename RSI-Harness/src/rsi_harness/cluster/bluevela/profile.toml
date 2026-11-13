@@ -65,6 +65,7 @@ build_args = ["--fakeroot"]
 # portable profile may override this without changing the adapter code.
 workspace_target = "/testbed"
 temp_root = "/tmp"
+# python3 3.8 or later in the task image: rsi-box wraps every Work process.
 container_python = "/opt/venv/bin/python"
 rdma_binds = ["/dev/infiniband", "/sys/class/infiniband"]
 

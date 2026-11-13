@@ -2102,6 +2102,7 @@ class _ProductionRunComposition:
             lifecycle_observer=observer,
             verifier_secret_env=self.verifier_secret_env,
             event_callback=self.event_callback,
+            special_file_check=self.workdir_volumes.special_files,
             **(
                 {"model_access": self.judge_model_access}
                 if self.judge_model_access is not None

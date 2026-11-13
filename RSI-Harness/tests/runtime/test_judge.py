@@ -195,6 +195,7 @@ def make_harness(tmp_path: Path, *, event_callback=None, clean_image=False):
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(plan),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -450,6 +451,7 @@ def test_judge_rejects_mode_inconsistent_workdir_volume_before_pause(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=volume,
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -479,6 +481,7 @@ def test_full_rootfs_judge_emits_no_workdir_volume_mount(tmp_path):
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=None,
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -551,6 +554,7 @@ def test_required_report_write_failure_retains_isolation_and_closes_service(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -604,6 +608,7 @@ def test_partial_verifier_output_is_not_published_or_allowed_to_release_isolatio
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(plan),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -649,6 +654,7 @@ def test_pre_exec_failure_publishes_empty_feedback_and_releases_isolation(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(plan),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -714,6 +720,7 @@ def test_retryable_release_rejection_does_not_invoke_report_writer_or_close_subm
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -902,6 +909,7 @@ def test_retryable_gpu_release_recovery_observer_failure_stays_infrastructure(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(plan),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -960,6 +968,7 @@ def test_verifier_templates_resolve_from_runtime_only_source_before_create(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1007,6 +1016,7 @@ def test_resolved_verifier_secret_is_exact_redacted_from_runtime_errors(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1050,6 +1060,7 @@ def test_missing_verifier_template_is_typed_and_never_creates_judge(tmp_path) ->
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1094,6 +1105,7 @@ def test_engine_expected_gpu_env_overrides_unresolvable_task_template(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1131,6 +1143,7 @@ def test_harbor_template_name_with_hyphen_resolves_at_runtime(tmp_path) -> None:
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1196,6 +1209,7 @@ def test_lifecycle_observer_sees_plans_before_mutations_and_actual_ids_after(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1252,6 +1266,7 @@ def test_snapshot_actual_authority_persistence_failure_retains_exact_snapshot_an
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1295,6 +1310,7 @@ def test_proven_snapshot_acquire_failure_cancels_plan_before_work_resume(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1338,6 +1354,7 @@ def test_snapshot_plan_cancel_persistence_failure_retains_work_pause(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1367,6 +1384,7 @@ def test_ambiguous_snapshot_acquire_retains_plan_and_work_pause(tmp_path) -> Non
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1398,6 +1416,7 @@ def test_state_transition_error_cleans_judge_then_escapes_as_engine_bug(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1510,6 +1529,7 @@ def test_uncontained_recovery_identifiers_are_durable_before_return(tmp_path):
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1559,6 +1579,7 @@ def test_unpause_mutates_then_raises_repauses_work_before_recovery(tmp_path):
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1601,6 +1622,7 @@ def test_unpause_observer_failure_repauses_work_and_persists_factual_state(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -1646,6 +1668,7 @@ def test_ambiguous_repause_attestation_never_records_false_paused_authority(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
@@ -2184,6 +2207,7 @@ def test_network_rollback_observer_failure_retains_snapshot_and_work_pause(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=work_runtime,
         judge_runtime_factory=factory,
         snapshot_backend=snapshot,
@@ -2247,6 +2271,7 @@ def test_network_created_observer_and_rollback_failure_retains_snapshot_and_paus
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=work_runtime,
         judge_runtime_factory=factory,
         snapshot_backend=snapshot,
@@ -2320,6 +2345,7 @@ def test_post_network_runtime_construction_and_rollback_failure_retains_isolatio
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=work_runtime,
         judge_runtime_factory=factory,
         snapshot_backend=snapshot,
@@ -2527,6 +2553,7 @@ def test_policy_install_failure_with_unproved_remove_closes_submission_recovery(
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=work_runtime,
         judge_runtime_factory=factory,
         snapshot_backend=snapshot,
@@ -2613,6 +2640,7 @@ def test_partial_policy_install_rollback_failure_retains_round_and_closes_submit
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=work_runtime,
         judge_runtime_factory=factory,
         snapshot_backend=snapshot,
@@ -2873,3 +2901,125 @@ def test_other_rounds_never_skip_the_pause(tmp_path):
     assert ("inspect_quiescence", "work-1") not in runtime.events[
         : names.index("pause")
     ]
+
+
+def _special_file_runner(tmp_path, check):
+    _runner, runtime, snapshot, artifacts, request = make_harness(tmp_path)
+    runner = JudgeRunner(
+        run_id="run-1",
+        workdir_volume=managed_workdir_volume(request[0]),
+        special_file_check=check,
+        work_runtime=runtime,
+        judge_runtime_factory=runtime.for_round,
+        snapshot_backend=snapshot,
+        artifact_writer=artifacts,
+        quiescence_checker=runtime.assert_gpu_quiet,
+    )
+    return runner, runtime, snapshot, artifacts, request
+
+
+def test_special_files_in_the_paused_workdir_refuse_the_round_uncounted(tmp_path):
+    """A read-only mount stops no FIFO, socket or device: the Judge's code
+    could pass the hidden tests through one to Work, which resumes. The
+    round is refused while Work is paused, without using the one round."""
+    checks = []
+
+    def check(volume, image):
+        checks.append((volume, image, runtime.work_paused))
+        if len(checks) == 1:
+            return [(PurePosixPath("src/pipe"), "FIFO, socket or device")]
+        return []
+
+    runner, runtime, snapshot, artifacts, request = _special_file_runner(
+        tmp_path, check
+    )
+    plan, work, _logs = request
+    service = SubmissionService(
+        evaluator=runner, artifact_writer=FakeArtifactWriter(), clock=FakeClock()
+    )
+    token = service.register(
+        run_id="run-1", run_plan=plan, work_container=work, max_submissions=1
+    )
+
+    with pytest.raises(RetryableSubmissionError) as refused:
+        service.submit(token)
+
+    assert f"{plan.workdir}/src/pipe" in str(refused.value)
+    assert "not counted" in str(refused.value)
+    assert checks == [(managed_workdir_volume(plan), plan.images.work_digest, True)]
+    assert runtime.events == [("pause", "work-1"), ("unpause", "work-1")]
+    assert snapshot.acquired == [] and artifacts.reports == []
+    assert runner.recovery_required is False and runner.submission_closed is False
+    assert service.session_state.rounds_allocated == 0
+    # Once the files are gone, the run's one round is still there.
+    assert "round: agent-1" in service.submit(token)
+    assert service.session_state.rounds_allocated == 1
+
+
+def _final_request(request):
+    from rsi_harness.models import EvaluationRequest
+
+    plan, work, log_dir = request
+    return EvaluationRequest(
+        run_plan=plan,
+        work_container=work,
+        round_id="agent-1",
+        verifier_logs=log_dir / "agent-1",
+        verifier_output=(
+            plan.paths.logs / "runs" / "run-1" / plan.task.task_id / "feedback"
+        )
+        / "agent-1.log",
+        final=True,
+    )
+
+
+def test_a_final_round_with_work_paused_is_checked_too(tmp_path):
+    """Work is unpaused after a final round too, and a resumed attempt keeps
+    the WORKDIR: the round is refused while Work is paused."""
+    checks = []
+
+    def check(_volume, _image):
+        checks.append(runtime.work_paused)
+        return [(PurePosixPath("pipe"), "FIFO, socket or device")]
+
+    runner, runtime, snapshot, artifacts, request = _special_file_runner(
+        tmp_path, check
+    )
+
+    with pytest.raises(RetryableSubmissionError, match="pipe"):
+        runner.evaluate(_final_request(request))
+
+    assert checks == [True]
+    assert ("unpause", "work-1") in runtime.events
+    assert snapshot.acquired == [] and artifacts.reports == []
+
+
+def test_a_final_round_with_work_stopped_needs_no_check(tmp_path):
+    """Work stopped when the Agent's time ended: no live process holds an end
+    of any FIFO or socket, and Work is not unpaused."""
+
+    def check(_volume, _image):
+        raise AssertionError("stopped Work is not checked")
+
+    runner, runtime, _snapshot, _artifacts, request = _special_file_runner(
+        tmp_path, check
+    )
+    _stopped(runtime)
+
+    report = runner.evaluate(_final_request(request))
+
+    assert report.status is SubmissionStatus.COMPLETED
+    assert ("pause", "work-1") not in runtime.events
+
+
+def test_a_split_workdir_round_without_a_special_file_check_fails_closed(tmp_path):
+    runner, runtime, snapshot, _artifacts, request = _special_file_runner(
+        tmp_path, None
+    )
+
+    report = evaluate(runner, request)
+
+    assert report.status is SubmissionStatus.INFRASTRUCTURE_ERROR
+    assert "special-file check is unavailable" in (report.error or "")
+    assert snapshot.acquired == []
+    assert runtime.work_paused is False

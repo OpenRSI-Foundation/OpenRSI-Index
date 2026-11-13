@@ -119,10 +119,11 @@ def install_judge_box(run_root: Path, *, owner: tuple[int, int] | None = None) -
 def judge_box_command(
     python: str, layer: str, argv: list[str], *, no_unix: bool = False
 ) -> list[str]:
-    """``argv`` in the box: ``layer`` is "work" (no new namespaces or mounts)
-    or "judge" (no keyrings; with ``no_unix``, no AF_UNIX sockets either).
-    Exit status 125 when the box cannot be set up."""
-    if layer not in ("work", "judge") or (no_unix and layer != "judge"):
+    """``argv`` in the box: ``layer`` is "work" (no new namespaces, mounts
+    or file watches), "judge" (no keyrings; with ``no_unix``, no AF_UNIX
+    sockets either) or "work-filter" (no file watches, no box). Exit status
+    125 when the box cannot be set up."""
+    if layer not in ("work", "judge", "work-filter") or (no_unix and layer != "judge"):
         raise ValueError(f"no rsi-box layer {layer!r} (no_unix={no_unix})")
     command = [python, "-I", "-S", "-B", str(JUDGE_BOX_TARGET), f"--{layer}"]
     return command + (["--no-unix"] if no_unix else []) + ["--", *argv]

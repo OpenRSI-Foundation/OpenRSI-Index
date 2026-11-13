@@ -36,9 +36,9 @@ class NamespaceContainers(FakeDockerContainers):
     def create(self, image, command, **kwargs):
         container = super().create(image, command, **kwargs)
         container.attrs["State"]["Running"] = False
-        container.attrs["HostConfig"] = {
-            "NetworkMode": kwargs.get("network_mode") or kwargs.get("network")
-        }
+        container.attrs["HostConfig"]["NetworkMode"] = kwargs.get(
+            "network_mode"
+        ) or kwargs.get("network")
         name = kwargs.get("network")
         attached = {}
         if name is not None:

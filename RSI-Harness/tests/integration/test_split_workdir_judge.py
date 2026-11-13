@@ -10,6 +10,7 @@ import docker as docker_sdk
 import pytest
 from docker.errors import DockerException
 
+from rsi_harness.errors import RetryableSubmissionError
 from rsi_harness.models import (
     CompileOptions,
     ContainerSpec,
@@ -285,6 +286,7 @@ def test_split_workdir_gpu_preserves_rw_work_and_ro_judges_without_rootfs_copy(
         runner = JudgeRunner(
             run_id=run_id,
             workdir_volume=volume,
+            special_file_check=volume_backend.special_files,
             work_runtime=work_runtime,
             judge_runtime_factory=_SpecRecordingJudgeFactory(
                 judge_factory, observer=observer
@@ -348,6 +350,24 @@ def test_split_workdir_gpu_preserves_rw_work_and_ro_judges_without_rootfs_copy(
                     ]
                 )
                 assert update.exit_code == 0
+                # A FIFO Work holds open would carry what the Judge's code
+                # writes back to Work: the round is refused, Work resumes.
+                assert work.exec_run(["mkfifo", "/workspace/channel"]).exit_code == 0
+                with pytest.raises(
+                    RetryableSubmissionError, match="/workspace/channel"
+                ):
+                    runner.evaluate(
+                        EvaluationRequest(
+                            run_plan=round_plan,
+                            work_container=work_ref,
+                            round_id="agent-2",
+                            verifier_logs=plan.paths.logs / "verifier" / "agent-2",
+                            verifier_output=artifacts.feedback_root / "agent-2.log",
+                        )
+                    )
+                work.reload()
+                assert work.attrs["State"]["Paused"] is False
+                assert work.exec_run(["rm", "/workspace/channel"]).exit_code == 0
 
         assert len(reports) == 2
         work.reload()

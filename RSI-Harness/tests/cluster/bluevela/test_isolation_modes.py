@@ -25,6 +25,7 @@ from rsi_harness.cluster.bluevela.runtime import (
 from rsi_harness.cluster.config import load_cluster_profile
 from rsi_harness.cluster.slurm.adapter import SlurmClusterAdapter
 from rsi_harness.errors import InfrastructureError, SetupError
+from rsi_harness.judge_agent import judge_isolation
 from rsi_harness.models import AgentRunResult, ContainerRef, EvaluationRequest
 from tests.cluster.bluevela.test_runtime import (
     _codex_runtime,
@@ -97,6 +98,7 @@ def _record_execs(runtime, tmp_path, monkeypatch):
 
 
 def test_the_default_profile_keeps_every_argv(tmp_path, monkeypatch) -> None:
+    """But Work's execs run under rsi-box's filter, without file watches."""
     runtime = _runtime(tmp_path, monkeypatch)
     (seed, _), (assets, _), (work, work_env), (judge, judge_env) = _record_execs(
         runtime, tmp_path, monkeypatch
@@ -119,6 +121,9 @@ def test_the_default_profile_keeps_every_argv(tmp_path, monkeypatch) -> None:
     )
     sif = str(tmp_path / "task.sif")
     tmp = ("--bind", f"{runtime.work_tmp}:/tmp")
+    box = ("--bind", f"{runtime.control / 'rsi-box/judge_isolation.py'}")
+    box = (box[0], box[1] + ":/usr/local/bin/rsi-box:ro")
+    unwatched = (*BOX, "--work-filter", "--")
     assert seed[:-3] == (
         *head,
         "hostfs",
@@ -126,18 +131,22 @@ def test_the_default_profile_keeps_every_argv(tmp_path, monkeypatch) -> None:
         *dns,
         "--bind",
         f"{runtime.workspace}:/run/rsi-harness/seed",
+        *box,
         *tmp,
         "--bind",
         f"{runtime.agent_home}:/home/agent",
         *work_binds,
         sif,
+        *unwatched,
     )
     assert assets[: len(head) + 1] == (*head, "hostfs,tmp")
+    assert assets[assets.index(sif) + 1 :][:7] == unwatched
     assert work == (
         *head,
         "hostfs",
         *cwd,
         *dns,
+        *box,
         *tmp,
         "--bind",
         f"{runtime.workspace}:/workspace",
@@ -147,6 +156,7 @@ def test_the_default_profile_keeps_every_argv(tmp_path, monkeypatch) -> None:
         f"{runtime.agent_home}:/home/agent",
         *work_binds,
         sif,
+        *unwatched,
         "codex",
         "exec",
     )
@@ -160,7 +170,7 @@ def test_the_default_profile_keeps_every_argv(tmp_path, monkeypatch) -> None:
         "/bin/bash",
         "/tests/test.sh",
     )
-    assert not any("rsi-box" in argument for argument in (*seed, *work, *judge))
+    assert not any("rsi-box" in argument for argument in judge)
     assert "APPTAINERENV_RSI_SUBMIT_SOCKET" not in work_env
     # A no-network Judge has its own network namespace, whatever the task says.
     assert judge_env["APPTAINERENV_RSI_JUDGE_NETNS"] == "private"
@@ -218,7 +228,7 @@ def test_seccomp_mode_boxes_only_a_no_network_judge_without_unix_sockets(
 ) -> None:
     runtime = _runtime(tmp_path, monkeypatch, network_isolation="seccomp")
 
-    assert runtime._box_layer("work", "no-network") is None
+    assert runtime._box_layer("work", "no-network") == [*BOX, "--work-filter", "--"]
     assert runtime._box_layer("judge", "public") is None
     assert runtime._box_layer("judge", "no-network") == [
         *BOX,
@@ -406,20 +416,75 @@ def test_box_modes_need_python_and_a_working_box(tmp_path, monkeypatch):
 
     (tmp_path / "s").mkdir()
     seccomp = _runtime(tmp_path / "s", monkeypatch, network_isolation="seccomp")
-    calls = _scripted(seccomp, monkeypatch, _ok("Seccomp:\t2\n"), _ok(), _ok())
+    calls = _scripted(seccomp, monkeypatch, _ok("Seccomp:\t2\n"), _ok(), _ok(), _ok())
     seccomp._require_site_isolation()
     assert [options.get("box") for _command, options in calls] == [
         None,
         None,
+        "work",
         "judge",
     ]
 
 
-def test_the_default_profile_runs_no_site_checks(tmp_path, monkeypatch):
+def test_the_default_profile_checks_only_work_s_filter(tmp_path, monkeypatch):
     runtime = _runtime(tmp_path, monkeypatch)
-    _scripted(runtime, monkeypatch)
+    calls = _scripted(runtime, monkeypatch, _ok(), _ok())
 
     runtime._require_site_isolation()
+
+    assert [options.get("box") for _command, options in calls] == [None, "work"]
+    failed = AgentRunResult(exit_code=125, output="rsi-box: seccomp: Invalid\n")
+    _scripted(runtime, monkeypatch, _ok(), failed)
+    with pytest.raises(InfrastructureError, match=r"cannot run on this node \(rsi"):
+        runtime._require_site_isolation()
+
+
+@pytest.mark.parametrize("agent", ["public", "no-network"])
+def test_work_s_filter_is_checked_with_work_s_network(tmp_path, monkeypatch, agent):
+    """Default mode: a public Work's checks need no network namespace."""
+    runtime = _runtime(tmp_path, monkeypatch)
+    runtime.plan = _with_networks(runtime.plan, agent=agent, verifier="public")
+    calls = _scripted(runtime, monkeypatch, _ok(), _ok())
+
+    runtime._require_site_isolation()
+
+    assert [(options.get("box"), options["network_mode"]) for _, options in calls] == [
+        (None, agent),
+        ("work", agent),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("apptainer", "checks"),
+    [
+        (
+            {"process_namespaces": "harness"},
+            [(None, "no-network"), ("work", "no-network")],
+        ),
+        (
+            {"network_isolation": "seccomp"},
+            [
+                (None, "no-network"),
+                (None, "no-network"),
+                ("work", "public"),
+                ("judge", "no-network"),
+            ],
+        ),
+    ],
+)
+def test_the_harness_box_and_a_seccomp_judge_are_checked_without_network(
+    tmp_path, monkeypatch, apptainer, checks
+):
+    runtime = _runtime(tmp_path, monkeypatch, **apptainer)
+    runtime.plan = _with_networks(runtime.plan, agent="public", verifier="public")
+    seccomp = [_ok("Seccomp:\t2\n")] if "network_isolation" in apptainer else []
+    calls = _scripted(runtime, monkeypatch, *seccomp, *([_ok()] * len(checks)))
+
+    runtime._require_site_isolation()
+
+    assert [
+        (options.get("box"), options["network_mode"]) for _, options in calls
+    ] == checks
 
 
 @pytest.mark.parametrize(
@@ -639,7 +704,8 @@ def test_a_box_that_does_not_stop_its_processes_fails_the_pause(tmp_path, monkey
         _end(process, workers)
 
 
-def _probe(*lines, end=True):
+def _probe(*lines, end=True, watch=True):
+    lines = (*lines, *(["watch denied"] if watch else []))
     return "\n".join((*lines, *(["isolation probe end"] if end else []))) + "\n"
 
 
@@ -679,6 +745,8 @@ def _report(output, **options):
             "Work mounts /scratch/runs at /data",
         ),
         (_probe("seccomp 0"), {"boxed": True}, "box has no filter"),
+        (_probe(watch=False), {}, "Work can watch files"),
+        (_probe("watch open", watch=False), {}, "Work can watch files"),
         (
             _probe("seccomp 2", "inet open"),
             {"network_isolation": "seccomp", "network_mode": "no-network"},
@@ -741,7 +809,7 @@ def test_initialize_fails_closed_before_the_agent_and_records_why(
         calls.append(tuple(command))
         if command[:2] == ("/bin/sh", "-c"):
             hidden = str(runtime.plan.task.source_dir)
-            return _ok(_probe(f"visible {hidden}", "engine signal"))
+            return _ok(_probe(f"visible {hidden}", "engine signal", "seccomp 2"))
         return _ok("0.149.0\n")
 
     monkeypatch.setattr(runtime, "_run", fake_run)
@@ -826,7 +894,7 @@ def test_the_isolation_check_probes_neither_home_nor_site_bind_paths(
     def fake_run(command, **_options):
         # The task image has its own /usr/local/cuda.
         seen = [f"visible {path}" for path in command[7:] if path == site]
-        return _ok(_probe(*seen, "interface lo"))
+        return _ok(_probe(*seen, "interface lo", "seccomp 2"))
 
     monkeypatch.setattr(runtime_module, "isolation_report", report)
     monkeypatch.setattr(runtime, "_run", fake_run)
@@ -855,7 +923,7 @@ def test_the_isolation_check_asks_for_its_own_key_then_unlinks_it(
 
     def fake_run(command, **_options):
         probes.append((command, list(calls)))
-        return _ok(_probe("interface lo", "keyring shared"))
+        return _ok(_probe("interface lo", "keyring shared", "seccomp 2"))
 
     monkeypatch.setattr(runtime_module, "_keyring_call", keyring)
     monkeypatch.setattr(runtime, "_run", fake_run)
@@ -980,7 +1048,7 @@ def test_the_probe_reports_what_this_host_shows(tmp_path):
     assert [line for line in lines if line.startswith("visible ")] == [
         f"visible {full}"
     ]
-    assert {"engine signal", "engine proc", "inet open"} <= set(lines)
+    assert {"engine signal", "engine proc", "inet open", "watch open"} <= set(lines)
     # This process's own keyring: the key, then after the unlink none.
     assert "keyring shared" in lines and "keyring private" in gone
     assert "interface lo" in lines
@@ -990,6 +1058,22 @@ def test_the_probe_reports_what_this_host_shows(tmp_path):
     report = _report(result.stdout, host_mountinfo=None)
     assert report["passed"] is False
     assert any(f"Work sees {full}" == item for item in report["failures"])
+
+
+@pytest.mark.skipif(
+    os.uname().machine not in ("x86_64", "aarch64"), reason="no watch filter here"
+)
+def test_the_probe_finds_watches_and_leases_denied_under_work_s_filter():
+    box = [sys.executable, "-I", "-S", "-B", judge_isolation.__file__]
+    probe = ["/bin/sh", "-c", runtime_module._ISOLATION_PROBE, "probe"]
+    probe += [runtime_module.engine_identity(), sys.executable, ""]
+    lines = subprocess.run(
+        [*box, "--work-filter", "--", *probe],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    assert "watch denied" in lines and "watch open" not in lines
 
 
 def test_a_process_reusing_the_engine_pid_is_not_the_engine():
@@ -1015,3 +1099,26 @@ def test_initialize_proves_the_box_before_any_task_code(tmp_path, monkeypatch):
 
     # The python check failed: no seed, no Agent.
     assert [command[0] for command, _options in calls] == ["/opt/venv/bin/python"]
+
+
+@pytest.mark.parametrize("mode", ["apptainer", "harness"])
+def test_the_judge_binds_its_copy_read_only_and_never_works_workspace(
+    tmp_path, monkeypatch, mode
+) -> None:
+    """In both modes: a stopped Work can be continued, so the Judge never
+    reads Work's own files, and its copy is read-only so the next round can
+    link unchanged files from it."""
+    runtime = _runtime(tmp_path, monkeypatch, process_namespaces=mode)
+    monkeypatch.setattr(_RecordingPopen, "calls", [])
+    monkeypatch.setattr(subprocess, "Popen", _RecordingPopen)
+    copy, request = _judge_request(runtime, tmp_path)
+    runtime.workspace.mkdir(parents=True, exist_ok=True)
+
+    runtime.run_judge(copy, request, {"RSI_JUDGE_NETNS": "private"})
+
+    (judge, _env) = _RecordingPopen.calls[-1]
+    assert f"{copy}:{runtime.plan.workdir}:ro" in judge
+    assert f"{copy}:{runtime.plan.workdir}" not in judge
+    with pytest.raises(InfrastructureError, match="copy"):
+        runtime.run_judge(runtime.workspace, request, {})
+    assert len(_RecordingPopen.calls) == 1

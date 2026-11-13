@@ -64,7 +64,11 @@ from rsi_harness.cluster.bluevela.preflight import (
     singularity_ce_conflict,
 )
 from rsi_harness.cluster.bluevela.sandbox import ClusterSandbox
-from rsi_harness.cluster.snapshots import DirectorySnapshot
+from rsi_harness.cluster.snapshots import (
+    DirectorySnapshot,
+    JudgeSnapshots,
+    remove_retained,
+)
 from rsi_harness.errors import (
     InfrastructureError,
     RetryableSubmissionError,
@@ -386,6 +390,24 @@ if keyctl and libc.syscall(keyctl, 10, -4, b"user", key, 0) >= 0:
     print("keyring shared")
 elif keyctl and ctypes.get_errno() == errno.ENOKEY:
     print("keyring private")' "$key"
+  "$python" -I -c 'import ctypes, errno, os
+# inotify_init1 and fanotify_init get ENOSYS; fcntl(-1, F_SETLEASE),
+# F_NOTIFY and F_SETDELEG EINVAL from the filter (EBADF from the kernel).
+numbers = {"x86_64": (294, 300, 72), "aarch64": (26, 262, 25)}
+init1, fanotify_init, fcntl = numbers.get(os.uname().machine, (None,) * 3)
+libc = ctypes.CDLL(None, use_errno=True)
+denied = [
+    libc.syscall(*call) < 0 and ctypes.get_errno() == expected
+    for expected, call in (
+        (errno.ENOSYS, (init1, 0)),
+        (errno.ENOSYS, (fanotify_init, 0, 0)),
+        (errno.EINVAL, (fcntl, -1, 1024, 0)),
+        (errno.EINVAL, (fcntl, -1, 1026, 0)),
+        (errno.EINVAL, (fcntl, -1, 1040, 0)),
+    )
+    if fcntl is not None
+]
+print("watch denied" if denied and all(denied) else "watch open")'
 fi
 sed -n 's/^Seccomp:[[:space:]]*/seccomp /p' /proc/self/status
 sed -n '3,$s/^ *\([^:]*\):.*/interface \1/p' /proc/net/dev
@@ -579,7 +601,7 @@ def isolation_report(
     """The host's verdict on the isolation probe's output.
 
     It fails on a forbidden path Work sees, on the Engine's process visible
-    from Work, on a box or network filter that is not in place, on a
+    from Work, on a box, network or file-watch filter that is not in place, on a
     no-network Work with an interface other than loopback (namespace mode),
     and on a mount, other than a ``planned`` bind, that shows a
     ``forbidden`` path's files (the same device and an overlapping root).
@@ -605,6 +627,8 @@ def isolation_report(
     )
     if boxed and seccomp != "2":
         failures.append(f"the process box has no filter (Seccomp: {seccomp})")
+    if "watch denied" not in lines:
+        failures.append("Work can watch files (inotify, fanotify, fcntl)")
     if network_mode == "no-network" and network_isolation == "seccomp":
         if seccomp != "2" or "inet denied" not in lines:
             failures.append("Work without network can create IP sockets")
@@ -725,6 +749,22 @@ class ApptainerAgentRuntime:
         if self.allocated_pools is None:
             return self.plan.gpu_plan.work.uuids
         return self.allocated_pools.work[0].cuda_devices
+
+    @property
+    def judge_copy_reuse(self) -> bool:
+        """Whether a Judge copy may link files unchanged since the last round.
+
+        Only on one node, where this node's metadata shows every Work write,
+        and only when the pause waits until every Work thread has stopped
+        (the Harness box), so every write that started before the pause
+        signal has returned before the copy starts. A write that starts
+        later, even after Work wakes itself, is never reused (see
+        ``JudgeSnapshots.acquire``).
+        """
+        return (
+            self.allocated_pools is None
+            and self.profile.apptainer.process_namespaces == "harness"
+        )
 
     @property
     def work_ref(self) -> ContainerRef:
@@ -848,6 +888,10 @@ class ApptainerAgentRuntime:
                 directory.mkdir(parents=True, mode=0o700, exist_ok=resume)
             if resume and (not directory.is_dir() or directory.is_symlink()):
                 raise SetupError(f"resumed run directory is missing: {directory}")
+        if resume:
+            # The last attempt's Judge copy: nothing is adopted across
+            # processes, so the first resumed round copies everything.
+            remove_retained(self.rounds)
         # CODEX_HOME and CLAUDE_CONFIG_DIR name these, with or without a
         # stop hook (which used to be the only thing creating them).
         for name in (".codex", ".claude"):
@@ -1007,7 +1051,7 @@ class ApptainerAgentRuntime:
     def _require_site_isolation(self) -> None:
         """Prove the profile's isolation modes on this node before task code
         runs: the host-side network filter (seccomp mode), and rsi-box and
-        its python (harness mode, or a seccomp-mode Judge)."""
+        its python (Work's filter or box, and a seccomp-mode Judge's)."""
         apptainer = self.profile.apptainer
         harness = apptainer.process_namespaces == "harness"
         options: dict[str, Any] = {
@@ -1033,29 +1077,50 @@ class ApptainerAgentRuntime:
                     'network_isolation = "seccomp": the network filter did not '
                     f"reach the container: {result.output.strip()[-500:]}{setuid}"
                 )
-        if not (harness or self._seccomp_network):
-            return
-        needs, remedy = (
-            ('process_namespaces = "harness"', "allow pid ns and allow ipc ns")
-            if harness
-            else ('network_isolation = "seccomp"', "network namespaces")
-        )
+        # Work's filter is checked with Work's own network (a site without
+        # network namespaces runs a public Work); the harness box, and
+        # python with a seccomp-mode Judge, without network.
+        work_network = "no-network" if harness else self.plan.task.agent.network.mode
+        boxes = [("work", work_network)]
+        if self._seccomp_network and not harness:
+            boxes.append(("judge", "no-network"))
         python = str(apptainer.container_python)
         check = "import sys; sys.exit(0 if sys.version_info >= (3, 8) else 3)"
-        result = self._run((python, "-c", check), **options)
+        result = self._run(
+            (python, "-c", check),
+            **{
+                **options,
+                "network_mode": (
+                    "no-network" if self._seccomp_network else work_network
+                ),
+            },
+        )
         if result.exit_code != 0:
             raise SetupError(
-                f"{needs} needs python3 3.8 or later at {python} in the task "
-                f"image for rsi-box; add it, or use a site with {remedy}: "
+                f"Work needs python3 3.8 or later at {python} in the task image "
+                f"(rsi-box wraps every Work process): set "
+                f"apptainer.container_python to one, or add it to the image: "
                 f"{self._failure(result).strip()[-500:]}"
             )
-        box = "work" if harness else "judge"
-        result = self._run((python, "-I", "-c", ""), box=box, **options)
-        if result.exit_code != 0:
+        for box, network_mode in boxes:
+            result = self._run(
+                (python, "-I", "-c", ""),
+                box=box,
+                **{**options, "network_mode": network_mode},
+            )
+            if result.exit_code == 0:
+                continue
             steps = [line for line in result.output.splitlines() if "rsi-box:" in line]
+            step = steps[-1] if steps else f"exit {result.exit_code}"
+            if box == "work" and not harness:
+                raise InfrastructureError(f"rsi-box cannot run on this node ({step})")
+            needs, remedy = (
+                ('process_namespaces = "harness"', "allow pid ns and allow ipc ns")
+                if harness
+                else ('network_isolation = "seccomp"', "network namespaces")
+            )
             raise InfrastructureError(
-                f"rsi-box cannot run on this node "
-                f"({steps[-1] if steps else f'exit {result.exit_code}'}); {needs} "
+                f"rsi-box cannot run on this node ({step}); {needs} "
                 "needs user, PID, IPC and mount namespaces inside Apptainer, or "
                 f"use a site with {remedy}"
             )
@@ -1329,6 +1394,15 @@ class ApptainerAgentRuntime:
                 target=PurePosixPath(str(path)),
             )
             for path in self.profile.apptainer.rdma_binds
+        )
+        # Remote Work ranks run under rsi-box's filter (remote_worker).
+        self.control.mkdir(parents=True, mode=0o700, exist_ok=True)
+        binds.append(
+            WorkerBind(
+                source=install_judge_box(self.control),
+                target=JUDGE_BOX_TARGET,
+                read_only=True,
+            )
         )
         template = RemoteWorkerTemplate(
             apptainer_binary=self.profile.apptainer.binary,
@@ -1681,6 +1755,10 @@ class ApptainerAgentRuntime:
     ) -> AgentRunResult:
         # A public Judge runs exactly the tests Work saw.
         self._require_public_tests_digest()
+        # Never Work's own files: a stopped Work can be continued (SIGCONT),
+        # and shared inodes would carry data between Judge and Work.
+        if workspace == self.workspace:
+            raise InfrastructureError("Judge needs a copy of Work's workspace")
         if self.allocated_pools is not None:
             if sandbox_endpoint is not None:
                 raise SetupError("multi-node Judge cannot reach the sandbox broker")
@@ -1766,7 +1844,8 @@ class ApptainerAgentRuntime:
                 environment=environment,
                 output_path=request.verifier_output,
                 extra_binds=(
-                    (workspace, request.run_plan.workdir, False),
+                    # Read-only: the next round links its unchanged files.
+                    (workspace, request.run_plan.workdir, True),
                     (
                         request.run_plan.task.source_dir / "tests",
                         PurePosixPath("/tests"),
@@ -2645,16 +2724,18 @@ class ApptainerAgentRuntime:
 
         With process_namespaces = "harness" the box gives Work and the Judge
         their own PID and IPC namespaces; in seccomp mode a no-network Judge
-        also runs in it, under a layer without AF_UNIX sockets.
+        also runs in it, under a layer without AF_UNIX sockets. Work always
+        runs under rsi-box's filter: without file watches.
         """
         no_unix = (
             box == "judge" and network_mode == "no-network" and self._seccomp_network
         )
-        if box is None or not (
-            no_unix or self.profile.apptainer.process_namespaces == "harness"
-        ):
-            return None
+        harness = self.profile.apptainer.process_namespaces == "harness"
         python = str(self.profile.apptainer.container_python)
+        if box == "work" and not harness:
+            return judge_box_command(python, "work-filter", [])
+        if box is None or not (no_unix or harness):
+            return None
         return judge_box_command(python, box, [], no_unix=no_unix)
 
     def _run(
@@ -2727,30 +2808,34 @@ class ApptainerAgentRuntime:
             # Append: a resumed run's Agent output continues the same file.
             stream = output_path.open("a", encoding="utf-8")
         try:
-            process = subprocess.Popen(
-                argv,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                start_new_session=True,
-                env=child_env,
-            )
+            with self._lock if track_work else contextlib.nullcontext():
+                if track_work:
+                    # Under the lock with the spawn: a round's pause() then
+                    # sees either no new process or one it can stop.
+                    if self._paused:
+                        # A Judge round holds Work, which must not run, as
+                        # Docker refuses an exec into a paused container.
+                        raise InfrastructureError(
+                            "a Judge round holds Work; no Agent process can "
+                            "start before it ends"
+                        )
+                    if self._process is not None and self._process.poll() is None:
+                        raise InfrastructureError("an Agent process is already running")
+                process = subprocess.Popen(
+                    argv,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1,
+                    start_new_session=True,
+                    env=child_env,
+                )
+                if track_work:
+                    self._process = process
         except BaseException:
             if stream is not None:
                 stream.close()
             raise
-        if track_work:
-            with self._lock:
-                if self._process is not None and self._process.poll() is None:
-                    with contextlib.suppress(ProcessLookupError):
-                        os.killpg(process.pid, signal.SIGKILL)
-                    process.wait()
-                    if stream is not None:
-                        stream.close()
-                    raise InfrastructureError("an Agent process is already running")
-                self._process = process
-                self._paused = False
         captured = BoundedBytes(16_000_000)
         drain_errors: list[Exception] = []
 
@@ -2833,9 +2918,6 @@ class ApptainerAgentRuntime:
                         stream.close()
                     except OSError as error:
                         drain_errors.append(error)
-            if track_work:
-                with self._lock:
-                    self._paused = False
         if track_work and self._work_failure is not None:
             raise InfrastructureError(self._work_failure)
         # The final line, flush, fsync or close can fail after the child exits.
@@ -2941,6 +3023,11 @@ class NativeJudgeEvaluator:
         self.runtime = runtime
         self.artifacts = artifacts
         self.sandbox = sandbox_lifecycle or NullSandboxLifecycle()
+        self.snapshots = JudgeSnapshots(runtime.rounds)
+
+    def close(self) -> None:
+        """Remove the last round's retained workspace copy."""
+        self.snapshots.close()
 
     def evaluate(self, request: EvaluationRequest, observer: Any) -> SubmissionReport:
         started = time.monotonic()
@@ -2956,7 +3043,7 @@ class NativeJudgeEvaluator:
                 # being written. Still end the execution loop in memory.
                 self.runtime.fail_work(message)
 
-        snapshot = self.runtime.rounds / request.round_id / "workspace"
+        lease: DirectorySnapshot | None = None
         # Before Work pauses, as on Docker: a refresh may take a while.
         self.runtime.renew_operator_login(request.round_id)
         # Busy Work envs make the submission retryable before any pause.
@@ -2967,6 +3054,9 @@ class NativeJudgeEvaluator:
             work_container_id=request.work_container.container_id,
         )
         try:
+            # Before the pause signal: only files whose last write started
+            # before this time can be linked next round.
+            since = self.snapshots.clock() if self.runtime.judge_copy_reuse else None
             self.runtime.pause(request.work_container)
         except BaseException:
             if frozen:
@@ -2992,8 +3082,10 @@ class NativeJudgeEvaluator:
                 "snapshot_planned",
                 round_id=request.round_id,
             )
-            lease = DirectorySnapshot.acquire(
-                self.runtime.workspace, self.runtime.rounds, request.round_id
+            # A copy that shares no inode with Work, where files unchanged
+            # since the last round may be linked from its retained copy.
+            lease = self.snapshots.acquire(
+                self.runtime.workspace, request.round_id, since=since
             )
             snapshot = lease.workspace
             observer.resource_event(
@@ -3084,13 +3176,18 @@ class NativeJudgeEvaluator:
                     observer.resource_event(
                         "judge_removed", judge_container_id=judge_id
                     )
-                    lease.release()
-                    observer.resource_event(
-                        "snapshot_released",
-                        snapshot_lease_id=f"workspace-{request.round_id}",
-                    )
+                    if lease is not None:
+                        # Kept as the next round's base, until then.
+                        self.snapshots.retain(lease)
+                        observer.resource_event(
+                            "snapshot_released",
+                            snapshot_lease_id=f"workspace-{request.round_id}",
+                        )
 
             if failed:
+                # The round's copy stays as evidence; the next round copies
+                # everything.
+                self.snapshots.drop()
                 if frozen:
                     try:
                         self.sandbox.close_judge()
@@ -3672,6 +3769,14 @@ def run_native_engine(
         ).run(composition.request())
     finally:
         composition.runtime.close_multinode()
+        if composition.evaluator is not None:
+            try:
+                composition.evaluator.close()
+            except Exception as error:
+                print(
+                    f"[rsi-engine] judge_snapshot_cleanup_failed: {error}",
+                    flush=True,
+                )
     (plan.paths.root / "engine-result.json").write_text(
         result.model_dump_json(indent=2)
     )

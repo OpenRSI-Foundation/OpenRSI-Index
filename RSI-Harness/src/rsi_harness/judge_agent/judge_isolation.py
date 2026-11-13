@@ -12,12 +12,14 @@ the namespace box.
 Run as a program it is rsi-box, the box RSI Harness puts around Work and
 the Judge where Apptainer gives them no PID or IPC namespace:
 
-    rsi-box (--work | --judge [--no-unix]) -- COMMAND [ARG]...
+    rsi-box (--work | --judge [--no-unix] | --work-filter) -- COMMAND [ARG]...
 
 COMMAND runs as pid 2 of new user, PID, IPC and mount namespaces, with a
-fresh /proc and /dev/mqueue. ``--work`` denies new namespaces and mounts;
-``--judge`` denies kernel keyrings, and with ``--no-unix`` AF_UNIX sockets
-(a stream or seqpacket socketpair stays). SIGUSR1, SIGUSR2 and SIGTERM to
+fresh /proc and /dev/mqueue. ``--work`` denies new namespaces, mounts and
+file watches; ``--judge`` denies kernel keyrings, and with ``--no-unix``
+AF_UNIX sockets (a stream or seqpacket socketpair stays). ``--work-filter``
+builds no box: it denies file watches alone and execs COMMAND in place
+(Work where Apptainer gives the namespaces). SIGUSR1, SIGUSR2 and SIGTERM to
 rsi-box stop, continue and terminate every process in the box. Exit status:
 COMMAND's (128+N for signal N); 125 when the box cannot be set up, with the
 failing step on stderr; 126 and 127 when COMMAND cannot be executed or is
@@ -104,6 +106,16 @@ SECCOMP_ARCHES = {
         "namespace": (272, 308, 165, 166, 155, 161, 428, 429, 430, 431, 432, 433, 442),
         "clone": 56,
         "clone3": 435,
+        # inotify_init, inotify_init1, inotify_add_watch, fanotify_init,
+        # fanotify_mark
+        "watch": (253, 294, 254, 300, 301),
+        "fcntl": (72,),
+        # i386 (int 0x80): the same watch calls, then fcntl and fcntl64
+        "compat": {
+            "arch": 0x40000003,
+            "watch": (291, 332, 292, 338, 339),
+            "fcntl": (55, 221),
+        },
     },
     "aarch64": {
         "arch": 0xC00000B7,
@@ -121,6 +133,14 @@ SECCOMP_ARCHES = {
         "namespace": (97, 268, 40, 39, 41, 51, 428, 429, 430, 431, 432, 433, 442),
         "clone": 220,
         "clone3": 435,
+        "watch": (26, 27, 262, 263),
+        "fcntl": (25,),
+        # AArch32
+        "compat": {
+            "arch": 0x40000028,
+            "watch": (316, 360, 317, 367, 368),
+            "fcntl": (55, 221),
+        },
     },
 }
 _BPF_LD_W_ABS = 0x20
@@ -132,6 +152,9 @@ _BPF_JSET_K = 0x45
 _BPF_AND_K = 0x54
 _O_TRUNC_FLAG = 0o1000
 _O_ACCMODE = 0o3
+_F_SETLEASE = 1024
+_F_NOTIFY = 1026
+_F_SETDELEG = 1040
 _RET_KILL_PROCESS = 0x80000000
 _RET_ERRNO = 0x00050000
 _RET_ALLOW = 0x7FFF0000
@@ -462,6 +485,7 @@ def seccomp_program(
     trace_guard: bool = False,
     namespace_guard: bool = False,
     deny_unix: bool = False,
+    watch_guard: bool = False,
     machine: str | None = None,
     pointer_bytes: int | None = None,
     byteorder: str | None = None,
@@ -482,6 +506,7 @@ def seccomp_program(
     ``namespace_guard``, ``unshare``, ``setns``, the mount calls,
     ``pivot_root``, ``chroot`` and ``clone`` with a namespace flag get EPERM
     and ``clone3`` ENOSYS (libc then falls back to ``clone``). With
+    ``watch_guard``, see :func:`watch_filter`. With
     ``truncate_guard`` (Landlock ABI 1 and 2, which cannot control
     truncation) ``truncate`` and an ``open``/``openat`` with O_TRUNC and a
     read-only access mode get EPERM, and ``openat2`` ENOSYS. Everything else
@@ -497,7 +522,49 @@ def seccomp_program(
         namespace_guard=namespace_guard,
         truncate_guard=truncate_guard,
         deny_unix=deny_unix,
+        watch_guard=watch_guard,
     )
+
+
+def watch_filter(
+    *,
+    machine: str | None = None,
+    pointer_bytes: int | None = None,
+    byteorder: str | None = None,
+) -> bytes:
+    """Work's filter without a box: no file watches, everything else allowed.
+
+    A Judge reads Work's paused files: a watch set before would queue every
+    open and read for Work to count after it resumes, and a lease or
+    delegation the open breaks signals Work with the file. inotify and
+    fanotify get ENOSYS, as on a kernel built without them (watchers fall
+    back to polling), and ``fcntl`` with F_NOTIFY (dnotify), F_SETLEASE or
+    F_SETDELEG EINVAL; the command is compared on its low 32 bits, as the
+    kernel truncates it. The 32-bit compat arch (i386, AArch32) gets the
+    same rule with its own numbers; any other arch is killed, and x32
+    syscall numbers get EPERM, as in :func:`seccomp_program` (whose layers
+    still kill the compat arch: their rules name native numbers only).
+    """
+    spec = _arch(machine, pointer_bytes, byteorder)
+    compat = spec["compat"]
+    program: list = [
+        (_BPF_LD_W_ABS, 0, 0, 4),
+        (_BPF_JEQ_K, 0, "compat", spec["arch"]),
+        (_BPF_LD_W_ABS, 0, 0, 0),
+    ]
+    if spec["x32_mask"] is not None:
+        program.append((_BPF_JGE_K, "deny", 0, spec["x32_mask"]))
+    jumps, checks = _watch_rules(spec)
+    program += [*jumps, (_BPF_JA, 0, 0, "allow")]
+    program += [
+        ("compat", None, None, None),
+        (_BPF_JEQ_K, 1, 0, compat["arch"]),
+        (_BPF_RET_K, 0, 0, _RET_KILL_PROCESS),
+        (_BPF_LD_W_ABS, 0, 0, 0),
+        *_watch_rules(compat)[0],
+        (_BPF_JA, 0, 0, "allow"),
+    ]
+    return _assemble(program + checks + _returns())
 
 
 def network_filter(
@@ -554,15 +621,11 @@ def _filter(
     namespace_guard: bool,
     truncate_guard: bool,
     deny_unix: bool,
+    watch_guard: bool = False,
 ) -> bytes:
-    program: list = [
-        (_BPF_LD_W_ABS, 0, 0, 4),
-        (_BPF_JEQ_K, 1, 0, spec["arch"]),
-        (_BPF_RET_K, 0, 0, _RET_KILL_PROCESS),
-        (_BPF_LD_W_ABS, 0, 0, 0),
-    ]
-    if spec["x32_mask"] is not None:
-        program.append((_BPF_JGE_K, "deny", 0, spec["x32_mask"]))
+    program = _prologue(spec)
+    watch_jumps, watch_checks = _watch_rules(spec) if watch_guard else ([], [])
+    program += watch_jumps
     denied = [spec["io_uring_setup"]]
     denied += list(spec["keyring"]) if keyring else []
     denied += list(spec["trace"]) if trace_guard else []
@@ -629,7 +692,42 @@ def _filter(
             (_BPF_AND_K, 0, 0, _O_TRUNC_FLAG | _O_ACCMODE),
             (_BPF_JEQ_K, "deny", "allow", _O_TRUNC_FLAG),
         ]
-    program += [
+    program += watch_checks + _returns(einval=watch_guard)
+    return _assemble(program)
+
+
+def _prologue(spec: dict) -> list:
+    """Kill a foreign arch, load the syscall number, deny x32 numbers."""
+    program: list = [
+        (_BPF_LD_W_ABS, 0, 0, 4),
+        (_BPF_JEQ_K, 1, 0, spec["arch"]),
+        (_BPF_RET_K, 0, 0, _RET_KILL_PROCESS),
+        (_BPF_LD_W_ABS, 0, 0, 0),
+    ]
+    if spec["x32_mask"] is not None:
+        program.append((_BPF_JGE_K, "deny", 0, spec["x32_mask"]))
+    return program
+
+
+def _watch_rules(spec: dict) -> tuple[list, list]:
+    """The syscall-number jumps of :func:`watch_filter`'s rule, and the
+    ``fcntl`` command check they lead to."""
+    jumps = [(_BPF_JEQ_K, "enosys", 0, number) for number in spec["watch"]]
+    jumps += [(_BPF_JEQ_K, "fcntl", 0, number) for number in spec["fcntl"]]
+    # The refused commands differ from F_SETLEASE in bits 1 and 4 only
+    # (1042, unassigned, is refused too): one masked compare.
+    refused_mask = ~((_F_SETLEASE ^ _F_NOTIFY) | (_F_SETLEASE ^ _F_SETDELEG))
+    checks = [
+        ("fcntl", None, None, None),
+        (_BPF_LD_W_ABS, 0, 0, 16 + 8),
+        (_BPF_AND_K, 0, 0, refused_mask & 0xFFFFFFFF),
+        (_BPF_JEQ_K, "einval", "allow", _F_SETLEASE),
+    ]
+    return jumps, checks
+
+
+def _returns(*, einval: bool = True) -> list:
+    program: list = [
         ("enosys", None, None, None),
         (_BPF_RET_K, 0, 0, _RET_ERRNO | errno.ENOSYS),
         ("allow", None, None, None),
@@ -637,7 +735,12 @@ def _filter(
         ("deny", None, None, None),
         (_BPF_RET_K, 0, 0, _RET_ERRNO | errno.EPERM),
     ]
-    return _assemble(program)
+    if einval:
+        program += [
+            ("einval", None, None, None),
+            (_BPF_RET_K, 0, 0, _RET_ERRNO | errno.EINVAL),
+        ]
+    return program
 
 
 def _assemble(program) -> bytes:
@@ -1365,12 +1468,33 @@ def _init(libc, plan: dict, program: bytes, argv, alive: int, mask) -> None:
     os._exit(EXIT_INTERNAL)
 
 
-def _exec(argv, cwd, mask) -> None:
-    """pid 2: the command, in ``cwd`` (looked up again inside the box)."""
-    signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+def _default_signals() -> None:
     # Python ignores these at start; exec would keep them ignored.
     for signum in (signal.SIGPIPE, signal.SIGXFSZ):
         signal.signal(signum, signal.SIG_DFL)
+
+
+def _restore_environ() -> None:
+    """Give the command the environment this process started with: Python's
+    locale coercion (PEP 538) adds LC_CTYPE to it."""
+    try:
+        with open("/proc/self/environ", "rb") as file:
+            start = file.read()
+    except OSError:
+        return
+    environ = {}
+    for entry in start.split(b"\0"):
+        name, equals, value = entry.partition(b"=")
+        if equals and name:
+            environ.setdefault(os.fsdecode(name), os.fsdecode(value))
+    os.environ.clear()
+    os.environ.update(environ)
+
+
+def _exec(argv, cwd, mask) -> None:
+    """pid 2: the command, in ``cwd`` (looked up again inside the box)."""
+    signal.pthread_sigmask(signal.SIG_SETMASK, mask)
+    _default_signals()
     if cwd is not None:
         try:
             os.chdir(cwd)
@@ -1408,6 +1532,24 @@ def _supervise(command: int) -> None:
                 os._exit(exit_status(status))
 
 
+def filter_exec(program: bytes, argv) -> int:
+    """Exec ``argv`` in place under ``program``; 125, 126 or 127 when it
+    cannot run."""
+    libc = load_libc()
+    _check(libc.prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0), "no_new_privs")
+    try:
+        Seccomp(libc, program).install()
+    except OSError as error:
+        raise Failure(EXIT_INTERNAL, f"seccomp: {error.strerror}") from None
+    _default_signals()
+    try:
+        os.execvp(argv[0], argv)
+    except OSError as error:
+        sys.stderr.write(f"rsi-box: cannot execute {argv[0]}: {error.strerror}\n")
+        found = not isinstance(error, FileNotFoundError)
+        return EXIT_CANNOT_EXECUTE if found else EXIT_NOT_FOUND
+
+
 class _BoxParser(argparse.ArgumentParser):
     def error(self, message):
         raise Failure(EXIT_INTERNAL, message)
@@ -1424,11 +1566,14 @@ def box_main(argv=None) -> int:
         layer = parser.add_mutually_exclusive_group(required=True)
         layer.add_argument("--work", action="store_true")
         layer.add_argument("--judge", action="store_true")
+        layer.add_argument("--work-filter", action="store_true")
         layer.add_argument("--plan")
         parser.add_argument("--no-unix", action="store_true")
         options = parser.parse_args(arguments[:index])
         if options.no_unix and not options.judge:
             raise Failure(EXIT_INTERNAL, "--no-unix needs --judge")
+        if options.work_filter:
+            return filter_exec(watch_filter(), arguments[index + 1 :])
         if options.plan is not None:
             try:
                 plan = json.loads(options.plan)
@@ -1442,6 +1587,7 @@ def box_main(argv=None) -> int:
                 truncate_guard=False,
                 namespace_guard=options.work,
                 deny_unix=options.no_unix,
+                watch_guard=options.work,
             )
         return box(plan, program, arguments[index + 1 :])
     except Failure as failure:
@@ -1450,4 +1596,5 @@ def box_main(argv=None) -> int:
 
 
 if __name__ == "__main__":
+    _restore_environ()
     sys.exit(box_main())
