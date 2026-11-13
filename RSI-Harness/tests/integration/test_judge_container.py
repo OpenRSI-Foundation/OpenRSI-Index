@@ -276,6 +276,9 @@ def test_real_disposable_judge_uses_full_work_snapshot_and_discards_writes(tmp_p
                 base_ref="ubuntu:24.04",
                 work_ref="ubuntu:24.04",
                 judge_ref="ubuntu:24.04",
+                # The pre-round special-file check runs from the clean Work
+                # image, which needs the immutable ID the builder records.
+                work_digest=client.images.get("ubuntu:24.04").id,
                 workdir=PurePosixPath("/workspace"),
                 rootfs_snapshot_mode=RootfsSnapshotMode.SPLIT_WORKDIR,
             ),
