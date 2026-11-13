@@ -262,11 +262,21 @@ def _wire_listing(glob: str) -> str:
     )
 
 
-def _task(root: Path, *, timeout_seconds: int, dockerfile: str | None = None) -> Path:
+def _task(
+    root: Path,
+    *,
+    timeout_seconds: int,
+    dockerfile: str | None = None,
+    files: Mapping[str, str] | None = None,
+) -> Path:
     task = root / "task"
     shutil.copytree(FIXTURE, task)
     if dockerfile is not None:
         (task / "environment" / "Dockerfile").write_text(dockerfile)
+    for name, text in (files or {}).items():
+        path = task / "environment" / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
     config = task / "task.toml"
     text = config.read_text()
     # No-network Work: the CLI reaches only the pinned model endpoint, and
@@ -290,8 +300,16 @@ def _run(
     timeout_seconds: int,
     reasoning_effort: str | None = None,
     dockerfile: str | None = None,
+    model: str = MODEL,
+    task_files: Mapping[str, str] | None = None,
+    extra_env: Mapping[str, str] | None = None,
 ) -> DrivenRun:
-    """One full production run of ``case`` with the fake model."""
+    """One full production run of ``case`` with the fake model.
+
+    *task_files* are added to the task's environment directory (the Docker
+    build context), by relative path, with ``@API_BASE_URL@`` replaced by
+    the run's endpoint. *extra_env* is added to RSI_AGENT_EXTRA_ENV.
+    """
     client = _docker()
     gateway = next(
         item["Gateway"]
@@ -308,7 +326,10 @@ def _run(
     request.addfinalizer(server.stop)
     port = server.httpd.server_address[1]
     scheme = "http"
-    extra_env = {"RSI_AGENT_DRIVER_TIMINGS": json.dumps(DRIVER_TIMINGS)}
+    extra_env = {
+        "RSI_AGENT_DRIVER_TIMINGS": json.dumps(DRIVER_TIMINGS),
+        **(extra_env or {}),
+    }
     if case.tls:
         scheme = "https"
         server.httpd.socket = _tls_context(tmp_path).wrap_socket(
@@ -316,6 +337,7 @@ def _run(
         )
         # The certificate is self-signed and not in Work's trust store.
         extra_env["NODE_TLS_REJECT_UNAUTHORIZED"] = "0"
+    base_url = f"{scheme}://{gateway}:{port}{case.base_path}"
     data = tmp_path / "data"
     services = ProductionRuntimeServices(
         data_root=data,
@@ -325,7 +347,7 @@ def _run(
         inventory=_OneDeviceInventory(),
         rsi_loop_config=RSILoopConfig(
             agent_api_key=API_KEY,
-            agent_api_base_url=f"{scheme}://{gateway}:{port}{case.base_path}",
+            agent_api_base_url=base_url,
             agent_context_window="200000",
             agent_max_output_tokens=str(MAX_OUTPUT_TOKENS),
             agent_extra_env=extra_env,
@@ -345,10 +367,16 @@ def _run(
     result = services.run(
         RunRequest(
             task_dir=_task(
-                tmp_path, timeout_seconds=timeout_seconds, dockerfile=dockerfile
+                tmp_path,
+                timeout_seconds=timeout_seconds,
+                dockerfile=dockerfile,
+                files={
+                    name: text.replace("@API_BASE_URL@", base_url)
+                    for name, text in (task_files or {}).items()
+                },
             ),
             agent_name=case.agent,
-            model=MODEL,
+            model=model,
             reasoning_effort=reasoning_effort,
             gpu_selectors=("0",),
             options=CompileOptions(

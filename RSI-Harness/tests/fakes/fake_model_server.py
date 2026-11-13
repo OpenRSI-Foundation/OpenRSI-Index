@@ -27,7 +27,9 @@ request contains anywhere (system prompt included). Tests assert on that log.
 Scenario keys (all optional):
   cycle        actions for successive model requests (default ["text"])
   at           {"<request number>": action} overrides
-  after_tool   action when the last message is a tool result (default "text")
+  after_tool   action when the last message is a tool result (default "text");
+               ``next`` calls the next of ``commands`` while any is left and
+               answers with text afterwards
   delay        seconds to wait before answering every request
   shell_tools  shell tool names to call, first one the request offers wins
                (default: bash, run_shell_command, shell, Bash, exec_command)
@@ -43,6 +45,8 @@ Scenario keys (all optional):
                (for a text or mixed action)
   watch        strings to look for in every request, e.g. a marker that
                must not reach the model
+  schemas      tool names whose parameter names each request logs, as
+               ``tool_params`` {name: [parameter, ...]}, when it offers them
 
 Actions: text, tool, mixed, empty, reasoning, length, e400, e401, e429,
 e500, overflow, hang (never answers; the client has to time out).
@@ -244,7 +248,8 @@ class FakeModelServer:
         self.log_path = Path(log_path)
         self.scenario = scenario or {}
         self._counter = itertools.count(1)
-        self._commands = iter(self.scenario.get("commands") or ())
+        self._commands = list(self.scenario.get("commands") or ())
+        self._command = 0
         self._lock = threading.Lock()
         self._hangs: list[threading.Event] = []
         handler = type("Handler", (_Handler,), {"server_state": self})
@@ -285,14 +290,22 @@ class FakeModelServer:
         if str(number) in at:
             return number, at[str(number)]
         if last_role == "tool":
-            return number, self.scenario.get("after_tool", "text")
+            action = self.scenario.get("after_tool", "text")
+            if action == "next":
+                with self._lock:
+                    left = self._command < len(self._commands)
+                action = "tool" if left else "text"
+            return number, action
         cycle = self.scenario.get("cycle") or ["text"]
         return number, cycle[(number - 1) % len(cycle)]
 
     def next_command(self, number: int) -> str | dict[str, Any]:
         default = self.scenario.get("default_command") or f"echo tool-run-{number}"
         with self._lock:
-            return next(self._commands, default)
+            if self._command >= len(self._commands):
+                return default
+            self._command += 1
+            return self._commands[self._command - 1]
 
     def record(self, entry: dict[str, Any]) -> None:
         with self._lock, self.log_path.open("a") as log:
@@ -381,6 +394,11 @@ class _Handler(BaseHTTPRequestHandler):
                     for text in state.scenario.get("watch") or ()
                     if text in raw.decode("utf-8", errors="replace")
                 ],
+                "tool_params": {
+                    name: sorted((turn.tools[name] or {}).get("properties") or {})
+                    for name in state.scenario.get("schemas") or ()
+                    if name in turn.tools
+                },
             }
         )
         if state.scenario.get("delay"):

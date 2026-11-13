@@ -123,6 +123,7 @@ def test_config_names_the_key_and_endpoint_and_keeps_the_run_unattended(
         "rsi": {
             "npm": "@ai-sdk/openai-compatible",
             "name": "rsi",
+            "whitelist": ["oc-test"],
             "options": {
                 "baseURL": "{env:RSI_AGENT_API_BASE_URL}",
                 "apiKey": "{env:RSI_AGENT_API_KEY}",
@@ -132,6 +133,7 @@ def test_config_names_the_key_and_endpoint_and_keeps_the_run_unattended(
             },
             "models": {
                 "oc-test": {
+                    "id": "oc-test",
                     "name": "oc-test",
                     "tool_call": True,
                     "limit": {"context": 131072, "output": 16384},

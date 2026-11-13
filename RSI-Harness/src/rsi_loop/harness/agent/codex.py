@@ -29,6 +29,7 @@ from rsi_loop.harness.agent.base import (
     Agent,
     OneShotCommand,
     link_session_store,
+    remove_managed_config,
 )
 from rsi_loop.harness.backend import ContainerBackend, ContainerHandle
 
@@ -39,6 +40,31 @@ _PROVIDER_FLAGS = (
     """-c 'model_providers.rsi_proxy.base_url="'"$OPENAI_BASE_URL"'"' """
     "-c model_providers.rsi_proxy.env_key=OPENAI_API_KEY "
     "-c model_providers.rsi_proxy.wire_api=responses"
+)
+# No subagents, and none of the account's apps or plugins. spawn_agent takes
+# a ``model`` and accepts any model of the catalog (the bundled one, or the
+# account's), so a run could delegate to a stronger model; no setting limits
+# it to the main one (agents.default_subagent_model only fills in an omitted
+# model), so multi-agent is off: agents.enabled=false, and multi_agent_v2
+# off because the catalog's per-model multi_agent_version beats
+# features.multi_agent. Apps are the account's connectors (the codex_apps MCP
+# server), plugins and remote plugins bring MCP servers, skills and
+# connectors, tool_suggest installs them, image generation is a hosted tool
+# on another model, and memories are pinned off.
+_GUARD_FLAGS = (
+    "agents.enabled=false",
+    "features.multi_agent_v2=false",
+    "features.apps=false",
+    "features.plugins=false",
+    "features.remote_plugin=false",
+    "features.tool_suggest=false",
+    "features.image_generation=false",
+    "features.memories=false",
+)
+# Managed config and requirements outrank -c flags: they could turn
+# multi-agent back on. (hooks.json beside them is the Harness's stop hook.)
+_MANAGED_CONFIG = remove_managed_config(
+    "/etc/codex/managed_config.toml", "/etc/codex/requirements.toml"
 )
 # Rollouts are written under ~/.codex/sessions; ``codex exec resume`` finds a
 # session by its rollout alone.
@@ -113,7 +139,7 @@ fi''',
                 prompt_path, model=model, cwd=cwd, internet=internet, resume=resume,
             )
         cmd = self._launch_flags(cmd, model=model, internet=internet)
-        return f"{_SESSION_STORE} &&\nexec {cmd}"
+        return f"{_SESSION_STORE} && {_MANAGED_CONFIG} &&\nexec {cmd}"
 
     def session_id_in(self, line: str) -> str | None:
         match = _SESSION_LINE.fullmatch(_SGR.sub("", line.rstrip("\r\n")))
@@ -138,7 +164,10 @@ fi''',
             " --output-last-message {output_file} {schema_option} -"
         )
         return OneShotCommand(
-            command=self._launch_flags(cmd, model=model, internet=internet),
+            command=(
+                f"{_MANAGED_CONFIG} &&\nexec "
+                + self._launch_flags(cmd, model=model, internet=internet)
+            ),
             schema_option="--output-schema {schema_file}",
             output="file",
         )
@@ -171,7 +200,8 @@ fi''',
         if not internet:
             cmd = cmd.replace(marker, f'{marker} -c web_search="disabled"', 1)
 
-        return cmd
+        guard = " ".join(f"-c {flag}" for flag in _GUARD_FLAGS)
+        return cmd.replace(marker, f"{marker} {guard}", 1)
 
     def apply_reasoning_effort(self, command: str, effort: str) -> str:
         if "codex exec" not in command:

@@ -33,7 +33,37 @@ from rsi_loop.harness.agent.driven import DrivenAgent
 # Tools a headless run must not reach: plan mode waits for a user to approve
 # leaving it, and nobody answers questions.
 _DENIED_TOOLS = ("enter_plan_mode", "exit_plan_mode", "ask_user_question")
-_WEB_TOOLS = ("web_fetch", "web_search")
+# No delegation and no other model. Qwen cannot pin a subagent to the main
+# model: an agent definition's ``model:`` (which the working directory can
+# ship) is sent to the run's endpoint with the run's key, whatever model it
+# names. So the tools that start agents are denied (subagents, workflows,
+# agent teams and their messages, sub-sessions), and so are the tools that
+# consult another model or the account's services: the advisor, image
+# generation and web search (an account-backed search with a model of its
+# own), whatever the network. Denials merge across settings layers; the
+# working directory cannot lift them.
+_GUARD_TOOLS = (
+    "agent",
+    "workflow",
+    "team_create",
+    "send_message",
+    "create_sub_session",
+    "advisor",
+    "image_gen",
+    "web_search",
+)
+_WEB_TOOLS = ("web_fetch",)
+# Settings naming a model besides the main one, pinned in the system layer,
+# which outranks the user settings and the working directory's: the main
+# model itself, the fast model, compaction, capacity fallbacks, advisor,
+# image, vision and voice models, the Explore subagent, and the switches for
+# agent teams, workflows and the omni media tools (which call a vendor
+# model). An empty vision model would pick any image model of the
+# providers, and a provider entry may name any model of the run's endpoint:
+# the run declares none (its model comes from the environment), so both
+# provider maps are pinned empty, as arrays: an object would merge with the
+# working directory's, an array replaces it.
+_SYSTEM_SETTINGS = "$HOME/.qwen/rsi-system-settings.json"
 # Safe mode keeps the skill tool, which lists the working directory's
 # .qwen/commands by their descriptions and loads a command's body on request:
 # a one-shot call would pass instructions from a Judge's evidence to the model.
@@ -53,14 +83,38 @@ _CONFIRMED_TOOLS = (
 
 
 def _denied_tools(*, internet: bool) -> list[str]:
-    return [*_DENIED_TOOLS, *(() if internet else _WEB_TOOLS)]
+    return [*_DENIED_TOOLS, *_GUARD_TOOLS, *(() if internet else _WEB_TOOLS)]
 
 
-def _settings_prelude(settings: dict[str, object]) -> str:
+def system_settings(model: str | None) -> dict[str, object]:
+    """Return the settings pinned above every other layer for a run."""
+    same = model or ""
+    return {
+        **({"model": {"name": model}} if model else {}),
+        "modelProviders": [],
+        "providerProtocol": [],
+        "visionModel": "",
+        "voiceModel": "",
+        "fastModel": same,
+        "compactionModel": same,
+        "modelFallbacks": "",
+        "advisorModel": "",
+        "imageModel": "",
+        "agents": {"builtin": {"exploreModel": "inherit"}},
+        "experimental": {"agentTeam": False},
+        "tools": {"workflowsEnabled": False},
+        "omni": {"enabled": False},
+    }
+
+
+def _settings_prelude(settings: dict[str, object], model: str | None) -> str:
     text = json.dumps(settings, sort_keys=True)
+    pinned = json.dumps(system_settings(model), sort_keys=True)
     return (
         'mkdir -p "$HOME/.qwen" && '
-        f"printf '%s\\n' {shlex.quote(text)} > \"$HOME/.qwen/settings.json\""
+        f"printf '%s\\n' {shlex.quote(text)} > \"$HOME/.qwen/settings.json\" && "
+        f"printf '%s\\n' {shlex.quote(pinned)} > \"{_SYSTEM_SETTINGS}\" && "
+        f'export QWEN_CODE_SYSTEM_SETTINGS_PATH="{_SYSTEM_SETTINGS}"'
     )
 
 
@@ -147,7 +201,7 @@ class QwenCodeAgent(DrivenAgent):
         return settings
 
     def config_prelude(self, *, model: str | None, internet: bool) -> str:
-        return _settings_prelude(self.settings(internet=internet))
+        return _settings_prelude(self.settings(internet=internet), model)
 
     def format_oneshot_cmd(
         self,
@@ -176,7 +230,9 @@ class QwenCodeAgent(DrivenAgent):
         effective_model = self.effective_model(model)
         if effective_model:
             argv += ["--model", effective_model]
-        prelude = _settings_prelude(self.oneshot_settings(internet=internet))
+        prelude = _settings_prelude(
+            self.oneshot_settings(internet=internet), effective_model
+        )
         # Only the last line, the result: the whole event stream could pass
         # rsi-agent's stdout limit and lose it. pipefail keeps Qwen's status.
         return OneShotCommand(

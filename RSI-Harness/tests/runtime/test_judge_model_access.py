@@ -200,8 +200,10 @@ def test_resolve_reuses_the_work_agent_environment_and_credentials(tmp_path):
     assert spec["environment"]["OPENAI_API_KEY"] == API_KEY
     assert spec["agent"] == "codex" and spec["model"] == "gpt-test"
     assert spec["reasoning_effort"] == "high"
-    assert spec["command"].startswith(
-        "codex exec -c 'model_reasoning_effort=\"high\"' "
+    assert (
+        spec["command"]
+        .splitlines()[-1]
+        .startswith("exec codex exec -c 'model_reasoning_effort=\"high\"' ")
     )
     assert "--output-last-message {output_file}" in spec["command"]
     assert spec["schema_option"] == "--output-schema {schema_file}"

@@ -32,11 +32,35 @@ from rsi_harness.models import (
 )
 from rsi_loop.harness.agent import create_agent, list_agent_classes
 from rsi_loop.harness.agent.base import NODE_BIN, STOP_HOOK_REASON
+from rsi_loop.harness.agent.claude_code import _MANAGED_CONFIG as CLAUDE_MANAGED
 from rsi_loop.harness.agent.claude_code import _SESSION_STORE as CLAUDE_SESSION_STORE
+from rsi_loop.harness.agent.codex import _MANAGED_CONFIG as CODEX_MANAGED
 from rsi_loop.harness.agent.codex import _SESSION_STORE as CODEX_SESSION_STORE
+from rsi_loop.harness.agent.qwen_code import system_settings
 from rsi_loop.harness.config import RSILoopConfig, load_config
 from tests.factories import make_run_plan
 from tests.fakes import register_fake_driven_agent
+from tests.integrations.test_agent_fairness import (
+    CLAUDE_ACCOUNT_TOOLS,
+    CODEX_GUARD,
+    QWEN_GUARD_TOOLS,
+)
+
+# Every Codex launch: no subagents, apps or plugins (test_agent_fairness.py).
+CODEX_GUARD_FLAGS = " ".join(f"-c {flag}" for flag in CODEX_GUARD)
+
+
+def _claude_guard(model: str, *, internet: bool) -> str:
+    """What every Claude Code launch ends with (test_agent_fairness.py)."""
+    tools = ",".join([*CLAUDE_ACCOUNT_TOOLS, *(() if internet else _CLAUDE_WEB)])
+    settings = create_agent("claude-code", RSILoopConfig())._guard_flags(
+        model, internet=internet
+    )
+    assert f" --disallowedTools {tools} --settings " in settings
+    return settings
+
+
+_CLAUDE_WEB = ("WebSearch", "WebFetch")
 
 
 class RecordingAgentRuntime:
@@ -284,8 +308,9 @@ def test_prepare_maps_generic_reasoning_effort_to_codex_cli_override(
     assert prepared.command == (
         "/bin/bash",
         "-c",
-        f"{CODEX_SESSION_STORE} &&\n"
+        f"{CODEX_SESSION_STORE} && {CODEX_MANAGED} &&\n"
         f"exec codex exec -c 'model_reasoning_effort=\"{effort}\"' "
+        f"{CODEX_GUARD_FLAGS} "
         '-c web_search="disabled" -c allow_login_shell=false '
         "-c features.shell_snapshot=false --model gpt-test "
         "--dangerously-bypass-approvals-and-sandbox "
@@ -336,15 +361,18 @@ def test_codex_command_names_the_configured_endpoint_as_its_provider(
         text=True,
     ).stdout.splitlines()
     overrides = [value for flag, value in zip(argv, argv[1:]) if flag == "-c"]
-    assert sorted(overrides) == [
-        "allow_login_shell=false",
-        "features.shell_snapshot=false",
-        "model_provider=rsi_proxy",
-        f'model_providers.rsi_proxy.base_url="{url}"',
-        "model_providers.rsi_proxy.env_key=OPENAI_API_KEY",
-        "model_providers.rsi_proxy.name=rsi_proxy",
-        "model_providers.rsi_proxy.wire_api=responses",
-    ]
+    assert sorted(overrides) == sorted(
+        [
+            *CODEX_GUARD,
+            "allow_login_shell=false",
+            "features.shell_snapshot=false",
+            "model_provider=rsi_proxy",
+            f'model_providers.rsi_proxy.base_url="{url}"',
+            "model_providers.rsi_proxy.env_key=OPENAI_API_KEY",
+            "model_providers.rsi_proxy.name=rsi_proxy",
+            "model_providers.rsi_proxy.wire_api=responses",
+        ]
+    )
 
 
 @pytest.mark.parametrize(
@@ -389,7 +417,9 @@ def test_prepare_maps_generic_reasoning_effort_to_claude_cli_flag(
     )
 
     assert prepared.command[:2] == ("/bin/bash", "-c")
-    assert prepared.command[2].startswith(f"{CLAUDE_SESSION_STORE} &&\n")
+    assert prepared.command[2].startswith(
+        f"{CLAUDE_SESSION_STORE} && {CLAUDE_MANAGED} &&\n"
+    )
     assert prepared.command[2].splitlines()[-1].startswith(expected_prefix)
     assert "--model claude-opus-5" in prepared.command[2]
     assert "--reasoning-effort" not in prepared.command[2]
@@ -1358,7 +1388,8 @@ def test_codex_one_shot_command_matches_work_launch_flags(
 ) -> None:
     offline = _oneshot("codex", model=model, effort=effort)
     assert offline["command"] == (
-        f"codex exec -c 'model_reasoning_effort=\"{effort}\"' "
+        f"{CODEX_MANAGED} &&\n"
+        f"exec codex exec -c 'model_reasoning_effort=\"{effort}\"' {CODEX_GUARD_FLAGS} "
         '-c web_search="disabled" -c allow_login_shell=false '
         f"-c features.shell_snapshot=false --model {model} " + CODEX_ONESHOT
     )
@@ -1371,8 +1402,8 @@ def test_codex_one_shot_command_matches_work_launch_flags(
 
     online = _oneshot("codex", internet=True, effort=None, model=None)
     assert online["command"] == (
-        "codex exec -c allow_login_shell=false -c features.shell_snapshot=false "
-        + CODEX_ONESHOT
+        f"{CODEX_MANAGED} &&\nexec codex exec {CODEX_GUARD_FLAGS}"
+        " -c allow_login_shell=false -c features.shell_snapshot=false " + CODEX_ONESHOT
     )
 
 
@@ -1392,9 +1423,10 @@ def test_codex_one_shot_names_the_base_url_provider_at_launch() -> None:
 def test_claude_one_shot_command_prints_one_json_result() -> None:
     offline = _oneshot("claude-code", effort="max")
     assert offline["command"] == (
-        "claude --effort max -p --output-format json --no-session-persistence"
+        f"{CLAUDE_MANAGED} &&\n"
+        "exec claude --effort max -p --output-format json --no-session-persistence"
         " --dangerously-skip-permissions --safe-mode --setting-sources user"
-        " {schema_option} --model m --disallowedTools WebSearch,WebFetch"
+        " {schema_option} --model m" + _claude_guard("m", internet=False)
     )
     assert offline["schema_option"] == '--json-schema "$(cat {schema_file})"'
     assert offline["output"] == {
@@ -1406,8 +1438,8 @@ def test_claude_one_shot_command_prints_one_json_result() -> None:
     assert offline["environment"]["IS_SANDBOX"] == "1"
 
     online = _oneshot("claude-code", internet=True, effort=None)
-    assert "--disallowedTools" not in online["command"]
-    assert online["command"].startswith("claude -p ")
+    assert online["command"].endswith(_claude_guard("m", internet=True))
+    assert online["command"].startswith(f"{CLAUDE_MANAGED} &&\nexec claude -p ")
 
 
 MODEL_LIMITS = {"agent_context_window": "131072", "agent_max_output_tokens": "16384"}
@@ -1415,6 +1447,7 @@ QWEN_CONFIRMED = (
     "read_file,glob,grep_search,run_shell_command,edit,write_file,notebook_edit"
 )
 QWEN_DENIED = "enter_plan_mode,exit_plan_mode,ask_user_question"
+QWEN_GUARD = ",".join(QWEN_GUARD_TOOLS)
 
 
 def test_qwen_one_shot_command_prints_one_result_line() -> None:
@@ -1428,7 +1461,7 @@ def test_qwen_one_shot_command_prints_one_result_line() -> None:
         f" --allowed-tools {QWEN_CONFIRMED}"
         # The skill tool too: it would list the working directory's
         # .qwen/commands.
-        f" --exclude-tools {QWEN_DENIED},web_fetch,web_search,skill"
+        f" --exclude-tools {QWEN_DENIED},{QWEN_GUARD},web_fetch,skill"
         " --model m {schema_option} | tail -n 1"
     )
     # Work's settings, with folder trust on, written into the fresh HOME.
@@ -1444,7 +1477,11 @@ def test_qwen_one_shot_command_prints_one_result_line() -> None:
     assert prelude == (
         "mkdir -p \"$HOME/.qwen\" && printf '%s\\n' "
         + shlex.quote(json.dumps(settings, sort_keys=True))
-        + ' > "$HOME/.qwen/settings.json" && set -o pipefail &&'
+        + " > \"$HOME/.qwen/settings.json\" && printf '%s\\n' "
+        + shlex.quote(json.dumps(system_settings("m"), sort_keys=True))
+        + ' > "$HOME/.qwen/rsi-system-settings.json" && export'
+        + ' QWEN_CODE_SYSTEM_SETTINGS_PATH="$HOME/.qwen/rsi-system-settings.json"'
+        + " && set -o pipefail &&"
     )
     assert offline["schema_option"] == "--json-schema @{schema_file}"
     assert offline["output"] == {
@@ -1463,10 +1500,9 @@ def test_qwen_one_shot_command_prints_one_result_line() -> None:
 
     online = _oneshot("qwen-code", internet=True, effort=None, **MODEL_LIMITS)
     argv = shlex.split(online["command"].split("\n")[1])
-    assert argv[argv.index("--allowed-tools") + 1] == (
-        f"{QWEN_CONFIRMED},web_fetch,web_search"
-    )
-    assert argv[argv.index("--exclude-tools") + 1] == f"{QWEN_DENIED},skill"
+    assert argv[argv.index("--allowed-tools") + 1] == f"{QWEN_CONFIRMED},web_fetch"
+    excluded = argv[argv.index("--exclude-tools") + 1]
+    assert excluded == f"{QWEN_DENIED},{QWEN_GUARD},skill"
 
 
 @pytest.mark.parametrize(
@@ -1637,7 +1673,7 @@ def test_opencode_one_shot_refuses_what_work_refuses(options, message) -> None:
 
 ZCODE_ONESHOT_DENIED = (
     "AskUserQuestion,EnterPlanMode,ExitPlanMode,CronList,CronUpdate,"
-    "CronCreate,CronDelete,OffPeakCreate,Skill,Agent,SendMessage"
+    "OffPeakList,ReplyToChannel,CronCreate,CronDelete,OffPeakCreate,Skill,Agent,SendMessage"
 )
 
 
@@ -2207,12 +2243,12 @@ def test_resumed_claude_continues_its_session_with_the_message_on_stdin(
     assert first.command[2].splitlines()[-1] == (
         "exec claude -p --output-format stream-json --verbose"
         " --dangerously-skip-permissions </tmp/rsi-agent-prompt.md"
-        f" --session-id {session} --model m --disallowedTools WebSearch,WebFetch"
+        f" --session-id {session} --model m" + _claude_guard("m", internet=False)
     )
     assert prepared.command[2].splitlines()[-1] == (
         f"exec claude --resume {session} -p --output-format stream-json --verbose"
         " --dangerously-skip-permissions </tmp/rsi-agent-prompt.md --model m"
-        " --disallowedTools WebSearch,WebFetch"
+        + _claude_guard("m", internet=False)
     )
     assert prepared.prompt_path.read_text() == f"{_MESSAGE}\n"
 
@@ -2278,7 +2314,7 @@ def test_legacy_resume_keeps_the_most_recent_session_command() -> None:
     )
 
     assert codex.splitlines()[-1] == (
-        "exec codex exec resume -c allow_login_shell=false"
+        f"exec codex exec resume {CODEX_GUARD_FLAGS} -c allow_login_shell=false"
         " -c features.shell_snapshot=false --model m --last"
         ' --dangerously-bypass-approvals-and-sandbox "Continue working."'
     )

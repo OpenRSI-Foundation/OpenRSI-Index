@@ -142,7 +142,8 @@ def test_command_runs_pi_in_print_mode_with_the_extension() -> None:
     command = _agent().format_run_cmd(PROMPT, model="pi-test", cwd="/workspace")
 
     assert command.splitlines()[-1] == (
-        "exec pi --offline -p -e /opt/rsi-harness/pi/rsi-never-stop.ts "
+        "exec pi --offline -p --no-extensions --no-approve"
+        " -e /opt/rsi-harness/pi/rsi-never-stop.ts "
         "--provider rsi --model pi-test </tmp/rsi-agent-prompt.md"
     )
     assert _registered_agent_launcher(_agent()) == "pi"
@@ -157,7 +158,8 @@ def test_a_resume_reopens_the_last_session_the_extension_reported(
     own id, which the extension reports."""
     agent = _agent()
     launch = (
-        "exec pi --offline -p -e /opt/rsi-harness/pi/rsi-never-stop.ts "
+        "exec pi --offline -p --no-extensions --no-approve"
+        " -e /opt/rsi-harness/pi/rsi-never-stop.ts "
         "--provider rsi --model pi-test{} </tmp/rsi-agent-prompt.md"
     )
     output = tmp_path / "agent_output.txt"
@@ -211,6 +213,8 @@ def test_prelude_writes_the_config_and_feeds_the_prompt_on_stdin(
     assert launched["argv"] == [
         "--offline",
         "-p",
+        "--no-extensions",
+        "--no-approve",
         "-e",
         EXTENSION_PATH,
         "--provider",

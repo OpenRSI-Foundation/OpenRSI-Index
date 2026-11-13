@@ -37,7 +37,10 @@ BASE_URL = "http://203.0.113.17:8000/v1"
 PROMPT = "/tmp/rsi-agent-prompt.md"
 SHM = Path("/dev/shm")
 NODE = shutil.which("node")
-DENIED = "AskUserQuestion,EnterPlanMode,ExitPlanMode,CronList,CronUpdate"
+DENIED = (
+    "AskUserQuestion,EnterPlanMode,ExitPlanMode,CronList,CronUpdate,"
+    "OffPeakList,ReplyToChannel"
+)
 
 requires_node = pytest.mark.skipif(NODE is None, reason="node is not installed")
 # _fake_deb packs the .deb with ar.
