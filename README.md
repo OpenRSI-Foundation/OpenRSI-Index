@@ -35,6 +35,22 @@ Use the proposal-agent skill at .agents/skills/proposal-agent/SKILL.md in my loc
 
 If you have compute resources to run experiments and want to build frontier RSI environments together, contact [yuetaili@uw.edu](mailto:yuetaili@uw.edu), [zhuofengli12345@gmail.com](mailto:zhuofengli12345@gmail.com), or [hanxinyang@berkeley.edu](mailto:hanxinyang@berkeley.edu).
 
+## Shared schema and Brew authoring
+
+The [shared OpenRSI schema](https://github.com/AgentsLastExam/openrsi-schema)
+adds optional domain, evaluation, runtime and resource declarations to ALE
+under `1.4+ale+openrsi`. See the
+[Harbor → ALE → OpenRSI comparison](https://github.com/AgentsLastExam/openrsi-schema/blob/main/docs/COMPATIBILITY.md)
+for changed defaults and compatibility boundaries.
+
+[OpenRSI Brew](https://github.com/AgentsLastExam/OpenRSI-Brew) uses the schema in
+its intake, author prompts, generated manifests and expert review scopes. Its
+Science tasks route to OpenRSI-X even when they train models; other categories
+route here. Relative to ALE Brew, it also adds optional Proxmox evaluation and
+live node capacity for Worker assignment, while keeping native ALE Workers.
+The existing RSI-Anything/RSI-Harness workflow below remains a separate path;
+these declarations do not automatically migrate or execute its tasks.
+
 ## 💥 Why OpenRSI Index?
 
 We are witnessing the dawn of a new era: AI is entering a recursive self-improvement loop. The central question is whether this loop can move beyond the best-known human-designed method and reliably extend the scientific frontier. Answering it requires careful measurement, and building that measurement is the purpose of this project.
