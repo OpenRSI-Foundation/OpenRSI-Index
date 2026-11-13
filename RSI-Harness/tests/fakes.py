@@ -493,6 +493,11 @@ class FakeDockerContainer:
         self.events.append("stop")
         self.attrs["State"]["Running"] = False
 
+    def kill(self, **kwargs: Any) -> None:
+        self.events.append(f"kill:{kwargs.get('signal')}")
+        self.attrs["State"]["Running"] = False
+        self.attrs["State"]["Paused"] = False
+
     def remove(self, **kwargs: Any) -> None:
         self.events.append("remove")
         self.removed_kwargs = kwargs
@@ -563,6 +568,9 @@ class FakeDockerContainers:
             }
             for mount in kwargs.get("mounts", ())
         ]
+        container.attrs["HostConfig"] = {
+            "SecurityOpt": list(kwargs.get("security_opt") or ())
+        }
         self.by_id[container.id] = container
         return container
 

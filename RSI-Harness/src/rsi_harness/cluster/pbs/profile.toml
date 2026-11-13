@@ -67,6 +67,7 @@ work_binds = []
 judge_binds = []
 workspace_target = "/testbed"
 temp_root = "/tmp"
+# python3 3.8 or later in the task image: rsi-box wraps every Work process.
 container_python = "/opt/venv/bin/python"
 rdma_binds = []
 

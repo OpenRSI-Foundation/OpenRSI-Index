@@ -165,30 +165,26 @@ def test_output_open_storage_error_never_starts_child(
     assert caught.value.errno == error_number
 
 
-@pytest.mark.parametrize("already_exited", [False, True])
+@pytest.mark.parametrize("reason", ["running", "paused"])
 def test_refused_second_work_closes_sink_and_keeps_first_work(
-    tmp_path, monkeypatch, already_exited
+    tmp_path, monkeypatch, reason
 ):
+    """A second Work process starts neither beside a running one nor while a
+    Judge round holds Work (an Agent that exited before the round's pause,
+    retried meanwhile, would otherwise run beside a Judge reading WORKDIR)."""
     runtime, _ = process_runtime(tmp_path, monkeypatch)
     output = tmp_path / "output.log"
-    original_open, original_popen = Path.open, subprocess.Popen
-    streams, children = [], []
-    first = original_popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    original_open = Path.open
+    streams = []
+    script = "" if reason == "paused" else "import time; time.sleep(60)"
+    first = subprocess.Popen([sys.executable, "-c", script])
+    if reason == "paused":
+        first.wait(timeout=10)
+        runtime._paused = True
     runtime._process = first
 
-    def spawn(*args, **kwargs):
-        child = original_popen(
-            [
-                sys.executable,
-                "-c",
-                "" if already_exited else "import time; time.sleep(60)",
-            ],
-            **kwargs,
-        )
-        children.append(child)
-        if already_exited:
-            child.wait(timeout=10)
-        return child
+    def unexpected(*_args, **_kwargs):
+        pytest.fail("a second Work process started")
 
     def open_sink(path, mode="r", *args, **kwargs):
         stream = original_open(path, mode, *args, **kwargs)
@@ -197,19 +193,16 @@ def test_refused_second_work_closes_sink_and_keeps_first_work(
         return stream
 
     monkeypatch.setattr(Path, "open", open_sink)
-    monkeypatch.setattr(subprocess, "Popen", spawn)
+    monkeypatch.setattr(subprocess, "Popen", unexpected)
+    match = "a Judge round holds Work" if reason == "paused" else "already running"
     try:
-        with pytest.raises(InfrastructureError, match="already running"):
+        with pytest.raises(InfrastructureError, match=match):
             run(runtime, output, track_work=True)
-        assert runtime._process is first and first.poll() is None
-        assert children and all(child.poll() is not None for child in children)
+        assert runtime._process is first
         assert streams and all(stream.closed for stream in streams)
     finally:
         first.kill()
         first.wait()
-        for child in children:
-            child.kill()
-            child.wait()
 
 
 def test_spawn_failure_closes_already_open_output(tmp_path, monkeypatch):

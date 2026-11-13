@@ -14,6 +14,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from rsi_harness.cluster import snapshots
 from rsi_harness.cluster.bluevela.allocation import AllocatedNode, AllocatedPools
 from rsi_harness.cluster.bluevela.runtime import (
     ApptainerAgentRuntime,
@@ -21,6 +22,7 @@ from rsi_harness.cluster.bluevela.runtime import (
     NativeJudgeEvaluator,
 )
 from rsi_harness.cluster.config import load_cluster_profile
+from rsi_harness.cluster.snapshots import RETAINED, JudgeSnapshots
 from rsi_harness.errors import (
     InfrastructureError,
     RetryableSubmissionError,
@@ -53,11 +55,13 @@ from rsi_harness.runtime.local_auth import (
     AgentAuthMount,
 )
 from rsi_harness.runtime.submissions import SubmissionService
+from tests.cluster.test_snapshots import settle
 from tests.factories import make_run_plan
 from tests.fakes import FakeClock
 
-# The last line of a finished isolation probe (initialize's last exec).
-PROBE_END = "isolation probe end\n"
+# The last lines of a finished isolation probe (initialize's last exec) in
+# Work's filter.
+PROBE_END = "seccomp 2\nwatch denied\nisolation probe end\n"
 
 
 class _Runtime:
@@ -74,6 +78,7 @@ class _Runtime:
         self.rounds = root / "rounds"
         self.rounds.mkdir()
         self.payload = SimpleNamespace(run_id="native-run")
+        self.judge_copy_reuse = True
         self.events: list[str] = []
         self.reward_file = reward_file
         self.reward_content = reward_content
@@ -194,7 +199,8 @@ def test_workspace_seed_streams_archive_to_shared_storage(
 
     runtime.initialize()
 
-    seed_command, seed_options = calls[0]
+    # After the site checks (python, Work's filter).
+    seed_command, seed_options = calls[2]
     shell = seed_command[2]
     assert "set -o pipefail" in shell
     assert "command -v tar" in shell
@@ -1246,6 +1252,15 @@ def test_multinode_work_runtime_injects_only_current_phase_broker(
             binding.source == Path("/proj")
             for binding in runtime.work_broker.worker_template.binds
         )
+        # Remote Work ranks run under rsi-box's filter.
+        assert (
+            runtime.control / "rsi-box/judge_isolation.py",
+            PurePosixPath("/usr/local/bin/rsi-box"),
+            True,
+        ) in {
+            (binding.source, binding.target, binding.read_only)
+            for binding in runtime.work_broker.worker_template.binds
+        }
         assert (runtime.work_broker.root / "READY.json").is_file()
         shim = runtime._copies[PurePosixPath("/usr/local/bin/torchrun")]
         assert shim.is_relative_to(node_tmp)
@@ -1800,6 +1815,10 @@ def test_resumed_initialize_reuses_the_run_directories_and_seeds_nothing(
     (runtime.workspace / "answer.py").write_text("answer = 42\n")
     (runtime.agent_home / ".codex").mkdir(exist_ok=True)
     (runtime.rounds / "agent-1").mkdir()
+    # The last attempt's Judge copy, in a read-only tree.
+    (runtime.rounds / RETAINED / "src").mkdir(parents=True)
+    (runtime.rounds / RETAINED / "src" / "answer.py").write_text("copy")
+    (runtime.rounds / RETAINED / "src").chmod(0o500)
     # The next attempt's job: a fresh node-local scratch.
     node_tmp = tmp_path / "node-tmp-2"
     node_tmp.mkdir()
@@ -1810,12 +1829,16 @@ def test_resumed_initialize_reuses_the_run_directories_and_seeds_nothing(
 
     resumed.initialize(resume=True)
 
-    # The smoke check, then the isolation probe; no seed.
-    assert calls[0] == ("/usr/local/bin/codex", "--version")
-    assert [call[:2] for call in calls[1:]] == [("/bin/sh", "-c")]
+    # The site checks, the smoke check, then the isolation probe; no seed.
+    python = str(resumed.profile.apptainer.container_python)
+    assert [call[0] for call in calls[:2]] == [python, python]
+    assert calls[2] == ("/usr/local/bin/codex", "--version")
+    assert [call[:2] for call in calls[3:]] == [("/bin/sh", "-c")]
     assert (resumed.workspace / "answer.py").read_text() == "answer = 42\n"
     assert (resumed.agent_home / ".codex").is_dir()
     assert (resumed.rounds / "agent-1").is_dir()
+    # Nothing is adopted: the first resumed round copies everything.
+    assert not (resumed.rounds / RETAINED).exists()
     assert (resumed.control / "rsi-submit").is_file()
 
 
@@ -2425,7 +2448,8 @@ def test_completed_judge_releases_copy_but_preserves_all_feedback(
             ),
             observer,
         )
-        assert not list(runtime.rounds.iterdir())
+        # Only the finished round's copy is left, as the next round's base.
+        assert [path.name for path in runtime.rounds.iterdir()] == [RETAINED]
         assert "snapshot_released" in dict(observer.events)
         assert (writer.root / "submissions" / name / "report.json").is_file()
         assert (writer.feedback_root / f"{name}.log").read_text() == "passed\n"
@@ -2437,8 +2461,6 @@ def test_completed_judge_releases_copy_but_preserves_all_feedback(
 def test_snapshot_release_follows_judge_teardown_and_precedes_work_resume(
     tmp_path, monkeypatch, failure
 ):
-    from rsi_harness.cluster.snapshots import DirectorySnapshot
-
     plan = make_run_plan(tmp_path)
     writer = RunArtifactWriter(plan, run_id="native-run")
     writer.start()
@@ -2474,18 +2496,18 @@ def test_snapshot_release_follows_judge_teardown_and_precedes_work_resume(
         def reopen_work(self):
             events.append("reopen")
 
-    original = DirectorySnapshot.release
+    original = JudgeSnapshots.retain
 
-    def release(lease):
+    def retain(snapshots, lease):
         assert events == ["freeze", "closed"]
         assert (writer.root / "submissions/agent-1/report.json").is_file()
         assert "unpause" not in runtime.events
         if failure == "release":
             raise OSError("release failed")
-        original(lease)
+        original(snapshots, lease)
         events.append("released")
 
-    monkeypatch.setattr(DirectorySnapshot, "release", release)
+    monkeypatch.setattr(JudgeSnapshots, "retain", retain)
     if failure == "report":
 
         def fail_report(_report):
@@ -2514,6 +2536,292 @@ def test_snapshot_release_follows_judge_teardown_and_precedes_work_resume(
         assert events == ["freeze", "closed", "released", "resume", "reopen"]
         assert "snapshot_released" in dict(observer.events)
         assert not (runtime.rounds / "agent-1").exists()
+        assert (runtime.rounds / RETAINED / "answer.py").is_file()
+
+
+def _round(writer, plan, name):
+    return EvaluationRequest(
+        run_plan=plan,
+        work_container=ContainerRef(container_id="work", role="work"),
+        round_id=name,
+        verifier_logs=writer.root / "verifier" / name,
+        verifier_output=writer.feedback_root / f"{name}.log",
+    )
+
+
+class _OrderedObserver(_Observer):
+    def __init__(self, log: list[str]) -> None:
+        super().__init__()
+        self.log = log
+
+    def resource_event(self, name: str, **values: object) -> None:
+        super().resource_event(name, **values)
+        self.log.append(name)
+
+
+def test_every_round_judges_a_read_only_copy_in_order(tmp_path, monkeypatch):
+    """Whatever the box mode (the evaluator does not depend on it), every
+    round copies: the Judge reads Harness inodes only, and the copy is kept
+    after the Judge has stopped and before Work resumes."""
+    plan = make_run_plan(tmp_path)
+    writer = RunArtifactWriter(plan, run_id="native-run")
+    writer.start()
+    runtime = _Runtime(tmp_path)
+    settle(tmp_path)  # as Agent time does: the file predates the first copy
+    # Whatever file system the tmp directory is on.
+    monkeypatch.setattr(snapshots, "_mapped_writes_change_ctime", lambda _fd: True)
+    log: list[str] = []
+    runtime.events = log
+    judge = runtime.run_judge
+    seen = []
+
+    def run(workspace, request, environment, **kwargs):
+        log.append("judge")
+        seen.append((workspace, (workspace / "answer.py").stat()))
+        return judge(workspace, request, environment, **kwargs)
+
+    original = JudgeSnapshots.retain
+    clock = JudgeSnapshots.clock
+
+    def retain(snapshots, lease):
+        log.append("retain")
+        original(snapshots, lease)
+
+    def read_clock(snapshots):
+        log.append("clock")
+        return clock(snapshots)
+
+    monkeypatch.setattr(runtime, "run_judge", run)
+    monkeypatch.setattr(JudgeSnapshots, "retain", retain)
+    monkeypatch.setattr(JudgeSnapshots, "clock", read_clock)
+    evaluator = NativeJudgeEvaluator(runtime, writer)
+    for name in ("agent-1", "agent-2"):
+        log.clear()
+        evaluator.evaluate(_round(writer, plan, name), _OrderedObserver(log))
+        order = [
+            "clock",
+            "pause",
+            "snapshot_acquired",
+            "judge",
+            "judge_removed",
+            "retain",
+            "snapshot_released",
+            "unpause",
+        ]
+        assert [event for event in log if event in order] == order
+    (first, first_stat), (second, second_stat) = seen
+    work = (runtime.workspace / "answer.py").stat()
+    assert first == runtime.rounds / "agent-1" / "workspace"
+    assert second == runtime.rounds / "agent-2" / "workspace"
+    # The unchanged file is linked from the first copy, never Work's inode.
+    assert second_stat.st_ino == first_stat.st_ino != work.st_ino
+    assert [path.name for path in runtime.rounds.iterdir()] == [RETAINED]
+    assert (runtime.workspace / "answer.py").read_text() == "answer = 42\n"
+
+
+def test_without_reuse_every_round_copies_every_file_and_keeps_none(
+    tmp_path, monkeypatch
+):
+    """A write still running when a copy starts set ctime before it, so a
+    torn copy looks unchanged: without a verified full stop, the next round
+    copies the file again instead of linking the torn copy."""
+    plan = make_run_plan(tmp_path)
+    writer = RunArtifactWriter(plan, run_id="native-run")
+    writer.start()
+    runtime = _Runtime(tmp_path)
+    runtime.judge_copy_reuse = False
+    settle(tmp_path)
+    monkeypatch.setattr(snapshots, "_mapped_writes_change_ctime", lambda _fd: True)
+    real = snapshots._copy_content
+
+    def torn(read_fd, write_fd, size):
+        # Half old bytes, half new: Work's metadata does not change.
+        os.write(write_fd, b"torn")
+        return real(read_fd, write_fd, size)
+
+    monkeypatch.setattr(snapshots, "_copy_content", torn)
+    original = JudgeSnapshots.acquire
+    since = []
+
+    def acquire(snapshots, source, name, **kwargs):
+        since.append(kwargs.get("since"))
+        return original(snapshots, source, name, **kwargs)
+
+    seen = []
+    judge = runtime.run_judge
+
+    def run(workspace, request, environment, **kwargs):
+        seen.append((workspace / "answer.py").read_bytes())
+        return judge(workspace, request, environment, **kwargs)
+
+    monkeypatch.setattr(JudgeSnapshots, "acquire", acquire)
+    monkeypatch.setattr(runtime, "run_judge", run)
+    evaluator = NativeJudgeEvaluator(runtime, writer)
+    for name in ("agent-1", "agent-2"):
+        observer = _Observer()
+        evaluator.evaluate(_round(writer, plan, name), observer)
+        assert "snapshot_released" in dict(observer.events)
+        assert list(runtime.rounds.iterdir()) == []
+        monkeypatch.setattr(snapshots, "_copy_content", real)
+    assert since == [None, None]
+    assert seen[0] != b"answer = 42\n"
+    assert seen[1] == b"answer = 42\n"
+
+
+def test_a_write_by_work_woken_after_the_pause_signal_is_not_reused(
+    tmp_path, monkeypatch
+):
+    """Even with reuse, a Work that wakes itself during the round (a timer
+    can send it SIGCONT) and starts a write after the pause signal cannot
+    leave a torn copy that later rounds link: the clock is read first."""
+    plan = make_run_plan(tmp_path)
+    writer = RunArtifactWriter(plan, run_id="native-run")
+    writer.start()
+    runtime = _Runtime(tmp_path)
+    settle(tmp_path)
+    monkeypatch.setattr(snapshots, "_mapped_writes_change_ctime", lambda _fd: True)
+    answer = runtime.workspace / "answer.py"
+    pause = runtime.pause
+
+    def pause_then_wake(work):
+        pause(work)
+        if len(seen) == 0:
+            found = answer.stat()
+            answer.write_text("answer = 43\n")  # the same size, in place
+            os.utime(answer, ns=(found.st_atime_ns, found.st_mtime_ns))
+
+    real = snapshots._copy_content
+
+    def torn(read_fd, write_fd, size):
+        # The copy overtook the write: it reads the old bytes.
+        os.write(write_fd, b"answer = 42\n")
+        return size
+
+    seen = []
+    judge = runtime.run_judge
+
+    def run(workspace, request, environment, **kwargs):
+        seen.append((workspace / "answer.py").read_bytes())
+        return judge(workspace, request, environment, **kwargs)
+
+    monkeypatch.setattr(runtime, "pause", pause_then_wake)
+    monkeypatch.setattr(runtime, "run_judge", run)
+    monkeypatch.setattr(snapshots, "_copy_content", torn)
+    evaluator = NativeJudgeEvaluator(runtime, writer)
+    evaluator.evaluate(_round(writer, plan, "agent-1"), _Observer())
+    monkeypatch.setattr(snapshots, "_copy_content", real)
+    settle(tmp_path)
+    evaluator.evaluate(_round(writer, plan, "agent-2"), _Observer())
+
+    assert seen == [b"answer = 42\n", b"answer = 43\n"]
+    assert answer.read_bytes() == b"answer = 43\n"
+
+
+def test_only_a_single_node_harness_box_reuses_judge_copies(tmp_path, monkeypatch):
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    assert runtime.profile.apptainer.process_namespaces != "harness"
+    # SIGSTOP to a process group returns before a running write ends.
+    assert runtime.judge_copy_reuse is False
+    runtime.profile = runtime.profile.model_copy(
+        update={
+            "apptainer": runtime.profile.apptainer.model_copy(
+                update={"process_namespaces": "harness"}
+            )
+        }
+    )
+    assert runtime.judge_copy_reuse is True
+    runtime.allocated_pools = _multi_pools()
+    assert runtime.judge_copy_reuse is False
+
+
+@pytest.mark.parametrize("failure", ["judge", "cancel"])
+def test_a_failed_round_keeps_its_copy_and_drops_the_base(
+    tmp_path, monkeypatch, failure
+):
+    plan = make_run_plan(tmp_path)
+    writer = RunArtifactWriter(plan, run_id="native-run")
+    writer.start()
+    runtime = _Runtime(tmp_path)
+    settle(tmp_path)
+    # Whatever file system the tmp directory is on.
+    monkeypatch.setattr(snapshots, "_mapped_writes_change_ctime", lambda _fd: True)
+    evaluator = NativeJudgeEvaluator(runtime, writer)
+    evaluator.evaluate(_round(writer, plan, "agent-1"), _Observer())
+    retained = (runtime.rounds / RETAINED / "answer.py").stat()
+    retained_calls = []
+    monkeypatch.setattr(
+        JudgeSnapshots, "retain", lambda *_args: retained_calls.append(True)
+    )
+
+    def run(*_args, **_kwargs):
+        if failure == "cancel":
+            raise KeyboardInterrupt
+        raise OSError("judge failed")
+
+    monkeypatch.setattr(runtime, "run_judge", run)
+    observer = _Observer()
+    runtime.events.clear()
+    with pytest.raises((OSError, KeyboardInterrupt)):
+        evaluator.evaluate(_round(writer, plan, "agent-2"), observer)
+
+    assert retained_calls == []
+    assert "recovery_required" in dict(observer.events)
+    assert "snapshot_released" not in dict(observer.events)
+    assert "unpause" not in runtime.events
+    kept = runtime.rounds / "agent-2" / "workspace" / "answer.py"
+    assert kept.stat().st_ino == retained.st_ino
+    # No base: a later copy links nothing.
+    later = evaluator.snapshots.acquire(runtime.workspace, "agent-3")
+    assert (later.workspace / "answer.py").stat().st_ino != retained.st_ino
+
+
+def test_the_run_end_removes_the_retained_copy_and_logs_a_failure(
+    tmp_path, monkeypatch, capsys
+):
+    from rsi_harness.cluster.bluevela import runtime as module
+    from tests.cluster.bluevela.test_engine import _payload
+
+    node_tmp = tmp_path / "node-tmp"
+    node_tmp.mkdir()
+    monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
+    monkeypatch.setattr(module, "_agent_provider_urls", lambda *a, **k: ())
+    made = []
+
+    class Composition(module.NativeEngineComposition):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            made.append(self)
+
+    class Stop(Exception):
+        pass
+
+    def coordinator(**_kwargs):
+        composition = made[-1]
+        composition.start_artifacts(composition.plan, composition.payload.run_id)
+        retained = composition.runtime.rounds / RETAINED
+        if broken:
+            retained.parent.mkdir(parents=True, exist_ok=True)
+            retained.symlink_to(composition.runtime.workspace)
+        else:
+            (retained / "src").mkdir(parents=True)
+            (retained / "src" / "answer.py").write_text("copy")
+            (retained / "src").chmod(0o500)
+        raise Stop
+
+    monkeypatch.setattr(module, "NativeEngineComposition", Composition)
+    monkeypatch.setattr(module, "RunCoordinator", coordinator)
+    broken = False
+    payload = _payload(tmp_path / "clean")
+    with pytest.raises(Stop):
+        module.run_native_engine(payload, payload.run_plan)
+    assert not os.path.lexists(made[-1].runtime.rounds / RETAINED)
+
+    broken = True
+    payload = _payload(tmp_path / "broken")
+    with pytest.raises(Stop):
+        module.run_native_engine(payload, payload.run_plan)
+    assert "judge_snapshot_cleanup_failed" in capsys.readouterr().out
+    assert os.path.islink(made[-1].runtime.rounds / RETAINED)
 
 
 @pytest.mark.parametrize("error_type", [KeyboardInterrupt, SystemExit])

@@ -355,6 +355,7 @@ def test_real_disposable_judge_uses_full_work_snapshot_and_discards_writes(tmp_p
     runner = JudgeRunner(
         run_id="run-real",
         workdir_volume=workdir_volume,
+        special_file_check=volume_backend.special_files,
         work_runtime=work_runtime,
         judge_runtime_factory=judge_factory,
         snapshot_backend=snapshot,

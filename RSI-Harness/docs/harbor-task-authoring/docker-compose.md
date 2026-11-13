@@ -157,8 +157,10 @@ The runtime behavior is:
 
 - Work mounts the managed WORKDIR volume read-write.
 - Agent commands run with the effective WORKDIR as their current directory.
-- Each submission pauses Work and creates a CoW snapshot of the managed volume.
-- Judge mounts that snapshot read-only at the same WORKDIR.
+- Each submission pauses Work; the Judge mounts the paused volume read-only
+  at the same WORKDIR.
+- A submission is refused, and not counted, while the WORKDIR holds a FIFO,
+  socket or device.
 - Judge-private writes elsewhere in its disposable container are discarded.
 - Judge cannot change Work files or the next Judge round.
 - Large files under the WORKDIR stay out of repeated rootfs image snapshots.

@@ -81,6 +81,7 @@ judge_authority_root = "/srv/rsi/harness/authority"
 build_args = ["--fakeroot"]
 workspace_target = "/testbed"
 temp_root = "/tmp"
+# python3 3.8 or later in the task image: rsi-box wraps every Work process.
 container_python = "/opt/venv/bin/python"
 rdma_binds = ["/dev/infiniband", "/sys/class/infiniband"]
 # Sites without network namespaces (max_net_namespaces = 0): phases without
@@ -88,7 +89,7 @@ rdma_binds = ["/dev/infiniband", "/sys/class/infiniband"]
 # non-setuid mode).
 # network_isolation = "seccomp"
 # Sites whose apptainer.conf disables PID namespaces: Work, seed and Judge get
-# their own PID, IPC and mount namespaces from rsi-box (needs container_python).
+# their own PID, IPC and mount namespaces from rsi-box.
 # process_namespaces = "harness"
 
 [apptainer.environment]

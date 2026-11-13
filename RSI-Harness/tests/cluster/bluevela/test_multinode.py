@@ -69,6 +69,11 @@ def _worker(multinode, tmp_path: Path, *, network_mode: str = "public"):
                 target="/workspace",
                 read_only=False,
             ),
+            multinode.WorkerBind(
+                source=tmp_path / "rsi-box.py",
+                target="/usr/local/bin/rsi-box",
+                read_only=True,
+            ),
         ),
         environment={"NCCL_DEBUG": "INFO"},
     )
@@ -356,8 +361,18 @@ def test_remote_worker_builds_only_the_broker_owned_apptainer_shape(
     )
     assert singularity["SINGULARITYENV_TRAINING_PROFILE"] == 'E3,"quoted"'
     assert not any(name.startswith("APPTAINERENV_") for name in singularity)
-    python_offset = command.index("/opt/venv/bin/python")
-    distributed = command[python_offset:]
+    # A Work rank runs under rsi-box's filter, without file watches.
+    python_offset = command.index(str(tmp_path / "image.sif")) + 1
+    assert command[python_offset : python_offset + 7] == (
+        "/opt/venv/bin/python",
+        "-I",
+        "-S",
+        "-B",
+        "/usr/local/bin/rsi-box",
+        "--work-filter",
+        "--",
+    )
+    distributed = command[python_offset + 7 :]
     assert distributed[:3] == (
         "/opt/venv/bin/python",
         "-m",

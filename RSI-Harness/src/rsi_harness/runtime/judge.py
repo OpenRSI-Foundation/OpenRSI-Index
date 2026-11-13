@@ -92,6 +92,7 @@ from rsi_harness.runtime.network import (
 from rsi_harness.runtime.redaction import redact_exact_values, redact_text
 from rsi_harness.runtime.reward import read_reward
 from rsi_harness.runtime.rootfs_snapshot import RootfsSnapshotNotCreatedError
+from rsi_harness.runtime.special_files import special_files_refusal
 from rsi_harness.runtime.trajectory import (
     capture_round_trajectory,
     release_round_trajectory,
@@ -692,6 +693,10 @@ class JudgeRunner:
         event_callback: Callable[[str, object], None] | None = None,
         sandbox_lifecycle: Any | None = None,
         model_access: JudgeModelAccess | None = None,
+        special_file_check: Callable[
+            [ManagedWorkdirVolume, str], Sequence[tuple[PurePosixPath, str]]
+        ]
+        | None = None,
     ) -> None:
         if sandbox_lifecycle is None:
             from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
@@ -699,6 +704,9 @@ class JudgeRunner:
             sandbox_lifecycle = NullSandboxLifecycle()
         self._sandbox_lifecycle = sandbox_lifecycle
         self._model_access = model_access
+        # A split-WORKDIR round: FIFOs, sockets and devices in the paused
+        # volume (DockerWorkdirVolumeBackend.special_files).
+        self._special_file_check = special_file_check
         self._run_id = run_id
         self._workdir_volume = workdir_volume
         self._work_runtime = work_runtime
@@ -813,6 +821,13 @@ class JudgeRunner:
                     )
                     primary_error = _error_text(error, verifier_error_secrets)
                     raise _SubmissionRejected from error
+            if paused and self._workdir_volume is not None:
+                found = self._special_files(plan)
+                if found:
+                    retry_reason = special_files_refusal(found, plan.workdir)
+                    retry_candidate = SubmissionError(retry_reason)
+                    primary_error = retry_reason
+                    raise _SubmissionRejected
             log_dir = self._prepare_log_dir(request)
             # Freeze the Agent's output now, while Work is paused: the Judge
             # sees exactly what led to this submission and nothing later.
@@ -1338,6 +1353,20 @@ class JudgeRunner:
             )
         verifier_error_secrets.clear()
         return report
+
+    def _special_files(self, plan: RunPlan) -> Sequence[tuple[PurePosixPath, str]]:
+        """FIFOs, sockets and devices in the paused WORKDIR volume, which the
+        Judge mounts read-only in place (special_files.py says why they are
+        refused). Every round with Work paused, final ones too: Work is
+        unpaused afterwards and a resumed attempt keeps the WORKDIR. Work
+        that has already stopped holds no end of any of them."""
+        if self._special_file_check is None or self._workdir_volume is None:
+            raise InfrastructureError("WORKDIR special-file check is unavailable")
+        try:
+            image = clean_judge_image(plan.images)
+        except SetupError as error:
+            raise InfrastructureError(str(error)) from None
+        return self._special_file_check(self._workdir_volume, image)
 
     def _close_after_work_end(self, secret_values: set[str]) -> list[str]:
         """Close the stream: a later round would re-pause the ended Work."""

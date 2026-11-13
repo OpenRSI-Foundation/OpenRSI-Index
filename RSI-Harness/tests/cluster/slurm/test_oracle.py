@@ -651,6 +651,7 @@ def test_native_engine_applies_oracle_result_checks(
         coordinator_options=lambda: {},
         request=lambda: None,
         runtime=SimpleNamespace(close_multinode=lambda: None),
+        evaluator=None,
     )
     monkeypatch.setattr(module, "NativeEngineComposition", lambda *a, **k: composition)
     monkeypatch.setattr(

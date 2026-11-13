@@ -603,6 +603,7 @@ def judge_round(tmp_path: Path, access, events: list):
     runner = JudgeRunner(
         run_id="run-1",
         workdir_volume=managed_workdir_volume(plan),
+        special_file_check=lambda _volume, _image: [],
         work_runtime=runtime,
         judge_runtime_factory=runtime.for_round,
         snapshot_backend=snapshot,
