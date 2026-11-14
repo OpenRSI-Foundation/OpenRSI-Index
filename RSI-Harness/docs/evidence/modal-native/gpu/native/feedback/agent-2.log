@@ -1,0 +1,4 @@
+{"fixture_score": 1.0, "isolation": "passed"}
+GPU-2117d1d2-3b56-2953-dd05-610802dcfadb, NVIDIA H100 80GB HBM3
+
+{"cuda_context": "passed", "gpu_memory_roundtrip": 2.0, "physical_gpu_count": 1}
