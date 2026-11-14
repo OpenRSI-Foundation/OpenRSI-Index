@@ -579,7 +579,18 @@ def _daemon_work():
         stdout=subprocess.PIPE,
         text=True,
     )
-    return leader, int(leader.stdout.readline())
+    daemon = int(leader.stdout.readline())
+    # SIGUSR1 kills the daemon until it catches it (SigCgt).
+    status = Path(f"/proc/{daemon}/status")
+    deadline = time.monotonic() + 10
+    while not any(
+        line.startswith("SigCgt:")
+        and int(line.split()[1], 16) >> (signal.SIGUSR1 - 1) & 1
+        for line in status.read_text().splitlines()
+    ):
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    return leader, daemon
 
 
 def _end_daemon_work(leader, pids) -> None:
