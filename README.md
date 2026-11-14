@@ -19,7 +19,6 @@
 - **[2026-11-12]** RSI Harness adds [task-defined submission budgets and a single final evaluation mode](https://github.com/OpenRSI-Foundation/OpenRSI-Index/pull/342).
 - **[2026-11-09]** Our [OpenRSI × SGLang-Omni report](https://index.openrsi.foundation/blog/2026/openrsi-sglang-omni/) documents **14 upstream-merged PRs across eight speech and omni model families**.
 - **[2026-11-06]** RSI Harness expands [cluster support](NEWS.md#november-2026) with Kubernetes, PBS Pro, Fujitsu PJM and SingularityCE.
-- **[2026-11-05]** We released the [SGLang-Omni task collection](rsi-tasks/SGNOMI/): **12 task packages covering 10 model configurations across eight model families**.
 
 [All news →](NEWS.md)
 
