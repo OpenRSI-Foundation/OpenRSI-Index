@@ -15,10 +15,10 @@
 
 ## ✨ News
 
-- **[2026-11-13]** RSI Harness [reduces cluster evaluation overhead](https://github.com/OpenRSI-Foundation/OpenRSI-Index/pull/347) by judging paused workspaces through read-only mounts, without per-round workspace copies.
-- **[2026-11-12]** RSI Harness adds [task-defined submission budgets and a single final evaluation mode](https://github.com/OpenRSI-Foundation/OpenRSI-Index/pull/342).
-- **[2026-11-09]** Our [OpenRSI × SGLang-Omni report](https://index.openrsi.foundation/blog/2026/openrsi-sglang-omni/) documents **14 upstream-merged PRs across eight speech and omni model families**.
-- **[2026-11-06]** RSI Harness expands [cluster support](NEWS.md#november-2026) with Kubernetes, PBS Pro, Fujitsu PJM and SingularityCE.
+- **[2026-11]** New [OpenRSI × SGLang-Omni blog](https://index.openrsi.foundation/blog/2026/openrsi-sglang-omni/): **14 merged PRs**, **8 model families**, and **7.6%–326.5% higher H100 non-streaming throughput**.
+- **[2026-11]** We presented OpenRSI × SGLang-Omni at [SGLang Summit 2026](https://www.sglang.io/summit).
+- **[2026-11]** [RSI Harness](RSI-Harness/) now supports **7 coding agents on local Docker**, resumable runs, and more cluster backends.
+- **[2026-11]** Our [26 public task packages](rsi-tasks/) cover pre-training, post-training, vision, robotics, agents, and AI systems.
 
 [All news →](NEWS.md)
 
