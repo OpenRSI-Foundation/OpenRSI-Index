@@ -365,10 +365,8 @@ class _Apptainer:
     def __init__(self, root: Path, kit: Kit, work_env: str) -> None:
         self.workspace = root / "workspace"
         self.workspace.mkdir()
-        self.rounds = root / "rounds"
-        self.rounds.mkdir()
         self.payload = SimpleNamespace(run_id="run-1")
-        self.judge_copy_reuse = True
+        self.work_alive = True
         self.events: list[str] = []
         self.kit = kit
         self.work_env = work_env
@@ -386,10 +384,8 @@ class _Apptainer:
     def require_work_idle(self):
         self.events.append("idle")
 
-    def run_judge(
-        self, workspace, request, environment, *, sandbox_endpoint, trajectory=None
-    ):
-        del workspace, environment, trajectory
+    def run_judge(self, request, environment, *, sandbox_endpoint, trajectory=None):
+        del environment, trajectory
         self.events.append("judge")
         # Work's envs are frozen before Work is paused and the round starts.
         assert sandbox_of(self.kit, self.work_env).paused
@@ -570,7 +566,7 @@ def test_apptainer_mounts_each_phase_endpoint_and_starts_the_work_deadline(
         verifier_output=tmp_path / "out.log",
         verifier_logs=tmp_path / "logs",
     )
-    apptainer.run_judge(tmp_path, request, {"A": "1"}, sandbox_endpoint=endpoint)
+    apptainer.run_judge(request, {"A": "1"}, sandbox_endpoint=endpoint)
     judge = calls[-1]
     assert (judge_dir, PurePosixPath(SANDBOX_TARGET), True) in judge["extra_binds"]
     assert judge["environment"]["RSI_SANDBOX_TOKEN"] == "judge-token"

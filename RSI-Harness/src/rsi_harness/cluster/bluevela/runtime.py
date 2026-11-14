@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import contextlib
 import ctypes
+import errno
 import grp
 import hashlib
 import json
@@ -64,11 +65,6 @@ from rsi_harness.cluster.bluevela.preflight import (
     singularity_ce_conflict,
 )
 from rsi_harness.cluster.bluevela.sandbox import ClusterSandbox
-from rsi_harness.cluster.snapshots import (
-    DirectorySnapshot,
-    JudgeSnapshots,
-    remove_retained,
-)
 from rsi_harness.errors import (
     InfrastructureError,
     RetryableSubmissionError,
@@ -166,6 +162,12 @@ from rsi_harness.runtime.reward import read_reward
 from rsi_harness.runtime.sandbox_lifecycle import NullSandboxLifecycle
 from rsi_harness.runtime.sandbox_policy import validate_cluster_sandbox
 from rsi_harness.runtime.sandbox_server import SANDBOX_TARGET
+from rsi_harness.runtime.special_files import (
+    SpecialFileScanError,
+    find_special_files,
+    scan_failure_refusal,
+    special_files_refusal,
+)
 from rsi_harness.runtime.trajectory import (
     capture_round_trajectory,
     release_round_trajectory,
@@ -196,9 +198,7 @@ def _gpu_preflight_command(command: list[str]) -> subprocess.CompletedProcess[st
             timeout=15,
         )
     except (OSError, subprocess.TimeoutExpired) as error:
-        raise SubmissionError(
-            f"Work GPU preflight {command[0]} query failed: {error}"
-        ) from error
+        raise SubmissionError(f"{command[0]} query failed: {error}") from error
 
 
 def _agent_provider_urls(
@@ -352,6 +352,13 @@ def kubernetes_accounts(
 _BOX_PAUSE = signal.SIGUSR1
 _BOX_RESUME = signal.SIGUSR2
 _BOX_PAUSE_SECONDS = 10.0
+_SIGSTOP_BIT = 1 << (signal.SIGSTOP - 1)
+
+
+class WorkStopTimeoutError(InfrastructureError):
+    """Work did not stop within _BOX_PAUSE_SECONDS; the pause continued it."""
+
+
 # The pre-search isolation check, run in Work: raw facts, the host decides.
 # Arguments: the Engine's pid, the container python, the description of the
 # Engine's key in its user keyring (or nothing), the paths to look for (an
@@ -462,6 +469,151 @@ def _descendants(table: dict[int, tuple[int, str, str]], roots: set[int]) -> set
     ):
         found |= below
     return found
+
+
+def _process_stat(pid: int) -> tuple[int, int, int] | None:
+    """A process's parent, session and start time (/proc/<pid>/stat), or
+    None once it has exited."""
+    try:
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    return int(fields[1]), int(fields[3]), int(fields[19])
+
+
+def _running_threads(pid: int) -> list[int]:
+    """The threads of ``pid`` not stopped yet. A thread counts as stopped
+    when it is stopped (T, t), has exited, or waits in the kernel (D) with
+    SIGSTOP pending for that thread (SigPnd), as _stop_threads leaves it.
+    Such a thread stops before it runs user code again; it may wait for a
+    stopped child (vfork) or a stopped FUSE helper, which SIGSTOP cannot end.
+    A SIGSTOP pending for the whole process (ShdPnd) does not count: the
+    kernel may have given it to a thread in D, which cannot take it, and then
+    no other thread stops."""
+    try:
+        threads = os.listdir(f"/proc/{pid}/task")
+    except (FileNotFoundError, ProcessLookupError):
+        return []
+    running = []
+    for thread in threads:
+        task = f"/proc/{pid}/task/{thread}"
+        try:
+            state = Path(f"{task}/stat").read_text().rsplit(")", 1)[1].split()[0]
+            if state in {"T", "t", "Z", "X"}:
+                continue
+            if state == "D" and _stop_pending(Path(f"{task}/status"), "SigPnd"):
+                continue
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        running.append(int(thread))
+    return running
+
+
+def _threads_stopped(pid: int) -> bool:
+    """Whether every thread of ``pid`` counts as stopped (_running_threads)."""
+    return not _running_threads(pid)
+
+
+def _stop_pending(status: Path, field: str) -> bool:
+    """Whether /proc status ``field`` has SIGSTOP: SigPnd for the thread,
+    ShdPnd for its process. False once it has exited."""
+    try:
+        lines = status.read_text().splitlines()
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+    for line in lines:
+        name, _, value = line.partition(":")
+        if name == field:
+            return bool(int(value, 16) & _SIGSTOP_BIT)
+    return False
+
+
+# tgkill(2) by architecture; Python has no wrapper.
+_TGKILL_SYSCALL = {"x86_64": 234, "aarch64": 131}
+
+
+def _tgkill(pid: int, tid: int, signum: int) -> None:
+    """Signal thread ``tid`` of process ``pid``; nothing once it has exited
+    (the kernel refuses a ``tid`` that is not a thread of ``pid``)."""
+    machine = os.uname().machine
+    number = _TGKILL_SYSCALL.get(machine)
+    if number is None:
+        raise InfrastructureError(f"cannot signal a Work thread on {machine}")
+    libc = ctypes.CDLL(None, use_errno=True)
+    arguments = (ctypes.c_long(value) for value in (number, pid, tid, signum))
+    if libc.syscall(*arguments) != 0:
+        error = ctypes.get_errno()
+        if error != errno.ESRCH:
+            raise OSError(error, f"tgkill {pid} {tid}: {os.strerror(error)}")
+
+
+def _stop_threads(pid: int, start: int) -> None:
+    """Send SIGSTOP to each thread of ``pid`` not stopped yet, unless ``pid``
+    has exited or its number is another process's now. The first thread that
+    takes it stops the whole process; a thread in D keeps it pending. SIGCONT
+    to the process clears it from every thread."""
+    stat = _process_stat(pid)
+    if stat is None or stat[2] != start:
+        return
+    for tid in _running_threads(pid):
+        _tgkill(pid, tid, signal.SIGSTOP)
+
+
+def _finish_box_stop(pid: int) -> None:
+    """Harness mode: stop each thread of a box process the box already
+    reached but that is not stopped yet. The box's SIGSTOP is either still
+    pending for the whole process (ShdPnd), as a thread in D may have taken
+    it, or another thread took it and stopped, leaving a thread in D behind.
+    A process the box never reached is left to the box. A refused signal
+    leaves the pause to time out."""
+    stat = _process_stat(pid)
+    if stat is not None and (
+        _stop_pending(Path(f"/proc/{pid}/status"), "ShdPnd") or _group_stop_begun(pid)
+    ):
+        with contextlib.suppress(OSError):
+            _stop_threads(pid, stat[2])
+
+
+def _group_stop_begun(pid: int) -> bool:
+    """Whether some thread of ``pid`` is stopped (T, t)."""
+    try:
+        threads = os.listdir(f"/proc/{pid}/task")
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+    for thread in threads:
+        try:
+            stat = Path(f"/proc/{pid}/task/{thread}/stat").read_text()
+        except (FileNotFoundError, ProcessLookupError):
+            continue
+        if stat.rsplit(")", 1)[1].split()[0] in {"T", "t"}:
+            return True
+    return False
+
+
+def _signal_process(pid: int, start: int, signum: int) -> None:
+    """Signal ``pid`` unless it has exited or its number is another
+    process's now (another start time)."""
+    stat = _process_stat(pid)
+    if stat is not None and stat[2] == start:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signum)
+
+
+def _syncfs(path: Path) -> None:
+    """Write the file system's dirty data under ``path`` to its storage, so
+    other nodes read it (NFS). A failure is reported, not raised: the Judge
+    then reads what the storage holds."""
+    try:
+        descriptor = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
+    except OSError as error:
+        print(f"[rsi-engine] workspace_syncfs: {error}", flush=True)
+        return
+    try:
+        if ctypes.CDLL(None, use_errno=True).syncfs(descriptor) != 0:
+            error = OSError(ctypes.get_errno(), "syncfs failed")
+            print(f"[rsi-engine] workspace_syncfs: {error}", flush=True)
+    finally:
+        os.close(descriptor)
 
 
 def _box_outer(root: int, table: dict[int, tuple[int, str, str]]) -> int | None:
@@ -691,7 +843,6 @@ class ApptainerAgentRuntime:
         self.control = plan.paths.root / "engine-control"
         self.agent_home = plan.paths.root / "agent-home"
         self.task_assets = plan.paths.root / "task-tmp"
-        self.rounds = plan.paths.root / "judge-rounds"
         raw_node_tmp = os.environ.get("RSI_HARNESS_NODE_TMP")
         if not raw_node_tmp or not Path(raw_node_tmp).is_absolute():
             raise SetupError("RSI_HARNESS_NODE_TMP must be an absolute path")
@@ -730,6 +881,8 @@ class ApptainerAgentRuntime:
         self.work_broker: MultiNodeBroker | None = None
         self.judge_broker: MultiNodeBroker | None = None
         self._paused = False
+        # The Work processes a pause stopped by pid, with their start times.
+        self._stopped: dict[int, int] = {}
         self._work_failure: str | None = None
         self._lock = threading.RLock()
         # The Work sandbox endpoint directory (cluster/bluevela/sandbox.py).
@@ -751,20 +904,11 @@ class ApptainerAgentRuntime:
         return self.allocated_pools.work[0].cuda_devices
 
     @property
-    def judge_copy_reuse(self) -> bool:
-        """Whether a Judge copy may link files unchanged since the last round.
-
-        Only on one node, where this node's metadata shows every Work write,
-        and only when the pause waits until every Work thread has stopped
-        (the Harness box), so every write that started before the pause
-        signal has returned before the copy starts. A write that starts
-        later, even after Work wakes itself, is never reused (see
-        ``JudgeSnapshots.acquire``).
-        """
-        return (
-            self.allocated_pools is None
-            and self.profile.apptainer.process_namespaces == "harness"
-        )
+    def work_alive(self) -> bool:
+        """Whether Work's process is still there, running or paused: a
+        final round after the Agent exits finds none."""
+        with self._lock:
+            return self._process is not None and self._process.poll() is None
 
     @property
     def work_ref(self) -> ContainerRef:
@@ -881,17 +1025,12 @@ class ApptainerAgentRuntime:
             self.control,
             self.agent_home,
             self.task_assets,
-            self.rounds,
         ):
             if not kept:
                 # The image's own files seed a partial copy over again.
                 directory.mkdir(parents=True, mode=0o700, exist_ok=resume)
             if resume and (not directory.is_dir() or directory.is_symlink()):
                 raise SetupError(f"resumed run directory is missing: {directory}")
-        if resume:
-            # The last attempt's Judge copy: nothing is adopted across
-            # processes, so the first resumed round copies everything.
-            remove_retained(self.rounds)
         # CODEX_HOME and CLAUDE_CONFIG_DIR name these, with or without a
         # stop hook (which used to be the only thing creating them).
         for name in (".codex", ".claude"):
@@ -1474,7 +1613,7 @@ class ApptainerAgentRuntime:
         with self._lock:
             process = self._process
             if process is None or process.poll() is not None:
-                raise SubmissionError("Work process disappeared before GPU preflight")
+                raise SubmissionError("Work process disappeared")
             root_pid = process.pid
         result = _gpu_preflight_command(["ps", "-eo", "pid=,ppid=,sid="])
         if result.returncode != 0:
@@ -1632,7 +1771,7 @@ class ApptainerAgentRuntime:
 
         The launcher removes the single-node copy itself.  Distributed Work
         shares this copy, so stop the broker before deleting it: no queued
-        request may start reading /solution during the snapshot or Judge.
+        request may start reading /solution during the Judge.
         """
         if self.allocated_pools is None or self._oracle_solution is None:
             return
@@ -1746,24 +1885,21 @@ class ApptainerAgentRuntime:
 
     def run_judge(
         self,
-        workspace: Path,
         request: EvaluationRequest,
         environment: dict[str, str],
         *,
         sandbox_endpoint: Any = None,
         trajectory: Path | None = None,
     ) -> AgentRunResult:
+        """One Judge round, which binds Work's paused workspace read-only
+        at WORKDIR: no copy (NativeJudgeEvaluator pauses Work first)."""
         # A public Judge runs exactly the tests Work saw.
         self._require_public_tests_digest()
-        # Never Work's own files: a stopped Work can be continued (SIGCONT),
-        # and shared inodes would carry data between Judge and Work.
-        if workspace == self.workspace:
-            raise InfrastructureError("Judge needs a copy of Work's workspace")
         if self.allocated_pools is not None:
             if sandbox_endpoint is not None:
                 raise SetupError("multi-node Judge cannot reach the sandbox broker")
             return self._run_multinode_judge(
-                workspace, request, environment, trajectory=trajectory
+                request, environment, trajectory=trajectory
             )
         trajectory_binds: tuple[tuple[Path, PurePosixPath, bool], ...] = ()
         if trajectory is not None:
@@ -1844,8 +1980,8 @@ class ApptainerAgentRuntime:
                 environment=environment,
                 output_path=request.verifier_output,
                 extra_binds=(
-                    # Read-only: the next round links its unchanged files.
-                    (workspace, request.run_plan.workdir, True),
+                    # Read-only: the Judge cannot change what Work resumes with.
+                    (self.workspace, request.run_plan.workdir, True),
                     (
                         request.run_plan.task.source_dir / "tests",
                         PurePosixPath("/tests"),
@@ -2046,7 +2182,6 @@ class ApptainerAgentRuntime:
 
     def _run_multinode_judge(
         self,
-        workspace: Path,
         request: EvaluationRequest,
         environment: dict[str, str],
         *,
@@ -2061,12 +2196,15 @@ class ApptainerAgentRuntime:
             raise SetupError(
                 "Blue Vela multi-node Judge does not support allowlist networking"
             )
+        # The Judge's nodes read Work's paused workspace from shared storage.
+        _syncfs(self.workspace)
         round_digest = hashlib.sha256(request.round_id.encode()).hexdigest()[:16]
         round_root = self.control / "multinode/judge" / round_digest
         shim = self._materialize_shared_judge_torchrun()
         binds = [
+            # Work's workspace on the shared file system, read-only.
             WorkerBind(
-                source=workspace,
+                source=self.workspace,
                 target=request.run_plan.workdir,
                 read_only=True,
             ),
@@ -2364,11 +2502,11 @@ class ApptainerAgentRuntime:
             self._paused = True
 
     def _stop_work(self, process: subprocess.Popen[str]) -> None:
-        """Stop every Work process: its process group, or in the Harness box
-        every thread in the box, which the host then sees stopped twice in a
-        row. A pause that fails continues the box again."""
+        """Stop every Work process on this node, which the host then sees
+        stopped twice in a row. A pause that fails continues what it
+        stopped."""
         if self.profile.apptainer.process_namespaces != "harness":
-            os.killpg(process.pid, signal.SIGSTOP)
+            self._stop_work_processes(process)
             return
         outer = _box_outer(process.pid, _process_table())
         if outer is None:
@@ -2377,33 +2515,90 @@ class ApptainerAgentRuntime:
             )
         deadline = time.monotonic() + _BOX_PAUSE_SECONDS
         stopped = False
-        while True:
-            if not stopped:
-                # Again until it holds: a Work process not stopped yet can
-                # continue one that was, or keep its own signal pending at
-                # pid 1, with which this one merges.
-                os.kill(outer, _BOX_PAUSE)
-            time.sleep(0.05)
-            table = _process_table()
-            # pid 1 of the box stays running to resume it.
-            inits = {pid for pid, (parent, _, _) in table.items() if parent == outer}
-            running = sorted(
-                pid
-                for pid in _descendants(table, inits) - inits
-                if set(table[pid][1]) - {"T", "t", "Z"}
-            )
-            if inits and not running and stopped:
-                return
-            stopped = bool(inits) and not running
-            if time.monotonic() >= deadline:
-                with contextlib.suppress(OSError):
-                    os.kill(outer, _BOX_RESUME)
-                raise InfrastructureError(
-                    f"Work did not stop in its process box: running {running}"
+        try:
+            while True:
+                if not stopped:
+                    # Again until it holds: a Work process not stopped yet
+                    # can continue one that was, or keep its own signal
+                    # pending at pid 1, with which this one merges.
+                    os.kill(outer, _BOX_PAUSE)
+                time.sleep(0.05)
+                table = _process_table()
+                # pid 1 of the box stays running to resume it.
+                inits = {
+                    pid for pid, (parent, _, _) in table.items() if parent == outer
+                }
+                running = sorted(
+                    pid
+                    for pid in _descendants(table, inits) - inits
+                    if set(table[pid][1]) - {"T", "t", "Z"}
+                    and not _threads_stopped(pid)
                 )
+                for pid in running:
+                    _finish_box_stop(pid)
+                if inits and not running and stopped:
+                    return
+                stopped = bool(inits) and not running
+                if time.monotonic() >= deadline:
+                    raise WorkStopTimeoutError(
+                        f"Work did not stop in its process box: running {running}"
+                    )
+        except BaseException:
+            with contextlib.suppress(OSError):
+                os.kill(outer, _BOX_RESUME)
+            raise
+
+    def _stop_work_processes(self, process: subprocess.Popen[str]) -> None:
+        """Stop Work's process group and every other Work process: each one
+        below it or in its session, also in its own group or session (a
+        daemon). Stops again until two passes in a row find every one
+        stopped. Apptainer's PID namespace keeps an orphan below Work."""
+        root = process.pid
+        stopped = self._stopped
+        deadline = time.monotonic() + _BOX_PAUSE_SECONDS
+        settled = False
+        try:
+            # The group at once; then each thread not stopped yet, as a
+            # process-directed SIGSTOP can be taken by a thread in D and
+            # stop no other thread.
+            os.killpg(root, signal.SIGSTOP)
+            while True:
+                members = self._work_process_ids()
+                running = []
+                for pid in sorted(members):
+                    stat = _process_stat(pid)
+                    if stat is None:
+                        continue  # exited
+                    parent, session, start = stat
+                    if session != root and parent not in members:
+                        continue  # exited, and its pid is another process's now
+                    if not _threads_stopped(pid):
+                        # Again until it holds: a Work process not stopped
+                        # yet can continue one that was.
+                        stopped[pid] = start
+                        _stop_threads(pid, start)
+                        running.append(pid)
+                if not running and settled:
+                    return
+                settled = not running
+                if time.monotonic() >= deadline:
+                    raise WorkStopTimeoutError(f"Work did not stop: running {running}")
+                time.sleep(0.05)
+        except BaseException as error:
+            with contextlib.suppress(OSError):
+                self._continue_work(process)
+            if isinstance(error, InfrastructureError) or not isinstance(
+                error, Exception
+            ):
+                raise
+            raise InfrastructureError(f"cannot stop Work: {error}") from error
 
     def _continue_work(self, process: subprocess.Popen[str]) -> None:
         if self.profile.apptainer.process_namespaces != "harness":
+            # Exactly the processes the pause stopped, then the group.
+            stopped, self._stopped = self._stopped, {}
+            for pid, start in stopped.items():
+                _signal_process(pid, start, signal.SIGCONT)
             os.killpg(process.pid, signal.SIGCONT)
         elif process.poll() is None:
             # Once the box has exited, nothing is left in it.
@@ -3009,10 +3204,11 @@ def require_cluster_judge_model_access(task: Any, *, multi_node: bool) -> None:
 
 
 class NativeJudgeEvaluator:
-    """One Judge round. With a sandbox lifecycle it follows the local
-    ordering: freeze Work's envs, pause Work, run the round with its own
-    endpoint, close the round's envs, then resume Work's envs, unpause Work
-    and reopen its endpoint."""
+    """One Judge round, which reads Work's paused workspace through a
+    read-only bind. With a sandbox lifecycle it follows the local ordering:
+    freeze Work's envs, pause Work, run the round with its own endpoint,
+    close the round's envs, then resume Work's envs, unpause Work and reopen
+    its endpoint."""
 
     def __init__(
         self,
@@ -3023,11 +3219,6 @@ class NativeJudgeEvaluator:
         self.runtime = runtime
         self.artifacts = artifacts
         self.sandbox = sandbox_lifecycle or NullSandboxLifecycle()
-        self.snapshots = JudgeSnapshots(runtime.rounds)
-
-    def close(self) -> None:
-        """Remove the last round's retained workspace copy."""
-        self.snapshots.close()
 
     def evaluate(self, request: EvaluationRequest, observer: Any) -> SubmissionReport:
         started = time.monotonic()
@@ -3043,7 +3234,6 @@ class NativeJudgeEvaluator:
                 # being written. Still end the execution loop in memory.
                 self.runtime.fail_work(message)
 
-        lease: DirectorySnapshot | None = None
         # Before Work pauses, as on Docker: a refresh may take a while.
         self.runtime.renew_operator_login(request.round_id)
         # Busy Work envs make the submission retryable before any pause.
@@ -3053,16 +3243,18 @@ class NativeJudgeEvaluator:
             "work_pause_planned",
             work_container_id=request.work_container.container_id,
         )
+        stalled: WorkStopTimeoutError | None = None
         try:
-            # Before the pause signal: only files whose last write started
-            # before this time can be linked next round.
-            since = self.snapshots.clock() if self.runtime.judge_copy_reuse else None
             self.runtime.pause(request.work_container)
+        except WorkStopTimeoutError as error:
+            stalled = error  # Work runs again: refuse the round as below.
         except BaseException:
             if frozen:
                 self._release_sandbox()
             raise
         try:
+            if stalled is not None:
+                raise RetryableSubmissionError(f"{stalled}; submit again") from stalled
             try:
                 self.runtime.require_work_idle()
             except SubmissionError as error:
@@ -3071,27 +3263,16 @@ class NativeJudgeEvaluator:
                 raise RetryableSubmissionError(
                     "active remote Work must finish before submission"
                 ) from error
+            if self.runtime.work_alive:
+                # Work resumes after this round; one that has ended holds
+                # no end of any of these files.
+                self._refuse_special_files(request)
             if request.run_plan.task.agent.name == "oracle":
                 self.runtime.remove_oracle_solution()
             request.verifier_logs.mkdir(
                 parents=True,
                 mode=0o700,
                 exist_ok=False,
-            )
-            observer.resource_event(
-                "snapshot_planned",
-                round_id=request.round_id,
-            )
-            # A copy that shares no inode with Work, where files unchanged
-            # since the last round may be linked from its retained copy.
-            lease = self.snapshots.acquire(
-                self.runtime.workspace, request.round_id, since=since
-            )
-            snapshot = lease.workspace
-            observer.resource_event(
-                "snapshot_acquired",
-                snapshot_lease_id=f"workspace-{request.round_id}",
-                snapshot_merged_path=str(snapshot),
             )
             observer.resource_event("judge_planned", round_id=request.round_id)
             judge_id = f"bluevela-{self.runtime.payload.run_id}-{request.round_id}"
@@ -3113,12 +3294,9 @@ class NativeJudgeEvaluator:
                         + request.run_plan.task.verifier.timeout_seconds
                     )
                 result = (
-                    self.runtime.run_judge(
-                        snapshot, request, environment, trajectory=trajectory
-                    )
+                    self.runtime.run_judge(request, environment, trajectory=trajectory)
                     if endpoint is None
                     else self.runtime.run_judge(
-                        snapshot,
                         request,
                         environment,
                         sandbox_endpoint=endpoint,
@@ -3171,23 +3349,13 @@ class NativeJudgeEvaluator:
         finally:
             # Work that ended (deadline or retired) during the round stays
             # paused for the coordinator to stop.
-            def release_snapshot() -> None:
+            def release_judge() -> None:
                 if report is not None:
                     observer.resource_event(
                         "judge_removed", judge_container_id=judge_id
                     )
-                    if lease is not None:
-                        # Kept as the next round's base, until then.
-                        self.snapshots.retain(lease)
-                        observer.resource_event(
-                            "snapshot_released",
-                            snapshot_lease_id=f"workspace-{request.round_id}",
-                        )
 
             if failed:
-                # The round's copy stays as evidence; the next round copies
-                # everything.
-                self.snapshots.drop()
                 if frozen:
                     try:
                         self.sandbox.close_judge()
@@ -3196,11 +3364,9 @@ class NativeJudgeEvaluator:
             else:
                 try:
                     if frozen:
-                        can_resume = self._release_sandbox(
-                            before_resume=release_snapshot
-                        )
+                        can_resume = self._release_sandbox(before_resume=release_judge)
                     else:
-                        release_snapshot()
+                        release_judge()
                         can_resume = True
                     if can_resume:
                         self.runtime.unpause(request.work_container)
@@ -3213,6 +3379,20 @@ class NativeJudgeEvaluator:
                 except Exception as error:
                     recover(error)
                     raise InfrastructureError(str(error)) from error
+
+    def _refuse_special_files(self, request: EvaluationRequest) -> None:
+        """Refuse the round, not counted, while the paused workspace holds a
+        FIFO, socket or device, or when the walk cannot check all of it
+        (special_files.py says why)."""
+        workdir = request.run_plan.workdir
+        try:
+            found = find_special_files(self.runtime.workspace)
+        except SpecialFileScanError as error:
+            raise RetryableSubmissionError(
+                scan_failure_refusal(error, workdir)
+            ) from None
+        if found:
+            raise RetryableSubmissionError(special_files_refusal(found, workdir))
 
     def _release_sandbox(self, before_resume: Callable[[], None] | None = None) -> bool:
         """End the round's envs, then resume Work's; False when Work ended
@@ -3769,14 +3949,6 @@ def run_native_engine(
         ).run(composition.request())
     finally:
         composition.runtime.close_multinode()
-        if composition.evaluator is not None:
-            try:
-                composition.evaluator.close()
-            except Exception as error:
-                print(
-                    f"[rsi-engine] judge_snapshot_cleanup_failed: {error}",
-                    flush=True,
-                )
     (plan.paths.root / "engine-result.json").write_text(
         result.model_dump_json(indent=2)
     )

@@ -14,9 +14,9 @@ the same rule (``judge_isolation.watch_filter``).
 Not covered: page-cache residency (mincore, cachestat) or read timing can
 still show Work which pages the Judge read of any file that shares an inode
 with what Work can map. On Docker that is the image's lower layers in every
-rootfs mode and the split WORKDIR volume; on a cluster, any source shared
-between Work and Judge binds. This exists without the watch rule too and is
-not changed by it.
+rootfs mode and the split WORKDIR volume; on a cluster, Work's workspace and
+any other source shared between Work and Judge binds. This exists without
+the watch rule too and is not changed by it.
 """
 
 from __future__ import annotations

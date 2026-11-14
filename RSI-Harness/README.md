@@ -752,24 +752,19 @@ phases continue using their private `/tmp/.cache/huggingface` cache. Common
 `apptainer.environment` values are combined with phase environment overrides;
 use `RSI_SHARED_DATA_ROOT = "/rsi-data"` for the sample mappings.
 
-Every cluster Judge starts from the task image with a read-only copy of the
-workspace, as a clean-image Judge does locally: nothing the Agent changed
-outside the workspace reaches it, `clean_image = false` has no effect there,
-and the run plan records `clean_image: true`.
+Every cluster Judge starts from the task image with Work's workspace bound
+read-only at `WORKDIR`, as a clean-image Judge does locally: nothing the Agent
+changed outside the workspace reaches it, `clean_image = false` has no effect
+there, and the run plan records `clean_image: true`.
 
-Unchanged files are reused only with `process_namespaces = "harness"` on a
-single node; the default process mode, whose pause does not wait for a running
-write to end, copies the whole workspace every round. In harness mode, each
-round copies only the files that changed since the previous round and
-hard-links the rest from that round's copy, which is kept until the next round
-or the end of the run; a resumed run removes it and copies everything once. A
-file written after the pause signal is copied again next round. Multi-node runs
-and a run directory on tmpfs also copy everything and keep nothing. FIFOs,
-sockets, devices, files the Harness cannot read and directories more than 200
-levels deep are left out of the copy. A failed round's copy is kept for
-inspection.
+Each submission stops every Work process on the node, and the Judge, on one
+node or several, reads the paused workspace in place; no copy is made. A
+submission is refused, and not counted, when Work does not stop within 10 s,
+or while the workspace holds a FIFO, socket or device, or a directory the
+Harness cannot open. A failed round keeps no copy.
 Trajectories and feedback remain available. See [snapshot lifecycle and failure
-recovery](docs/cluster-snapshot-lifecycle.md).
+recovery](docs/cluster-snapshot-lifecycle.md), also for NFS mount options on
+several nodes.
 
 Two operator-only `[apptainer]` keys serve sites whose Apptainer cannot give
 phases namespaces of their own. `network_isolation = "seccomp"` (default

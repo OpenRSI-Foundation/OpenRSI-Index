@@ -201,13 +201,11 @@ def _judge(tmp_path, monkeypatch, plan, access, **runtime_options):
     runtime.configure_judge_model_access(access)
     capture = _Capture(runtime)
     monkeypatch.setattr(runtime, "_run", capture)
-    workspace = runtime.rounds / "agent-1" / "workspace"
-    workspace.mkdir(parents=True)
+    runtime.workspace.mkdir(parents=True, exist_ok=True)
     trajectory = tmp_path / "judge-trajectory" / "agent-1"
     trajectory.mkdir(parents=True)
     runtime.task_assets.mkdir(parents=True, exist_ok=True)
     result = runtime.run_judge(
-        workspace,
         _request(tmp_path, plan),
         {"TASK_VALUE": "1"},
         trajectory=trajectory,
@@ -403,10 +401,9 @@ def test_a_pinned_judge_reaches_the_agents_endpoints_through_its_upstream_proxy(
     monkeypatch.setattr(runtime_module, "JudgeProviderBroker", Broker)
     runtime.configure_judge_model_access(access)
     monkeypatch.setattr(runtime, "_run", _Capture(runtime))
-    workspace = runtime.rounds / "agent-1" / "workspace"
-    workspace.mkdir(parents=True)
+    runtime.workspace.mkdir(parents=True, exist_ok=True)
     runtime.task_assets.mkdir(parents=True, exist_ok=True)
-    runtime.run_judge(workspace, _request(tmp_path, plan), {})
+    runtime.run_judge(_request(tmp_path, plan), {})
 
     assert [options["upstream"] for options in brokers] == [upstream]
 

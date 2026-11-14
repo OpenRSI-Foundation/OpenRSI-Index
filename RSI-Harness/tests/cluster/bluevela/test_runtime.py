@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import platform
 import signal
 import subprocess
 import sys
@@ -14,15 +16,15 @@ from types import SimpleNamespace
 
 import pytest
 
-from rsi_harness.cluster import snapshots
+from rsi_harness.cluster.bluevela import runtime as runtime_module
 from rsi_harness.cluster.bluevela.allocation import AllocatedNode, AllocatedPools
 from rsi_harness.cluster.bluevela.runtime import (
     ApptainerAgentRuntime,
     NativeEngineComposition,
     NativeJudgeEvaluator,
+    WorkStopTimeoutError,
 )
 from rsi_harness.cluster.config import load_cluster_profile
-from rsi_harness.cluster.snapshots import RETAINED, JudgeSnapshots
 from rsi_harness.errors import (
     InfrastructureError,
     RetryableSubmissionError,
@@ -55,7 +57,6 @@ from rsi_harness.runtime.local_auth import (
     AgentAuthMount,
 )
 from rsi_harness.runtime.submissions import SubmissionService
-from tests.cluster.test_snapshots import settle
 from tests.factories import make_run_plan
 from tests.fakes import FakeClock
 
@@ -75,10 +76,8 @@ class _Runtime:
         self.workspace = root / "workspace"
         self.workspace.mkdir()
         (self.workspace / "answer.py").write_text("answer = 42\n")
-        self.rounds = root / "rounds"
-        self.rounds.mkdir()
         self.payload = SimpleNamespace(run_id="native-run")
-        self.judge_copy_reuse = True
+        self.work_alive = True
         self.events: list[str] = []
         self.reward_file = reward_file
         self.reward_content = reward_content
@@ -99,8 +98,9 @@ class _Runtime:
     def require_work_idle(self) -> None:
         self.events.append("idle")
 
-    def run_judge(self, workspace, request, environment, *, trajectory=None):
-        del workspace, environment
+    def run_judge(self, request, environment, *, trajectory=None):
+        del environment
+        self.events.append("judge")
         self.trajectory = trajectory
         self.trajectory_files = (
             None
@@ -235,7 +235,7 @@ def test_vlmr1_verifier_does_not_mutate_read_only_private_tests() -> None:
         ("reward.json", '{"reward": 1, "accuracy": 0.75}\n'),
     ],
 )
-def test_workspace_snapshot_uses_path_authority_and_native_artifacts(
+def test_a_round_reads_the_workspace_in_place_and_writes_native_artifacts(
     tmp_path: Path,
     reward_file,
     reward_content,
@@ -261,10 +261,10 @@ def test_workspace_snapshot_uses_path_authority_and_native_artifacts(
 
     report = NativeJudgeEvaluator(runtime, writer).evaluate(request, observer)
 
-    planned = dict(observer.events)["snapshot_planned"]
-    assert "planned_snapshot_ref" not in planned
+    # No copy: no snapshot is planned, acquired or released.
+    assert not any(name.startswith("snapshot_") for name, _ in observer.events)
     assert report.score == 1.0
-    assert runtime.events == ["pause", "idle", "unpause"]
+    assert runtime.events == ["pause", "idle", "judge", "unpause"]
     assert (writer.root / "submissions/agent-1/report.json").is_file()
     assert (writer.root / "feedback/agent-1.log").read_text() == "passed\n"
     assert (request.verifier_logs / reward_file).read_text() == reward_content
@@ -278,7 +278,7 @@ def test_workspace_snapshot_uses_path_authority_and_native_artifacts(
     ]
 
 
-def test_active_remote_work_makes_submission_retryable_before_snapshot(
+def test_active_remote_work_makes_submission_retryable_before_the_judge(
     tmp_path: Path,
 ) -> None:
     plan = make_run_plan(tmp_path)
@@ -304,7 +304,36 @@ def test_active_remote_work_makes_submission_retryable_before_snapshot(
         NativeJudgeEvaluator(runtime, writer).evaluate(request, observer)
 
     assert runtime.events == ["pause", "idle", "unpause"]
-    assert not (runtime.rounds / "agent-1").exists()
+    assert not request.verifier_logs.exists()
+    assert not (writer.root / "submissions/agent-1/report.json").exists()
+
+
+def test_work_that_does_not_stop_makes_submission_retryable(tmp_path: Path) -> None:
+    plan = make_run_plan(tmp_path)
+    writer = RunArtifactWriter(plan, run_id="native-run")
+    writer.start()
+    runtime = _Runtime(tmp_path)
+
+    def stalled(_work) -> None:
+        runtime.events.append("pause")
+        raise WorkStopTimeoutError("Work did not stop: running [12]")
+
+    runtime.pause = stalled  # type: ignore[method-assign]
+    observer = _Observer()
+    request = EvaluationRequest(
+        run_plan=plan,
+        work_container=ContainerRef(container_id="work", role="work"),
+        round_id="agent-1",
+        verifier_logs=writer.root / "verifier/agent-1",
+        verifier_output=writer.feedback_root / "agent-1.log",
+    )
+
+    with pytest.raises(RetryableSubmissionError, match=r"running \[12\]; submit"):
+        NativeJudgeEvaluator(runtime, writer).evaluate(request, observer)
+
+    assert runtime.events == ["pause", "unpause"]
+    assert [name for name, _ in observer.events][-1] == "work_unpaused"
+    assert not request.verifier_logs.exists()
     assert not (writer.root / "submissions/agent-1/report.json").exists()
 
 
@@ -345,6 +374,15 @@ def _single_node_gpu_runtime(
     return runtime
 
 
+def _work_group_only(monkeypatch, runtime) -> None:
+    """The fake Work has no process outside its group: a pause signals only
+    the group, and nothing on this host."""
+    monkeypatch.setattr(
+        runtime, "_work_process_ids", lambda: frozenset({runtime._process.pid})
+    )
+    monkeypatch.setattr(runtime_module, "_process_stat", lambda _pid: None)
+
+
 @pytest.mark.parametrize("agent_exit", ["running", "before_resume", "during_resume"])
 def test_final_native_judge_is_registered_after_agent_exit(
     tmp_path: Path,
@@ -355,11 +393,12 @@ def test_final_native_judge_is_registered_after_agent_exit(
     runtime.workspace.mkdir()
     (runtime.workspace / "answer.py").write_text("answer = 42\n")
     monkeypatch.setattr(runtime, "require_work_idle", lambda: None)
+    _work_group_only(monkeypatch, runtime)
     writer = RunArtifactWriter(runtime.plan, run_id="native-run")
     writer.start()
     judge_rounds = 0
 
-    def judge(_snapshot, request, _environment, *, trajectory=None):
+    def judge(request, _environment, *, trajectory=None):
         nonlocal judge_rounds
         judge_rounds += 1
         (request.verifier_logs / "reward.json").write_text(
@@ -503,6 +542,507 @@ def test_unpause_and_stop_reach_members_left_after_the_agent_exits(
             os.kill(child, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+# Work's leader: one child in its own session, which a group stop misses, and
+# on SIGUSR1 that child starts another in its own session. Each pid is printed.
+_DAEMON_WORK = r"""
+import os, signal, subprocess, sys, time
+script = (
+    "import os, signal, subprocess, sys, time\n"
+    "def spawn(*_):\n"
+    "    child = subprocess.Popen(['sleep', '300'], start_new_session=True)\n"
+    "    print(child.pid, flush=True)\n"
+    "signal.signal(signal.SIGUSR1, spawn)\n"
+    "while True:\n"
+    "    time.sleep(0.01)\n"
+)
+daemon = subprocess.Popen([sys.executable, "-c", script], start_new_session=True)
+print(daemon.pid, flush=True)
+time.sleep(300)
+"""
+
+
+def _wait_state(pid: int, accept) -> None:
+    deadline = time.monotonic() + 10
+    while not accept(_process_state(pid)):
+        assert time.monotonic() < deadline, _process_state(pid)
+        time.sleep(0.05)
+
+
+def _daemon_work():
+    """Work's leader and its daemon, which reports its children's pids on the
+    leader's stdout."""
+    leader = subprocess.Popen(
+        [sys.executable, "-c", _DAEMON_WORK],
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    return leader, int(leader.stdout.readline())
+
+
+def _end_daemon_work(leader, pids) -> None:
+    for pid in pids:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+    with contextlib.suppress(ProcessLookupError):
+        os.killpg(leader.pid, signal.SIGKILL)
+    leader.wait()
+
+
+def test_a_pause_stops_work_outside_its_process_group_and_unpause_continues_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    leader, daemon = _daemon_work()
+    try:
+        runtime._process = leader
+        runtime.pause(runtime.work_ref)
+        assert _process_state(leader.pid) == "T"
+        assert _process_state(daemon) == "T"
+
+        runtime.unpause(runtime.work_ref)
+        _wait_state(daemon, lambda state: state not in ("T", "t"))
+        _wait_state(leader.pid, lambda state: state not in ("T", "t"))
+        assert runtime._stopped == {}
+    finally:
+        _end_daemon_work(leader, [daemon])
+
+
+def test_a_process_started_while_work_stops_is_stopped_too(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    leader, daemon = _daemon_work()
+    started: list[int] = []
+    query = runtime._work_process_ids
+
+    def first_query_misses_a_new_process():
+        members = query()
+        if not started:
+            # After the query, before the daemon is stopped.
+            os.kill(daemon, signal.SIGUSR1)
+            started.append(int(leader.stdout.readline()))
+            assert started[0] not in members
+        return members
+
+    monkeypatch.setattr(runtime, "_work_process_ids", first_query_misses_a_new_process)
+    try:
+        runtime._process = leader
+        runtime.pause(runtime.work_ref)
+        assert [_process_state(pid) for pid in (daemon, *started)] == ["T", "T"]
+
+        runtime.unpause(runtime.work_ref)
+        _wait_state(started[0], lambda state: state not in ("T", "t"))
+    finally:
+        _end_daemon_work(leader, [daemon, *started])
+
+
+def test_a_work_process_that_exits_while_work_stops_is_skipped(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    leader, daemon = _daemon_work()
+    gone = 2**22 + 7  # above any default pid_max: no process of this host
+    query = runtime._work_process_ids
+    monkeypatch.setattr(runtime, "_work_process_ids", lambda: query() | {gone})
+    real_stat = runtime_module._process_stat
+    reads = []
+
+    def process_stat(pid):
+        if pid != gone:
+            return real_stat(pid)
+        # Live when listed and read again before its signal; then gone.
+        reads.append(pid)
+        return (leader.pid, leader.pid, 7) if len(reads) <= 2 else None
+
+    monkeypatch.setattr(runtime_module, "_process_stat", process_stat)
+    real_stopped = runtime_module._threads_stopped
+    monkeypatch.setattr(
+        runtime_module,
+        "_threads_stopped",
+        lambda pid: False if pid == gone else real_stopped(pid),
+    )
+    real_kill = os.kill
+    sent = []
+
+    def kill(pid, signum):
+        sent.append((pid, signum))
+        real_kill(pid, signum)
+
+    monkeypatch.setattr(runtime_module.os, "kill", kill)
+    real_stop = runtime_module._stop_threads
+    stops = []
+
+    def stop_threads(pid, start):
+        stops.append(pid)
+        real_stop(pid, start)  # no threads for the gone pid
+
+    monkeypatch.setattr(runtime_module, "_stop_threads", stop_threads)
+    try:
+        runtime._process = leader
+        runtime.pause(runtime.work_ref)
+        assert _process_state(daemon) == "T"
+        assert stops.count(gone) == 1
+        runtime.unpause(runtime.work_ref)
+        # Gone when continued: not signalled again.
+        assert (gone, signal.SIGCONT) not in sent
+        _wait_state(daemon, lambda state: state not in ("T", "t"))
+    finally:
+        monkeypatch.undo()
+        _end_daemon_work(leader, [daemon])
+
+
+# Work's leader starts a child with CLONE_VFORK, which stops before it execs:
+# the leader waits in the kernel (D) until the child goes on.
+_VFORK_WORK = r"""
+import ctypes, os, signal, sys, time
+clone = int(sys.argv[1])
+pid = ctypes.CDLL(None).syscall(clone, 0x4000 | signal.SIGCHLD, 0, 0, 0, 0)
+if pid == 0:
+    os.kill(os.getpid(), signal.SIGSTOP)
+    os._exit(0)
+os.waitpid(pid, 0)
+print(pid, flush=True)
+time.sleep(300)
+"""
+_CLONE_SYSCALL = {"x86_64": 56, "aarch64": 220}.get(platform.machine())
+
+
+@pytest.mark.skipif(_CLONE_SYSCALL is None, reason="clone syscall number unknown")
+def test_a_pause_stops_work_whose_vfork_child_is_stopped(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(runtime_module, "_BOX_PAUSE_SECONDS", 2.0)
+    leader = subprocess.Popen(
+        [sys.executable, "-c", _VFORK_WORK, str(_CLONE_SYSCALL)],
+        start_new_session=True,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    children = Path(f"/proc/{leader.pid}/task/{leader.pid}/children")
+    try:
+        deadline = time.monotonic() + 10
+        while not children.read_text().split():
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        child = int(children.read_text().split()[0])
+        _wait_state(child, lambda state: state == "T")
+        assert _process_state(leader.pid) == "D"
+
+        runtime._process = leader
+        runtime.pause(runtime.work_ref)
+        assert runtime._paused is True
+        # SIGSTOP is pending: the leader stops before it runs user code.
+        assert _process_state(leader.pid) == "D"
+        assert runtime_module._threads_stopped(leader.pid)
+
+        runtime.unpause(runtime.work_ref)
+        assert int(leader.stdout.readline()) == child
+        _wait_state(leader.pid, lambda state: state not in ("D", "T", "t"))
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(leader.pid, signal.SIGKILL)
+        leader.wait()
+
+
+# Work's leader with two threads. The main thread starts a child with
+# CLONE_VFORK, which stops before it execs, and waits in the kernel (D). The
+# other thread spins ("spin") or appends to a progress file in a loop; it
+# starts once the child has stopped. The child's pid goes to the "done" file
+# once the child has exited.
+THREADED_VFORK_WORK = r"""
+import ctypes, os, signal, sys, threading, time
+clone, read = int(sys.argv[1]), int(sys.argv[2])
+work, done = sys.argv[3], sys.argv[4]
+ready, go = os.pipe()
+
+
+def other():
+    os.read(ready, 1)
+    while work == "spin":
+        pass
+    while True:
+        with open(work, "a") as stream:
+            stream.write("x")
+            stream.flush()
+            os.fsync(stream.fileno())
+
+
+thread = threading.Thread(target=other, daemon=True)
+thread.start()
+# Clone while the other thread waits in read() without the GIL: the child
+# then takes the GIL.
+syscall = f"/proc/self/task/{thread.native_id}/syscall"
+while open(syscall).read().split()[0] != str(read):
+    time.sleep(0.01)
+pid = ctypes.CDLL(None).syscall(clone, 0x4000 | signal.SIGCHLD, 0, 0, 0, 0)
+if pid == 0:
+    os.write(go, b"x")
+    os.kill(os.getpid(), signal.SIGSTOP)
+    os._exit(0)
+os.waitpid(pid, 0)
+with open(done, "w") as stream:
+    stream.write(str(pid))
+time.sleep(300)
+"""
+_READ_SYSCALL = {"x86_64": 0, "aarch64": 63}.get(platform.machine())
+needs_vfork = pytest.mark.skipif(
+    _CLONE_SYSCALL is None or _READ_SYSCALL is None,
+    reason="clone or read syscall number unknown",
+)
+
+
+def threaded_vfork_arguments(work: str, done: Path) -> list[str]:
+    return [str(_CLONE_SYSCALL), str(_READ_SYSCALL), work, str(done)]
+
+
+def threaded_vfork_ready(leader: int) -> tuple[int, int]:
+    """Once the vfork child has stopped and the other thread runs: the
+    child's pid and the other thread's id."""
+    children = Path(f"/proc/{leader}/task/{leader}/children")
+    deadline = time.monotonic() + 20
+    while True:
+        tasks = os.listdir(f"/proc/{leader}/task")
+        others = [int(tid) for tid in tasks if int(tid) != leader]
+        child = children.read_text().split()
+        if child and others and _process_state(int(child[0])) == "T":
+            break
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    while _thread_state(leader, others[0]) not in ("R", "D"):
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    assert _thread_state(leader, leader) == "D"
+    return int(child[0]), others[0]
+
+
+def _thread_state(pid: int, tid: int) -> str | None:
+    try:
+        stat = Path(f"/proc/{pid}/task/{tid}/stat").read_text()
+    except FileNotFoundError:
+        return None
+    return stat.rsplit(")", 1)[1].split()[0]
+
+
+def _threaded_vfork_work(tmp_path: Path, work: str):
+    done = tmp_path / "done"
+    leader = subprocess.Popen(
+        [
+            sys.executable,
+            "-c",
+            THREADED_VFORK_WORK,
+            *threaded_vfork_arguments(work, done),
+        ],
+        start_new_session=True,
+    )
+    return leader, done
+
+
+def _wait_file(path: Path) -> str:
+    deadline = time.monotonic() + 10
+    while not (path.exists() and path.read_text()):
+        assert time.monotonic() < deadline
+        time.sleep(0.05)
+    return path.read_text()
+
+
+@needs_vfork
+def test_a_pause_stops_every_thread_while_the_main_thread_waits_for_vfork(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # The group's SIGSTOP goes to the main thread in D, which cannot take it;
+    # no other thread stops and a second SIGSTOP to the process is dropped.
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(runtime_module, "_BOX_PAUSE_SECONDS", 3.0)
+    leader, done = _threaded_vfork_work(tmp_path, "spin")
+    try:
+        child, spinner = threaded_vfork_ready(leader.pid)
+        runtime._process = leader
+        runtime.pause(runtime.work_ref)
+        assert _thread_state(leader.pid, spinner) == "T"
+        assert _thread_state(leader.pid, leader.pid) == "D"
+        assert _process_state(child) == "T"
+        time.sleep(0.3)
+        assert _thread_state(leader.pid, spinner) == "T"
+
+        runtime.unpause(runtime.work_ref)
+        # The child exits, the main thread runs on: no SIGSTOP is left.
+        assert _wait_file(done) == str(child)
+        _wait_state(child, lambda state: state is None)
+        assert _thread_state(leader.pid, spinner) in ("R", "S")
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(leader.pid, signal.SIGKILL)
+        leader.wait()
+
+
+@needs_vfork
+def test_a_thread_writing_files_stays_stopped_while_the_main_thread_waits(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(runtime_module, "_BOX_PAUSE_SECONDS", 3.0)
+    progress = tmp_path / "progress"
+    leader, done = _threaded_vfork_work(tmp_path, str(progress))
+    try:
+        threaded_vfork_ready(leader.pid)
+        _wait_file(progress)
+        runtime._process = leader
+        runtime.pause(runtime.work_ref)
+        size = progress.stat().st_size
+        time.sleep(0.5)
+        assert progress.stat().st_size == size
+
+        runtime.unpause(runtime.work_ref)
+        _wait_file(done)
+        deadline = time.monotonic() + 10
+        while progress.stat().st_size == size:
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(leader.pid, signal.SIGKILL)
+        leader.wait()
+
+
+@needs_vfork
+def test_sigstop_pending_for_the_process_is_not_a_stop_and_sigcont_clears_it(
+    tmp_path: Path,
+) -> None:
+    leader, done = _threaded_vfork_work(tmp_path, "spin")
+    status = Path(f"/proc/{leader.pid}/task/{leader.pid}/status")
+    try:
+        threaded_vfork_ready(leader.pid)
+        os.kill(leader.pid, signal.SIGSTOP)
+        deadline = time.monotonic() + 10
+        while not runtime_module._stop_pending(status, "ShdPnd"):
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        time.sleep(0.2)
+        assert not runtime_module._threads_stopped(leader.pid)
+
+        start = runtime_module._process_stat(leader.pid)[2]
+        runtime_module._stop_threads(leader.pid, start)
+        while not runtime_module._threads_stopped(leader.pid):
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        assert runtime_module._stop_pending(status, "SigPnd")
+
+        os.kill(leader.pid, signal.SIGCONT)
+        assert not runtime_module._stop_pending(status, "SigPnd")
+        assert not runtime_module._stop_pending(status, "ShdPnd")
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(leader.pid, signal.SIGKILL)
+        leader.wait()
+
+
+def test_a_thread_of_another_process_is_not_signalled() -> None:
+    other = subprocess.Popen(["sleep", "300"])
+    try:
+        # A tid that is not a thread of the pid: ESRCH, not signalled.
+        runtime_module._tgkill(os.getpid(), other.pid, signal.SIGKILL)
+        assert other.poll() is None
+        runtime_module._tgkill(other.pid, other.pid, signal.SIGKILL)
+        assert other.wait(timeout=10) == -signal.SIGKILL
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            other.kill()
+        other.wait()
+
+
+def test_an_unknown_architecture_cannot_signal_a_thread(monkeypatch) -> None:
+    machine = SimpleNamespace(machine="riscv64")
+    monkeypatch.setattr(runtime_module.os, "uname", lambda: machine)
+    with pytest.raises(InfrastructureError, match="riscv64"):
+        runtime_module._tgkill(os.getpid(), os.getpid(), 0)
+
+
+def test_a_pid_taken_by_another_process_is_not_signalled() -> None:
+    other = subprocess.Popen(["sleep", "300"])
+    try:
+        stat = runtime_module._process_stat(other.pid)
+        assert stat is not None
+        runtime_module._signal_process(other.pid, stat[2] + 1, signal.SIGKILL)
+        assert other.poll() is None
+        runtime_module._signal_process(other.pid, stat[2], signal.SIGKILL)
+        assert other.wait(timeout=10) == -signal.SIGKILL
+        # Exited and reaped: nothing to signal, and no error.
+        runtime_module._signal_process(other.pid, stat[2], signal.SIGKILL)
+    finally:
+        with contextlib.suppress(ProcessLookupError):
+            other.kill()
+        other.wait()
+
+
+def test_work_that_does_not_stop_fails_the_pause_and_is_continued(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(runtime_module, "_BOX_PAUSE_SECONDS", 0.3)
+    leader, daemon = _daemon_work()
+    real = runtime_module._threads_stopped
+    monkeypatch.setattr(
+        runtime_module,
+        "_threads_stopped",
+        lambda pid: False if pid == daemon else real(pid),
+    )
+    try:
+        runtime._process = leader
+        with pytest.raises(
+            InfrastructureError, match=rf"did not stop: running \[{daemon}\]"
+        ):
+            runtime.pause(runtime.work_ref)
+        assert runtime._paused is False
+        assert runtime._stopped == {}
+        _wait_state(daemon, lambda state: state not in ("T", "t"))
+        _wait_state(leader.pid, lambda state: state not in ("T", "t"))
+    finally:
+        _end_daemon_work(leader, [daemon])
+
+
+def test_a_failed_process_query_fails_the_pause_and_continues_work(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    leader, daemon = _daemon_work()
+    calls = []
+    query = runtime._work_process_ids
+
+    def fail_second_query():
+        calls.append(None)
+        if len(calls) == 2:
+            raise SubmissionError("ps query failed: timed out")
+        return query()
+
+    monkeypatch.setattr(runtime, "_work_process_ids", fail_second_query)
+    try:
+        runtime._process = leader
+        with pytest.raises(InfrastructureError, match="cannot stop Work: ps query"):
+            runtime.pause(runtime.work_ref)
+        _wait_state(daemon, lambda state: state not in ("T", "t"))
+        _wait_state(leader.pid, lambda state: state not in ("T", "t"))
+    finally:
+        _end_daemon_work(leader, [daemon])
+
+
+def test_syncfs_reports_a_failure_and_goes_on(tmp_path: Path, monkeypatch, capsys):
+    runtime_module._syncfs(tmp_path)
+    assert capsys.readouterr().out == ""
+
+    runtime_module._syncfs(tmp_path / "missing")
+    assert "workspace_syncfs" in capsys.readouterr().out
+
+    monkeypatch.setattr(
+        runtime_module.ctypes,
+        "CDLL",
+        lambda *_args, **_kwargs: SimpleNamespace(syncfs=lambda _fd: -1),
+    )
+    runtime_module._syncfs(tmp_path)
+    assert "workspace_syncfs" in capsys.readouterr().out
 
 
 def _gpu_preflight_commands(
@@ -649,7 +1189,7 @@ def test_unresolved_work_gpu_allocation_rejects_submission(
         runtime.require_work_idle()
 
 
-def test_busy_single_node_submission_is_retryable_before_snapshot(
+def test_busy_single_node_submission_is_retryable_before_the_judge(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -657,6 +1197,8 @@ def test_busy_single_node_submission_is_retryable_before_snapshot(
     runtime.workspace.mkdir()
     runtime.task_assets.mkdir(parents=True)
     _gpu_preflight_commands(monkeypatch, compute="GPU-owned, 102\n")
+    # The fake table's other pids are not this host's processes.
+    monkeypatch.setattr(runtime_module, "_process_stat", lambda _pid: None)
 
     def unexpected_judge(*_args, **_kwargs):
         pytest.fail("Judge launched before Work GPU release")
@@ -679,7 +1221,6 @@ def test_busy_single_node_submission_is_retryable_before_snapshot(
         NativeJudgeEvaluator(runtime, writer).evaluate(request, observer)
 
     assert signals == [(100, signal.SIGSTOP), (100, signal.SIGCONT)]
-    assert not (runtime.rounds / "agent-1").exists()
     assert not request.verifier_logs.exists()
     assert "judge_planned" not in dict(observer.events)
     assert not (writer.root / "submissions/agent-1/report.json").exists()
@@ -723,8 +1264,7 @@ def test_judge_gets_fresh_writable_tmp_without_mutating_preserved_assets(
     runtime.task_assets.mkdir(parents=True)
     (runtime.task_assets / "test_patch.diff").write_text("original\n")
     (runtime.task_assets / "setup_patch.diff").touch()
-    workspace = runtime.rounds / "agent-1" / "workspace"
-    workspace.mkdir(parents=True)
+    runtime.workspace.mkdir(parents=True)
     request = EvaluationRequest(
         run_plan=plan,
         work_container=ContainerRef(container_id="work", role="work"),
@@ -735,6 +1275,9 @@ def test_judge_gets_fresh_writable_tmp_without_mutating_preserved_assets(
 
     def fake_run(command, **options):
         del command
+        # Work's own workspace, read-only: no copy.
+        workdir = [bind for bind in options["extra_binds"] if bind[1] == plan.workdir]
+        assert workdir == [(runtime.workspace, plan.workdir, True)]
         tmp_binds = [
             bind for bind in options["extra_binds"] if bind[1] == PurePosixPath("/tmp")
         ]
@@ -768,7 +1311,7 @@ def test_judge_gets_fresh_writable_tmp_without_mutating_preserved_assets(
     trajectory = tmp_path / "judge-trajectory" / "agent-1"
     trajectory.mkdir(parents=True)
 
-    result = runtime.run_judge(workspace, request, {}, trajectory=trajectory)
+    result = runtime.run_judge(request, {}, trajectory=trajectory)
 
     assert result.exit_code == 0
     assert (runtime.task_assets / "test_patch.diff").read_text() == "original\n"
@@ -780,7 +1323,7 @@ def test_judge_gets_fresh_writable_tmp_without_mutating_preserved_assets(
     [("bluevela", "codex"), ("slurm", "codex"), ("slurm", "oracle")],
 )
 @pytest.mark.parametrize("allow_signal_compatibility", [False, True])
-def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
+def test_multinode_judge_uses_only_fresh_judge_pool_and_reads_the_workspace_read_only(
     tmp_path: Path,
     monkeypatch,
     cluster_name,
@@ -845,10 +1388,8 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
         runtime._oracle_solution = runtime.control / "oracle-solution"
         runtime._oracle_solution.mkdir()
         (runtime._oracle_solution / "solve.sh").write_text("baseline\n")
-    runtime.rounds.mkdir(parents=True)
     runtime.judge_tmp_root.mkdir(parents=True)
-    snapshot = runtime.rounds / "agent-1/workspace"
-    snapshot.mkdir(parents=True)
+    runtime.workspace.mkdir(parents=True)
     verifier_logs = tmp_path / "verifier"
     verifier_logs.mkdir()
     request = EvaluationRequest(
@@ -863,6 +1404,8 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
     def controller(command, *, timeout_seconds, output_path):
         del timeout_seconds
         observed.append(command)
+        # Work's writes reach the shared storage before a Judge node reads it.
+        assert synced == [runtime.workspace]
         assert runtime.judge_broker is not None
         assert runtime.judge_broker.remote_args == profile.scheduler.remote_args
         assert tuple(node.host for node in runtime.judge_broker.nodes) == ("judge-a",)
@@ -871,7 +1414,12 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
         binds = {
             (item.source, item.target): item.read_only for item in control.worker.binds
         }
-        assert binds[(snapshot, plan.workdir)] is True
+        # Work's workspace on the shared file system, read-only: no copy.
+        assert [
+            (source, read_only)
+            for (source, target), read_only in binds.items()
+            if target == plan.workdir
+        ] == [(runtime.workspace, True)]
         assert binds[(plan.task.source_dir / "tests", PurePosixPath("/tests"))] is True
         assert binds[(trajectory, PurePosixPath("/logs/agent"))] is True
         assert not any(
@@ -917,10 +1465,12 @@ def test_multinode_judge_uses_only_fresh_judge_pool_and_read_only_snapshot(
         return AgentRunResult(exit_code=0, output="passed\n", full_output_captured=True)
 
     monkeypatch.setattr(runtime, "_run_host_controller", controller)
+    synced: list[Path] = []
+    monkeypatch.setattr(runtime_module, "_syncfs", synced.append)
     trajectory = tmp_path / "judge-trajectory" / "agent-1"
     trajectory.mkdir(parents=True)
 
-    result = runtime.run_judge(snapshot, request, {}, trajectory=trajectory)
+    result = runtime.run_judge(request, {}, trajectory=trajectory)
 
     assert result.exit_code == 0
     prefix_length = 3 + len(profile.scheduler.remote_args)
@@ -1814,11 +2364,6 @@ def test_resumed_initialize_reuses_the_run_directories_and_seeds_nothing(
     runtime.initialize()
     (runtime.workspace / "answer.py").write_text("answer = 42\n")
     (runtime.agent_home / ".codex").mkdir(exist_ok=True)
-    (runtime.rounds / "agent-1").mkdir()
-    # The last attempt's Judge copy, in a read-only tree.
-    (runtime.rounds / RETAINED / "src").mkdir(parents=True)
-    (runtime.rounds / RETAINED / "src" / "answer.py").write_text("copy")
-    (runtime.rounds / RETAINED / "src").chmod(0o500)
     # The next attempt's job: a fresh node-local scratch.
     node_tmp = tmp_path / "node-tmp-2"
     node_tmp.mkdir()
@@ -1836,9 +2381,8 @@ def test_resumed_initialize_reuses_the_run_directories_and_seeds_nothing(
     assert [call[:2] for call in calls[3:]] == [("/bin/sh", "-c")]
     assert (resumed.workspace / "answer.py").read_text() == "answer = 42\n"
     assert (resumed.agent_home / ".codex").is_dir()
-    assert (resumed.rounds / "agent-1").is_dir()
-    # Nothing is adopted: the first resumed round copies everything.
-    assert not (resumed.rounds / RETAINED).exists()
+    # The Judge reads the workspace in place: no directory for copies.
+    assert not (resumed.plan.paths.root / "judge-rounds").exists()
     assert (resumed.control / "rsi-submit").is_file()
 
 
@@ -1877,7 +2421,7 @@ def test_resumed_initialize_seeds_a_run_that_never_finished_seeding(
     assert any("/run/rsi-harness/seed" in shell for shell in shells)
     assert any("/run/rsi-harness/task-tmp" in shell for shell in shells)
     assert (runtime.control / "seeded").is_file()
-    assert runtime.task_assets.is_dir() and runtime.rounds.is_dir()
+    assert runtime.task_assets.is_dir()
 
 
 def test_resumed_initialize_refuses_a_multinode_run(
@@ -2412,7 +2956,7 @@ def test_controller_failure_ends_paused_work_without_resuming(tmp_path, monkeypa
 @pytest.mark.parametrize(
     "outcome", ["success", "verifier-error", "timeout", "bad-reward"]
 )
-def test_completed_judge_releases_copy_but_preserves_all_feedback(
+def test_completed_judge_keeps_no_copy_and_preserves_all_feedback(
     tmp_path, monkeypatch, outcome
 ):
     plan = make_run_plan(tmp_path)
@@ -2423,9 +2967,8 @@ def test_completed_judge_releases_copy_but_preserves_all_feedback(
     runtime = _Runtime(tmp_path)
     judge = runtime.run_judge
 
-    def run(workspace, request, environment, **kwargs):
-        assert workspace.is_dir()
-        result = judge(workspace, request, environment, **kwargs)
+    def run(request, environment, **kwargs):
+        result = judge(request, environment, **kwargs)
         if outcome == "bad-reward":
             (request.verifier_logs / "reward.txt").write_text("invalid")
         return replace(
@@ -2435,32 +2978,26 @@ def test_completed_judge_releases_copy_but_preserves_all_feedback(
         )
 
     monkeypatch.setattr(runtime, "run_judge", run)
+    before = sorted(path.name for path in tmp_path.iterdir())
     for n in range(1, 4):
         name = f"agent-{n}"
         observer = _Observer()
         NativeJudgeEvaluator(runtime, writer).evaluate(
-            EvaluationRequest(
-                run_plan=plan,
-                work_container=ContainerRef(container_id="work", role="work"),
-                round_id=name,
-                verifier_logs=writer.root / "verifier" / name,
-                verifier_output=writer.feedback_root / f"{name}.log",
-            ),
-            observer,
+            _round(writer, plan, name), observer
         )
-        # Only the finished round's copy is left, as the next round's base.
-        assert [path.name for path in runtime.rounds.iterdir()] == [RETAINED]
-        assert "snapshot_released" in dict(observer.events)
+        assert not any(event.startswith("snapshot_") for event, _ in observer.events)
+        assert "judge_removed" in dict(observer.events)
         assert (writer.root / "submissions" / name / "report.json").is_file()
         assert (writer.feedback_root / f"{name}.log").read_text() == "passed\n"
+    # No copy anywhere under the run directory.
+    assert sorted(path.name for path in tmp_path.iterdir()) == before
     assert raw.read_text() == "original trajectory\n"
+    assert [path.name for path in runtime.workspace.iterdir()] == ["answer.py"]
     assert (runtime.workspace / "answer.py").read_text() == "answer = 42\n"
 
 
-@pytest.mark.parametrize("failure", [None, "judge-close", "release", "report"])
-def test_snapshot_release_follows_judge_teardown_and_precedes_work_resume(
-    tmp_path, monkeypatch, failure
-):
+@pytest.mark.parametrize("failure", [None, "judge-close", "report"])
+def test_judge_teardown_and_report_precede_work_resume(tmp_path, monkeypatch, failure):
     plan = make_run_plan(tmp_path)
     writer = RunArtifactWriter(plan, run_id="native-run")
     writer.start()
@@ -2485,6 +3022,8 @@ def test_snapshot_release_follows_judge_teardown_and_precedes_work_resume(
         def close_judge(self):
             if failure == "judge-close":
                 raise OSError("judge-close failed")
+            report = writer.root / "submissions/agent-1/report.json"
+            closed.append((report.is_file(), "unpause" in runtime.events))
             events.append("closed")
 
         def contain_work(self):
@@ -2496,47 +3035,29 @@ def test_snapshot_release_follows_judge_teardown_and_precedes_work_resume(
         def reopen_work(self):
             events.append("reopen")
 
-    original = JudgeSnapshots.retain
-
-    def retain(snapshots, lease):
-        assert events == ["freeze", "closed"]
-        assert (writer.root / "submissions/agent-1/report.json").is_file()
-        assert "unpause" not in runtime.events
-        if failure == "release":
-            raise OSError("release failed")
-        original(snapshots, lease)
-        events.append("released")
-
-    monkeypatch.setattr(JudgeSnapshots, "retain", retain)
+    closed = []
     if failure == "report":
 
         def fail_report(_report):
             raise OSError("report failed")
 
         monkeypatch.setattr(writer, "record_submission", fail_report)
-    request = EvaluationRequest(
-        run_plan=plan,
-        work_container=ContainerRef(container_id="work", role="work"),
-        round_id="agent-1",
-        verifier_logs=writer.root / "verifier/agent-1",
-        verifier_output=writer.feedback_root / "agent-1.log",
-    )
     evaluator = NativeJudgeEvaluator(runtime, writer, Lifecycle())
     if failure:
         with pytest.raises((OSError, InfrastructureError), match="failed"):
-            evaluator.evaluate(request, observer)
-        assert (runtime.rounds / "agent-1/workspace/answer.py").exists()
-        assert "snapshot_released" not in dict(observer.events)
+            evaluator.evaluate(_round(writer, plan, "agent-1"), observer)
+        assert "judge_removed" not in dict(observer.events)
         assert "recovery_required" in dict(observer.events)
         assert "unpause" not in runtime.events
         assert "fail" in runtime.events
         assert "resume" not in events
     else:
-        evaluator.evaluate(request, observer)
-        assert events == ["freeze", "closed", "released", "resume", "reopen"]
-        assert "snapshot_released" in dict(observer.events)
-        assert not (runtime.rounds / "agent-1").exists()
-        assert (runtime.rounds / RETAINED / "answer.py").is_file()
+        evaluator.evaluate(_round(writer, plan, "agent-1"), observer)
+        assert events == ["freeze", "closed", "resume", "reopen"]
+        # The Judge closed after its report was written, before Work resumed.
+        assert closed == [(True, False)]
+        assert runtime.events == ["pause", "idle", "judge", "unpause"]
+    assert not (tmp_path / "judge-rounds").exists()
 
 
 def _round(writer, plan, name):
@@ -2559,199 +3080,193 @@ class _OrderedObserver(_Observer):
         self.log.append(name)
 
 
-def test_every_round_judges_a_read_only_copy_in_order(tmp_path, monkeypatch):
-    """Whatever the box mode (the evaluator does not depend on it), every
-    round copies: the Judge reads Harness inodes only, and the copy is kept
-    after the Judge has stopped and before Work resumes."""
+def test_every_round_reads_what_work_last_wrote_while_it_is_paused(tmp_path):
+    """No copy: each round's Judge sees the workspace as Work left it at
+    the pause, and Work resumes only after the Judge has stopped."""
     plan = make_run_plan(tmp_path)
     writer = RunArtifactWriter(plan, run_id="native-run")
     writer.start()
     runtime = _Runtime(tmp_path)
-    settle(tmp_path)  # as Agent time does: the file predates the first copy
-    # Whatever file system the tmp directory is on.
-    monkeypatch.setattr(snapshots, "_mapped_writes_change_ctime", lambda _fd: True)
     log: list[str] = []
     runtime.events = log
-    judge = runtime.run_judge
     seen = []
+    judge = runtime.run_judge
 
-    def run(workspace, request, environment, **kwargs):
-        log.append("judge")
-        seen.append((workspace, (workspace / "answer.py").stat()))
-        return judge(workspace, request, environment, **kwargs)
+    def run(request, environment, **kwargs):
+        seen.append((runtime.workspace / "answer.py").read_text())
+        return judge(request, environment, **kwargs)
 
-    original = JudgeSnapshots.retain
-    clock = JudgeSnapshots.clock
-
-    def retain(snapshots, lease):
-        log.append("retain")
-        original(snapshots, lease)
-
-    def read_clock(snapshots):
-        log.append("clock")
-        return clock(snapshots)
-
-    monkeypatch.setattr(runtime, "run_judge", run)
-    monkeypatch.setattr(JudgeSnapshots, "retain", retain)
-    monkeypatch.setattr(JudgeSnapshots, "clock", read_clock)
+    runtime.run_judge = run  # type: ignore[method-assign]
     evaluator = NativeJudgeEvaluator(runtime, writer)
-    for name in ("agent-1", "agent-2"):
+    for n, answer in enumerate(("answer = 42\n", "answer = 43\n"), start=1):
+        (runtime.workspace / "answer.py").write_text(answer)
         log.clear()
-        evaluator.evaluate(_round(writer, plan, name), _OrderedObserver(log))
-        order = [
-            "clock",
-            "pause",
-            "snapshot_acquired",
-            "judge",
-            "judge_removed",
-            "retain",
-            "snapshot_released",
-            "unpause",
-        ]
+        evaluator.evaluate(_round(writer, plan, f"agent-{n}"), _OrderedObserver(log))
+        order = ["pause", "idle", "judge", "judge_removed", "unpause"]
         assert [event for event in log if event in order] == order
-    (first, first_stat), (second, second_stat) = seen
-    work = (runtime.workspace / "answer.py").stat()
-    assert first == runtime.rounds / "agent-1" / "workspace"
-    assert second == runtime.rounds / "agent-2" / "workspace"
-    # The unchanged file is linked from the first copy, never Work's inode.
-    assert second_stat.st_ino == first_stat.st_ino != work.st_ino
-    assert [path.name for path in runtime.rounds.iterdir()] == [RETAINED]
-    assert (runtime.workspace / "answer.py").read_text() == "answer = 42\n"
+    assert seen == ["answer = 42\n", "answer = 43\n"]
 
 
-def test_without_reuse_every_round_copies_every_file_and_keeps_none(
+def _fifo_and_socket(workspace: Path, monkeypatch):
+    import socket
+
+    (workspace / "src").mkdir()
+    os.mkfifo(workspace / "src" / "pipe")
+    monkeypatch.chdir(workspace)
+    listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    listener.bind("control.sock")  # relative: AF_UNIX paths are short
+    return listener
+
+
+def test_special_files_in_the_paused_workspace_refuse_the_round_uncounted(
     tmp_path, monkeypatch
 ):
-    """A write still running when a copy starts set ctime before it, so a
-    torn copy looks unchanged: without a verified full stop, the next round
-    copies the file again instead of linking the torn copy."""
     plan = make_run_plan(tmp_path)
     writer = RunArtifactWriter(plan, run_id="native-run")
     writer.start()
     runtime = _Runtime(tmp_path)
-    runtime.judge_copy_reuse = False
-    settle(tmp_path)
-    monkeypatch.setattr(snapshots, "_mapped_writes_change_ctime", lambda _fd: True)
-    real = snapshots._copy_content
+    listener = _fifo_and_socket(runtime.workspace, monkeypatch)
+    observer = _Observer()
+    request = _round(writer, plan, "agent-1")
+    try:
+        with pytest.raises(RetryableSubmissionError) as refused:
+            NativeJudgeEvaluator(runtime, writer).evaluate(request, observer)
+    finally:
+        listener.close()
 
-    def torn(read_fd, write_fd, size):
-        # Half old bytes, half new: Work's metadata does not change.
-        os.write(write_fd, b"torn")
-        return real(read_fd, write_fd, size)
-
-    monkeypatch.setattr(snapshots, "_copy_content", torn)
-    original = JudgeSnapshots.acquire
-    since = []
-
-    def acquire(snapshots, source, name, **kwargs):
-        since.append(kwargs.get("since"))
-        return original(snapshots, source, name, **kwargs)
-
-    seen = []
-    judge = runtime.run_judge
-
-    def run(workspace, request, environment, **kwargs):
-        seen.append((workspace / "answer.py").read_bytes())
-        return judge(workspace, request, environment, **kwargs)
-
-    monkeypatch.setattr(JudgeSnapshots, "acquire", acquire)
-    monkeypatch.setattr(runtime, "run_judge", run)
-    evaluator = NativeJudgeEvaluator(runtime, writer)
-    for name in ("agent-1", "agent-2"):
-        observer = _Observer()
-        evaluator.evaluate(_round(writer, plan, name), observer)
-        assert "snapshot_released" in dict(observer.events)
-        assert list(runtime.rounds.iterdir()) == []
-        monkeypatch.setattr(snapshots, "_copy_content", real)
-    assert since == [None, None]
-    assert seen[0] != b"answer = 42\n"
-    assert seen[1] == b"answer = 42\n"
+    message = str(refused.value)
+    assert "not counted" in message
+    assert f"{plan.workdir}/src/pipe (FIFO)" in message
+    assert f"{plan.workdir}/control.sock (socket)" in message
+    # Checked while Work is paused; no Judge ran and Work resumed.
+    assert runtime.events == ["pause", "idle", "unpause"]
+    assert "judge_planned" not in dict(observer.events)
+    assert "recovery_required" not in dict(observer.events)
+    assert not request.verifier_logs.exists()
+    assert not (writer.root / "submissions/agent-1/report.json").exists()
 
 
-def test_a_write_by_work_woken_after_the_pause_signal_is_not_reused(
-    tmp_path, monkeypatch
-):
-    """Even with reuse, a Work that wakes itself during the round (a timer
-    can send it SIGCONT) and starts a write after the pause signal cannot
-    leave a torn copy that later rounds link: the clock is read first."""
+def test_a_special_file_refusal_does_not_use_a_submission(tmp_path, monkeypatch):
     plan = make_run_plan(tmp_path)
     writer = RunArtifactWriter(plan, run_id="native-run")
     writer.start()
     runtime = _Runtime(tmp_path)
-    settle(tmp_path)
-    monkeypatch.setattr(snapshots, "_mapped_writes_change_ctime", lambda _fd: True)
-    answer = runtime.workspace / "answer.py"
-    pause = runtime.pause
-
-    def pause_then_wake(work):
-        pause(work)
-        if len(seen) == 0:
-            found = answer.stat()
-            answer.write_text("answer = 43\n")  # the same size, in place
-            os.utime(answer, ns=(found.st_atime_ns, found.st_mtime_ns))
-
-    real = snapshots._copy_content
-
-    def torn(read_fd, write_fd, size):
-        # The copy overtook the write: it reads the old bytes.
-        os.write(write_fd, b"answer = 42\n")
-        return size
-
-    seen = []
-    judge = runtime.run_judge
-
-    def run(workspace, request, environment, **kwargs):
-        seen.append((workspace / "answer.py").read_bytes())
-        return judge(workspace, request, environment, **kwargs)
-
-    monkeypatch.setattr(runtime, "pause", pause_then_wake)
-    monkeypatch.setattr(runtime, "run_judge", run)
-    monkeypatch.setattr(snapshots, "_copy_content", torn)
-    evaluator = NativeJudgeEvaluator(runtime, writer)
-    evaluator.evaluate(_round(writer, plan, "agent-1"), _Observer())
-    monkeypatch.setattr(snapshots, "_copy_content", real)
-    settle(tmp_path)
-    evaluator.evaluate(_round(writer, plan, "agent-2"), _Observer())
-
-    assert seen == [b"answer = 42\n", b"answer = 43\n"]
-    assert answer.read_bytes() == b"answer = 43\n"
-
-
-def test_only_a_single_node_harness_box_reuses_judge_copies(tmp_path, monkeypatch):
-    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
-    assert runtime.profile.apptainer.process_namespaces != "harness"
-    # SIGSTOP to a process group returns before a running write ends.
-    assert runtime.judge_copy_reuse is False
-    runtime.profile = runtime.profile.model_copy(
-        update={
-            "apptainer": runtime.profile.apptainer.model_copy(
-                update={"process_namespaces": "harness"}
-            )
-        }
+    os.mkfifo(runtime.workspace / "pipe")
+    native = NativeJudgeEvaluator(runtime, writer)
+    state = CoordinatorState(run_id="native-run")
+    state.transition(RunStatus.AGENT_RUNNING)
+    evaluator = _RoundEvaluator(
+        backend=SimpleNamespace(
+            evaluate_submission=lambda request, *, lifecycle_observer: native.evaluate(
+                request, lifecycle_observer
+            ),
+        ),
+        state=state,
+        transition=state.transition,
+        persist_recovery=lambda _message: None,
+        update_work=lambda **_values: None,
+        update_judge=lambda **_values: None,
     )
-    assert runtime.judge_copy_reuse is True
-    runtime.allocated_pools = _multi_pools()
-    assert runtime.judge_copy_reuse is False
+    service = SubmissionService(
+        evaluator=evaluator,
+        artifact_writer=writer,
+        clock=FakeClock(),
+    )
+    token = service.register(
+        run_id="native-run",
+        run_plan=plan,
+        work_container=ContainerRef(container_id="work", role="work"),
+    )
+
+    with pytest.raises(RetryableSubmissionError, match="pipe"):
+        service.submit(token)
+    assert service.reports == ()
+    (runtime.workspace / "pipe").unlink()
+    service.submit(token)
+    service.close(timeout_seconds=0)
+
+    assert [report.round_id for report in service.reports] == ["agent-1"]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root reads every directory")
+def test_a_workspace_the_scan_cannot_read_refuses_the_round_uncounted(tmp_path):
+    plan = make_run_plan(tmp_path)
+    writer = RunArtifactWriter(plan, run_id="native-run")
+    writer.start()
+    runtime = _Runtime(tmp_path)
+    hidden = runtime.workspace / "hidden"
+    hidden.mkdir()
+    hidden.chmod(0)
+    observer = _Observer()
+    try:
+        with pytest.raises(RetryableSubmissionError) as refused:
+            NativeJudgeEvaluator(runtime, writer).evaluate(
+                _round(writer, plan, "agent-1"), observer
+            )
+    finally:
+        hidden.chmod(0o700)
+
+    message = str(refused.value)
+    assert "not counted" in message and "could not check" in message
+    assert f"{plan.workdir}/hidden" in message
+    assert runtime.events == ["pause", "idle", "unpause"]
+    assert "recovery_required" not in dict(observer.events)
+
+
+def test_a_failed_scan_refuses_the_round_uncounted(tmp_path, monkeypatch):
+    from rsi_harness.cluster.bluevela import runtime as module
+    from rsi_harness.runtime.special_files import SpecialFileScanError
+
+    plan = make_run_plan(tmp_path)
+    writer = RunArtifactWriter(plan, run_id="native-run")
+    writer.start()
+    runtime = _Runtime(tmp_path)
+
+    def fail(_root):
+        raise SpecialFileScanError(PurePosixPath(), "more than 10 entries")
+
+    monkeypatch.setattr(module, "find_special_files", fail)
+    with pytest.raises(RetryableSubmissionError, match="more than 10 entries"):
+        NativeJudgeEvaluator(runtime, writer).evaluate(
+            _round(writer, plan, "agent-1"), _Observer()
+        )
+    assert runtime.events == ["pause", "idle", "unpause"]
+
+
+def test_a_round_after_work_ended_does_not_scan(tmp_path, monkeypatch):
+    """A final round after the Agent exits: nothing holds the other end."""
+    plan = make_run_plan(tmp_path)
+    writer = RunArtifactWriter(plan, run_id="native-run")
+    writer.start()
+    runtime = _Runtime(tmp_path)
+    runtime.work_alive = False
+    os.mkfifo(runtime.workspace / "pipe")
+
+    report = NativeJudgeEvaluator(runtime, writer).evaluate(
+        _round(writer, plan, "agent-1"), _Observer()
+    )
+
+    assert report.score == 1.0
+
+
+def test_work_alive_follows_the_work_process(tmp_path, monkeypatch):
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    assert runtime.work_alive is True
+    runtime._process = SimpleNamespace(pid=100, poll=lambda: 0)
+    assert runtime.work_alive is False
+    runtime._process = None
+    assert runtime.work_alive is False
 
 
 @pytest.mark.parametrize("failure", ["judge", "cancel"])
-def test_a_failed_round_keeps_its_copy_and_drops_the_base(
+def test_a_failed_round_keeps_no_copy_and_does_not_resume_work(
     tmp_path, monkeypatch, failure
 ):
     plan = make_run_plan(tmp_path)
     writer = RunArtifactWriter(plan, run_id="native-run")
     writer.start()
     runtime = _Runtime(tmp_path)
-    settle(tmp_path)
-    # Whatever file system the tmp directory is on.
-    monkeypatch.setattr(snapshots, "_mapped_writes_change_ctime", lambda _fd: True)
-    evaluator = NativeJudgeEvaluator(runtime, writer)
-    evaluator.evaluate(_round(writer, plan, "agent-1"), _Observer())
-    retained = (runtime.rounds / RETAINED / "answer.py").stat()
-    retained_calls = []
-    monkeypatch.setattr(
-        JudgeSnapshots, "retain", lambda *_args: retained_calls.append(True)
-    )
+    before = sorted(path.name for path in tmp_path.iterdir())
 
     def run(*_args, **_kwargs):
         if failure == "cancel":
@@ -2760,68 +3275,16 @@ def test_a_failed_round_keeps_its_copy_and_drops_the_base(
 
     monkeypatch.setattr(runtime, "run_judge", run)
     observer = _Observer()
-    runtime.events.clear()
     with pytest.raises((OSError, KeyboardInterrupt)):
-        evaluator.evaluate(_round(writer, plan, "agent-2"), observer)
+        NativeJudgeEvaluator(runtime, writer).evaluate(
+            _round(writer, plan, "agent-1"), observer
+        )
 
-    assert retained_calls == []
     assert "recovery_required" in dict(observer.events)
-    assert "snapshot_released" not in dict(observer.events)
     assert "unpause" not in runtime.events
-    kept = runtime.rounds / "agent-2" / "workspace" / "answer.py"
-    assert kept.stat().st_ino == retained.st_ino
-    # No base: a later copy links nothing.
-    later = evaluator.snapshots.acquire(runtime.workspace, "agent-3")
-    assert (later.workspace / "answer.py").stat().st_ino != retained.st_ino
-
-
-def test_the_run_end_removes_the_retained_copy_and_logs_a_failure(
-    tmp_path, monkeypatch, capsys
-):
-    from rsi_harness.cluster.bluevela import runtime as module
-    from tests.cluster.bluevela.test_engine import _payload
-
-    node_tmp = tmp_path / "node-tmp"
-    node_tmp.mkdir()
-    monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
-    monkeypatch.setattr(module, "_agent_provider_urls", lambda *a, **k: ())
-    made = []
-
-    class Composition(module.NativeEngineComposition):
-        def __init__(self, *args, **kwargs):
-            super().__init__(*args, **kwargs)
-            made.append(self)
-
-    class Stop(Exception):
-        pass
-
-    def coordinator(**_kwargs):
-        composition = made[-1]
-        composition.start_artifacts(composition.plan, composition.payload.run_id)
-        retained = composition.runtime.rounds / RETAINED
-        if broken:
-            retained.parent.mkdir(parents=True, exist_ok=True)
-            retained.symlink_to(composition.runtime.workspace)
-        else:
-            (retained / "src").mkdir(parents=True)
-            (retained / "src" / "answer.py").write_text("copy")
-            (retained / "src").chmod(0o500)
-        raise Stop
-
-    monkeypatch.setattr(module, "NativeEngineComposition", Composition)
-    monkeypatch.setattr(module, "RunCoordinator", coordinator)
-    broken = False
-    payload = _payload(tmp_path / "clean")
-    with pytest.raises(Stop):
-        module.run_native_engine(payload, payload.run_plan)
-    assert not os.path.lexists(made[-1].runtime.rounds / RETAINED)
-
-    broken = True
-    payload = _payload(tmp_path / "broken")
-    with pytest.raises(Stop):
-        module.run_native_engine(payload, payload.run_plan)
-    assert "judge_snapshot_cleanup_failed" in capsys.readouterr().out
-    assert os.path.islink(made[-1].runtime.rounds / RETAINED)
+    assert "fail" in runtime.events
+    assert sorted(path.name for path in tmp_path.iterdir()) == before
+    assert (runtime.workspace / "answer.py").read_text() == "answer = 42\n"
 
 
 @pytest.mark.parametrize("error_type", [KeyboardInterrupt, SystemExit])
@@ -2838,19 +3301,15 @@ def test_cancelled_judge_keeps_evidence_without_resuming_work(
         raise error_type("cancelled")
 
     monkeypatch.setattr(runtime, "run_judge", cancel)
-    request = EvaluationRequest(
-        run_plan=plan,
-        work_container=ContainerRef(container_id="work", role="work"),
-        round_id="agent-1",
-        verifier_logs=writer.root / "verifier/agent-1",
-        verifier_output=writer.feedback_root / "agent-1.log",
-    )
+    request = _round(writer, plan, "agent-1")
     with pytest.raises(error_type):
         NativeJudgeEvaluator(runtime, writer).evaluate(request, observer)
     assert "unpause" not in runtime.events
     assert "fail" in runtime.events
-    assert "snapshot_released" not in dict(observer.events)
-    assert (runtime.rounds / "agent-1/workspace/answer.py").is_file()
+    assert "judge_removed" not in dict(observer.events)
+    # The round's logs stay; Work's workspace is untouched.
+    assert request.verifier_logs.is_dir()
+    assert (runtime.workspace / "answer.py").is_file()
 
 
 def test_an_engine_stopped_by_the_provider_says_so():
@@ -2986,3 +3445,36 @@ def test_a_final_judge_work_sees_an_empty_feedback_directory(
     assert f"{empty}:/run/rsi-harness/feedback:ro" in mounts
     assert f"{runtime.feedback}:/run/rsi-harness/feedback:ro" not in mounts
     assert list(empty.iterdir()) == []
+
+
+def test_harness_mode_finishes_a_stop_the_box_already_began(monkeypatch) -> None:
+    # The main thread took the box's SIGSTOP and stopped, which cleared
+    # ShdPnd, while another thread waits in D (vfork): its threads still
+    # get SIGSTOP. A process the box never reached is left alone.
+    sent = []
+    monkeypatch.setattr(runtime_module, "_process_stat", lambda pid: (1, 1, 77))
+    monkeypatch.setattr(runtime_module, "_stop_pending", lambda path, field: False)
+    monkeypatch.setattr(
+        runtime_module, "_stop_threads", lambda pid, start: sent.append((pid, start))
+    )
+    monkeypatch.setattr(runtime_module, "_group_stop_begun", lambda pid: True)
+    runtime_module._finish_box_stop(10)
+    assert sent == [(10, 77)]
+
+    sent.clear()
+    monkeypatch.setattr(runtime_module, "_group_stop_begun", lambda pid: False)
+    runtime_module._finish_box_stop(10)
+    assert sent == []
+
+
+def test_a_group_stop_has_begun_once_a_thread_is_stopped() -> None:
+    process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
+    try:
+        assert not runtime_module._group_stop_begun(process.pid)
+        os.kill(process.pid, signal.SIGSTOP)
+        _wait_state(process.pid, lambda state: state == "T")
+        assert runtime_module._group_stop_begun(process.pid)
+    finally:
+        process.kill()
+        process.wait()
+    assert not runtime_module._group_stop_begun(process.pid)

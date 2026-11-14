@@ -4,7 +4,7 @@ Opt in with RSI_ACCEPTANCE=1, RSI_APPTAINER_TEST_PROFILE (site TOML), and
 RSI_APPTAINER_TEST_IMAGE (SIF containing bash and the profile's Python).
 Run inside the site's CPU allocation. This tests the native evaluator and
 runtime, not image building, the model CLI, or the Engine resume command.
-The Judge reads a read-only copy; a later round links unchanged files.
+The Judge reads Work's paused workspace through a read-only bind; no copy.
 """
 
 import errno
@@ -24,8 +24,7 @@ from rsi_harness.cluster.bluevela.runtime import (
     NativeJudgeEvaluator,
 )
 from rsi_harness.cluster.config import load_cluster_profile
-from rsi_harness.cluster.snapshots import RETAINED, can_link
-from rsi_harness.errors import InfrastructureError
+from rsi_harness.errors import InfrastructureError, RetryableSubmissionError
 from rsi_harness.models import EvaluationRequest, GPURequirement, SubmissionStatus
 from rsi_harness.runtime.artifacts import RunArtifactWriter
 from rsi_harness.runtime.coordinator import _cancellation_signals, _RunCancelled
@@ -72,7 +71,6 @@ def native(tmp_path, monkeypatch):
         runtime.control,
         runtime.agent_home,
         runtime.task_assets,
-        runtime.rounds,
         runtime.work_tmp,
         runtime.judge_tmp_root,
         runtime.feedback,
@@ -83,7 +81,8 @@ def native(tmp_path, monkeypatch):
     (tests / "test.sh").write_text(
         "#!/bin/bash\nset -eu\n"
         "echo judge-started\n"
-        # The Judge's copy is read-only.
+        # The Judge reads Work's workspace, read-only.
+        "cat /workspace/candidate.txt\n"
         "if mkdir /workspace/readonly 2>/dev/null; then\n"
         "  echo judge-wrote-workspace\n"
         "else echo judge-workspace-read-only; fi\n"
@@ -135,7 +134,7 @@ class Observer:
         self.runtime, self.path, self.events = runtime, path, []
 
     def resource_event(self, name, **values):
-        if name in ("snapshot_acquired", "judge_created", "snapshot_released"):
+        if name == "judge_created":
             assert self.runtime._paused
         self.events.append(name)
         with self.path.open("a") as stream:
@@ -154,16 +153,19 @@ def evaluate(runtime, writer, name, observer, evaluator=None):
     return evaluator.evaluate(request, observer)
 
 
-def test_real_apptainer_keeps_one_copy_and_links_unchanged_files(native):
+def test_real_apptainer_judge_reads_the_paused_workspace_read_only(native):
     runtime, writer, work = native
-    # Existing interrupted evidence is not swept by a later round.
-    old = runtime.rounds / "previous-attempt" / "workspace"
-    old.mkdir(parents=True)
-    (old / "keep").write_text("recovery evidence")
+    before = sorted(path.name for path in runtime.plan.paths.root.iterdir())
     evaluator = NativeJudgeEvaluator(runtime, writer)
-    # Only a verified full stop on one node, off tmpfs, links unchanged files.
-    reuse = runtime.judge_copy_reuse and can_link(runtime.workspace, runtime.rounds)
-    copied = None
+    # A FIFO in the workspace: refused, not counted, and Work resumes.
+    os.mkfifo(runtime.workspace / "pipe")
+    (runtime.workspace / "mode").write_text("success")
+    observer = Observer(runtime, writer.root / "acceptance-events.jsonl")
+    with pytest.raises(RetryableSubmissionError, match="pipe"):
+        evaluate(runtime, writer, "agent-1", observer, evaluator)
+    assert "judge_created" not in observer.events
+    assert not runtime._paused
+    (runtime.workspace / "pipe").unlink()
     for index, mode in enumerate(("success", "success", "error", "timeout")):
         name = f"agent-{index + 1}"
         (runtime.workspace / "mode").write_text(mode)
@@ -177,35 +179,24 @@ def test_real_apptainer_keeps_one_copy_and_links_unchanged_files(native):
         assert report.status == expected
         if mode == "success":
             assert report.score == 0.75
-        assert not (runtime.rounds / name).exists()
-        assert sorted(path.name for path in runtime.rounds.iterdir()) == (
-            [RETAINED, old.parent.name] if reuse else [old.parent.name]
-        )
-        assert (old / "keep").read_text() == "recovery evidence"
         assert (writer.root / "submissions" / name / "report.json").is_file()
         feedback = (writer.feedback_root / f"{name}.log").read_text()
         assert "judge-started" in feedback
+        assert "candidate-source" in feedback
         assert "judge-workspace-read-only" in feedback
-        assert observer.events.index("snapshot_released") < observer.events.index(
+        assert not any(event.startswith("snapshot_") for event in observer.events)
+        assert observer.events.index("judge_removed") < observer.events.index(
             "work_unpaused"
         )
-        if reuse:
-            candidate = (runtime.rounds / RETAINED / "candidate.txt").stat()
-            work_candidate = (runtime.workspace / "candidate.txt").stat()
-            assert candidate.st_ino != work_candidate.st_ino
-            if copied is not None:
-                # Unchanged in Work: linked from the previous round's copy.
-                assert candidate.st_ino == copied
-            copied = candidate.st_ino
         assert not work.done()
-    evaluator.close()
-    assert not (runtime.rounds / RETAINED).exists()
+    # No copy anywhere under the run directory.
+    assert sorted(path.name for path in runtime.plan.paths.root.iterdir()) == before
     assert "work-ready" in (writer.root / "agent_output.txt").read_text()
     assert (runtime.workspace / "candidate.txt").read_text() == "candidate-source\n"
     assert not (runtime.workspace / "readonly").exists()
 
 
-def test_real_apptainer_interruption_retains_uncommitted_snapshot(native):
+def test_real_apptainer_interruption_keeps_evidence_without_resuming_work(native):
     runtime, writer, work = native
     (runtime.workspace / "mode").write_text("interrupt")
     observer = Observer(runtime, writer.root / "acceptance-events.jsonl")
@@ -231,10 +222,10 @@ def test_real_apptainer_interruption_retains_uncommitted_snapshot(native):
     with pytest.raises(InfrastructureError, match="recovery_required"):
         work.result(timeout=20)
     assert runtime._process.poll() is not None
-    assert (runtime.rounds / "agent-1/workspace/candidate.txt").is_file()
+    assert not (runtime.plan.paths.root / "judge-rounds").exists()
     assert (runtime.workspace / "candidate.txt").read_text() == "candidate-source\n"
     assert "recovery_required" in observer.events
-    assert "snapshot_released" not in observer.events
+    assert "judge_removed" not in observer.events
     assert "work_unpaused" not in observer.events
     assert not (writer.root / "submissions/agent-1/report.json").exists()
     assert "judge-started" in output.read_text()
@@ -269,9 +260,9 @@ def test_real_apptainer_output_failure_requires_recovery(native, monkeypatch):
     with pytest.raises(InfrastructureError, match="recovery_required"):
         work.result(timeout=20)
     assert runtime._process.poll() is not None
-    assert (runtime.rounds / "agent-1/workspace/candidate.txt").is_file()
+    assert not (runtime.plan.paths.root / "judge-rounds").exists()
     assert (runtime.workspace / "candidate.txt").read_text() == "candidate-source\n"
     assert "recovery_required" in observer.events
-    assert "snapshot_released" not in observer.events
+    assert "judge_removed" not in observer.events
     assert "work_unpaused" not in observer.events
     assert not (writer.root / "submissions/agent-1/report.json").exists()
