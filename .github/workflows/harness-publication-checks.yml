@@ -95,8 +95,7 @@ jobs:
         working-directory: ${{ steps.archive.outputs.root }}/RSI-Harness
         run: |
           uv sync --frozen --group test --python 3.12
-          uname -a; ps --version; cat /proc/sys/kernel/yama/ptrace_scope || true
-          timeout 480 uv run --frozen --group test python -m pytest -m 'not integration and not gpu' -vv -p no:cacheprovider -o faulthandler_timeout=40 tests/cluster/bluevela/test_resume.py tests/cluster/bluevela/test_rsi_nonet.py tests/cluster/bluevela/test_runtime.py
+          uv run --frozen --group test python -m pytest -m 'not integration and not gpu' -q
 
   published-tasks:
     # The task publication workflow compiles only changed tasks, with the base
