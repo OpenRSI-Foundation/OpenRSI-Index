@@ -6,11 +6,21 @@
   <a href="https://index.openrsi.foundation/index.html"><img src="https://img.shields.io/badge/Website-4F86D8?style=for-the-badge&logo=googleearth&logoColor=white" alt="Website"></a>&nbsp;
   <!-- <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index"><img src="https://img.shields.io/badge/GitHub-35434D?style=for-the-badge&logo=github&logoColor=white" alt="GitHub"></a>&nbsp; -->
   <a href="https://x.com/OpenRSI/status/2102831770458890626"><img src="https://img.shields.io/badge/Twitter-35434D?style=for-the-badge&logo=X&logoColor=white" alt="X"></a>&nbsp;
+  <a href="#-news"><img src="https://img.shields.io/badge/News-7357CF?style=for-the-badge&logo=rss&logoColor=white" alt="News"></a>&nbsp;
   <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md"><img src="assets/figures/contribution-call.svg" alt="Contribution Call"></a>&nbsp;
   <a href="https://index.openrsi.foundation/logs/"><img src="https://img.shields.io/badge/RSI%20Logs-14967F?style=for-the-badge&logo=google-sheets&logoColor=white" alt="RSI Logs"></a>&nbsp;
   <a href="assets/figures/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-24A36F?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat Group"></a>&nbsp;
   <a href="https://discord.gg/3EG8Qhmfsa"><img src="https://img.shields.io/badge/Discord-6674D8?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
 </div>
+
+## ✨ News
+
+- **[2026-11-13]** At [SGLang Summit 2026](https://www.sglang.io/summit), we presented **Scaling RSI for AI Infra**. [[Slide]](https://docs.google.com/presentation/d/1ODcBjqT9sl0NRa7SdtV4rwULmMZI71xx/edit)
+- **[2026-11-09]** New [OpenRSI x SGLang-omni blog](https://index.openrsi.foundation/blog/2026/openrsi-sglang-omni/): RSI for multimodal serving, with **14 merged PRs** and **up to 326.5% higher H100 non-streaming throughput**.
+- **[2026-11-06]** [RSI Harness](RSI-Harness/) supports **7 coding agents**, **Docker/Apptainer/SingularityCE containers**, and deployment on **standalone GPU servers and Slurm/LSF/Kubernetes/PBS/PJM clusters**.
+- **[2026-11-05]** **140+ [RSI tasks](https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions) assigned**, spanning pre-training, post-training, multimodal learning, robotics, agents, AI systems, and scientific ML.
+
+[All news →](NEWS.md)
 
 ## 📣 Call for Contributors
 
