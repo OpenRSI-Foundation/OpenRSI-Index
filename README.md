@@ -6,11 +6,22 @@
   <a href="https://index.openrsi.foundation/index.html"><img src="https://img.shields.io/badge/Website-4F86D8?style=for-the-badge&logo=googleearth&logoColor=white" alt="Website"></a>&nbsp;
   <!-- <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index"><img src="https://img.shields.io/badge/GitHub-35434D?style=for-the-badge&logo=github&logoColor=white" alt="GitHub"></a>&nbsp; -->
   <a href="https://x.com/OpenRSI/status/2102831770458890626"><img src="https://img.shields.io/badge/Twitter-35434D?style=for-the-badge&logo=X&logoColor=white" alt="X"></a>&nbsp;
+  <a href="#-news"><img src="https://img.shields.io/badge/News-7357CF?style=for-the-badge&logo=rss&logoColor=white" alt="News"></a>&nbsp;
   <a href="https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md"><img src="assets/figures/contribution-call.svg" alt="Contribution Call"></a>&nbsp;
   <a href="https://index.openrsi.foundation/logs/"><img src="https://img.shields.io/badge/RSI%20Logs-14967F?style=for-the-badge&logo=google-sheets&logoColor=white" alt="RSI Logs"></a>&nbsp;
   <a href="assets/figures/wechat.jpg"><img src="https://img.shields.io/badge/WeChat-24A36F?style=for-the-badge&logo=wechat&logoColor=white" alt="WeChat Group"></a>&nbsp;
   <a href="https://discord.gg/3EG8Qhmfsa"><img src="https://img.shields.io/badge/Discord-6674D8?style=for-the-badge&logo=discord&logoColor=white" alt="Discord"></a>
 </div>
+
+## ✨ News
+
+- **[2026-11-13]** RSI Harness [reduces cluster evaluation overhead](https://github.com/OpenRSI-Foundation/OpenRSI-Index/pull/347) by judging paused workspaces through read-only mounts, without per-round workspace copies.
+- **[2026-11-12]** RSI Harness adds [task-defined submission budgets and a single final evaluation mode](https://github.com/OpenRSI-Foundation/OpenRSI-Index/pull/342).
+- **[2026-11-09]** Our [OpenRSI × SGLang-Omni report](https://index.openrsi.foundation/blog/2026/openrsi-sglang-omni/) documents **14 upstream-merged PRs across eight speech and omni model families**.
+- **[2026-11-06]** RSI Harness expands [cluster support](NEWS.md#november-2026) with Kubernetes, PBS Pro, Fujitsu PJM and SingularityCE.
+- **[2026-11-05]** We released the [SGLang-Omni task collection](rsi-tasks/SGNOMI/): **12 task packages covering 10 model configurations across eight model families**.
+
+[All news →](NEWS.md)
 
 ## 📣 Call for Contributors
 
