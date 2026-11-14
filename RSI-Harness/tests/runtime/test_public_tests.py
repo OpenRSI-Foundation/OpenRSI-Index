@@ -701,7 +701,7 @@ def test_cluster_public_runtime_refuses_changed_tests_before_work_or_judge(
         verifier_output=tmp_path / "feedback.log",
     )
     with pytest.raises(SetupError, match="tests digest"):
-        runtime.run_judge(tmp_path / "snapshot", request, {})
+        runtime.run_judge(request, {})
 
 
 # Work prompt

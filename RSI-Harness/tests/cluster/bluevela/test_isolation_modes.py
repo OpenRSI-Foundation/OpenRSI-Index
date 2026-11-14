@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -28,8 +29,13 @@ from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.judge_agent import judge_isolation
 from rsi_harness.models import AgentRunResult, ContainerRef, EvaluationRequest
 from tests.cluster.bluevela.test_runtime import (
+    THREADED_VFORK_WORK,
     _codex_runtime,
     _RecordingPopen,
+    _thread_state,
+    needs_vfork,
+    threaded_vfork_arguments,
+    threaded_vfork_ready,
 )
 from tests.cluster.slurm.test_adapter import RecordingSlurmScheduler
 from tests.cluster.slurm.test_oracle import setup_oracle
@@ -75,9 +81,8 @@ def _with_networks(plan, *, agent="no-network", verifier="no-network", name=None
 def _judge_request(runtime, tmp_path):
     runtime.task_assets.mkdir(parents=True)
     runtime.judge_tmp_root.mkdir(parents=True)
-    workspace = runtime.rounds / "agent-1" / "workspace"
-    workspace.mkdir(parents=True)
-    return workspace, EvaluationRequest(
+    runtime.workspace.mkdir(parents=True, exist_ok=True)
+    return EvaluationRequest(
         run_plan=runtime.plan,
         work_container=ContainerRef(container_id="work", role="work"),
         round_id="agent-1",
@@ -92,8 +97,8 @@ def _record_execs(runtime, tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", _RecordingPopen)
     runtime._seed()
     runtime.exec(runtime.work_ref, ("codex", "exec"), timeout_seconds=5)
-    workspace, request = _judge_request(runtime, tmp_path)
-    runtime.run_judge(workspace, request, {"RSI_JUDGE_NETNS": "private"})
+    request = _judge_request(runtime, tmp_path)
+    runtime.run_judge(request, {"RSI_JUDGE_NETNS": "private"})
     return _RecordingPopen.calls
 
 
@@ -268,9 +273,9 @@ def test_the_judge_learns_whether_its_network_namespace_is_shared(
         return AgentRunResult(exit_code=0, output="")
 
     monkeypatch.setattr(runtime, "_run", fake_run)
-    workspace, request = _judge_request(runtime, tmp_path)
+    request = _judge_request(runtime, tmp_path)
 
-    runtime.run_judge(workspace, request, {"RSI_JUDGE_NETNS": "private"})
+    runtime.run_judge(request, {"RSI_JUDGE_NETNS": "private"})
 
     assert seen["RSI_JUDGE_NETNS"] == expected
 
@@ -527,6 +532,7 @@ if init == 0:
         # "late": the first pause misses a process; "half": every pause does.
         reached = {
             "obey": targets,
+            "vfork": targets,
             "late": targets[: 1 if pauses.count(True) == 1 else 2],
             "half": targets[:1],
             "ignore": [],
@@ -537,6 +543,8 @@ if init == 0:
     signal.signal(signal.SIGUSR2, act)
     targets.append(subprocess.Popen(["sleep", "60"]).pid)
     targets.append(subprocess.Popen(["sleep", "60"], start_new_session=True).pid)
+    if sys.argv[2] == "vfork":
+        targets.append(subprocess.Popen([sys.executable, *sys.argv[3:]]).pid)
     while True:
         signal.pause()
 for signum in (signal.SIGUSR1, signal.SIGUSR2):
@@ -545,17 +553,15 @@ os.waitpid(init, 0)
 """
 
 
-def _fake_box(tmp_path, behaviour):
+def _fake_box(tmp_path, behaviour, *work):
     """A process tree shaped as Apptainer's starter, the box's outer process,
-    its pid 1 and two Work processes (one in its own session)."""
+    its pid 1 and two Work processes (one in its own session), and a third
+    that runs ``work`` (with "vfork")."""
     script = tmp_path / "fake_box.py"
     script.write_text(_FAKE_BOX)
+    arguments = shlex.join([str(script), "/usr/local/bin/rsi-box", behaviour, *work])
     process = subprocess.Popen(
-        [
-            "/bin/sh",
-            "-c",
-            f'"{sys.executable}" {script} /usr/local/bin/rsi-box {behaviour}; :',
-        ],
+        ["/bin/sh", "-c", f"{shlex.quote(sys.executable)} {arguments}; :"],
         start_new_session=True,
         text=True,
     )
@@ -605,6 +611,48 @@ def test_harness_mode_pauses_every_process_through_the_box(tmp_path, monkeypatch
         _end(process, workers)
 
 
+@needs_vfork
+def test_harness_mode_stops_every_thread_while_the_main_thread_waits_for_vfork(
+    tmp_path, monkeypatch
+):
+    # The box's SIGSTOP goes to the main thread in D, which cannot take it.
+    runtime = _runtime(tmp_path, monkeypatch, process_namespaces="harness")
+    monkeypatch.setattr(runtime_module, "_BOX_PAUSE_SECONDS", 3.0)
+    work = tmp_path / "work.py"
+    work.write_text(THREADED_VFORK_WORK)
+    done = tmp_path / "done"
+    process, workers = _fake_box(
+        tmp_path, "vfork", str(work), *threaded_vfork_arguments("spin", done)
+    )
+    table = _process_table()
+    # Its vfork child has the same command line.
+    mine = {
+        pid
+        for pid, row in table.items()
+        if row[2].split()[1:2] == [str(work)] and _below(table, pid, process.pid)
+    }
+    (leader,) = [pid for pid in mine if table[pid][0] not in mine]
+    try:
+        child, spinner = threaded_vfork_ready(leader)
+        runtime._process = process
+        runtime.pause(runtime.work_ref)
+        assert runtime_module._threads_stopped(leader)
+        assert _thread_state(leader, spinner) == "T"
+
+        runtime.unpause(runtime.work_ref)
+        deadline = time.monotonic() + 10
+        while _thread_state(leader, spinner) == "T":
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+        # The fake box continues only its own targets; rsi-box, every process.
+        os.kill(child, signal.SIGCONT)
+        while not (done.exists() and done.read_text()):
+            assert time.monotonic() < deadline
+            time.sleep(0.05)
+    finally:
+        _end(process, [*workers, leader])
+
+
 def test_a_pause_is_sent_again_until_every_process_stays_stopped(tmp_path, monkeypatch):
     runtime = _runtime(tmp_path, monkeypatch, process_namespaces="harness")
     process, workers = _fake_box(tmp_path, "late")
@@ -645,6 +693,8 @@ def test_a_thread_still_running_is_not_a_stopped_process(tmp_path, monkeypatch):
     }
     sent = []
     monkeypatch.setattr(runtime_module, "_process_table", lambda: table)
+    monkeypatch.setattr(runtime_module, "_threads_stopped", lambda _pid: False)
+    monkeypatch.setattr(runtime_module, "_finish_box_stop", sent.append)
     monkeypatch.setattr(os, "kill", lambda pid, signum: sent.append((pid, signum)))
     runtime._process = SimpleNamespace(pid=9, poll=lambda: None)
 
@@ -652,7 +702,31 @@ def test_a_thread_still_running_is_not_a_stopped_process(tmp_path, monkeypatch):
         runtime.pause(runtime.work_ref)
 
     assert sent.count((10, signal.SIGUSR1)) > 1
+    assert 12 in sent  # its threads stopped one by one if the box's stop is stuck
     assert sent[-1] == (10, signal.SIGUSR2)
+
+
+def test_a_pause_whose_process_query_fails_resumes_the_box(tmp_path, monkeypatch):
+    runtime = _runtime(tmp_path, monkeypatch, process_namespaces="harness")
+    box = "python -I -S -B /usr/local/bin/rsi-box --work -- codex"
+    queries = iter([{9: (1, "S", "apptainer"), 10: (9, "S", box)}])
+
+    def query():
+        try:
+            return next(queries)
+        except StopIteration:
+            raise InfrastructureError("process query failed: timed out") from None
+
+    sent = []
+    monkeypatch.setattr(runtime_module, "_process_table", query)
+    monkeypatch.setattr(os, "kill", lambda pid, signum: sent.append((pid, signum)))
+    runtime._process = SimpleNamespace(pid=9, poll=lambda: None)
+
+    with pytest.raises(InfrastructureError, match="process query failed"):
+        runtime.pause(runtime.work_ref)
+
+    assert sent == [(10, signal.SIGUSR1), (10, signal.SIGUSR2)]
+    assert runtime._paused is False
 
 
 def test_the_process_table_has_every_thread_s_state():
@@ -1102,23 +1176,22 @@ def test_initialize_proves_the_box_before_any_task_code(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ["apptainer", "harness"])
-def test_the_judge_binds_its_copy_read_only_and_never_works_workspace(
+def test_the_judge_binds_works_workspace_read_only_in_both_modes(
     tmp_path, monkeypatch, mode
 ) -> None:
-    """In both modes: a stopped Work can be continued, so the Judge never
-    reads Work's own files, and its copy is read-only so the next round can
-    link unchanged files from it."""
+    """In both modes the Judge binds Work's own workspace, read-only, at
+    WORKDIR: no copy is made."""
     runtime = _runtime(tmp_path, monkeypatch, process_namespaces=mode)
     monkeypatch.setattr(_RecordingPopen, "calls", [])
     monkeypatch.setattr(subprocess, "Popen", _RecordingPopen)
-    copy, request = _judge_request(runtime, tmp_path)
-    runtime.workspace.mkdir(parents=True, exist_ok=True)
+    request = _judge_request(runtime, tmp_path)
 
-    runtime.run_judge(copy, request, {"RSI_JUDGE_NETNS": "private"})
+    runtime.run_judge(request, {"RSI_JUDGE_NETNS": "private"})
 
     (judge, _env) = _RecordingPopen.calls[-1]
-    assert f"{copy}:{runtime.plan.workdir}:ro" in judge
-    assert f"{copy}:{runtime.plan.workdir}" not in judge
-    with pytest.raises(InfrastructureError, match="copy"):
-        runtime.run_judge(runtime.workspace, request, {})
-    assert len(_RecordingPopen.calls) == 1
+    binds = [judge[index + 1] for index, arg in enumerate(judge) if arg == "--bind"]
+    workdir = [
+        bind for bind in binds if bind.split(":")[1] == str(runtime.plan.workdir)
+    ]
+    assert workdir == [f"{runtime.workspace}:{runtime.plan.workdir}:ro"]
+    assert not (runtime.plan.paths.root / "judge-rounds").exists()

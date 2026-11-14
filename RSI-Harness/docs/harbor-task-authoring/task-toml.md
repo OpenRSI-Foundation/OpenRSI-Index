@@ -770,11 +770,13 @@ clean_image = false
 When the `WORKDIR` is `/`, a hidden Judge cannot use the clean image and runs
 from a snapshot of Work instead. The run prints a warning, and `run-plan.json`
 records `clean_image: false` next to `rootfs_snapshot_mode: "full-rootfs"`.
-On a cluster, every Judge starts from the task image with a copy of the
-workspace, whatever this field says, so the Agent's changes outside the
-workspace never reach it there and `run-plan.json` records
-`clean_image: true`. A Judge must not write into `WORKDIR`: it reads it
-read-only on Docker, with a non-root `WORKDIR`, and on a cluster. A cluster
+On a cluster, every Judge starts from the task image with Work's paused
+workspace bound read-only, whatever this field says, so the Agent's changes
+outside the workspace never reach it there and `run-plan.json` records
+`clean_image: true`. There too, a submission is refused, and not counted,
+while the workspace holds a FIFO, socket or device. A Judge must not write
+into `WORKDIR`: it reads it read-only on Docker, with a non-root `WORKDIR`,
+and on a cluster. A cluster
 Judge also runs as the invoking user, not root (see
 [Judges that are not root](#judges-that-are-not-root)).
 

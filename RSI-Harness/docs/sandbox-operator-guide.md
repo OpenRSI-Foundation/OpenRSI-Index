@@ -339,7 +339,7 @@ per-phase socket directory is on node-local scratch
 is bound read-only at `/run/rsi-harness/sandbox` into the Work Agent and the
 Judge verifier, with the same `RSI_SANDBOX_*` variables as locally. The
 Engine applies the local ordering around a Judge round: freeze Work's envs,
-pause (SIGSTOP) the Work process group, run the round with its own
+stop every Work process on the node, run the round with its own
 endpoint, kill the round's envs, then resume Work's envs, continue Work and
 reopen its endpoint. The run's close kills every sandbox.
 

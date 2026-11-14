@@ -807,6 +807,29 @@ def test_a_plan_makes_all_read_only_hides_then_binds_the_grants(monkeypatch, tmp
     assert mounted[4][0].startswith("/proc/self/fd/")
 
 
+def test_a_write_grant_on_a_read_only_bind_stays_read_only(monkeypatch, tmp_path):
+    """The cluster binds Work's workspace read-only at WORKDIR: a Judge box
+    that grants it writable keeps it read-only."""
+    workdir = tmp_path / "workspace"
+    workdir.mkdir()
+    flags = os.ST_RDONLY | os.ST_NOSUID | os.ST_RELATIME
+    read_only = os.statvfs_result((0,) * 8 + (flags, 255))
+    monkeypatch.setattr(isolation, "mounts", lambda text=None: [])
+    monkeypatch.setattr(isolation.os, "statvfs", lambda _path: read_only)
+    libc = _Libc()
+
+    isolation._apply_plan(libc, {"write": [str(workdir)]})
+
+    remounts = [
+        call[4]
+        for call in libc.calls
+        if call[0] == "mount"
+        and call[2] == str(workdir)
+        and call[4] & isolation.MS_REMOUNT
+    ]
+    assert remounts and all(flag & isolation.MS_RDONLY for flag in remounts)
+
+
 @pytest.mark.parametrize("error", [0, errno.EPERM])
 def test_a_mount_that_stays_writable_stops_the_box(monkeypatch, error):
     writable = os.statvfs_result((0,) * 8 + (os.ST_NOSUID, 255))

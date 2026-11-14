@@ -627,8 +627,9 @@ def test_run_plan_overlaps_work_and_judge_when_single_node_requires_reuse(
 def test_cluster_run_plan_records_the_clean_judge_it_always_uses(
     tmp_path: Path, clean_image: bool
 ) -> None:
-    """A cluster Judge starts from the task SIF with a workspace copy,
-    whatever clean_image says, so the plan never claims a Work snapshot."""
+    """A cluster Judge starts from the task SIF with Work's workspace bound
+    read-only, whatever clean_image says, so the plan never claims a Work
+    snapshot."""
     profile = _profile(tmp_path)
     adapter = BlueVelaClusterAdapter(
         profile,

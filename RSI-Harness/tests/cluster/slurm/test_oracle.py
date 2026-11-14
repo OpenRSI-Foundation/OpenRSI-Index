@@ -1,3 +1,4 @@
+import os
 from pathlib import PurePosixPath
 from types import SimpleNamespace
 
@@ -371,12 +372,12 @@ def test_multinode_oracle_retires_solution_after_idle_before_judge(
 
     monkeypatch.setattr(runtime, "remove_oracle_solution", remove)
 
-    def judge(snapshot, request, environment, *, trajectory):
+    def judge(request, environment, *, trajectory):
         assert events == ["pause", "idle", "cleanup"]
         assert not solution.exists()
         assert runtime.work_broker is None
-        assert (snapshot / "answer").read_text() == "42\n"
-        assert sorted(p.name for p in snapshot.iterdir()) == ["answer"]
+        # Work's own workspace on the shared file system: no copy.
+        assert (runtime.workspace / "answer").read_text() == "42\n"
         events.append("judge")
         (request.verifier_logs / "reward.txt").write_text("1\n")
         request.verifier_output.write_text("passed\n")
@@ -402,12 +403,52 @@ def test_multinode_oracle_retires_solution_after_idle_before_judge(
                 evaluator.evaluate(request, _Observer())
             assert (solution / "solve.sh").is_file()
             assert "judge" not in events
-            assert not (runtime.rounds / "agent-1").exists()
+            assert not (runtime.plan.paths.root / "judge-rounds").exists()
         else:
             assert evaluator.evaluate(request, _Observer()).score == 1.0
             assert events == ["pause", "idle", "cleanup", "judge", "unpause"]
         assert original.is_file()
     finally:
+        runtime.close_multinode()
+
+
+def test_multinode_special_files_refuse_the_round_after_remote_work_is_idle(
+    tmp_path, monkeypatch
+):
+    """Multi-node: the controller walks the shared workspace once Work is
+    paused and no remote rank is running, before anything is retired."""
+    runtime = _oracle_runtime(tmp_path, monkeypatch, multi=True)
+    runtime.initialize()
+    runtime.stage_solution()
+    solution = runtime._oracle_solution
+    (runtime.workspace / "src").mkdir()
+    os.mkfifo(runtime.workspace / "src" / "pipe")
+    # A paused Work process: the round scans before the Judge.
+    runtime._process = SimpleNamespace(pid=0, poll=lambda: None)
+    events = []
+    monkeypatch.setattr(runtime, "pause", lambda _: events.append("pause"))
+    monkeypatch.setattr(runtime, "unpause", lambda _: events.append("unpause"))
+    monkeypatch.setattr(runtime, "require_work_idle", lambda: events.append("idle"))
+    monkeypatch.setattr(
+        runtime, "run_judge", lambda *_a, **_k: pytest.fail("Judge started")
+    )
+    writer = RunArtifactWriter(runtime.plan, run_id=runtime.payload.run_id)
+    writer.start()
+    request = EvaluationRequest(
+        run_plan=runtime.plan,
+        work_container=runtime.work_ref,
+        round_id="agent-1",
+        verifier_logs=writer.root / "verifier/agent-1",
+        verifier_output=writer.feedback_root / "agent-1.log",
+    )
+    try:
+        with pytest.raises(RetryableSubmissionError, match="src/pipe"):
+            NativeJudgeEvaluator(runtime, writer).evaluate(request, _Observer())
+        assert events == ["pause", "idle", "unpause"]
+        assert (solution / "solve.sh").is_file()
+        assert runtime.work_broker is not None
+    finally:
+        runtime._process = None
         runtime.close_multinode()
 
 
@@ -432,11 +473,11 @@ def test_multinode_oracle_real_broker_barrier_and_repeated_submissions(
     monkeypatch.setattr(runtime, "unpause", lambda _: None)
     observed = []
 
-    def judge(snapshot, request, environment, *, trajectory):
+    def judge(request, environment, *, trajectory):
         assert not solution.exists()
         assert runtime.work_broker is None
         assert not (broker.root / "READY.json").exists()
-        assert (snapshot / "answer").read_text() == "42\n"
+        assert (runtime.workspace / "answer").read_text() == "42\n"
         observed.append(request.round_id)
         (request.verifier_logs / "reward.txt").write_text("1\n")
         request.verifier_output.write_text("passed\n")
@@ -476,7 +517,6 @@ def test_multinode_oracle_real_broker_barrier_and_repeated_submissions(
                 assert runtime.work_broker is broker
                 assert (solution / "solve.sh").is_file()
                 assert observed == []
-                assert not (runtime.rounds / "busy").exists()
             finally:
                 broker.release(reserved)
         for round_id in ("agent-1", "agent-2", "agent-3"):
