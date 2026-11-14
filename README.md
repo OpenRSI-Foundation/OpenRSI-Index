@@ -15,10 +15,9 @@
 
 ## ✨ News
 
-- **[2026-11-13]** We presented OpenRSI × SGLang-Omni at [SGLang Summit 2026](https://www.sglang.io/summit).
+- **[2026-11-13]** At [SGLang Summit 2026](https://www.sglang.io/summit), we presented **Scaling RSI for AI Infra**: agents continuously optimize model serving, with gains independently verified.
 - **[2026-11-09]** New [OpenRSI × SGLang-Omni blog](https://index.openrsi.foundation/blog/2026/openrsi-sglang-omni/): **14 merged PRs**, **8 model families**, and **7.6%–326.5% higher H100 non-streaming throughput**.
 - **[2026-11-06]** [RSI Harness](RSI-Harness/) now supports **7 coding agents on local Docker**, resumable runs, and more cluster backends.
-- **[As of 2026-11-14]** Our [26 public task packages](rsi-tasks/) cover pre-training, post-training, vision, robotics, agents, and AI systems.
 
 [All news →](NEWS.md)
 
