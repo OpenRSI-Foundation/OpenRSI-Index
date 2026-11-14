@@ -17,7 +17,7 @@
 
 - **[2026-11-13]** At [SGLang Summit 2026](https://www.sglang.io/summit), we presented **Scaling RSI for AI Infra**: agents continuously optimize model serving, with gains independently verified.
 - **[2026-11-09]** New [OpenRSI x SGLang-omni blog](https://index.openrsi.foundation/blog/2026/openrsi-sglang-omni/): RSI for multimodal serving, with **14 merged PRs** and **up to 326.5% higher H100 non-streaming throughput**.
-- **[2026-11-06]** [RSI Harness](RSI-Harness/) now supports **7 coding agents on local Docker**, resumable runs, and more cluster backends.
+- **[2026-11-06]** [RSI Harness](RSI-Harness/) now supports **Docker, Apptainer, and SingularityCE**, multiple coding agents, and resumable runs.
 - **[2026-11-05]** **140+ [RSI tasks](https://github.com/OpenRSI-Foundation/OpenRSI-Index/discussions/categories/task-ideas) assigned**, spanning pre-training, post-training, multimodal learning, robotics, agents, AI systems, and scientific ML.
 
 [All news →](NEWS.md)
