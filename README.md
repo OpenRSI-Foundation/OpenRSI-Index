@@ -15,6 +15,7 @@
 
 ## ✨ News
 
+- **[2026-11-16]** **OpenPhysics Bench** has seen exciting progress in internal AI evaluations across **60+ open physics problems**. We’re seeking domain-expert reviewers to validate problem definitions and rigorously assess AI-generated solutions.
 - **[2026-11-13]** At [SGLang Summit 2026](https://www.sglang.io/summit), we presented **Scaling RSI for AI Infra**. [[Slide]](https://docs.google.com/presentation/d/1ODcBjqT9sl0NRa7SdtV4rwULmMZI71xx/edit)
 - **[2026-11-09]** New [OpenRSI x SGLang-omni blog](https://index.openrsi.foundation/blog/2026/openrsi-sglang-omni/): RSI for multimodal serving, with **14 merged PRs** and **up to 326.5% higher H100 non-streaming throughput**.
 - **[2026-11-06]** [RSI Harness](RSI-Harness/) supports **7 coding agents**, **Docker/Apptainer/SingularityCE containers**, and deployment on **standalone GPU servers and Slurm/LSF/Kubernetes/PBS/PJM clusters**.
