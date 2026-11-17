@@ -965,6 +965,141 @@ def visualize_command(
     uvicorn.run(visualizer, host=host, port=port)
 
 
+@app.command("serve")
+def serve_command(
+    host: Annotated[str, typer.Option("--host")] = "127.0.0.1",
+    port: Annotated[int, typer.Option("--port", min=1, max=65535)] = 7472,
+    mode: Annotated[
+        Literal["lint", "prepare", "validate", "run"],
+        typer.Option(
+            "--mode",
+            help=(
+                "Default execution mode when a dispatch names none: run validates "
+                "the task's solution with the oracle Agent, then runs --agent"
+            ),
+        ),
+    ] = "run",
+    concurrency: Annotated[int, typer.Option("--concurrency", min=1)] = 1,
+    state_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--state-dir",
+            help="Intake records and bundles (default $RSI_INTAKE_STATE_DIR, "
+            "then .rsi-harness/intake)",
+        ),
+    ] = None,
+    data_root: Annotated[Path, typer.Option("--data-root")] = Path(".rsi-harness"),
+    agent: Annotated[str, typer.Option("--agent")] = "codex",
+    model: Annotated[str | None, typer.Option("--model")] = None,
+    reasoning_effort: Annotated[str | None, typer.Option("--reasoning-effort")] = None,
+    agent_auth: Annotated[AgentAuthSource | None, typer.Option("--agent-auth")] = None,
+    timeout: Annotated[float | None, typer.Option("--timeout", min=0.0)] = None,
+    gpus: Annotated[str, typer.Option("--gpus")] = "",
+    cluster: Annotated[str | None, typer.Option("--cluster")] = None,
+    sandbox_policy: Annotated[Path | None, typer.Option("--sandbox-policy")] = None,
+    judge_llm_auth: Annotated[
+        JudgeLLMAuth | None, typer.Option("--judge-llm-auth")
+    ] = None,
+    judge_llm_api_key_env: Annotated[
+        str | None, typer.Option("--judge-llm-api-key-env")
+    ] = None,
+    judge_llm_api_key_file: Annotated[
+        Path | None, typer.Option("--judge-llm-api-key-file")
+    ] = None,
+    judge_llm_base_url: Annotated[
+        str | None, typer.Option("--judge-llm-base-url")
+    ] = None,
+    judge_llm_proxy: Annotated[str | None, typer.Option("--judge-llm-proxy")] = None,
+    max_skew: Annotated[int, typer.Option("--max-skew", min=0)] = 300,
+    verbose: Annotated[bool, typer.Option("--verbose")] = False,
+) -> None:
+    """Serve the Runtime Task Intake API (ale.task.intake.v1) for task brewers.
+
+    Credentials come from the environment: RSI_INTAKE_SECRET (HMAC) and/or
+    RSI_INTAKE_TOKEN (Bearer); RSI_INTAKE_WEBHOOK_URL (a URL or "auto"),
+    RSI_INTAKE_WEBHOOK_SECRET, RSI_INTAKE_ALLOWED_ORIGINS (comma separated).
+    """
+    import os
+
+    import uvicorn
+
+    from rsi_harness.intake.executor import HarnessExecutor, RunProfile
+    from rsi_harness.intake.protocol import ExecutionMode
+    from rsi_harness.intake.server import create_app
+    from rsi_harness.intake.service import IntakeService, IntakeSettings
+
+    secret = os.environ.get("RSI_INTAKE_SECRET", "").strip()
+    token = os.environ.get("RSI_INTAKE_TOKEN", "").strip()
+    if not secret and not token:
+        typer.echo(
+            "Error: set RSI_INTAKE_SECRET and/or RSI_INTAKE_TOKEN to serve intake",
+            err=True,
+        )
+        raise typer.Exit(2)
+    # Refuse a profile `rsi-harness run` always rejects, rather than failing
+    # every dispatched task with the same error.
+    if cluster is not None and gpus:
+        typer.echo(
+            "Error: --gpus is local-only and cannot be used with --cluster", err=True
+        )
+        raise typer.Exit(2)
+    judge_llm_options = (
+        judge_llm_api_key_env,
+        judge_llm_api_key_file,
+        judge_llm_base_url,
+        judge_llm_proxy,
+    )
+    if judge_llm_auth is None and any(item is not None for item in judge_llm_options):
+        typer.echo("Error: the --judge-llm-* options need --judge-llm-auth", err=True)
+        raise typer.Exit(2)
+    state = state_dir or Path(
+        os.environ.get("RSI_INTAKE_STATE_DIR") or ".rsi-harness/intake"
+    )
+    origins = tuple(
+        item.strip()
+        for item in os.environ.get("RSI_INTAKE_ALLOWED_ORIGINS", "").split(",")
+        if item.strip()
+    )
+    settings = IntakeSettings(
+        secret=secret,
+        token=token,
+        webhook_url=os.environ.get("RSI_INTAKE_WEBHOOK_URL", "").strip(),
+        webhook_secret=os.environ.get("RSI_INTAKE_WEBHOOK_SECRET", "").strip(),
+        allowed_origins=origins,
+        state_dir=state.expanduser().resolve(),
+        default_mode=ExecutionMode(mode),
+        concurrency=concurrency,
+        max_skew_sec=max_skew,
+    )
+    profile = RunProfile(
+        agent=agent,
+        model=model,
+        reasoning_effort=reasoning_effort,
+        agent_auth=None if agent_auth is None else agent_auth.value,
+        timeout=timeout,
+        gpus=gpus,
+        cluster=cluster,
+        sandbox_policy=None
+        if sandbox_policy is None
+        else sandbox_policy.expanduser().resolve(),
+        judge_llm_auth=None if judge_llm_auth is None else judge_llm_auth.value,
+        judge_llm_api_key_env=judge_llm_api_key_env,
+        judge_llm_api_key_file=None
+        if judge_llm_api_key_file is None
+        else judge_llm_api_key_file.expanduser().resolve(),
+        judge_llm_base_url=judge_llm_base_url,
+        judge_llm_proxy=judge_llm_proxy,
+        data_root=data_root.expanduser().resolve(),
+        verbose=verbose,
+    )
+    service = IntakeService(settings, HarnessExecutor(profile))
+    typer.echo(
+        f"Serving task intake on {host}:{port} (default mode {mode}, "
+        f"agent {agent!r}, state {settings.state_dir})"
+    )
+    uvicorn.run(create_app(service), host=host, port=port)
+
+
 _CLUSTER_RECOVERY_HELP = (
     "Cluster name or profile TOML: kill the run's remote sandboxes "
     "(after its scheduler job has ended)"

@@ -113,6 +113,12 @@ class DrivenCase:
     # for this CLI, and the one path its model requests must reach.
     base_path: str = "/v1"
     api_path: str = "/v1/chat/completions"
+    # The run's model, and the one its requests name when the CLI maps it.
+    model: str = MODEL
+    wire_model: str | None = None
+    # A notice the CLI sends as a user message of its own after a resumed
+    # session's first prompt.
+    resume_notice: str = ""
 
     def __str__(self) -> str:
         return self.agent
@@ -180,6 +186,36 @@ CASES = (
         ),
         tls=True,
     ),
+    DrivenCase(
+        "antigravity",
+        scenario={
+            # Its shell returns a command to poll instead of the output when
+            # one runs longer than this, as a Judge round may.
+            "shell_arguments": {"WaitMsBeforeAsync": 60_000},
+            # Its title request, one per session, on a model of its own.
+            "side_requests": {
+                "gemini-3.1-flash-lite-preview": "conversation title generator"
+            },
+        },
+        reasoning_effort="high",
+        checks=(
+            (
+                {"tool": "read_file", "arguments": {"Path": "/workspace/answer.txt"}},
+                "42",
+            ),
+        ),
+        # It wraps every prompt in its own tags.
+        continuation=r"<USER_REQUEST>\n" + re.escape(STOP_HOOK_REASON) + r"\s*<",
+        output_limit=False,
+        # It adds /v1beta/models/... itself; its catalog id names the model
+        # and the thinking level it sends. One whose commands no safety
+        # rater reviews (test_agent_fairness_docker covers that).
+        base_path="",
+        api_path="/v1beta/models/gemini-4-hydrogen:streamGenerateContent",
+        model="gemini-4-hydrogen-low",
+        wire_model="gemini-4-hydrogen",
+        resume_notice="stopped due to server restart",
+    ),
     # Not driven: its own extension continues it and writes the transcript.
     DrivenCase(
         "pi",
@@ -214,7 +250,12 @@ class DrivenRun:
         ]
 
     def tool_results(self) -> list[str]:
-        return [r["last_tool"] for r in self.requests if r["last_tool"]]
+        # A shell tool on a terminal ends its lines in CRLF.
+        return [
+            r["last_tool"].replace("\r\n", "\n")
+            for r in self.requests
+            if r["last_tool"]
+        ]
 
 
 def _unavailable(reason: str) -> None:
@@ -300,7 +341,7 @@ def _run(
     timeout_seconds: int,
     reasoning_effort: str | None = None,
     dockerfile: str | None = None,
-    model: str = MODEL,
+    model: str | None = None,
     task_files: Mapping[str, str] | None = None,
     extra_env: Mapping[str, str] | None = None,
 ) -> DrivenRun:
@@ -376,7 +417,7 @@ def _run(
                 },
             ),
             agent_name=case.agent,
-            model=model,
+            model=model or case.model,
             reasoning_effort=reasoning_effort,
             gpu_selectors=("0",),
             options=CompileOptions(
@@ -387,8 +428,15 @@ def _run(
         )
     )
     run_root = tmp_path / "logs" / "runs" / result.run_id / "minimal-gpu"
+    requests = server.requests()
+    # A CLI's own side requests, outside the script, go to their own model.
+    side = [r for r in requests if r["action"] == "side"]
+    assert len(side) <= 1, side
     return DrivenRun(
-        case=case, result=result, run_root=run_root, requests=server.requests()
+        case=case,
+        result=result,
+        run_root=run_root,
+        requests=[r for r in requests if r not in side],
     )
 
 
@@ -470,6 +518,13 @@ def test_driven_agent_keeps_one_session_working_through_a_judge_round(
     requests = run.requests
     actions = {r["n"]: r["action"] for r in requests}
     assert actions[8] == "e500" and actions[12] == "empty"
+    agent = create_agent(case.agent, RSILoopConfig())
+    if "--acp-error-text" in getattr(agent, "driver_flags", ()):
+        # The failure after a tool call, which the CLI reports as text in
+        # the same turn: the real CLI's wording still matches the prefix.
+        events = _transcript(run)
+        codes = [e["error"]["code"] for e in events if e.get("subtype") == "turn_error"]
+        assert "error_text" in codes, output[-4000:]
     # Every continuation reached the model as the last user text, after the
     # injected failures too, in one conversation that only ever grew: a new
     # session or a relaunched CLI would start over from the task prompt.
@@ -484,7 +539,8 @@ def test_driven_agent_keeps_one_session_working_through_a_judge_round(
     assert "consecutive times" not in output
     counts = [r["n_messages"] for r in requests]
     assert counts == sorted(counts)
-    assert all(r["authorization"] and r["model"] == MODEL for r in requests)
+    wire_model = case.wire_model or case.model
+    assert all(r["authorization"] and r["model"] == wire_model for r in requests)
     # The CLI reached the model where a real endpoint serves it.
     assert {r["path"] for r in requests} == {case.api_path}
     if case.output_limit:
@@ -537,7 +593,7 @@ def test_driven_agent_keeps_one_session_working_through_a_judge_round(
         # Codex's text output has no stop hook markers to show.
         assert len(trajectory.markers) >= 10
     assert visualizer_scanner._peek_agent(run.run_root) == case.agent
-    assert visualizer_scanner._peek_model(run.run_root) == MODEL
+    assert visualizer_scanner._peek_model(run.run_root) == case.model
 
 
 def _longest_text_stretch(run: DrivenRun) -> int:

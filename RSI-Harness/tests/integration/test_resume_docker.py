@@ -41,7 +41,6 @@ from tests.integration.test_driven_agents_docker import (
     CASES,
     DRIVER_TIMINGS,
     MAX_OUTPUT_TOKENS,
-    MODEL,
     DrivenCase,
     _tls_context,
 )
@@ -572,6 +571,8 @@ def test_run_killed_mid_judge_charges_the_round_and_withholds_its_feedback(
 # request must carry it, with the resume message as its last user text.
 SESSION_CASES = tuple(case for case in CASES if case.agent != "oracle")
 WATCH = "rsi-resume-watch-6c1f"
+# Part of the resume message, which only attempt 2 sends.
+RESUMED = "resumes now as attempt 2"
 
 
 def _fake_model(
@@ -630,10 +631,11 @@ def _build_driven_services(
 
 def _driven_request(task: Path, agent: str) -> RunRequest:
     # No stop hook: the CLI ends after one turn, in either attempt.
+    [case] = [c for c in CASES if c.agent == agent]
     return RunRequest(
         task_dir=task,
         agent_name=agent,
-        model=MODEL,
+        model=case.model,
         gpu_selectors=("0",),
         options=CompileOptions(
             agent_name=agent, primary_reward="reward", disable_stop_hook=True
@@ -650,23 +652,32 @@ def _session_scenario(**extra: Any) -> dict[str, Any]:
             f"echo {WATCH} > /workspace/attempt-1.txt; cat /workspace/attempt-1.txt",
             'echo "attempt-2-sees:[$(cat /workspace/attempt-1.txt)]"',
         ],
-        "watch": [WATCH],
+        "watch": [WATCH, RESUMED],
         **extra,
     }
 
 
 def _assert_session_continued(
-    server, attempt_1: list[dict[str, Any]], context, run_root: Path
+    case: DrivenCase,
+    server,
+    attempt_1: list[dict[str, Any]],
+    context,
+    run_root: Path,
 ) -> None:
     output = (run_root / "agent_output.txt").read_text()
     attempt_2 = server.requests()[len(attempt_1) :]
     assert attempt_2, output[-4000:]
     opening = attempt_2[0]
     # The continued session: attempt 1's history, then the resume message.
-    assert opening["watched"] == [WATCH], (opening, output[-4000:])
+    assert opening["watched"] == [WATCH, RESUMED], (opening, output[-4000:])
     assert opening["n_messages"] > attempt_1[-1]["n_messages"], (attempt_1, opening)
     assert opening["last_role"] == "user", opening
-    assert (opening["last_user"] or "").strip() == context.message.strip(), opening
+    last_user = (opening["last_user"] or "").strip()
+    if case.resume_notice:
+        # The CLI's own notice follows the resume message.
+        assert case.resume_notice in last_user, opening
+    else:
+        assert last_user == context.message.strip(), opening
     # The continued session ran its tools in the kept Work.
     assert any(
         f"attempt-2-sees:[{WATCH}]" in (r["last_tool"] or "") for r in attempt_2
@@ -696,7 +707,7 @@ def test_agent_continues_its_own_session_on_resume(
     assert not context.salvage_pending and context.attempt == 2
     services.resume(context)
 
-    _assert_session_continued(server, attempt_1, context, run_root)
+    _assert_session_continued(case, server, attempt_1, context, run_root)
     assert (run_root / "attempts" / "1" / "final_result.json").exists()
 
 
@@ -735,7 +746,7 @@ def test_agent_continues_its_session_after_a_crash_mid_turn(
     assert context.attempt == 2
     services.resume(context)
 
-    _assert_session_continued(server, attempt_1, context, run_root)
+    _assert_session_continued(case, server, attempt_1, context, run_root)
     assert not (run_root / "attempts").exists()
 
 

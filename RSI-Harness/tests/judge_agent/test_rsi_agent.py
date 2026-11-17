@@ -41,6 +41,7 @@ from tests.landlock_helpers import native_signal_compatibility
 PROGRAM = Path(__file__).parents[2] / "src/rsi_harness/judge_agent/rsi_agent.py"
 API_KEY = "sk-synthetic-rsi-agent-key-91c2"
 MODELS = {
+    "antigravity": "gemini-4-carbon-low",
     "codex": "gpt-test",
     "claude-code": "claude-test",
     "qwen-code": "qwen-test",
@@ -84,7 +85,8 @@ if "--json-schema" in args:
     value = args[args.index("--json-schema") + 1]
     # Qwen takes "@FILE", Claude the schema itself.
     schema = json.load(open(value[1:])) if value.startswith("@") else json.loads(value)
-key = os.environ.get("OPENAI_API_KEY") or os.environ.get("RSI_AGENT_API_KEY", "")
+key = (os.environ.get("OPENAI_API_KEY") or os.environ.get("RSI_AGENT_API_KEY")
+       or os.environ.get("GEMINI_API_KEY", ""))
 answer = {{"verdict": "clear", "key": key}}
 if mode == "fail":
     sys.stderr.write("model said no with key " + key + "\n")
@@ -182,6 +184,24 @@ if cli == "pi":
     if mode != "empty":
         print(json.dumps(answer) if "JSON Schema" in record["stdin"]
               else "plain text answer\n\nwith a second paragraph")
+    sys.exit(0)
+if cli == "agy":
+    # Print mode's stream-json: each reply of the turn as a step, the result
+    # last; a failed model call is an error result, a message on stderr and
+    # status 3.
+    def step(index, text):
+        print(json.dumps({{"event": "step_update", "step_update": {{
+            "step_index": index, "step_type": "agent_response",
+            "text_delta": text + "\n"}}}}))
+    step(1, "thinking aloud")
+    if mode == "error":
+        sys.stderr.write("AGY_ERROR: Error 401: bad key " + key + "\n")
+        print(json.dumps({{"event": "result", "result": {{
+            "status": "ERROR", "error": "Error 401: bad key " + key}}}}))
+        sys.exit(3)
+    step(3, json.dumps(answer) if "JSON Schema" in record["stdin"]
+         else "plain text answer")
+    print(json.dumps({{"event": "result", "result": {{"status": "SUCCESS"}}}}))
     sys.exit(0)
 if cli == "claude":
     result = {{"type": "result", "is_error": mode == "is_error",
@@ -281,7 +301,7 @@ process.stdout.write(JSON.stringify(result, null, 2));
 def fake_bin(tmp_path: Path) -> Path:
     directory = tmp_path / "bin"
     directory.mkdir()
-    for name in ("codex", "claude", "qwen", "opencode", "pi"):
+    for name in ("codex", "claude", "qwen", "opencode", "pi", "agy"):
         path = directory / name
         path.write_text(FAKE_CLI.format(python=sys.executable))
         path.chmod(0o755)
@@ -836,6 +856,78 @@ def test_a_failed_opencode_call_fails(judge, tmp_path, mode, reason):
     assert API_KEY not in log.read_text()
 
 
+@requires_node
+def test_antigravity_answers_in_print_mode_with_its_own_settings(judge, tmp_path):
+    judge.spec("antigravity", base_url="http://model.test:8000", internet=False)
+
+    result, work = _exec(judge, tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    [call] = judge.calls()
+    assert call["cli"] == "agy"
+    # Print mode with the prompt, and the schema, on stdin; the effort picks
+    # the catalog id.
+    assert call["argv"] == [
+        "--dangerously-skip-permissions",
+        "--disable-slash-commands",
+        "--model",
+        "gemini-4-carbon-high",
+        "--output-format",
+        "stream-json",
+    ]
+    assert call["stdin"].startswith("Review the evidence.\n\n")
+    assert "JSON Schema" in call["stdin"]
+    env = call["env"]
+    assert env["GEMINI_API_KEY"] == API_KEY
+    assert env["GOOGLE_GEMINI_BASE_URL"] == "http://model.test:8000"
+    assert env["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"
+    # Work's settings and hooks in the private HOME.
+    assert call["home_files"] == [
+        ".gemini/antigravity-cli/settings.json",
+        ".gemini/config/hooks.json",
+        ".gemini/config/mcp_config.json",
+        "prompt.md",
+    ]
+    assert env["HOME"].startswith(str(judge.root / "jobs"))
+    assert call["cwd"] == str(work)
+    assert json.loads((tmp_path / "out").read_text()) == {
+        "verdict": "clear",
+        "key": "[REDACTED]",
+    }
+
+
+@requires_node
+def test_a_failed_antigravity_call_fails(judge, tmp_path):
+    judge.spec("antigravity", mode="error")
+    log = tmp_path / "agent.log"
+
+    result, _ = _exec(judge, tmp_path, "--log", str(log))
+
+    assert result.returncode == 1
+    assert "the Agent exited with status 3" in result.stderr
+    assert "reported an error: Error 401: bad key [REDACTED]" in result.stderr
+    assert not (tmp_path / "out").exists()
+    assert "bad key [REDACTED]" in log.read_text()
+    assert API_KEY not in log.read_text()
+
+
+def test_antigravity_refuses_a_prompt_its_cli_would_cut(judge, tmp_path):
+    judge.spec("antigravity")
+    # With the schema rsi-agent adds, over agy's whole-prompt limit.
+    prompt, schema, work = _inputs(tmp_path, "x" * 179_900 + "\n")
+
+    result = judge.run(
+        "exec",
+        *("--prompt-file", str(prompt), "--output", str(tmp_path / "out")),
+        *("--schema", str(schema), "--workdir", str(work)),
+    )
+
+    assert result.returncode == 1
+    assert "at most 180000 bytes" in result.stderr
+    assert judge.calls() == []
+    assert not (tmp_path / "out").exists()
+
+
 PI_ONESHOT_FLAGS = [
     "--no-session",
     "--no-approve",
@@ -1353,6 +1445,7 @@ def test_a_missing_empty_or_symlinked_answer_fails(judge, tmp_path, mode, reason
         ("qwen-code", "qwen", None),
         pytest.param("kimi-code", "kimi", "high", marks=requires_node),
         ("opencode", "opencode", "high"),
+        pytest.param("antigravity", "agy", "high", marks=requires_node),
         # pi's prelude writes its models with node.
         pytest.param("pi", "pi", "high", marks=requires_node),
     ],

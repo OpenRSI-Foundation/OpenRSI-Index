@@ -268,6 +268,8 @@ const VALUE_FLAGS = new Set([
   'prompt-file',
   'continuation-reason',
   'acp-mode',
+  'acp-model',
+  'acp-error-text',
   'permission-prefer',
   'idle-probe',
   'zcode-tool-deny',
@@ -497,6 +499,8 @@ class Driver {
     this.continuations = 0;
     this.errorStreak = 0;
     this.contentSeen = 0;
+    this.turnText = '';
+    this.lastText = '';
   }
 
   // -- process ------------------------------------------------------------
@@ -713,8 +717,12 @@ class Driver {
       const text = update.content?.type === 'text' ? update.content.text : '';
       if (!text) return;
       this.contentSeen += 1;
-      if (kind === 'agent_message_chunk') this.transcript.text(text);
-      else this.transcript.thinking(text);
+      if (kind === 'agent_message_chunk') {
+        this.transcript.text(text);
+        // Only the start and the last chunk matter (--acp-error-text).
+        if (this.turnText.length < 4096) this.turnText += text;
+        if (text.trim()) this.lastText = text;
+      } else this.transcript.thinking(text);
     } else if (kind === 'tool_call' || kind === 'tool_call_update') {
       this.contentSeen += 1;
       this.onAcpTool(update);
@@ -796,6 +804,16 @@ class Driver {
     this.sessionId = sessionId;
     this.transcript.sessionId = sessionId;
     this.tools = new Map();
+    if (this.opts['acp-model']) {
+      // Some CLIs take the model only this way. Unlike the mode, a model
+      // that cannot be set must not run.
+      const model = await this.rpc.request(
+        'session/set_model',
+        { sessionId, modelId: this.opts['acp-model'] },
+        TIMINGS.setupTimeoutMs,
+      );
+      if (model.error) return this.setupFailed(`session/set_model ${this.opts['acp-model']}`, model.error);
+    }
     let modeNotice = null;
     if (this.opts['acp-mode']) {
       const mode = await this.rpc.request(
@@ -815,6 +833,8 @@ class Driver {
       this.turn += 1;
       this.transcript.user(text, this.turn > 1 ? this.continuations : 0);
       this.contentSeen = 0;
+      this.turnText = '';
+      this.lastText = '';
       this.usage = undefined;
       const started = now();
       this.inflight = this.rpc.request('session/prompt', {
@@ -841,7 +861,17 @@ class Driver {
         const stopReason = response.result?.stopReason ?? null;
         const usage = response.result?.usage ?? this.usage;
         queued = this.queuedGuard() && !content && duration < TIMINGS.queuedTurnMs;
-        if (!queued && !content && duration < TIMINGS.fastTurnMs) {
+        const errorText = this.errorTextTurn();
+        if (errorText) {
+          failed = true;
+          this.transcript.result('turn_error', {
+            is_error: true,
+            turn: this.turn,
+            stop_reason: stopReason,
+            duration_ms: duration,
+            error: { code: 'error_text', message: capText(errorText.trim(), STDERR_LINE_CAP) },
+          });
+        } else if (!queued && !content && duration < TIMINGS.fastTurnMs) {
           failed = true;
           this.transcript.result('turn_error', {
             is_error: true,
@@ -879,6 +909,16 @@ class Driver {
 
   queuedGuard() {
     return Boolean(this.opts['idle-probe']);
+  }
+
+  // A CLI that reports a failed model call as an ordinary reply starting
+  // with a fixed prefix, not as an error: the turn's text, or its last
+  // chunk when the call failed after the turn had said something. Returns
+  // that text, or null.
+  errorTextTurn() {
+    const prefix = this.opts['acp-error-text'];
+    if (!prefix) return null;
+    return [this.turnText, this.lastText].find((text) => text.trimStart().startsWith(prefix)) ?? null;
   }
 
   // The prompt was queued behind a turn the agent started itself. Sending
@@ -1350,6 +1390,9 @@ function main() {
   if (!cli.length) return setupExit('missing agent command after --');
   if (opts['zcode-tool-deny'] !== undefined && opts.protocol !== 'zcode') {
     return setupExit('--zcode-tool-deny needs --protocol zcode');
+  }
+  for (const name of ['acp-model', 'acp-error-text']) {
+    if (opts[name] !== undefined && opts.protocol !== 'acp') return setupExit(`--${name} needs --protocol acp`);
   }
   if (opts['idle-probe'] && !opts['idle-probe'].startsWith('kimi-wire:')) {
     return setupExit('--idle-probe must be kimi-wire:GLOB');

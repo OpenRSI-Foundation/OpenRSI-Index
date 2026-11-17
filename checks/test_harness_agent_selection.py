@@ -49,6 +49,8 @@ def test_selection_knows_every_registered_agent_and_version():
         ([selection.VERSIONS], _bump("CODEX"), ["codex"]),
         ([selection.VERSIONS], _bump("CODEX", "CLAUDE_CODE"), ["codex", "claude-code"]),
         ([selection.VERSIONS], _bump("RIPGREP"), ["opencode"]),
+        ([AGENT_DIR + "antigravity.py"], "", ["antigravity"]),
+        ([selection.VERSIONS], _bump("ANTIGRAVITY", "ANTIGRAVITY_BUILD"), ["antigravity"]),
         ([AGENT_DIR + "oracle.py", AGENT_DIR + "oracle/rsi-oracle"], "", ["oracle"]),
         ([AGENT_DIR + "codex.py", AGENT_DIR + "oracle.py"], "", ["codex", "oracle"]),
         ([selection.VERSIONS], _bump("NODE_VERSION"), ALL),

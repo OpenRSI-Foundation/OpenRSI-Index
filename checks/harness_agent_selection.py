@@ -39,6 +39,7 @@ AGENT_FILES = {
     "opencode": ("opencode.py",),
     "zcode": ("zcode.py", "zcode/"),
     "pi": ("pi.py", "pi/"),
+    "antigravity": ("antigravity.py",),
     "oracle": ("oracle.py", "oracle/"),
 }
 AGENTS = tuple(AGENT_FILES)
@@ -54,6 +55,8 @@ VERSION_OWNERS = {
     "RIPGREP": "opencode",
     "ZCODE": "zcode",
     "PI": "pi",
+    "ANTIGRAVITY": "antigravity",
+    "ANTIGRAVITY_BUILD": "antigravity",
 }
 MODEL_ACCESS_AGENTS = {"codex", "claude-code"}
 _VERSION_LINE = re.compile(r'^[+-]([A-Z_]+) = "[^"]*"$')

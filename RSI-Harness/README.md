@@ -4,8 +4,8 @@ RSI Harness powers OpenRSI Index for ultra-long-horizon RSI runs, natively
 supporting [Harbor-format tasks](docs/harbor-task-authoring/task-toml.md) on local Docker and
 [supported Slurm/LSF allocations](#run-multi-node-tasks-on-a-cluster).
 
-Agents such as Claude Code, Codex, Qwen Code, Kimi Code, OpenCode, ZCode and
-pi develop solutions in
+Agents such as Claude Code, Codex, Qwen Code, Kimi Code, OpenCode, ZCode,
+Antigravity and pi develop solutions in
 a persistent, isolated Work container and submit them to a fresh Judge for
 scoring. They can iterate on test feedback until the submission limit or
 timeout, with the highest score retained as the final result.
@@ -13,8 +13,8 @@ timeout, with the highest score retained as the final result.
 RSI Harness runs the **outer loop** only: preparing the task, pausing and
 snapshotting Work, scoring each submission in a fresh Judge, and selecting the
 final result. The **inner loop** is whichever agent you put in it — Claude Code,
-Codex, Qwen Code, Kimi Code, OpenCode, ZCode, pi, or an agent you design
-yourself.
+Codex, Qwen Code, Kimi Code, OpenCode, ZCode, Antigravity, pi, or an agent
+you design yourself.
 
 
 ## How it works
@@ -197,6 +197,7 @@ Retries do not create a new Harness attempt.
 | `kimi-code` | Kimi Code | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
 | `opencode` | OpenCode | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
 | `zcode` | ZCode | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
+| `antigravity` | Antigravity | `RSI_AGENT_API_KEY` only | The model from `--model` or `RSI_AGENT_MODEL` (setup fails without one), one of the CLI's own model ids (`agy models`), such as `gemini-4-hydrogen-high`; the base URL defaults to the provider's public API | `low`, `medium`, `high`, `xhigh`, set as the model id's suffix |
 | `pi` | pi | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `minimal`, `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
 | `oracle` | Oracle: the task's own `solution/solve.sh`, no model ([Validate a task's Judge with the oracle](#validate-a-tasks-judge-with-the-oracle)) | None; no credential reaches Work | `solution/solve.sh` in the task | No |
 
@@ -208,10 +209,11 @@ Each Agent CLI is installed at an exact pinned version, over HTTPS, into the
 Work image when the image is built, together with the node it runs on. All of
 these versions live in one table,
 [`src/rsi_loop/harness/agent/versions.py`](src/rsi_loop/harness/agent/versions.py).
-Native downloads (node, the OpenCode binary, its ripgrep and the ZCode
-package) follow the image's architecture as `uname -m` reports it during the
-build: `x86_64` gets the x64 release and `aarch64` the arm64 one; on any other
-architecture the Work image build fails with a message naming it.
+Native downloads (node, the OpenCode binary, its ripgrep, the ZCode
+package and the Antigravity binary) follow the image's architecture as
+`uname -m` reports it during the build: `x86_64` gets the x64 release and
+`aarch64` the arm64 one; on any other architecture the Work image build fails
+with a message naming it.
 To fetch the ZCode package from a mirror with the same
 `<version>/linux-<x64|arm64>/<file>` layout, set `RSI_ZCODE_MIRROR_URL` where
 `rsi-harness run` runs; the Work image build receives it as a build argument.
@@ -222,26 +224,28 @@ To upgrade an Agent, or node for all of them:
 uv run python scripts/bump_agent.py codex 0.160.0   # or scripts/bump-agent.sh
 ```
 
-The script checks that the version is published (for node, OpenCode, ZCode
-and ripgrep, both the x64 and the arm64 release), rewrites that one entry in
-the table, prints the diff and runs the Agent's Docker tests (every Agent's
-for `node`), exiting non-zero if they fail or cannot run. `--no-test` only
-edits, and `--no-check` skips the published check (offline, or without npm).
-`ripgrep`, which OpenCode's image carries, is bumped the same way and runs
-OpenCode's tests. A new version gets a new Work image; cached images of other
-versions are not reused. The Docker tests run each Agent's real CLI in a full
-run against a local fake model that speaks chat completions, the Responses API
-(Codex) and the Messages API (Claude Code). They check that one CLI process
-keeps working through many stop-hook continuations, including a long stretch
-with no tool use, a Judge round, a failed and an empty model reply, and that
-the API key stays out of every artifact.
+The script checks that the version is published (for node, OpenCode, ZCode,
+Antigravity and ripgrep, both the x64 and the arm64 release), rewrites that
+one entry in the table, prints the diff and runs the Agent's Docker tests
+(every Agent's for `node`), exiting non-zero if they fail or cannot run.
+`--no-test` only edits, and `--no-check` skips the published check (offline,
+or without npm). `ripgrep`, which OpenCode's image carries, is bumped the same
+way and runs OpenCode's tests. Antigravity's release manifests name only the
+latest release, so it can only be bumped to that one; its build id moves with
+it. A new version gets a new Work image; cached images of other versions are
+not reused. The Docker tests run each Agent's real CLI in a full run against a
+local fake model that speaks chat completions, the Responses API (Codex), the
+Messages API (Claude Code) and the Gemini API (Antigravity). They check that
+one CLI process keeps working through many stop-hook continuations, including
+a long stretch with no tool use, a Judge round, a failed and an empty model
+reply, and that the API key stays out of every artifact.
 
 Codex and Claude Code keep working through their native stop hook. The stop
-hooks of Qwen Code, Kimi Code and ZCode allow only a limited number of
-continuations, and OpenCode has none, so RSI Harness runs them under
+hooks of Qwen Code, Kimi Code, ZCode and Antigravity allow only a limited
+number of continuations, and OpenCode has none, so RSI Harness runs them under
 `rsi-agent-driver`, a small program baked into their Work image. pi's own stop
 point has no limit, so it needs no driver: an extension baked into its Work
-image does the same job inside pi. For these five Agents:
+image does the same job inside pi. For these six Agents:
 
 - **Same process, same session.** The CLI is started once. The driver talks to
   it over the Agent Client Protocol (ZCode over its own app-server protocol)
@@ -263,12 +267,13 @@ image does the same job inside pi. For these five Agents:
 - **Endpoint.** `RSI_AGENT_API_BASE_URL` is an OpenAI chat-completions
   compatible base URL, including its version path (for example
   `https://your-api.example/v1`). There is no default endpoint and no local
-  login.
+  login. Antigravity's speaks the Gemini API instead, without the version
+  path (the CLI adds `/v1beta`), and defaults to the provider's public API.
 - **Model limits.** `RSI_AGENT_CONTEXT_WINDOW` and
   `RSI_AGENT_MAX_OUTPUT_TOKENS` are the served model's real context window and
   output limit in tokens. Setup fails without them; they are never guessed,
   because a window larger than the real one makes the CLI overflow instead of
-  compacting its context.
+  compacting its context. Antigravity takes neither: its model ids fix them.
 - **No other traffic.** The API key stays in the Agent's environment and is
   never written to its configuration. ZCode is the exception: it reads an
   OpenAI-compatible provider's key only from its provider file, so that one
@@ -278,8 +283,9 @@ image does the same job inside pi. For these five Agents:
   downloads, ZCode's endpoint routing lookups and other background model
   requests are turned off, so a
   no-network Work reaches only the pinned model endpoint; web tools are
-  disabled there.
-- **Local Docker only.** These five Agents need files baked into their Work
+  disabled there. Antigravity's own title and command-review requests are
+  the exception (see [Same model, no account tools](#same-model-no-account-tools)).
+- **Local Docker only.** These six Agents need files baked into their Work
   image, which cluster images do not carry yet, so `--cluster` refuses them.
 
 ### Same model, no account tools
@@ -301,8 +307,8 @@ two rules. There is no option to turn them off.
 
 System-wide managed config outranks every flag below. Before each launch,
 the Agent's (`/etc/claude-code`, `/etc/codex/managed_config.toml` and
-`requirements.toml`, `/etc/opencode`) is removed, with `sudo -n` when
-needed, and the launch fails if it cannot be.
+`requirements.toml`, `/etc/opencode`, `/etc/antigravity`) is removed, with
+`sudo -n` when needed, and the launch fails if it cannot be.
 
 | Agent | Subagents and models | Account-level tools |
 | --- | --- | --- |
@@ -312,16 +318,27 @@ needed, and the launch fails if it cannot be.
 | `kimi-code` | `[secondary_model]` forced to the run's model; `KIMI_CODE_WATCH=0`, so a config the Agent edits loads only at the next launch, which rewrites it | None: a run gets no Kimi login |
 | `opencode` | The provider's `whitelist` holds only the run's model, under its own `id` | None: a run gets no OpenCode login |
 | `zcode` | Its provider registry holds only the run's model, and a definition naming another fails with `model-not-found` | `OffPeakList` and `ReplyToChannel` denied with the driver's own list. That list reaches the main session only: a subagent still offers `ReplyToChannel`, which has no bot conversation to reply to. A run gets no Z.ai login |
+| `antigravity` | A `PreToolUse` hook in `~/.gemini/config/hooks.json` runs every `invoke_subagent` call as the built-in `self` type with `Model` `inherit`, since an agent definition's own model and a built-in type's fixed one outrank `Model`; it denies `swarm` and `run_workflow`, which start agents on any model | The same hook denies `search_web` (a hosted search with a model of its own), `schedule` and `send_message`. A run gets no Google login |
 | `pi` | pi has none; `--no-extensions --no-approve` keep out every extension but the Harness's own, and the working directory's trust-gated files | None in pi itself; extensions would bring them |
 
 A Claude Code subagent cannot be continued once it finishes, because
-`SendMessage` is denied. What no flag stops, from the Agent's shell:
+`SendMessage` is denied. Antigravity sends some requests of its own to other
+models, and no setting turns them off: a title for each session to
+`gemini-3.1-flash-lite-preview` and, for some models (`gemini-4-carbon` and
+`gemini-4-argon` when tested), a safety review of each command to that model
+and `gemini-3.8-flash`. An endpoint that serves only the run's model makes
+them fail, which is harmless: the command still runs.
+
+What no flag stops, from the Agent's shell:
 
 - starting a second copy of its CLI, or calling the endpoint directly, with
   the credentials Work gives it; only an endpoint that serves the run's
   model alone prevents that;
 - editing ZCode's provider file (its path is in Work's environment), which
   ZCode reloads live: a model added there is open to subagents;
+- editing Antigravity's hook file, which is under the Agent's own `$HOME`, or
+  adding a `.agents/hooks.json` to the working directory; whether the CLI
+  reloads its hooks live is not known;
 - as root (or with sudo), writing managed config while the CLI runs (Claude
   Code reloads its managed settings), or rewriting what the Harness bakes
   into the image (the driver, pi's extension), which a later launch in the
@@ -1026,6 +1043,20 @@ rsi-harness visualize
 
 Then open `http://127.0.0.1:8000`.
 
+## Accept tasks from a task brewer
+
+`rsi-harness serve` exposes the Runtime Task Intake API (`ale.task.intake.v1`,
+port 7472) that a task brewer (`ale-brew-science`) dispatches reviewed task
+bundles to.
+Each bundle is verified, staged as a native task and run like any OpenRSI-X
+task (oracle validation, then the configured Agent); status goes back to the
+Brewer by signed webhook. See [docs/task-intake.md](docs/task-intake.md).
+
+```bash
+RSI_INTAKE_TOKEN=... RSI_INTAKE_SECRET=... RSI_INTAKE_WEBHOOK_URL=auto \
+  rsi-harness serve --host 0.0.0.0 --port 7472 --agent codex --model MODEL
+```
+
 ## Recovery and cleanup
 
 Normal multi-round runs manage their own resources. `recover` is only needed
@@ -1094,6 +1125,7 @@ above.
 | --- | --- | --- |
 | `run TASK_DIR` | Run a Harbor task locally, or submit it to a cluster when `--cluster` is set. | `rsi-harness run ../rsi-tasks/minference-sparse-prefill --agent codex --agent-auth local --model gpt-6-astra --reasoning-effort max --gpus 0` |
 | `visualize` | Serve the run visualizer. | `rsi-harness visualize` |
+| `serve` | Serve the task intake API for task brewers ([docs](docs/task-intake.md)). | `RSI_INTAKE_TOKEN=... rsi-harness serve --port 7472` |
 | `recover [RUN_ID]` | Recover one interrupted run, or all unfinished runs when `RUN_ID` is omitted. | `rsi-harness recover RUN_ID` |
 | `resume RUN_ID` | Continue a run as its next attempt ([Resume](#resume)). | `rsi-harness resume RUN_ID --add-time 3600` |
 | `cleanup RUN_ID` | Remove leftover runtime resources while retaining the final workspace. | `rsi-harness cleanup RUN_ID` |
@@ -1105,10 +1137,10 @@ above.
 | Option | Purpose | Default |
 | --- | --- | --- |
 | `TASK_DIR` | Path to a supported Harbor task directory. | Required |
-| `--agent NAME` | Agent adapter to run: `codex`, `claude-code`, `qwen-code`, `kimi-code`, `opencode`, `zcode`, `pi`, or `oracle` for the task's own `solution/solve.sh` ([Agents](#agents)). | `codex` |
+| `--agent NAME` | Agent adapter to run: `codex`, `claude-code`, `qwen-code`, `kimi-code`, `opencode`, `zcode`, `antigravity`, `pi`, or `oracle` for the task's own `solution/solve.sh` ([Agents](#agents)). | `codex` |
 | `--gpus LIST` | Ordered, comma-separated local GPU indexes or UUIDs. The Work container receives the count declared by the task. This option cannot be combined with `--cluster`. | Automatically select the task-declared GPU count; `gpus = "all"` requires an explicit list |
 | `--model NAME` | Override the model used by the selected Agent. | `RSI_AGENT_MODEL`, then the Agent's default |
-| `--reasoning-effort LEVEL` | Set an Agent-supported reasoning effort: `minimal`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra` for Codex; `low`, `medium`, `high`, `xhigh` or `max` for Claude Code; `low`, `medium` or `high` for Kimi Code, OpenCode and ZCode; `minimal`, `low`, `medium` or `high` for pi. Other Agents refuse the option. | Agent default |
+| `--reasoning-effort LEVEL` | Set an Agent-supported reasoning effort: `minimal`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra` for Codex; `low`, `medium`, `high`, `xhigh` or `max` for Claude Code; `low`, `medium` or `high` for Kimi Code, OpenCode and ZCode; `low`, `medium`, `high` or `xhigh` for Antigravity (its model id's suffix); `minimal`, `low`, `medium` or `high` for pi. Other Agents refuse the option. | Agent default |
 | `--agent-auth local` | Reuse credentials from the local Codex or Claude Code login. | Not set; use `RSI_AGENT_API_KEY` when provided |
 | `--judge-llm-auth api\|codex-login` | Credential for a task's `judge_model`: an OpenAI API key, or a Codex login made with a ChatGPT plan (the Judge gets its access token only; before a Judge round that would outlive it, the Harness runs its pinned Codex CLI as you to refresh the login in place; never a login a Work Agent holds a copy of, which that refresh logs out; on a cluster, only a login the compute nodes see in place). Ignored, with a warning, for a task without `judge_model`. | Not set; a Codex Agent with a ChatGPT login or an OpenAI API key on OpenAI's own API lends its own (whatever its model; a login is renewed from Work before each Judge round), otherwise a `judge_model` task fails before the Agent starts |
 | `--judge-llm-api-key-env NAME` / `--judge-llm-api-key-file PATH` | Where the `api` key is read from. | `RSI_JUDGE_LLM_API_KEY` |

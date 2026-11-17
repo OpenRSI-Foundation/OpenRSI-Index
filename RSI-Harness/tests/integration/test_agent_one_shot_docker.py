@@ -11,7 +11,8 @@ bridge gateway, from a no-network Judge pinned to that endpoint:
 * the same prompt with ``--schema``, whose output must be the JSON the fake
   model gave: through the tool the CLI's native schema option offers, or as
   the reply text when the CLI has none and rsi-agent states the schema in
-  the prompt.
+  the prompt. A case may have the model reply first with text and a shell
+  tool call, which must not reach the output.
 
 The Judge's working directory carries the CLI's project instructions and
 settings; neither may reach the model. A case may also set a reasoning
@@ -87,6 +88,14 @@ class OneShotCase:
     reasoning_effort: str | None = None
     base_path: str = "/v1"
     api_path: str = "/v1/chat/completions"
+    # The run's model, and the one its requests name when the CLI maps it.
+    model: str = MODEL
+    wire_model: str | None = None
+    # The CLI sends RSI_AGENT_MAX_OUTPUT_TOKENS as the request's limit.
+    output_limit: bool = True
+    # The schema call's model replies with text and a shell tool call
+    # before the answer.
+    narrated: bool = False
 
     def __str__(self) -> str:
         return self.agent
@@ -197,6 +206,21 @@ CASES = (
         },
         web_tools=("WebFetch",),
         reasoning_effort="high",
+    ),
+    # agy always reads the working directory's AGENTS.md, GEMINI.md, skills
+    # and hooks (there is no switch for any of them), so the case plants
+    # nothing. Its one web tool, search_web, is offered whatever the network
+    # and denied by a hook.
+    OneShotCase(
+        "antigravity",
+        reasoning_effort="high",
+        base_path="",
+        api_path="/v1beta/models/gemini-4-hydrogen:streamGenerateContent",
+        model="gemini-4-hydrogen-low",
+        wire_model="gemini-4-hydrogen",
+        output_limit=False,
+        # Its print mode joins every reply of the turn.
+        narrated=True,
     ),
     # pi has no web tools. Its project resources, which an untrusted folder
     # would not load anyway, carry the marker as well as the instructions:
@@ -350,6 +374,8 @@ def test_judge_calls_the_real_agent_cli_one_shot(
             "at": {"2": "tool"},
             "commands": [{"tool": case.schema_tool, "arguments": ANSWER}],
         }
+    elif case.narrated:
+        schema_turn = {"at": {"2": "mixed"}, "replies": {"3": json.dumps(ANSWER)}}
     else:
         schema_turn = {"replies": {"2": json.dumps(ANSWER)}}
     server = _load_fake_model_server().FakeModelServer(
@@ -394,7 +420,7 @@ def test_judge_calls_the_real_agent_cli_one_shot(
         RunRequest(
             task_dir=_task(tmp_path, case),
             agent_name=case.agent,
-            model=MODEL,
+            model=case.model,
             reasoning_effort=case.reasoning_effort,
             gpu_selectors=("0",),
             options=CompileOptions(agent_name=case.agent, primary_reward="reward"),
@@ -409,17 +435,20 @@ def test_judge_calls_the_real_agent_cli_one_shot(
     assert result.best_score == 1, feedback
 
     requests = server.requests()
-    # One model request per call: each answered once and exited.
-    assert len(requests) == 2, requests
+    # One model request per call (two for a narrated one): each answered
+    # once and exited.
+    assert len(requests) == 2 + case.narrated, requests
     for number, entry in enumerate(requests):
         assert entry["path"] == case.api_path
-        assert entry["model"] == MODEL and entry["authorization"]
+        assert entry["model"] == (case.wire_model or case.model)
+        assert entry["authorization"]
         # The prompt, the schema only where rsi-agent added it, and none of
         # the working directory's instructions, nor any web tool's name; nor
         # the working directory's settings.
-        in_prompt = number == 1 and case.schema_tool is None
+        in_prompt = number >= 1 and case.schema_tool is None
         assert entry["watched"] == [PROMPT, *([SCHEMA_IN_PROMPT] * in_prompt)]
-        assert entry["max_tokens"] == MAX_OUTPUT_TOKENS
+        if case.output_limit:
+            assert entry["max_tokens"] == MAX_OUTPUT_TOKENS
         assert entry["reasoning_effort"] == case.reasoning_effort
         assert not set(case.web_tools) & set(entry["tool_names"])
     if case.schema_tool:

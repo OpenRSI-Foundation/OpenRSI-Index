@@ -953,6 +953,82 @@ def test_setup_failures_exit_64(driver, protocol, scenario, detail) -> None:
     assert run.prompts() == []
 
 
+@requires_node
+def test_acp_model_is_set_before_the_first_prompt(driver) -> None:
+    run = driver(
+        "acp",
+        {"turns": [{"text": "done"}, {"hold": True}]},
+        flags=("--acp-model", "model-x"),
+    )
+
+    run.wait_prompts(2)
+    run.stop()
+
+    methods = [e["method"] for e in run.events("recv")]
+    assert methods[:4] == [
+        "initialize",
+        "session/new",
+        "session/set_model",
+        "session/prompt",
+    ]
+    [set_model] = [e for e in run.events("recv") if e["method"] == "session/set_model"]
+    assert set_model["params"] == {
+        "sessionId": "fake-acp-session-1",
+        "modelId": "model-x",
+    }
+
+
+@requires_node
+def test_a_model_that_cannot_be_set_is_a_setup_failure(driver) -> None:
+    run = driver(
+        "acp",
+        {"modelError": {"code": -32602, "message": "Unknown model ID"}},
+        flags=("--acp-model", "model-x"),
+    )
+
+    assert run.wait() == 64
+
+    exit_record = run.lines()[-1]
+    assert exit_record["reason"] == "setup"
+    assert "session/set_model model-x failed" in exit_record["error"]
+    assert "Unknown model ID" in exit_record["error"]
+    assert run.prompts() == []
+
+
+@requires_node
+def test_a_turn_reporting_an_error_as_text_is_backed_off_like_an_error(
+    driver,
+) -> None:
+    error = {"text": "\n⚠ agent executor error: Error 404, model not found"}
+    # A later model call of the turn failed: the error is its last chunk.
+    late = "\n⚠ agent executor error: Error 429, quota"
+    after_tool = {"text": "Let me look.", "tool": {"output": "ok"}, "after": late}
+    after_text = {"text": "Let me look.", "after": late}
+    quoted = {"text": "The log said ⚠ agent executor error: earlier."}
+    run = driver(
+        "acp",
+        {"turns": [error, after_tool, after_text, quoted, {"hold": True}]},
+        flags=("--acp-error-text", "⚠ agent executor error:"),
+        timings={"backoffBaseMs": 100, "backoffMaxMs": 10_000},
+    )
+
+    run.wait_prompts(5)
+    run.stop()
+
+    gaps = _gaps(run.prompts())
+    assert gaps[0] >= 100
+    assert gaps[1] >= 200
+    assert gaps[2] >= 400
+    assert gaps[3] < 100
+    errors = run.results("turn_error")
+    assert [e["error"]["code"] for e in errors] == ["error_text"] * 3
+    assert errors[0]["error"]["message"].startswith("⚠ agent executor error: Error 404")
+    assert errors[1]["error"]["message"] == late.strip()
+    assert errors[0]["stop_reason"] == "end_turn"
+    # Only a reply, or its last chunk, that starts with the prefix is an error.
+    assert len(run.results("turn_end")) == 1
+
+
 # ---------------------------------------------------------------------------
 # Resuming a session of an earlier run
 # ---------------------------------------------------------------------------
@@ -965,13 +1041,17 @@ def test_setup_failures_exit_64(driver, protocol, scenario, detail) -> None:
         (
             "acp",
             "earlier-acp-session",
-            ("--acp-mode", "yolo"),
+            ("--acp-mode", "yolo", "--acp-model", "model-x"),
             [
                 ("initialize", None),
                 # Not session/load, which replays the history into the transcript.
                 (
                     "session/resume",
                     {"sessionId": "earlier-acp-session", "mcpServers": []},
+                ),
+                (
+                    "session/set_model",
+                    {"sessionId": "earlier-acp-session", "modelId": "model-x"},
                 ),
                 ("session/set_mode", {"sessionId": "earlier-acp-session"}),
                 ("session/prompt", {"sessionId": "earlier-acp-session"}),
@@ -1064,6 +1144,11 @@ def test_a_session_that_cannot_be_resumed_is_a_setup_failure(driver, protocol) -
             "--",
             "true",
         ],
+        *(
+            ["--protocol", "zcode", flag, "x", "--prompt-file", "/dev/null"]
+            + ["--", "true"]
+            for flag in ("--acp-model", "--acp-error-text")
+        ),
     ],
 )
 def test_invalid_invocations_exit_64_with_a_driver_exit_record(argv) -> None:
@@ -1559,6 +1644,105 @@ def test_fake_model_server_speaks_the_messages_api(tmp_path: Path) -> None:
     assert requests[0]["max_tokens"] == 32000
     assert requests[1]["last_role"] == "tool" and requests[1]["last_tool"] == "ok"
     assert requests[1]["last_user"].endswith("go") and requests[1]["n_messages"] == 4
+
+
+def test_fake_model_server_speaks_the_gemini_api(tmp_path: Path) -> None:
+    module = _load_fake_model_server()
+    run_command = {
+        "name": "run_command",
+        "parametersJsonSchema": {
+            "type": "object",
+            "properties": {
+                "CommandLine": {"type": "string"},
+                "WaitMsBeforeAsync": {"type": "integer"},
+            },
+            "required": ["CommandLine", "WaitMsBeforeAsync"],
+        },
+    }
+    scenario = {
+        "cycle": ["mixed", "text"],
+        "at": {"3": "e500"},
+        "commands": ["rsi-submit"],
+        "shell_arguments": {"WaitMsBeforeAsync": 10_000},
+        "side_requests": {"side-model": "title"},
+    }
+
+    def post(server: Any, model: str, contents: list[Any], action: str) -> Any:
+        body = {
+            "contents": contents,
+            "tools": [{"functionDeclarations": [run_command]}],
+            "generationConfig": {
+                "maxOutputTokens": 65536,
+                "thinkingConfig": {"thinkingLevel": "HIGH"},
+            },
+        }
+        query = "?alt=sse" if action == "streamGenerateContent" else ""
+        request = Request(
+            f"{server.url}/v1beta/models/{model}:{action}{query}",
+            data=json.dumps(body).encode(),
+            headers={"content-type": "application/json", "x-goog-api-key": "k"},
+        )
+        return urlopen(request, timeout=5)
+
+    def chunks(response: Any) -> list[dict[str, Any]]:
+        lines = response.read().decode().splitlines()
+        return [json.loads(x.removeprefix("data: ")) for x in lines if x]
+
+    user = {"role": "user", "parts": [{"text": "<USER_REQUEST>\ngo"}]}
+    title = {"role": "user", "parts": [{"text": "a title"}]}
+    with module.FakeModelServer(tmp_path / "log.jsonl", scenario) as server:
+        with post(server, "side-model", [title], "streamGenerateContent") as response:
+            side = chunks(response)
+        with post(server, "m", [user], "streamGenerateContent") as response:
+            events = chunks(response)
+        parts = [p for e in events for p in e["candidates"][0]["content"]["parts"]]
+        call = {"role": "model", "parts": parts}
+        result = {"functionResponse": {"name": "run_command"}}
+        result["functionResponse"]["response"] = {"output": "ok\ndone"}
+        contents = [user, call, {"role": "model", "parts": [result]}]
+        with post(server, "m", contents, "generateContent") as response:
+            plain = json.load(response)
+        with pytest.raises(HTTPError) as error:
+            post(server, "m", contents, "streamGenerateContent")
+        body = json.load(error.value)
+        requests = server.requests()
+
+    assert side[-1]["candidates"][0]["finishReason"] == "STOP"
+    text = "".join(p.get("text", "") for p in parts)
+    assert text == "Let me run a command (1)."
+    assert parts[-1]["functionCall"] == {
+        "name": "run_command",
+        "args": {"CommandLine": "rsi-submit", "WaitMsBeforeAsync": 10_000},
+    }
+    assert events[-1]["candidates"][0]["finishReason"] == "STOP"
+    assert "usageMetadata" in events[-1]
+    [candidate] = plain["candidates"]
+    assert candidate["content"]["parts"] == [
+        {"text": "Reply 2: I think I am finished."}
+    ]
+    assert error.value.code == 500 and body["error"]["status"] == "INTERNAL"
+    # The side request is logged but not counted.
+    assert [(r["n"], r["action"]) for r in requests] == [
+        (0, "side"),
+        (1, "mixed"),
+        (2, "text"),
+        (3, "e500"),
+    ]
+    assert [r["model"] for r in requests] == ["side-model", "m", "m", "m"]
+    assert {r["api"] for r in requests} == {"gemini"}
+    assert [r["path"] for r in requests][1:3] == [
+        "/v1beta/models/m:streamGenerateContent",
+        "/v1beta/models/m:generateContent",
+    ]
+    assert [r["stream"] for r in requests][1:3] == [True, False]
+    assert all(r["authorization"] for r in requests)
+    assert requests[1]["last_user"] == "<USER_REQUEST>\ngo"
+    assert requests[1]["tool_names"] == ["run_command"]
+    assert requests[1]["reasoning_effort"] == "high"
+    assert requests[1]["max_tokens"] == 65536
+    assert requests[2]["last_role"] == "tool" and requests[2]["last_tool"] == "ok\ndone"
+    assert requests[2]["last_user"] == "<USER_REQUEST>\ngo"
+    assert requests[2]["n_messages"] == 3
 
 
 @requires_node

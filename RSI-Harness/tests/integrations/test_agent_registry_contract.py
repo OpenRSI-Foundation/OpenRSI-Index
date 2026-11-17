@@ -241,8 +241,13 @@ def test_driven_agent_pins_the_version_it_reports(name: str) -> None:
     agent = create_agent(name, _config())
 
     assert agent.agent_version
-    # As an npm package version or a download path segment.
-    pinned = (f"@{agent.agent_version}", f"/{agent.agent_version}/")
+    # As an npm package version or a download path segment, alone or with
+    # a build id.
+    pinned = (
+        f"@{agent.agent_version}",
+        f"/{agent.agent_version}/",
+        f"/{agent.agent_version}-",
+    )
     assert any(p in c for c in agent.install_cmds for p in pinned)
 
 

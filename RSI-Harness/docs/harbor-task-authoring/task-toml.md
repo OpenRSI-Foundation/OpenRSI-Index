@@ -850,7 +850,9 @@ rsi-agent exec --prompt-file FILE --output FILE [--schema FILE] \
 
 - `--prompt-file`: the prompt, read by the caller (at most 4 MiB). The Agent
   reads it as its task and may read files, such as evidence the procedure
-  placed in the working directory or anywhere world-readable.
+  placed in the working directory or anywhere world-readable. Antigravity's
+  CLI silently cuts a prompt over about 191 KB, so its call fails on one
+  over 180,000 bytes, the schema request rsi-agent adds included.
 - `--output`: receives the Agent's final message, written atomically only
   when the call succeeds.
 - `--schema`: a JSON Schema object. The Agent is asked for a final message

@@ -12,6 +12,7 @@
 //   sessionError  {code,message}: fail session/new
 //   resumeError   {code,message}: fail session/resume (which otherwise
 //                 continues the session it names)
+//   modelError    {code,message}: fail session/set_model
 //   ignoreSigterm true: survive SIGTERM (tests the driver's SIGKILL)
 //   ignoreStdinEnd true: keep running when stdin closes, like a CLI stuck in
 //                 a tool call, so only the driver's signals can end it
@@ -24,6 +25,7 @@
 //     thought     agent_thought_chunk text
 //     text        agent_message_chunk text (sent in two chunks)
 //     tool        {kind,title,rawInput,output,status,lateInput}
+//     after       agent_message_chunk text sent in one chunk after the tool
 //     permission  {options:[...]}: ask session/request_permission first
 //     clientRequest  method name: send it to the client and log the reply
 //     stderr      [lines] to write to stderr
@@ -186,6 +188,7 @@ async function runTurn(spec, text) {
       content: [{ type: 'content', content: { type: 'text', text: output } }],
     });
   }
+  if (spec.after) update({ sessionUpdate: 'agent_message_chunk', content: { type: 'text', text: spec.after } });
   if (spec.hold) return new Promise(() => {});
   if (spec.delayMs) await sleep(spec.delayMs);
   if (spec.error) return { error: spec.error };
@@ -245,6 +248,10 @@ function onMessage(msg) {
       break;
     case 'session/set_mode':
       send({ id: msg.id, result: {} });
+      break;
+    case 'session/set_model':
+      if (scenario.modelError) send({ id: msg.id, error: scenario.modelError });
+      else send({ id: msg.id, result: {} });
       break;
     case 'session/prompt':
       onPrompt(msg);

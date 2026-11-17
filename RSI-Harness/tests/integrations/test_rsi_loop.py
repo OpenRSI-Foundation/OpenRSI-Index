@@ -1671,6 +1671,50 @@ def test_opencode_one_shot_refuses_what_work_refuses(options, message) -> None:
         _oneshot("opencode", **options)
 
 
+def test_antigravity_one_shot_command_uses_print_mode_with_work_settings() -> None:
+    base_url = "http://model.test:8000"
+    offline = _oneshot("antigravity", base_url=base_url, model="gemini-4-carbon-low")
+
+    command = offline["command"]
+    prelude, _, _, launch = command.split("\n")
+    # Work's settings and hooks in the fresh HOME.
+    agent = create_agent("antigravity", RSILoopConfig())
+    assert prelude == agent.config_prelude(model=None, internet=False) + " &&"
+    # Print mode, never the driver; the prompt arrives on stdin, and the
+    # effort picks the catalog id.
+    assert launch.startswith(
+        "set -o pipefail && agy --dangerously-skip-permissions"
+        " --disable-slash-commands --model gemini-4-carbon-high"
+        " --output-format stream-json {schema_option}"
+    )
+    # Its schema option returns every reply of the turn: rsi-agent states
+    # the schema in the prompt instead, and a filter keeps the last reply.
+    assert offline["schema_option"] is None
+    assert offline["output"] == {
+        "mode": "stdout-json",
+        "fields": ["response"],
+        "error_field": "error",
+    }
+    environment = offline["environment"]
+    assert environment["GEMINI_API_KEY"] == "sk-oneshot"
+    assert environment["GOOGLE_GEMINI_BASE_URL"] == base_url
+    assert environment["AGY_CLI_DISABLE_AUTO_UPDATE"] == "true"
+    assert "sk-oneshot" not in command
+    assert "model.test" not in command
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        ({"effort": "max"}, "unsupported Antigravity reasoning effort"),
+        ({"model": None}, "needs a model"),
+    ],
+)
+def test_antigravity_one_shot_refuses_what_work_refuses(options, message) -> None:
+    with pytest.raises(SetupError, match=message):
+        _oneshot("antigravity", **options)
+
+
 ZCODE_ONESHOT_DENIED = (
     "AskUserQuestion,EnterPlanMode,ExitPlanMode,CronList,CronUpdate,"
     "OffPeakList,ReplyToChannel,CronCreate,CronDelete,OffPeakCreate,Skill,Agent,SendMessage"

@@ -8,7 +8,8 @@ stronger model, settings turning the CLI's subagent pin off or naming
 another main, alias or vision model, system-wide managed config, MCP
 servers, extensions. The fake model then asks the CLI to start subagents
 (and, for Kimi Code, to edit its config first; for Qwen Code, to read an
-image). Every request the fake receives,
+image; for Antigravity, to start workers and call the tools its hook
+denies). Every request the fake receives,
 subagents' included, must name the run's model, offer none of the Agent's
 account-level tools, and, where the CLI has the parameter, offer no subagent
 ``model``. A subagent the run's model may use answers; one naming another
@@ -167,7 +168,78 @@ _KIMI_POOL = (
     ' && sleep 2 && grep -c big-model "$cfg" && echo config-edited'
 )
 
+# Antigravity's tools that its PreToolUse hook denies, with arguments that
+# would reach another model or start turns of their own.
+_AGY_DENIED = (
+    ("swarm", {"action": "add", "model": "gemini-3.1-flash-lite-preview"}),
+    (
+        "run_workflow",
+        {
+            "Description": "fairness",
+            "Script": "log(await agent('hi', {'type': 'string'}, model='flash_lite'))",
+        },
+    ),
+    ("search_web", {"query": "fairness"}),
+    ("schedule", {"Prompt": "fairness", "DurationSeconds": 60}),
+    ("send_message", {"Recipient": "other", "Message": "fairness"}),
+)
+
 CASES = (
+    # Its one title request per session goes to another model (a README
+    # residual); _run lets that one request through, by its prompt.
+    FairnessCase(
+        "antigravity",
+        plant={
+            # Managed config naming a model gateway, which would take every
+            # request elsewhere.
+            "/etc/antigravity/admin_settings.json": json.dumps(
+                {"gateway": {"url": "http://127.0.0.1:9"}}
+            ),
+            # Settings naming another model, which the launch replaces.
+            "/home/agent/.gemini/antigravity-cli/settings.json": json.dumps(
+                {"model": "gemini-4-argon-high"}
+            ),
+            # Agent definitions naming a stronger model: one in the working
+            # directory, and one under $HOME in place of a built-in type.
+            **{
+                f"{root}/{name}/agent.md": (
+                    f"---\nname: {name}\ndescription: Strong helper\n"
+                    f"model: pro\n---\n# {name}\nHelp.\n"
+                )
+                for root, name in (
+                    ("/workspace/.agents/agents", "strong"),
+                    ("/home/agent/.gemini/config/agents", "research"),
+                )
+            },
+        },
+        calls=(
+            # Defined types, and a built-in one bound to another model.
+            *(
+                (
+                    {
+                        "tool": "invoke_subagent",
+                        "arguments": {
+                            "TypeName": name,
+                            "Role": "Helper",
+                            "Prompt": SUBAGENT.format(number),
+                            "Model": "pro",
+                        },
+                    },
+                    "Changed: Model, TypeName",
+                )
+                for number, name in enumerate(
+                    ("strong", "research", "image-generator"), 1
+                )
+            ),
+            *(
+                ({"tool": tool, "arguments": arguments}, "disabled in this run")
+                for tool, arguments in _AGY_DENIED
+            ),
+        ),
+        subagents=(1, 2, 3),
+        model="gemini-4-hydrogen-low",
+        sent_model="gemini-4-hydrogen",
+    ),
     FairnessCase(
         "claude-code",
         plant={

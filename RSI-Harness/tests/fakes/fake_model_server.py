@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fake model server for Agent tests: three model APIs (stdlib only).
+"""Fake model server for Agent tests: four model APIs (stdlib only).
 
 usage: fake_model_server.py --log REQUESTS.jsonl [--scenario S.json]
                             [--host 127.0.0.1] [--port 0] [--port-file PATH]
@@ -11,18 +11,24 @@ Endpoints, matched by the end of the path, so a base URL with or without
   POST /v1/responses               OpenAI Responses (Codex)
   POST /v1/messages                Anthropic Messages (Claude Code)
   POST /v1/messages/count_tokens   a fixed count; not logged
+  POST /v1beta/models/M:generateContent and :streamGenerateContent
+                                   the Gemini API (Antigravity); the model is
+                                   the path's M, the key the X-Goog-Api-Key
+                                   header
 Each answers streamed (SSE) or plain, as the request asks, with tool calls.
 
-Every request is appended to the log as one JSON line, the same for all three
+Every request is appended to the log as one JSON line, the same for all four
 APIs: the request number, the API, the request's path (without its query),
 the action taken, the message count (chat messages, Responses input items or
 Anthropic messages), the last message role (``tool`` for a tool result: a
 ``tool`` message, a ``function_call_output`` item, or a user message of
-``tool_result`` blocks; Anthropic mid-conversation ``system`` messages are
-skipped), the last user text (of its text blocks) and tool result, the model,
-the tools offered, the tool call made, whether an API key was sent, and the
-reasoning effort and output limit asked for, and which ``watch`` strings the
-request contains anywhere (system prompt included). Tests assert on that log.
+``tool_result`` blocks, or Gemini content of ``functionResponse`` parts;
+Anthropic mid-conversation ``system`` messages are skipped), the last user
+text (of its text blocks) and tool result, the model, the tools offered, the
+tool call made, whether an API key was sent, and the reasoning effort (for
+Gemini the thinking level, in lower case, or budget) and output limit asked
+for, and which ``watch`` strings the request contains anywhere (system prompt
+included). Tests assert on that log.
 
 Scenario keys (all optional):
   cycle        actions for successive model requests (default ["text"])
@@ -47,6 +53,11 @@ Scenario keys (all optional):
                must not reach the model
   schemas      tool names whose parameter names each request logs, as
                ``tool_params`` {name: [parameter, ...]}, when it offers them
+  side_requests
+               {model: text}: a request to that model containing that text
+               (a CLI's own side call, such as a title) gets a text reply
+               outside the script: logged with ``n`` 0 and action ``side``,
+               and not counted
 
 Actions: text, tool, mixed, empty, reasoning, length, e400, e401, e429,
 e500, overflow, hang (never answers; the client has to time out).
@@ -63,10 +74,17 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, NamedTuple
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 MODEL_ID = "fake-model"
-SHELL_TOOLS = ("bash", "run_shell_command", "shell", "Bash", "exec_command")
+SHELL_TOOLS = (
+    "bash",
+    "run_shell_command",
+    "shell",
+    "Bash",
+    "exec_command",
+    "run_command",
+)
 _TEXT_CAP = 2000
 _OVERFLOW = (
     "This model's maximum context length is 16000 tokens. "
@@ -86,6 +104,12 @@ _ANTHROPIC_ERRORS = {
     _OVERFLOW: "prompt is too long: 20000 tokens > 16000 maximum",
 }
 _USAGE = {"input": 100, "output": 10}
+_GEMINI_STATUS = {
+    "invalid_request_error": "INVALID_ARGUMENT",
+    "authentication_error": "UNAUTHENTICATED",
+    "rate_limit_error": "RESOURCE_EXHAUSTED",
+    "server_error": "INTERNAL",
+}
 
 
 def _text_of(content: Any) -> str:
@@ -218,10 +242,62 @@ def _messages_turn(body: dict[str, Any]) -> _Turn:
     )
 
 
+def _gemini_turn(body: dict[str, Any]) -> _Turn:
+    contents = body.get("contents") or []
+    last = contents[-1] if contents else {}
+
+    def parts(content: dict[str, Any], key: str) -> list[Any]:
+        return [
+            part[key]
+            for part in content.get("parts") or []
+            if isinstance(part, dict) and key in part and not part.get("thought")
+        ]
+
+    users = [
+        "".join(map(str, parts(c, "text")))
+        for c in contents
+        if c.get("role", "user") == "user" and not parts(c, "functionResponse")
+    ]
+    users = [text for text in users if text]
+    results = [
+        response.get("output")
+        if isinstance(response, dict) and isinstance(response.get("output"), str)
+        else json.dumps(response, ensure_ascii=False)
+        for result in parts(last, "functionResponse")
+        for response in [result.get("response") if isinstance(result, dict) else None]
+    ]
+    config = body.get("generationConfig") or {}
+    thinking = config.get("thinkingConfig") or {}
+    level = thinking.get("thinkingLevel")
+    tools = {
+        str(declaration.get("name")): declaration.get("parametersJsonSchema")
+        or declaration.get("parameters")
+        or {}
+        for tool in body.get("tools") or []
+        if isinstance(tool, dict)
+        for declaration in tool.get("functionDeclarations") or []
+        if isinstance(declaration, dict) and declaration.get("name")
+    }
+    role = {"model": "assistant"}.get(last.get("role"), last.get("role"))
+    return _Turn(
+        n_messages=len(contents),
+        last_role="tool" if results else role,
+        last_user=users[-1] if users else None,
+        last_tool="\n".join(results) if results else None,
+        tools=tools,
+        reasoning_effort=(
+            level.lower() if isinstance(level, str) else thinking.get("thinkingBudget")
+        ),
+        max_tokens=config.get("maxOutputTokens"),
+    )
+
+
 _APIS = {
     "/chat/completions": ("chat", _chat_turn),
     "/responses": ("responses", _responses_turn),
     "/messages": ("messages", _messages_turn),
+    ":generateContent": ("gemini", _gemini_turn),
+    ":streamGenerateContent": ("gemini", _gemini_turn),
 }
 
 
@@ -361,7 +437,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
         state = self.server_state
         turn = parse(body)
-        number, action = state.next_action(turn.last_role)
+        model = body.get("model")
+        if api == "gemini":
+            model = path.rsplit("/", 1)[-1].split(":", 1)[0]
+        side = (state.scenario.get("side_requests") or {}).get(model)
+        if side and side in raw.decode("utf-8", errors="replace"):
+            number, action = 0, "side"
+        else:
+            number, action = state.next_action(turn.last_role)
         call = None
         if action in ("tool", "mixed"):
             call = self._tool_call(turn.tools, state.next_command(number), number)
@@ -373,8 +456,9 @@ class _Handler(BaseHTTPRequestHandler):
                 # As requested, so a test sees the URL a real endpoint would.
                 "path": path,
                 "action": action,
-                "model": body.get("model"),
-                "stream": bool(body.get("stream")),
+                "model": model,
+                "stream": bool(body.get("stream"))
+                or path.endswith(":streamGenerateContent"),
                 "n_messages": turn.n_messages,
                 "last_role": turn.last_role,
                 "last_user": turn.last_user,
@@ -385,7 +469,9 @@ class _Handler(BaseHTTPRequestHandler):
                 "tool_names": sorted(turn.tools),
                 "call": call["function"] if call else None,
                 "authorization": bool(
-                    self.headers.get("authorization") or self.headers.get("x-api-key")
+                    self.headers.get("authorization")
+                    or self.headers.get("x-api-key")
+                    or self.headers.get("x-goog-api-key")
                 ),
                 "reasoning_effort": turn.reasoning_effort,
                 "max_tokens": turn.max_tokens,
@@ -414,13 +500,22 @@ class _Handler(BaseHTTPRequestHandler):
                     "message": _ANTHROPIC_ERRORS.get(message, message),
                 }
                 self._json(status, {"type": "error", "error": error})
+            elif api == "gemini":
+                error = {"code": status, "message": message}
+                self._json(status, {"error": {**error, "status": _GEMINI_STATUS[kind]}})
             else:
                 self._json(status, {"error": {"message": message, "type": kind}})
             return
-        reply = self._reply(body, action, number, call)
+        reply = self._reply(body, action, number, call)._replace(
+            model=model or MODEL_ID
+        )
         text = (state.scenario.get("replies") or {}).get(str(number))
-        if text is not None and reply.text is not None:
+        if text is not None and reply.text is not None and action != "side":
             reply = reply._replace(text=text)
+        if api == "gemini":
+            sse = parse_qs(urlsplit(self.path).query).get("alt") == ["sse"]
+            self._gemini(reply, stream=path.endswith(":streamGenerateContent"), sse=sse)
+            return
         {
             "chat": self._chat,
             "responses": self._responses,
@@ -441,10 +536,12 @@ class _Handler(BaseHTTPRequestHandler):
             candidates = scenario.get("shell_tools") or SHELL_TOOLS
             name = next((n for n in candidates if n in tools), candidates[0])
             properties = (tools.get(name) or {}).get("properties") or {}
-            # Codex's shell takes ``cmd``; the others ``command``.
-            key = "command"
-            if "cmd" in properties and "command" not in properties:
-                key = "cmd"
+            # Codex's shell takes ``cmd``, Antigravity's ``CommandLine``; the
+            # others ``command``.
+            key = next(
+                (k for k in ("command", "cmd", "CommandLine") if k in properties),
+                "command",
+            )
             arguments = {key: command, **(scenario.get("shell_arguments") or {})}
         # Fill the other required parameters the CLI declares, so its schema
         # validation accepts the call.
@@ -726,6 +823,65 @@ class _Handler(BaseHTTPRequestHandler):
         self._typed("message_stop")
         self._end_stream()
 
+    # -- Gemini ------------------------------------------------------------
+
+    def _gemini(self, reply: _Reply, *, stream: bool, sse: bool) -> None:
+        parts: list[dict[str, Any]] = []
+        if reply.reasoning:
+            parts.append({"text": reply.reasoning, "thought": True})
+        # Streamed text comes in two chunks, so clients have to join them.
+        texts = _halves(reply.text) if stream else [reply.text] if reply.text else []
+        parts += [{"text": text} for text in texts]
+        if reply.tool:
+            parts.append(
+                {
+                    "functionCall": {
+                        "name": reply.tool["function"]["name"],
+                        "args": json.loads(reply.tool["function"]["arguments"]),
+                    },
+                    # Gemini 3 models expect it back with the call.
+                    "thoughtSignature": "ZmFrZS1zaWduYXR1cmU=",
+                }
+            )
+        usage = {
+            "promptTokenCount": _USAGE["input"],
+            "candidatesTokenCount": _USAGE["output"],
+            "totalTokenCount": _USAGE["input"] + _USAGE["output"],
+        }
+        finish = "MAX_TOKENS" if reply.finish == "length" else "STOP"
+
+        def response(chunk: list[dict[str, Any]], last: bool) -> dict[str, Any]:
+            candidate: dict[str, Any] = {
+                "content": {"role": "model", "parts": chunk},
+                "index": 0,
+            }
+            if last:
+                candidate["finishReason"] = finish
+            payload = {
+                "candidates": [candidate],
+                "modelVersion": reply.model,
+                "responseId": f"resp-{reply.number}",
+            }
+            if last:
+                payload["usageMetadata"] = usage
+            return payload
+
+        if not stream:
+            self._json(200, response(parts, True))
+            return
+        # One part per chunk, the finish reason and usage with the last.
+        chunks = [
+            response([part], index == len(parts) - 1)
+            for index, part in enumerate(parts)
+        ] or [response([], True)]
+        if not sse:
+            self._json(200, chunks)
+            return
+        self._start_stream()
+        for chunk in chunks:
+            self._event(None, chunk)
+        self._end_stream()
+
     # -- transport ---------------------------------------------------------
 
     def _start_stream(self) -> None:
@@ -749,7 +905,7 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
         self.close_connection = True
 
-    def _json(self, status: int, payload: dict[str, Any]) -> None:
+    def _json(self, status: int, payload: Any) -> None:
         data = json.dumps(payload).encode()
         self.send_response(status)
         self.send_header("content-type", "application/json")
