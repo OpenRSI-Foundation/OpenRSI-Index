@@ -8,7 +8,7 @@
 
 **RSI-Anything** is the OpenRSI-Index contribution pipeline. It turns your research idea into a private, ready-to-use RSI task repository through an automated workflow, asking for your input only when a task-defining choice genuinely needs it.
 
-![Contributor and agent roles across five steps: share your idea while proposal-agent drafts (20 min); confirm the proposal for automatic Discussion submission and review (5 min); answer only if asked while agents build the private repo (25 min); provide GPUs and launch skills while agents validate, run, and recover (varies by task); request uploads and share feedback while agents upload logs (a few minutes).](assets/figures/rsi-anything-workflow.svg)
+![Contributor and agent roles across five steps: share your idea while proposal-agent drafts (20 min); confirm the proposal for automatic Discussion submission and review (5 min); answer only if asked while agents build the private repo (25 min); provide compute resources and launch skills while agents validate, run, and recover (varies by task); request uploads and share feedback while agents upload logs (a few minutes).](assets/figures/rsi-anything-workflow.svg)
 
 *Times are estimated elapsed durations, including agent work.*
 
@@ -82,9 +82,9 @@ The `$...` lines below are skill invocations for your coding agent, not shell
 commands.
 
 > [!IMPORTANT]
-> **GPU access is required to complete a contribution.** You must have access
-> to the required GPU resources declared by your task. Choose a task scope,
-> experiment plan, and compute budget that fit those resources.
+> **CPU-only tasks are welcome.** You must have access to the compute resources
+> declared by your task; GPUs are needed only if the task requires them. Choose
+> a task scope, experiment plan, and compute budget that fit those resources.
 
 When your private task repository is available, return to the original
 proposal-agent session and paste:
@@ -95,7 +95,7 @@ Find this session's complete original trajectory and submit it, together with th
 
 Keep the local session history until it is uploaded. After the agent reports
 the private repository and upload
-commit SHA, clone that repository on a machine with the required GPU resources
+commit SHA, clone that repository on a machine with the required compute resources
 and follow its README. Choose the local pair for Docker, or the cluster pair
 for Slurm/LSF, including single-node allocations:
 
