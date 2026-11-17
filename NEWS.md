@@ -2,12 +2,13 @@
 
 Milestones from OpenRSI Index and RSI Harness, newest first. Code updates use the date they merged in Los Angeles time; announcements use their published dates.
 
-Last updated: **2026-11-14**.
+Last updated: **2026-11-16**.
 
 [← Back to OpenRSI Index](README.md#-news)
 
 ## November 2026
 
+- **[2026-11-16] OpenPhysics Bench:** Exciting progress on **60+ open physics problems**—expert reviewers wanted!
 - **[2026-11-14] 26 public task packages.** The published collection spans pre-training, post-training, vision, robotics, agents and AI systems, including 12 SGLang-Omni packages. This count covers the published `task.toml` packages in `rsi-tasks/`, not pending proposals. [Explore tasks](rsi-tasks/)
 - **[2026-11-13] SGLang Summit talk.** We presented Scaling RSI for AI Infra: agents continuously optimize model serving, with gains independently verified. [Conference program](https://www.sglang.io/summit) · [Slide](https://docs.google.com/presentation/d/1ODcBjqT9sl0NRa7SdtV4rwULmMZI71xx/edit)
 - **[2026-11-13] Lower-overhead cluster evaluation.** RSI Harness now pauses Work and binds its workspace read-only into a fresh cluster Judge, avoiding per-round workspace copies. The update also strengthens Work sandboxing and checks the workspace before evaluation. [Workspace mounts](https://github.com/OpenRSI-Foundation/OpenRSI-Index/pull/347) · [Work sandboxing](https://github.com/OpenRSI-Foundation/OpenRSI-Index/pull/346)
