@@ -73,6 +73,9 @@ class DrivenAgent(Agent):
     # -- optional --
     driver_flags: tuple[str, ...] = ()
     agent_version: str | None = None
+    # The CLI takes its model only over ACP: the driver sets it with
+    # session/set_model after the session starts (``--acp-model``).
+    acp_model: bool = False
 
     install_cmds = [NODE_INSTALL_CMD]
     resumes_sessions = True
@@ -141,6 +144,8 @@ class DrivenAgent(Agent):
             argv += ["--agent-version", self.agent_version]
         if effective_model:
             argv += ["--model", effective_model]
+            if self.acp_model:
+                argv += ["--acp-model", effective_model]
         if resume and session_id is not None:
             argv += ["--resume-session", session_id]
         # The prompt is read from the file: task text in argv could be matched

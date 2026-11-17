@@ -22,6 +22,8 @@ dependencies = [
   "typer>=0.25,<1",
   "typing-extensions>=4.0",
   "uvicorn[standard]>=0.38,<1",
+  # Intake bundles may be .tar.zst (docs/task-intake.md).
+  "zstandard>=0.23,<1",
 ]
 
 [project.optional-dependencies]

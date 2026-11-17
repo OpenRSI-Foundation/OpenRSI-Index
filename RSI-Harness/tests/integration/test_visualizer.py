@@ -269,7 +269,9 @@ def _driver_init(agent: str, version: str, model: str = "test-model") -> str:
     )
 
 
-@pytest.mark.parametrize("name", ["kimi-code", "opencode", "pi", "qwen-code", "zcode"])
+@pytest.mark.parametrize(
+    "name", ["antigravity", "kimi-code", "opencode", "pi", "qwen-code", "zcode"]
+)
 def test_peek_agent_recognises_coding_agent_launch_lines(
     tmp_path: Path, name: str
 ) -> None:

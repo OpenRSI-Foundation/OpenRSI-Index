@@ -188,6 +188,50 @@ def _assert_claude_guard(
     assert "--mcp-config" not in argv
 
 
+# -- Antigravity ------------------------------------------------------------
+
+
+def _antigravity_hooks(command: str) -> dict[str, str]:
+    """The PreToolUse hooks a launch writes: matcher -> the hook's reply."""
+    written = command.split("printf '%s' ")[2].split(" > ")[0]
+    [hooks] = json.loads(shlex.split(written)[0]).values()
+    replies = {}
+    for group in hooks["PreToolUse"]:
+        [hook] = group["hooks"]
+        completed = subprocess.run(
+            ["/bin/sh", "-c", hook["command"]],
+            input='{"toolCall":{"name":"invoke_subagent","args":{"Model":"pro"}}}',
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+        replies[group["matcher"]] = json.loads(completed.stdout)
+    return replies
+
+
+@pytest.mark.parametrize("internet", [True, False])
+def test_antigravity_pins_subagents_and_denies_other_model_tools(
+    internet: bool,
+) -> None:
+    agent = create_agent("antigravity", _config())
+    for command in (
+        agent.format_run_cmd("/tmp/p.md", model=MODEL, internet=internet),
+        _oneshot("antigravity", internet=internet)["command"],
+    ):
+        assert remove_managed_config("/etc/antigravity") in command
+        replies = _antigravity_hooks(command)
+        assert replies == {
+            "invoke_subagent": {
+                "decision": "allow",
+                "overwrite": {"Model": "inherit", "TypeName": "self"},
+            },
+            "swarm|run_workflow|search_web|schedule|send_message": {
+                "decision": "deny",
+                "reason": "disabled in this run",
+            },
+        }
+
+
 # -- Claude Code ------------------------------------------------------------
 
 

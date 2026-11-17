@@ -211,14 +211,19 @@ def test_bump_script_checks_the_release_the_image_installs(name: str) -> None:
             package = target.npm_package.format(arch="${arch}")
             assert f"{package}@{version}" in text
         else:
-            url = urlparse(target.url.format(v=version, arch="${arch}"))
+            build = getattr(versions, target.build) if target.build else ""
+            url = urlparse(target.url.format(v=version, arch="${arch}", build=build))
             assert url.netloc in text
             assert url.path.rsplit("/", 1)[-1] in text
+            if target.build:
+                assert f"/{version}-{build}/" in text
         for arch in target.arches:
             assert f"arch={arch} ;;" in text
 
 
-@pytest.mark.parametrize("name", ["node", "opencode", "zcode", "ripgrep"])
+@pytest.mark.parametrize(
+    "name", ["node", "opencode", "zcode", "ripgrep", "antigravity"]
+)
 def test_native_releases_are_checked_for_both_architectures(name: str) -> None:
     target = bump.TARGETS[name]
     assert len(target.arches) == 2
@@ -275,6 +280,8 @@ CODEX = "0.159.2"
 CODEX_SHA256_X86_64 = "{a}"
 CODEX_SHA256_AARCH64 = "{b}"
 CLAUDE_CODE = "2.1.285"
+ANTIGRAVITY = "1.5.10"
+ANTIGRAVITY_BUILD = "5253791805734912"
 # CODEX = "0.1.0" in a comment is not an assignment.
 '''.format(a="a" * 64, b="b" * 64)
 
@@ -443,6 +450,56 @@ def test_release_digests_hash_the_native_binary_after_the_integrity_check() -> N
         bump.release_digests(target, "0.160.0", fetch=_registry(other))
 
 
+def _manifests(releases: dict[str, tuple[str, str]]):
+    """A fetch serving each architecture's manifest: (version, URL)."""
+
+    def fetch(url: str) -> bytes:
+        import json
+
+        machine = url.rsplit("_", 1)[-1].removesuffix(".json")
+        version, release = releases[machine]
+        return json.dumps({"version": version, "url": release}).encode()
+
+    return fetch
+
+
+_AGY = "https://storage.googleapis.com/antigravity-public/antigravity-cli"
+
+
+def test_latest_build_reads_the_build_from_every_manifest() -> None:
+    target = bump.TARGETS["antigravity"]
+    releases = {
+        "amd64": ("1.6.0", f"{_AGY}/1.6.0-777/linux-x64/cli_linux_x64.tar.gz"),
+        "arm64": ("1.6.0", f"{_AGY}/1.6.0-777/linux-arm/cli_linux_arm64.tar.gz"),
+    }
+
+    assert bump.latest_build(target, "1.6.0", fetch=_manifests(releases)) == "777"
+    # Only the latest release can be pinned: no manifest names an older one.
+    with pytest.raises(bump.BumpError, match="not the latest release, 1.6.0"):
+        bump.latest_build(target, "1.5.11", fetch=_manifests(releases))
+    other = {**releases, "arm64": ("1.6.0", releases["arm64"][1].replace("7", "8"))}
+    with pytest.raises(bump.BumpError, match="different builds"):
+        bump.latest_build(target, "1.6.0", fetch=_manifests(other))
+    moved = {**releases, "amd64": ("1.6.0", f"{_AGY}/1.6.0-777/x64.tar.gz")}
+    with pytest.raises(bump.BumpError, match="unexpected URL"):
+        bump.latest_build(target, "1.6.0", fetch=_manifests(moved))
+
+
+def test_main_pins_the_build_with_the_version(
+    table: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(bump, "run_tests", pytest.fail)
+    monkeypatch.setattr(bump, "latest_build", lambda target, version: "777")
+    checked = []
+    monkeypatch.setattr(bump, "check_published", lambda *args: checked.append(args[1:]))
+
+    assert bump.main(["antigravity", "1.6.0", "--no-test"]) == 0
+
+    assert 'ANTIGRAVITY = "1.6.0"\nANTIGRAVITY_BUILD = "777"\n' in table.read_text()
+    assert checked == [("1.6.0", "777")]
+    assert '+ANTIGRAVITY_BUILD = "777"\n' in capsys.readouterr().out
+
+
 def test_main_edits_prints_the_diff_and_skips_tests_on_request(
     table: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -480,7 +537,7 @@ def test_main_returns_the_test_failure(
 def test_main_checks_the_release_before_editing(
     table: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def unpublished(target, version):
+    def unpublished(target, version, build=""):
         raise bump.BumpError(f"{version} is not published")
 
     monkeypatch.setattr(bump, "check_published", unpublished)

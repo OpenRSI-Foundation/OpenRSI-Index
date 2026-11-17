@@ -41,6 +41,10 @@ KIMI_CODE = "2.1.1"
 OPENCODE = "1.19.0"
 ZCODE = "3.15.1"
 PI = "1.1.0"
+ANTIGRAVITY = "1.5.10"
+# The build id in that release's download URL; bump_agent.py rewrites it
+# with ANTIGRAVITY.
+ANTIGRAVITY_BUILD = "5253791805734912"
 
 # Not an Agent: OpenCode's grep tool downloads ripgrep on first use when no
 # ``rg`` is on PATH, which a no-network Work cannot do, so its image carries
