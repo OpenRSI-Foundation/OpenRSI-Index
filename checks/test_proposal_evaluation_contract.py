@@ -143,7 +143,7 @@ def test_all_available_rubric_copies_use_only_the_nine_gate_pass_reject_rule():
         assert "Decision: Accept" not in source, label
 
 
-def test_contributing_preserves_automatic_build_and_gpu_trajectory_contract():
+def test_contributing_preserves_automatic_build_and_compute_trajectory_contract():
     contributing = CONTRIBUTING.read_text(encoding="utf-8")
     normalized = " ".join(contributing.lower().split())
 
@@ -163,7 +163,8 @@ def test_contributing_preserves_automatic_build_and_gpu_trajectory_contract():
 
     private_repo = contributing.split("### 4. Use the private task repository", 1)[1]
     assert "must have access" in private_repo.lower()
-    assert "required gpu resources" in private_repo.lower()
+    assert "required compute resources" in private_repo.lower()
+    assert "gpus are needed only if the task requires them" in " ".join(private_repo.lower().split())
     assert "complete original trajectory" in private_repo.lower()
     assert "discussion record" in private_repo.lower()
     assert "clone" in private_repo.lower()
