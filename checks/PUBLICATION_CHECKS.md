@@ -12,8 +12,7 @@ packages are checked; a run with no package change passes with “not applicable
 (`workflow_dispatch`) audits every published package (`--full`), and so does a
 forced push to `main` (for example after a history rewrite). A newer push to
 a PR cancels that PR's running check; runs for pushes to `main` and manual runs
-are never cancelled, so each push's changes are audited. Nested `signature-tasks/`
-and `SGNOMI/` task and log paths are supported.
+are never cancelled, so each push's changes are audited. Nested `signature-tasks/`, `sglang-omni/` and historical `SGNOMI/` task and log paths are supported. Public task collections hosted in dedicated `OpenRSI-Foundation` repositories and mounted under `rsi-tasks/` as Git submodules (`160000` gitlinks) must be explicitly declared in `[external_task_collections]` of `publication-policy.toml` (matching `.gitmodules` `path` and `url`, with no custom `update` settings).
 
 Files directly under `rsi-tasks/`, `rsi-tasks/signature-tasks/`, `rsi-tasks/SGNOMI/`,
 `rsi-logs/`, `rsi-logs/signature-tasks/` or `rsi-logs/SGNOMI/` belong to no package.

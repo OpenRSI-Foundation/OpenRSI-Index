@@ -15,6 +15,7 @@ import argparse
 import fnmatch
 import importlib.util
 import subprocess
+import tomllib
 from pathlib import Path
 
 _SPEC = importlib.util.spec_from_file_location(
@@ -22,6 +23,7 @@ _SPEC = importlib.util.spec_from_file_location(
 )
 publication = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(publication)
+POLICY_FILE = Path(__file__).with_name("publication-policy.toml")
 
 # The workflow's other trigger paths (tested to match): always audit.
 ALWAYS = (
@@ -43,8 +45,23 @@ def git(repo: Path, *args: str) -> str:
 
 
 def roots(repo: Path, ref: str) -> set[str]:
-    listed = git(repo, "ls-tree", "-r", "--name-only", "-z", ref, "--", "rsi-tasks")
-    return publication.task_roots(listed.split("\0"))
+    files = set(publication.tracked_files(repo, ref, "rsi-tasks"))
+    links = publication.gitlinks(repo, ref, "rsi-tasks")
+    if links:
+        policy = (
+            tomllib.loads(POLICY_FILE.read_text())
+            if POLICY_FILE.is_file()
+            else {}
+        )
+        declared = policy.get("external_task_collections", {})
+        for sub_path, sha in links.items():
+            spec = declared.get(sub_path) if isinstance(declared, dict) else None
+            tasks = spec.get("tasks") if isinstance(spec, dict) else None
+            if isinstance(tasks, list) and tasks:
+                files.update(f"{sub_path}/{slug}/task.toml" for slug in tasks)
+            else:
+                files.add(f"{sub_path}@{sha}/task.toml")
+    return publication.task_roots(files)
 
 
 def decide(repo: Path, base: str, head: str) -> tuple[bool, str]:
@@ -58,7 +75,7 @@ def decide(repo: Path, base: str, head: str) -> tuple[bool, str]:
         return True, "no usable base revision"
     changed = [
         p
-        for p in git(repo, "diff", "--name-only", "--no-renames", "-z", start, head).split("\0")
+        for p in git(repo, "diff-tree", "-r", "--name-only", "--no-renames", "-z", start, head).split("\0")
         if p
     ]
     for path in changed:
