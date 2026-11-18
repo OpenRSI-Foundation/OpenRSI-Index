@@ -209,27 +209,32 @@ def _antigravity_hooks(command: str) -> dict[str, str]:
     return replies
 
 
+@pytest.mark.parametrize("login", [False, True])
 @pytest.mark.parametrize("internet", [True, False])
 def test_antigravity_pins_subagents_and_denies_other_model_tools(
-    internet: bool,
+    internet: bool, login: bool
 ) -> None:
-    agent = create_agent("antigravity", _config())
+    config = {"agent_api_key": None, "agent_local_auth": True} if login else {}
+    agent = create_agent("antigravity", _config(**config))
+    deny = {"decision": "deny", "reason": "disabled in this run"}
+    expected = {
+        "invoke_subagent": {
+            "decision": "allow",
+            "overwrite": {"Model": "inherit", "TypeName": "self"},
+        },
+        "swarm|run_workflow|search_web|generate_image|browser_subagent"
+        "|schedule|send_message|manage_inbox|list_plugin_accounts"
+        "|search_marketplace": deny,
+    }
+    if login and not internet:
+        # The login's model host fetches web pages past the firewall.
+        expected["read_url_content"] = deny
     for command in (
         agent.format_run_cmd("/tmp/p.md", model=MODEL, internet=internet),
-        _oneshot("antigravity", internet=internet)["command"],
+        _oneshot("antigravity", internet=internet, **config)["command"],
     ):
         assert remove_managed_config("/etc/antigravity") in command
-        replies = _antigravity_hooks(command)
-        assert replies == {
-            "invoke_subagent": {
-                "decision": "allow",
-                "overwrite": {"Model": "inherit", "TypeName": "self"},
-            },
-            "swarm|run_workflow|search_web|schedule|send_message": {
-                "decision": "deny",
-                "reason": "disabled in this run",
-            },
-        }
+        assert _antigravity_hooks(command) == expected
 
 
 # -- Claude Code ------------------------------------------------------------

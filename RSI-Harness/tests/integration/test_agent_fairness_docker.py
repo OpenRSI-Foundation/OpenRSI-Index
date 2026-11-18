@@ -183,6 +183,16 @@ _AGY_DENIED = (
     ("schedule", {"Prompt": "fairness", "DurationSeconds": 60}),
     ("send_message", {"Recipient": "other", "Message": "fairness"}),
 )
+# What the hook denies too, which agy does not offer on a key in a
+# no-network Work.
+_AGY_ABSENT = (
+    "generate_image",
+    "browser_subagent",
+    "manage_inbox",
+    "list_plugin_accounts",
+    "search_marketplace",
+    "read_url_content",
+)
 
 CASES = (
     # Its one title request per session goes to another model (a README
@@ -237,6 +247,7 @@ CASES = (
             ),
         ),
         subagents=(1, 2, 3),
+        absent_tools=_AGY_ABSENT,
         model="gemini-4-hydrogen-low",
         sent_model="gemini-4-hydrogen",
     ),

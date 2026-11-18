@@ -379,8 +379,77 @@ def test_one_shot_refuses_a_prompt_agy_would_cut(tmp_path: Path) -> None:
     assert "at most 180000 bytes" in completed.stderr
 
 
-def test_local_login_is_refused() -> None:
-    with pytest.raises(SetupError, match="not supported for Agent 'antigravity'"):
+def test_a_local_login_needs_no_key_and_an_api_key_wins() -> None:
+    login = _config(agent_api_key=None, agent_local_auth=True)
+    validate_agent_config(login, "antigravity", model=MODEL)
+    with pytest.raises(SetupError, match="or pass --agent-auth local"):
+        validate_agent_config(_config(agent_api_key=None), "antigravity", model=MODEL)
+    # A key: no login is read.
+    assert (
         resolve_agent_auth(
-            source=AgentAuthSource.LOCAL, agent_name="antigravity", agent_api_key=None
+            source=AgentAuthSource.LOCAL,
+            agent_name="antigravity",
+            agent_api_key=API_KEY,
+            user_lookup=lambda _uid: pytest.fail("the login must not be read"),
         )
+        is None
+    )
+
+
+def test_login_prelude_links_the_login_and_drops_the_key_and_endpoint(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    login = home / ".gemini" / "antigravity-login" / "antigravity-oauth-token"
+    login.parent.mkdir(parents=True)
+    login.write_text("{}")
+    agent = _agent(agent_api_key=None, agent_local_auth=True)
+    prelude = agent.format_run_cmd(PROMPT, model=MODEL).rpartition("\n")[0]
+    names = [
+        "GEMINI_API_KEY",
+        "GOOGLE_GEMINI_BASE_URL",
+        "CLOUD_CODE_URL",
+        "AGY_ACCOUNT",
+        "GOOGLE_API_KEY",
+    ]
+
+    completed = subprocess.run(
+        [
+            "/bin/bash",
+            "-c",
+            prelude + "\n" + "".join(f'echo "{n}=${{{n}-unset}}";' for n in names),
+        ],
+        env={
+            **rsi_loop_agent_environment(agent._config, agent, MODEL),
+            **{name: "from-the-operator" for name in names},
+            "PATH": "/usr/bin:/bin",
+            "HOME": str(home),
+        },
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.split() == [f"{name}=unset" for name in names]
+    agy_dir = home / ".gemini" / "antigravity-cli"
+    # No modelProvider: agy authenticates with its token file.
+    assert json.loads((agy_dir / "settings.json").read_text()) == {
+        "agentMode": "",
+        "enableTerminalSandbox": False,
+    }
+    assert (agy_dir / "antigravity-oauth-token").resolve() == login.resolve()
+    # agy's logs, which name the account, go to the login's directory.
+    assert (agy_dir / "log").resolve() == (login.parent / "log").resolve()
+    assert (login.parent / "log").is_dir()
+    environment = rsi_loop_agent_environment(agent._config, agent, MODEL)
+    assert "GEMINI_API_KEY" not in environment
+
+
+@pytest.mark.parametrize("name", ["GEMINI_API_KEY", "GOOGLE_API_KEY"])
+def test_a_local_login_with_a_key_in_the_extra_env_is_refused(name: str) -> None:
+    config = _config(
+        agent_api_key=None, agent_local_auth=True, agent_extra_env={name: API_KEY}
+    )
+    with pytest.raises(SetupError, match="not both"):
+        validate_agent_config(config, "antigravity", model=MODEL)
