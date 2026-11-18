@@ -32,6 +32,7 @@ from rsi_harness.integrations.rsi_loop import (
 from rsi_harness.judge_agent import JUDGE_CODEX_CACHE
 from rsi_harness.models import (
     WORK_FEEDBACK_ROOT,
+    AgentAuthSource,
     AgentHookRequest,
     AgentPrepareRequest,
     AgentResume,
@@ -2262,8 +2263,12 @@ class ProductionRuntimeServices:
             definition = definition.model_copy(
                 update={"agent": definition.agent.model_copy(update=agent_updates)}
             )
+        config = self.rsi_loop_config
+        if request.agent_auth == AgentAuthSource.LOCAL and not config.agent_api_key:
+            # The Agent launches on the login; an API key wins over it.
+            config = replace(config, agent_local_auth=True)
         selected_agent = validate_agent_config(
-            self.rsi_loop_config,
+            config,
             definition.agent.name,
             model=definition.agent.model,
         )
@@ -2312,20 +2317,20 @@ class ProductionRuntimeServices:
         agent_auth = resolve_agent_auth(
             source=request.agent_auth,
             agent_name=definition.agent.name,
-            agent_api_key=self.rsi_loop_config.agent_api_key,
+            agent_api_key=config.agent_api_key,
         )
-        api_endpoints = _agent_endpoints(definition, self.rsi_loop_config, agent_auth)
+        api_endpoints = _agent_endpoints(definition, config, agent_auth)
         # Before the Agent starts: a task's Judge LLM needs a usable credential.
         judge_llm = resolve_judge_llm(
             definition,
             request.judge_llm,
-            self.rsi_loop_config,
+            config,
             agent_auth,
             pin=lambda endpoints: _pin_ipv4_endpoints(endpoints, "Judge LLM"),
             environ=self.verifier_secret_env,
         )
         judge_model_access = resolve_judge_model_access(
-            definition, self.rsi_loop_config, agent_auth, api_endpoints, judge_llm
+            definition, config, agent_auth, api_endpoints, judge_llm
         )
         if self.event_callback is not None and judge_llm is not None:
             self.event_callback(
@@ -2355,7 +2360,7 @@ class ProductionRuntimeServices:
             data_root=self.data_root,
             logs_root=self.logs_root,
             inventory=self.inventory,
-            rsi_loop_config=self.rsi_loop_config,
+            rsi_loop_config=config,
             snapshot=snapshot,
             firewall=firewall,
             bind_host=self.bind_host,

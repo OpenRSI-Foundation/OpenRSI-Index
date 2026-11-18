@@ -12,6 +12,7 @@ import socket
 import tempfile
 import threading
 import time
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -48,6 +49,9 @@ from tests.runtime.test_judge_model_access import ENDPOINT, declare_model_access
 OPTIONS = "rw,nosuid,nodev,noexec,mode=0700"
 CODEX_LOGIN = PurePosixPath("/home/agent/.codex/auth.json")
 CLAUDE_LOGIN = PurePosixPath("/home/agent/.claude/.credentials.json")
+AGY_LOGIN = PurePosixPath(
+    "/home/agent/.gemini/antigravity-login/antigravity-oauth-token"
+)
 
 
 def _jwt(claims: dict) -> str:
@@ -131,9 +135,43 @@ def claude_login(generation: int) -> bytes:
     ).encode()
 
 
+def _rfc3339(seconds: float, zone: str = "Z") -> str:
+    """Go's time format: nanoseconds, and the zone as Z or an offset."""
+    moment = datetime.fromtimestamp(seconds, UTC)
+    if zone != "Z":
+        hours, minutes = map(int, zone[1:].split(":"))
+        offset = timedelta(hours=hours, minutes=minutes)
+        moment = moment.astimezone(timezone(-offset if zone[0] == "-" else offset))
+    text = moment.strftime("%Y-%m-%dT%H:%M:%S.%f") + "123"
+    return text + ("Z" if zone == "Z" else zone)
+
+
+@functools.cache
+def agy_login(
+    generation: int, email: str = "someone@example.test", expiry: str | None = None
+) -> bytes:
+    return json.dumps(
+        {
+            "token": {
+                "access_token": f"ya29.ACCESS-{generation}-synthetic-google-token",
+                "token_type": "Bearer",
+                "refresh_token": f"1//REFRESH-{generation}-synthetic-google-token",
+                "expiry": expiry or _rfc3339(time.time() + 3600, "+08:00"),
+                "expires_in": 3599,
+            },
+            "auth_method": "consumer",
+            "id_token_email": email,
+        }
+    ).encode()
+
+
 def material(agent: str = "codex", content: bytes | None = None) -> AgentAuthMaterial:
-    path = CODEX_LOGIN if agent == "codex" else CLAUDE_LOGIN
-    content = content or (codex_login(1) if agent == "codex" else claude_login(1))
+    path, default = {
+        "codex": (CODEX_LOGIN, codex_login),
+        "claude-code": (CLAUDE_LOGIN, claude_login),
+        "antigravity": (AGY_LOGIN, agy_login),
+    }[agent]
+    content = content or default(1)
     return AgentAuthMaterial(
         agent_name=agent,
         mounts=(
@@ -205,6 +243,49 @@ def test_a_claude_login_is_checked_for_its_kind():
     )
     with pytest.raises(SetupError, match="no usable login"):
         current_login(start, {CLAUDE_LOGIN: b'{"other": {}}'})
+
+
+def test_an_antigravity_login_is_checked_for_its_account():
+    start = material("antigravity")
+
+    current = current_login(start, {AGY_LOGIN: agy_login(2)})
+
+    assert _content(current)["token"]["access_token"] == (
+        "ya29.ACCESS-2-synthetic-google-token"
+    )
+    assert current.secret_values == {
+        "ya29.ACCESS-2-synthetic-google-token",
+        "1//REFRESH-2-synthetic-google-token",
+    }
+    with pytest.raises(SetupError, match="another login"):
+        current_login(start, {AGY_LOGIN: agy_login(2, email="other@example.test")})
+    with pytest.raises(SetupError, match="no usable login"):
+        current_login(start, {AGY_LOGIN: b'{"token": {"access_token": ""}}'})
+    content = agy_login(2).replace(b"1//REFRESH-2-synthetic-google-token", b"e")
+    with pytest.raises(SetupError, match="malformed credential"):
+        current_login(start, {AGY_LOGIN: content})
+
+
+@pytest.mark.parametrize("zone", ["Z", "+08:00", "-07:00"])
+def test_an_antigravity_expiry_is_gos_rfc3339_time(zone):
+    expires = time.time() + 1800
+    login = material("antigravity", agy_login(3, expiry=_rfc3339(expires, zone)))
+
+    assert login_expiry(login) == pytest.approx(expires, abs=1e-3)
+    zero = material("antigravity", agy_login(3, expiry="0001-01-01T00:00:00Z"))
+    assert login_expiry(zero) is None
+
+
+@pytest.mark.parametrize(
+    "expiry",
+    ["soon", "2026-13-45T00:00:00Z", "2026-11-17 10:00:00", "1970-01-01T00:00:00Z"],
+)
+def test_an_unusable_antigravity_expiry_is_refused(expiry):
+    login = json.loads(agy_login(2))
+    login["token"]["expiry"] = expiry
+
+    with pytest.raises(SetupError, match="unusable expiry"):
+        current_login(material("antigravity"), {AGY_LOGIN: json.dumps(login).encode()})
 
 
 def test_the_login_store_on_a_cluster_is_read_without_symlinks(tmp_path):
@@ -386,7 +467,7 @@ def test_the_redaction_set_keeps_the_run_start_values_and_the_last_logins(tmp_pa
 # -- the Judge's copy never refreshes ----------------------------------------------
 
 
-@pytest.mark.parametrize("agent", ["codex", "claude-code"])
+@pytest.mark.parametrize("agent", ["codex", "claude-code", "antigravity"])
 def test_the_judge_copy_has_no_usable_refresh_token(agent):
     start = material(agent)
 
@@ -397,6 +478,10 @@ def test_the_judge_copy_has_no_usable_refresh_token(agent):
     if agent == "codex":
         assert content["tokens"]["refresh_token"] == WITHHELD_REFRESH_TOKEN
         assert content["tokens"]["access_token"] == original["tokens"]["access_token"]
+    elif agent == "antigravity":
+        assert content["token"]["refresh_token"] == WITHHELD_REFRESH_TOKEN
+        assert content["token"]["access_token"] == original["token"]["access_token"]
+        assert content["id_token_email"] == original["id_token_email"]
     else:
         assert content["claudeAiOauth"]["refreshToken"] == WITHHELD_REFRESH_TOKEN
         assert (
@@ -420,6 +505,37 @@ def test_model_access_hands_exec_a_copy_without_the_refresh_token(tmp_path):
     assert refresh_token(1) in access.secret_values
     assert refresh_token(1).encode() not in access.launch
     assert refresh_token(1) not in json.dumps(_content(access.auth))
+
+
+def test_model_access_hands_antigravity_its_login_under_the_calls_home(tmp_path):
+    plan = declare_model_access(make_run_plan(tmp_path))
+    definition = plan.task.model_copy(
+        update={
+            "agent": plan.task.agent.model_copy(
+                update={"name": "antigravity", "model": "gemini-3.8-flash-low"}
+            )
+        }
+    )
+    start = material("antigravity")
+
+    access = resolve_judge_model_access(
+        definition, RSILoopConfig(agent_local_auth=True), start, (ENDPOINT,)
+    )
+
+    spec = json.loads(access.launch)
+    assert spec["credentials"] == [
+        {
+            "source": str(AGY_LOGIN),
+            "target": ".gemini/antigravity-login/antigravity-oauth-token",
+        }
+    ]
+    assert spec["credentials_expire_at"] == login_expiry(start)
+    assert _content(access.auth)["token"]["refresh_token"] == WITHHELD_REFRESH_TOKEN
+    # The call links the copy into agy's directory, with no API key.
+    assert "ln -s ../antigravity-login/antigravity-oauth-token" in spec["command"]
+    assert "modelProvider" not in spec["command"]
+    assert "GEMINI_API_KEY" not in spec["environment"]
+    assert b"1//REFRESH-1" not in access.launch
 
 
 def test_a_renewed_login_reaches_exec_llm_and_the_redaction_set(tmp_path):

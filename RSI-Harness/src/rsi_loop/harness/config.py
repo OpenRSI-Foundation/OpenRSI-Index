@@ -54,6 +54,9 @@ class RSILoopConfig:
     # rather than every config load.
     agent_context_window: str | None = None
     agent_max_output_tokens: str | None = None
+    # The run uses the operator's local login (--agent-auth local without
+    # an API key); set by the run, not by an environment variable.
+    agent_local_auth: bool = False
 
     # Claude Code cache optimization — suppress the random cch attribution
     # header and dynamic system prompt sections that break prompt caching on

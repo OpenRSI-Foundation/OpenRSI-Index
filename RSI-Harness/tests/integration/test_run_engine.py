@@ -590,6 +590,50 @@ def test_production_services_resolve_explicit_agent_auth_before_composition(
     assert captured[0].agent_auth is auth
 
 
+@pytest.mark.parametrize("api_key", [None, "sk-key-wins"])
+def test_production_launches_antigravity_on_a_local_login_without_a_key(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, api_key: str | None
+) -> None:
+    """Without a key the Agent passes setup on the login and launches on it;
+    a key wins, and the Agent stays on the key."""
+    import rsi_harness.runtime.production as production
+
+    captured = []
+    monkeypatch.setattr(production, "resolve_agent_auth", lambda **_kwargs: None)
+
+    class Coordinator:
+        def __init__(self, *, backend, lease_store, clock) -> None:
+            del lease_store, clock
+            captured.append(backend.work_creator.__self__)
+
+        def run(self, request: RunRequest) -> RunResult:
+            del request
+            return RunResult(run_id="local-auth", status=RunStatus.COMPLETED)
+
+    services = production.ProductionRuntimeServices(
+        data_root=tmp_path / "data",
+        logs_root=tmp_path / "logs",
+        docker_client=object(),
+        inventory=_OneDeviceInventory(),
+        rsi_loop_config=RSILoopConfig(agent_api_key=api_key),
+        coordinator_factory=Coordinator,
+        bridge_gateway="127.0.0.1",
+    )
+    services.run(
+        RunRequest(
+            task_dir=FIXTURE.resolve(),
+            agent_name="antigravity",
+            model="gemini-3.8-flash-low",
+            options=CompileOptions(agent_name="antigravity"),
+            agent_auth=AgentAuthSource.LOCAL,
+        )
+    )
+
+    assert captured[0].rsi_loop_config.agent_local_auth is (api_key is None)
+    # The operator's configuration is left as it was.
+    assert services.rsi_loop_config.agent_local_auth is False
+
+
 def _no_network_task(tmp_path: Path) -> Path:
     task = tmp_path / "no-network-task"
     shutil.copytree(FIXTURE, task)

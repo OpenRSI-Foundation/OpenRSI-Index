@@ -19,6 +19,10 @@ the continuation as a new prompt into the same ``agy acp`` session instead.
 Over ACP agy takes only a model of its own catalog, and only through
 session/set_model, which the driver sends. A Judge's one-shot call runs
 agy's print mode.
+
+It authenticates with a Gemini API key or, with ``--agent-auth local``, the
+operator's own Google login: agy's token file, which the Harness puts on a
+private tmpfs and the launch links into agy's directory.
 """
 
 from __future__ import annotations
@@ -67,34 +71,72 @@ _CONFIG_DIR = '"$HOME/.gemini/config"'
 # API-key auth with the run's endpoint. No auto mode or terminal sandbox:
 # both need namespaces, and in Work every command would fail.
 _SETTINGS = {"modelProvider": "gemini", "agentMode": "", "enableTerminalSandbox": False}
+# A Google login: without modelProvider agy uses its token file and ignores
+# GEMINI_API_KEY.
+_LOGIN_SETTINGS = {"agentMode": "", "enableTerminalSandbox": False}
+# The login as the Harness places it under $HOME (a private tmpfs in Work,
+# the call's home in a Judge), and where agy reads it. agy rewrites the
+# file in place when it refreshes the token, so the refreshed token stays on
+# the tmpfs.
+LOGIN_PATH = ".gemini/antigravity-login/antigravity-oauth-token"
+_LOGIN_LINK = '"$HOME/.gemini/antigravity-cli/antigravity-oauth-token"'
+# Under a login agy's logs name the account's email, so they go to the
+# login's tmpfs too, off the rootfs a Judge's snapshot copies; cli.log is a
+# relative link into this directory.
+_LOG_LINK = '"$HOME/.gemini/antigravity-cli/log"'
+# What else could pick another credential or endpoint under a login: the
+# API key and endpoints, and another account.
+_LOGIN_UNSET = (
+    "GEMINI_API_KEY",
+    "GOOGLE_GEMINI_BASE_URL",
+    "CLOUD_CODE_URL",
+    "AGY_ACCOUNT",
+    "AGY_CDE_SEAMLESS_AUTH",
+)
 # What the model asks for beyond the main model, answered by a global
 # PreToolUse hook (it applies with permissions skipped too): every subagent
 # runs as the built-in self (the main agent's setup) on the main model, as
 # an agent definition's own model and a built-in type's fixed one outrank
 # the call's; and the tools that start agents on any model (swarm,
-# run_workflow), call another model (search_web), start turns of their own
-# (schedule) or message other conversations (send_message) are denied.
+# run_workflow), call another model (search_web, generate_image,
+# browser_subagent), start turns of their own (schedule), message other
+# conversations (send_message, manage_inbox) or reach the account's plugins
+# (list_plugin_accounts, search_marketplace) are denied.
 _DENY = '{"decision":"deny","reason":"disabled in this run"}'
 _SELF = '{"decision":"allow","overwrite":{"Model":"inherit","TypeName":"self"}}'
-_HOOKS = {
-    "rsi-harness": {
-        "PreToolUse": [
-            {
-                "matcher": matcher,
-                "hooks": [
-                    {
-                        "type": "command",
-                        "command": f"cat >/dev/null; echo {shlex.quote(reply)}",
-                    }
-                ],
-            }
-            for matcher, reply in (
-                ("invoke_subagent", _SELF),
-                ("swarm|run_workflow|search_web|schedule|send_message", _DENY),
-            )
-        ]
+_RULES = (
+    ("invoke_subagent", _SELF),
+    (
+        "swarm|run_workflow|search_web|generate_image|browser_subagent"
+        "|schedule|send_message|manage_inbox|list_plugin_accounts"
+        "|search_marketplace",
+        _DENY,
+    ),
+)
+# Under a login the model host also fetches web pages for read_url_content,
+# past a no-network Work's firewall.
+_LOGIN_OFFLINE_RULES = (("read_url_content", _DENY),)
+
+
+def _hooks(rules: tuple[tuple[str, str], ...]) -> dict:
+    return {
+        "rsi-harness": {
+            "PreToolUse": [
+                {
+                    "matcher": matcher,
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": f"cat >/dev/null; echo {shlex.quote(reply)}",
+                        }
+                    ],
+                }
+                for matcher, reply in rules
+            ]
+        }
     }
-}
+
+
 # How agy reports a failed model call over ACP: as the turn's reply.
 _ERROR_TEXT = "⚠ agent executor error:"
 # Print mode cuts a longer prompt (about 191 KB with its own wrapping)
@@ -154,12 +196,22 @@ class AntigravityAgent(DrivenAgent):
     def check_config(self) -> None:
         super().check_config()
         if not (
-            self._config.agent_api_key
+            self._config.agent_local_auth
+            or self._config.agent_api_key
             or self._config.agent_extra_env.get(self.api_key_env)
         ):
             raise ValueError(
-                f"Agent {self.name!r} uses a Gemini API key and has no login; "
-                "set RSI_AGENT_API_KEY"
+                f"Agent {self.name!r} uses a Gemini API key or a local login; "
+                "set RSI_AGENT_API_KEY or pass --agent-auth local"
+            )
+        if self._config.agent_local_auth and any(
+            self._config.agent_extra_env.get(name)
+            for name in (self.api_key_env, "GOOGLE_API_KEY")
+        ):
+            # Both would reach Work, and the login would win.
+            raise ValueError(
+                f"Agent {self.name!r} takes a Gemini key or a local login, not "
+                "both; drop the key from RSI_AGENT_EXTRA_ENV or --agent-auth local"
             )
 
     def augment_env(self, env: dict[str, str], model: str | None) -> None:
@@ -168,21 +220,38 @@ class AntigravityAgent(DrivenAgent):
         env["AGY_CLI_DISABLE_AUTO_UPDATE"] = "true"
 
     def config_prelude(self, *, model: str | None, internet: bool) -> str:
-        # search_web, agy's only web tool besides the browser, is denied
-        # whatever the network: it calls another model.
-        return " && ".join(
-            [
-                _MANAGED_CONFIG,
-                f"unset {' '.join(_OTHER_ENDPOINTS)}",
-                f"mkdir -p {_SETTINGS_DIR} {_CONFIG_DIR}",
-                f"printf '%s' {shlex.quote(json.dumps(_SETTINGS))}"
-                f" > {_SETTINGS_DIR}/settings.json",
-                f"printf '%s' {shlex.quote(json.dumps(_HOOKS))}"
-                f" > {_CONFIG_DIR}/hooks.json",
-                f"printf '%s' {shlex.quote(json.dumps({'mcpServers': {}}))}"
-                f" > {_CONFIG_DIR}/mcp_config.json",
+        # search_web is denied whatever the network: it calls another model.
+        login = self._config.agent_local_auth
+        unset = _OTHER_ENDPOINTS + (_LOGIN_UNSET if login else ())
+        steps = [
+            _MANAGED_CONFIG,
+            f"unset {' '.join(unset)}",
+            f"mkdir -p {_SETTINGS_DIR} {_CONFIG_DIR}",
+        ]
+        if login:
+            # A fresh link each launch: whatever the Agent left in its place
+            # (a file on the rootfs, which a Judge's snapshot would carry)
+            # goes.
+            steps += [
+                f'{{ [ -f "$HOME/{LOGIN_PATH}" ] || {{ echo "rsi-harness: the'
+                ' Antigravity login is missing" >&2; exit 1; }; }',
+                f"rm -rf -- {_LOGIN_LINK} {_LOG_LINK}",
+                f"ln -s ../antigravity-login/antigravity-oauth-token {_LOGIN_LINK}",
+                'mkdir -p "$HOME/.gemini/antigravity-login/log"',
+                f"ln -s ../antigravity-login/log {_LOG_LINK}",
             ]
+        settings = _LOGIN_SETTINGS if login else _SETTINGS
+        hooks = _hooks(
+            _RULES + (_LOGIN_OFFLINE_RULES if login and not internet else ())
         )
+        steps += [
+            f"printf '%s' {shlex.quote(json.dumps(settings))}"
+            f" > {_SETTINGS_DIR}/settings.json",
+            f"printf '%s' {shlex.quote(json.dumps(hooks))} > {_CONFIG_DIR}/hooks.json",
+            f"printf '%s' {shlex.quote(json.dumps({'mcpServers': {}}))}"
+            f" > {_CONFIG_DIR}/mcp_config.json",
+        ]
+        return " && ".join(steps)
 
     def apply_reasoning_effort(self, command: str, effort: str) -> str:
         # A catalog id that lacks the combination fails at setup.

@@ -152,12 +152,15 @@ Provide an API key:
 export RSI_AGENT_API_KEY="..."
 ```
 
-Or reuse an existing Codex or Claude Code login:
+Or reuse an existing Codex, Claude Code or Antigravity login:
 
 ```bash
 sudo -E "$(command -v rsi-harness)" run /absolute/path/to/task --agent codex --agent-auth local --gpus 4,5
 sudo -E "$(command -v rsi-harness)" run /absolute/path/to/task --agent claude-code --agent-auth local --gpus 4,5
+sudo -E "$(command -v rsi-harness)" run /absolute/path/to/task --agent antigravity --agent-auth local --model gemini-3.8-flash-low --gpus 4,5
 ```
+
+`RSI_AGENT_API_KEY`, when set, wins over the login.
 
 When using a compatible API proxy, also set its base URL and optionally a
 model:
@@ -197,7 +200,7 @@ Retries do not create a new Harness attempt.
 | `kimi-code` | Kimi Code | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
 | `opencode` | OpenCode | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
 | `zcode` | ZCode | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
-| `antigravity` | Antigravity | `RSI_AGENT_API_KEY` only | The model from `--model` or `RSI_AGENT_MODEL` (setup fails without one), one of the CLI's own model ids (`agy models`), such as `gemini-4-hydrogen-high`; the base URL defaults to the provider's public API | `low`, `medium`, `high`, `xhigh`, set as the model id's suffix |
+| `antigravity` | Antigravity | `RSI_AGENT_API_KEY` or `--agent-auth local` | The model from `--model` or `RSI_AGENT_MODEL` (setup fails without one), one of the CLI's own model ids (`agy models`; on a login, one that login lists), such as `gemini-4-hydrogen-high`; the base URL defaults to the provider's public API | `low`, `medium`, `high`, `xhigh`, set as the model id's suffix |
 | `pi` | pi | `RSI_AGENT_API_KEY` only | `RSI_AGENT_API_BASE_URL`, `RSI_AGENT_CONTEXT_WINDOW`, `RSI_AGENT_MAX_OUTPUT_TOKENS`; the model from `--model` or `RSI_AGENT_MODEL` (setup fails without one) | `minimal`, `low`, `medium`, `high`, sent as the endpoint's `reasoning_effort` |
 | `oracle` | Oracle: the task's own `solution/solve.sh`, no model ([Validate a task's Judge with the oracle](#validate-a-tasks-judge-with-the-oracle)) | None; no credential reaches Work | `solution/solve.sh` in the task | No |
 
@@ -268,7 +271,8 @@ image does the same job inside pi. For these six Agents:
   compatible base URL, including its version path (for example
   `https://your-api.example/v1`). There is no default endpoint and no local
   login. Antigravity's speaks the Gemini API instead, without the version
-  path (the CLI adds `/v1beta`), and defaults to the provider's public API.
+  path (the CLI adds `/v1beta`), and defaults to the provider's public API;
+  Antigravity can also use a local login (below).
 - **Model limits.** `RSI_AGENT_CONTEXT_WINDOW` and
   `RSI_AGENT_MAX_OUTPUT_TOKENS` are the served model's real context window and
   output limit in tokens. Setup fails without them; they are never guessed,
@@ -285,6 +289,26 @@ image does the same job inside pi. For these six Agents:
   no-network Work reaches only the pinned model endpoint; web tools are
   disabled there. Antigravity's own title and command-review requests are
   the exception (see [Same model, no account tools](#same-model-no-account-tools)).
+  On a Google login, that endpoint also fetches web pages for agy:
+  `read_url_content` is denied in a no-network Work, but the Agent can still
+  ask the endpoint itself with the login.
+- **Antigravity's login.** With `--agent-auth local` and no API key, the
+  Harness reads `~/.gemini/antigravity-cli/antigravity-oauth-token` of the
+  invoking user (a private regular file, as for Codex and Claude Code) and
+  copies it at startup to a private tmpfs in Work, which each launch links
+  into agy's directory. agy then uses the login instead of a key, and
+  writes its refreshed token through the link, so it stays on the tmpfs and
+  never reaches the host file or a Judge's snapshot. agy's logs, which name
+  the account's email, go to that tmpfs too. Only a personal Google login
+  was tested; other login kinds are refused. A Gemini key in
+  `RSI_AGENT_EXTRA_ENV` together with `--agent-auth local` is refused too.
+  The login's model API (`daily-cloudcode-pa.googleapis.com`, which also
+  takes agy's account and model-list calls) and token refresh
+  (`oauth2.googleapis.com`) are the pinned endpoints; an allowlist task must
+  list both. agy's other requests (user info, feature flags, telemetry) are
+  blocked in a no-network Work, which it tolerates. A model-access Judge
+  gets the short-lived access token without the refresh token, so it can
+  call the Agent only until that token expires.
 - **Local Docker only.** These six Agents need files baked into their Work
   image, which cluster images do not carry yet, so `--cluster` refuses them.
 
@@ -318,7 +342,7 @@ the Agent's (`/etc/claude-code`, `/etc/codex/managed_config.toml` and
 | `kimi-code` | `[secondary_model]` forced to the run's model; `KIMI_CODE_WATCH=0`, so a config the Agent edits loads only at the next launch, which rewrites it | None: a run gets no Kimi login |
 | `opencode` | The provider's `whitelist` holds only the run's model, under its own `id` | None: a run gets no OpenCode login |
 | `zcode` | Its provider registry holds only the run's model, and a definition naming another fails with `model-not-found` | `OffPeakList` and `ReplyToChannel` denied with the driver's own list. That list reaches the main session only: a subagent still offers `ReplyToChannel`, which has no bot conversation to reply to. A run gets no Z.ai login |
-| `antigravity` | A `PreToolUse` hook in `~/.gemini/config/hooks.json` runs every `invoke_subagent` call as the built-in `self` type with `Model` `inherit`, since an agent definition's own model and a built-in type's fixed one outrank `Model`; it denies `swarm` and `run_workflow`, which start agents on any model | The same hook denies `search_web` (a hosted search with a model of its own), `schedule` and `send_message`. A run gets no Google login |
+| `antigravity` | A `PreToolUse` hook in `~/.gemini/config/hooks.json` runs every `invoke_subagent` call as the built-in `self` type with `Model` `inherit`, since an agent definition's own model and a built-in type's fixed one outrank `Model`; it denies `swarm` and `run_workflow`, which start agents on any model | The same hook denies `search_web`, `generate_image` and `browser_subagent` (hosted models of their own), `schedule`, `send_message`, `manage_inbox`, `list_plugin_accounts` and `search_marketplace` |
 | `pi` | pi has none; `--no-extensions --no-approve` keep out every extension but the Harness's own, and the working directory's trust-gated files | None in pi itself; extensions would bring them |
 
 A Claude Code subagent cannot be continued once it finishes, because
@@ -1141,7 +1165,7 @@ above.
 | `--gpus LIST` | Ordered, comma-separated local GPU indexes or UUIDs. The Work container receives the count declared by the task. This option cannot be combined with `--cluster`. | Automatically select the task-declared GPU count; `gpus = "all"` requires an explicit list |
 | `--model NAME` | Override the model used by the selected Agent. | `RSI_AGENT_MODEL`, then the Agent's default |
 | `--reasoning-effort LEVEL` | Set an Agent-supported reasoning effort: `minimal`, `low`, `medium`, `high`, `xhigh`, `max` or `ultra` for Codex; `low`, `medium`, `high`, `xhigh` or `max` for Claude Code; `low`, `medium` or `high` for Kimi Code, OpenCode and ZCode; `low`, `medium`, `high` or `xhigh` for Antigravity (its model id's suffix); `minimal`, `low`, `medium` or `high` for pi. Other Agents refuse the option. | Agent default |
-| `--agent-auth local` | Reuse credentials from the local Codex or Claude Code login. | Not set; use `RSI_AGENT_API_KEY` when provided |
+| `--agent-auth local` | Reuse credentials from the local Codex, Claude Code or Antigravity login. | Not set; use `RSI_AGENT_API_KEY` when provided |
 | `--judge-llm-auth api\|codex-login` | Credential for a task's `judge_model`: an OpenAI API key, or a Codex login made with a ChatGPT plan (the Judge gets its access token only; before a Judge round that would outlive it, the Harness runs its pinned Codex CLI as you to refresh the login in place; never a login a Work Agent holds a copy of, which that refresh logs out; on a cluster, only a login the compute nodes see in place). Ignored, with a warning, for a task without `judge_model`. | Not set; a Codex Agent with a ChatGPT login or an OpenAI API key on OpenAI's own API lends its own (whatever its model; a login is renewed from Work before each Judge round), otherwise a `judge_model` task fails before the Agent starts |
 | `--judge-llm-api-key-env NAME` / `--judge-llm-api-key-file PATH` | Where the `api` key is read from. | `RSI_JUDGE_LLM_API_KEY` |
 | `--judge-llm-base-url URL` | API base URL for `api`; `/v1/responses` is appended (once). | `https://api.openai.com` |

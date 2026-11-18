@@ -12,6 +12,7 @@ import re
 import stat
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Protocol
 
@@ -210,22 +211,24 @@ def _read_standard_auth_file(
     uid: int,
     agent_label: str,
 ) -> bytes:
-    home_fd = _open_directory(home, agent_label=agent_label, label="home directory")
-    config_fd: int | None = None
+    # One component at a time: no directory on the way may be a symlink.
+    fds = [_open_directory(home, agent_label=agent_label, label="home directory")]
     try:
-        config_fd = _open_directory(
-            Path(directory),
-            agent_label=agent_label,
-            label="directory",
-            dir_fd=home_fd,
-        )
+        for part in PurePosixPath(directory).parts:
+            fds.append(
+                _open_directory(
+                    Path(part),
+                    agent_label=agent_label,
+                    label="directory",
+                    dir_fd=fds[-1],
+                )
+            )
         return _read_auth_file(
-            config_fd, filename=filename, uid=uid, agent_label=agent_label
+            fds[-1], filename=filename, uid=uid, agent_label=agent_label
         )
     finally:
-        if config_fd is not None:
-            os.close(config_fd)
-        os.close(home_fd)
+        for fd in reversed(fds):
+            os.close(fd)
 
 
 def _invoking_user(
@@ -510,6 +513,86 @@ class ClaudeCodeLocalAuthProvider:
         )
 
 
+# Where Work keeps an Antigravity login: a private tmpfs of its own, which
+# the Agent links into agy's directory, with agy's logs (they name the
+# account). That directory also holds agy's sessions and an executable it
+# writes, which must stay on the rootfs (the tmpfs is noexec, and gone when
+# Work stops); agy rewrites the token in place, through the link.
+ANTIGRAVITY_LOGIN_DIR = PurePosixPath("/home/agent/.gemini/antigravity-login")
+ANTIGRAVITY_LOGIN_FILE = "antigravity-oauth-token"
+# A personal Google login's model API (its account and model-list calls too)
+# and its token refresh; agy's other requests (user info, feature flags,
+# telemetry) are optional. Only that login kind was tested; agy's business
+# login may use another model host.
+_ANTIGRAVITY_LOGIN_KIND = "consumer"
+_ANTIGRAVITY_PROVIDER_ENDPOINTS = (
+    "https://daily-cloudcode-pa.googleapis.com",
+    "https://oauth2.googleapis.com",
+)
+
+
+class AntigravityLocalAuthProvider:
+    """Resolve the invoking user's Antigravity CLI (agy) Google login."""
+
+    def resolve(
+        self,
+        *,
+        environ: Mapping[str, str] | None,
+        process_uid: int | None,
+        effective_uid: int | None,
+        user_lookup: Callable[[int], Any],
+    ) -> AgentAuthMaterial:
+        environment = os.environ if environ is None else environ
+        selected_uid, home = _invoking_user(
+            environment=environment,
+            process_uid=process_uid,
+            effective_uid=effective_uid,
+            user_lookup=user_lookup,
+            agent_label="Antigravity",
+        )
+        content = _read_standard_auth_file(
+            home,
+            directory=".gemini/antigravity-cli",
+            filename=ANTIGRAVITY_LOGIN_FILE,
+            uid=selected_uid,
+            agent_label="Antigravity",
+        )
+        parsed = _parsed_login(content)
+        if parsed is None:
+            raise SetupError("local Antigravity auth must contain a JSON object")
+        if _antigravity_identity(parsed) is None:
+            raise SetupError("local Antigravity auth holds no Google login")
+        if parsed.get("auth_method") != _ANTIGRAVITY_LOGIN_KIND:
+            raise SetupError(
+                "local Antigravity auth supports only a personal Google login"
+            )
+        # The account's email is no credential, but agy logs it: redacted too.
+        email = parsed.get("id_token_email")
+        secret_values = _secret_strings(parsed) | (
+            {email} if isinstance(email, str) and email else set()
+        )
+        return AgentAuthMaterial(
+            agent_name="antigravity",
+            mounts=(
+                AgentAuthMount(
+                    tmpfs=ContainerTmpfs(
+                        target=ANTIGRAVITY_LOGIN_DIR,
+                        options=_PRIVATE_TMPFS_OPTIONS,
+                    ),
+                    files=(
+                        AgentAuthFile(
+                            path=PurePosixPath(ANTIGRAVITY_LOGIN_FILE),
+                            content=content,
+                            mode=0o600,
+                        ),
+                    ),
+                ),
+            ),
+            secret_values=frozenset(secret_values),
+            provider_endpoints=_ANTIGRAVITY_PROVIDER_ENDPOINTS,
+        )
+
+
 # -- the Judge's copy of a Work Agent's login --------------------------------
 #
 # A Judge gets the Work Agent's current login before each round (Work refreshes
@@ -670,6 +753,56 @@ def _claude_expiry(login: Mapping[str, Any]) -> float | None:
     return _epoch_seconds(expiry, scale=1000.0)  # milliseconds
 
 
+def _antigravity_token(login: Mapping[str, Any]) -> dict[str, Any]:
+    token = login.get("token")
+    return token if isinstance(token, dict) else {}
+
+
+def _antigravity_identity(login: Mapping[str, Any]) -> tuple[str, str] | None:
+    token = _antigravity_token(login).get("access_token")
+    if not isinstance(token, str) or not token:
+        return None
+    kind, email = login.get("auth_method"), login.get("id_token_email")
+    return (
+        kind if isinstance(kind, str) else "",
+        email if isinstance(email, str) else "",
+    )
+
+
+def _antigravity_credentials(login: Mapping[str, Any]) -> tuple[object, ...]:
+    token = _antigravity_token(login)
+    return (token.get("access_token"), token.get("refresh_token"))
+
+
+def _antigravity_withheld(login: dict[str, Any]) -> dict[str, Any]:
+    token = _antigravity_token(login)
+    if isinstance(token.get("refresh_token"), str):
+        return {**login, "token": {**token, "refresh_token": WITHHELD_REFRESH_TOKEN}}
+    return login
+
+
+# Go's RFC 3339 time, with up to nine fraction digits.
+_RFC3339 = re.compile(
+    r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d{1,9}))?(Z|[+-]\d{2}:\d{2})"
+)
+
+
+def _antigravity_expiry(login: Mapping[str, Any]) -> float | None:
+    expiry = _antigravity_token(login).get("expiry")
+    if expiry is None or expiry == "0001-01-01T00:00:00Z":
+        return None  # Go's zero time: no expiry
+    match = _RFC3339.fullmatch(expiry) if isinstance(expiry, str) else None
+    if match is None:
+        raise ValueError("an expiry must be an RFC 3339 time")
+    zone = "+00:00" if match[3] == "Z" else match[3]
+    fraction = f".{match[2][:6]}" if match[2] else ""
+    try:
+        moment = datetime.fromisoformat(f"{match[1]}{fraction}{zone}")
+    except ValueError:
+        raise ValueError("an expiry is out of range") from None
+    return _epoch_seconds(moment.timestamp())
+
+
 @dataclass(frozen=True, slots=True)
 class _LoginRules:
     identity: Callable[[Mapping[str, Any]], tuple[str, str] | None]
@@ -687,6 +820,12 @@ _LOGIN_RULES: Mapping[str, _LoginRules] = {
     ),
     "claude-code": _LoginRules(
         _claude_identity, _claude_credentials, _claude_withheld, _claude_expiry
+    ),
+    "antigravity": _LoginRules(
+        _antigravity_identity,
+        _antigravity_credentials,
+        _antigravity_withheld,
+        _antigravity_expiry,
     ),
 }
 
@@ -906,6 +1045,7 @@ def login_kept_reason(error: BaseException) -> str:
 
 
 _LOCAL_PROVIDERS: Mapping[str, LocalAgentAuthProvider] = {
+    "antigravity": AntigravityLocalAuthProvider(),
     "claude-code": ClaudeCodeLocalAuthProvider(),
     "codex": CodexLocalAuthProvider(),
 }
@@ -946,9 +1086,12 @@ def resolve_agent_auth(
 
 
 __all__ = [
+    "ANTIGRAVITY_LOGIN_DIR",
+    "ANTIGRAVITY_LOGIN_FILE",
     "AgentAuthFile",
     "AgentAuthMaterial",
     "AgentAuthMount",
+    "AntigravityLocalAuthProvider",
     "ClaudeCodeLocalAuthProvider",
     "CodexLocalAuthProvider",
     "LocalAgentAuthProvider",
