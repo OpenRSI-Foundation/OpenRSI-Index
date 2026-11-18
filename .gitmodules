@@ -1,0 +1,3 @@
+[submodule "rsi-tasks/sglang-omni"]
+	path = rsi-tasks/sglang-omni
+	url = https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench.git

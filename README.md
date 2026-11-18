@@ -56,7 +56,7 @@ We are witnessing the dawn of a new era: AI is entering a recursive self-improve
 
 We are actively developing this project and welcome [contributions](https://github.com/OpenRSI-Foundation/OpenRSI-Index/blob/main/CONTRIBUTING.md) from the community. Tasks and execution logs are available in [rsi-tasks/](rsi-tasks/) and [OpenRSI-Index-Logs](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs), respectively. Open the [RSI Logs Viewer](https://index.openrsi.foundation/logs/) to explore results visually. See [Quick Start](assets/docs/quick-start.md) for instructions on running these tasks.
 
-The [SGLang-Omni task collection](rsi-tasks/SGNOMI/) contains complete public task packages, organized by model with the final streaming and non-streaming versions and related upstream pull requests.
+The [SGLang-Omni task collection](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench) (mounted at [`rsi-tasks/sglang-omni/`](rsi-tasks/sglang-omni/)) contains 12 native `rsi-harness` GPU serving optimization benchmarks across 8 open-weight TTS and ASR models, paired with official single-agent trajectories in [OpenRSI-Index-Logs/sglang-omni](https://huggingface.co/datasets/OpenRSI-Foundation/OpenRSI-Index-Logs/tree/main/sglang-omni).
 
 <details>
 <summary><strong>View tasks</strong></summary>
@@ -78,6 +78,18 @@ The [SGLang-Omni task collection](rsi-tasks/SGNOMI/) contains complete public ta
 | [`reasonir-difficulty-curriculum`](rsi-tasks/reasonir-difficulty-curriculum/) | Public Task | Post-training | Optimize a fixed-budget retrieval LoRA through difficulty-aware curricula. | 4× H100 minimum |
 | [`isaaclab-peginsert-reward-search`](rsi-tasks/isaaclab-peginsert-reward-search/) | Public Task | Robotics      | Design bounded reward graphs for fixed-budget Isaac Lab peg insertion. | 4× H100         |
 | [`kev-decision-architecture`](rsi-tasks/kev-decision-architecture/) | Public Task | Post-training | Redesign a 0.5B decision architecture under a fixed training corpus and recipe. | 2× H100 minimum |
+| [`cosyvoice3-dual-mode`](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench/tree/main/tasks/cosyvoice3-dual-mode) | Public Task | MLSys | Optimize CosyVoice3 dual-mode TTS serving throughput on SGLang-Omni. | 1× H100 |
+| [`moss-tts-v1.5-dual-mode`](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench/tree/main/tasks/moss-tts-v1.5-dual-mode) | Public Task | MLSys | Optimize MOSS-TTS-v1.5 dual-mode TTS serving throughput on SGLang-Omni. | 1× H100 |
+| [`fish-s2-pro-dual-mode`](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench/tree/main/tasks/fish-s2-pro-dual-mode) | Public Task | MLSys | Optimize Fish Audio S2-Pro dual-mode TTS serving throughput on SGLang-Omni. | 1× H100 |
+| [`qwen3-tts-0.6b-dual-mode`](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench/tree/main/tasks/qwen3-tts-0.6b-dual-mode) | Public Task | MLSys | Optimize Qwen3-TTS-0.6B dual-mode TTS serving throughput on SGLang-Omni. | 1× H100 |
+| [`qwen3-tts-1.7b-dual-mode`](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench/tree/main/tasks/qwen3-tts-1.7b-dual-mode) | Public Task | MLSys | Optimize Qwen3-TTS-1.7B dual-mode TTS serving throughput on SGLang-Omni. | 1× H100 |
+| [`ming3-tts-0.5b-nonstream`](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench/tree/main/tasks/ming3-tts-0.5b-nonstream) | Public Task | MLSys | Optimize Ming-3.0-TTS-0.5B non-streaming serving throughput on SGLang-Omni. | 1× H100 |
+| [`ming3-tts-0.5b-streaming`](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench/tree/main/tasks/ming3-tts-0.5b-streaming) | Public Task | MLSys | Optimize Ming-3.0-TTS-0.5B streaming serving throughput on SGLang-Omni. | 1× H200 / H100 |
+| [`ming3-tts-tiny-nonstream`](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench/tree/main/tasks/ming3-tts-tiny-nonstream) | Public Task | MLSys | Optimize Ming-3.0-TTS-Tiny non-streaming serving throughput on SGLang-Omni. | 1× H100 |
+| [`ming3-tts-tiny-streaming`](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench/tree/main/tasks/ming3-tts-tiny-streaming) | Public Task | MLSys | Optimize Ming-3.0-TTS-Tiny streaming serving throughput on SGLang-Omni. | 1× H200 / H100 |
+| [`qwen3-asr-1.7b-dual-mode`](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench/tree/main/tasks/qwen3-asr-1.7b-dual-mode) | Public Task | MLSys | Optimize Qwen3-ASR-1.7B bilingual SSE & HTTP serving throughput on SGLang-Omni. | 1× H100 |
+| [`whisper-large-v3-dual-mode`](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench/tree/main/tasks/whisper-large-v3-dual-mode) | Public Task | MLSys | Optimize Whisper-large-v3 bilingual SSE & HTTP serving throughput on SGLang-Omni. | 1× H100 |
+| [`moss-transcribe-diarize-dual-mode`](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench/tree/main/tasks/moss-transcribe-diarize-dual-mode) | Public Task | MLSys | Optimize MOSS-Transcribe-Diarize bilingual SSE & HTTP throughput on SGLang-Omni. | 1× H100 |
 
 </details>
 
