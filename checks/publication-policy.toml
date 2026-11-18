@@ -7,6 +7,26 @@
 [task_snapshots]
 "SGNOMI/sglang-omni-tts-runtime" = "c31e48c5293d0854bb09a2afa64b4e707842625b"
 
+# Public task collections hosted in dedicated OpenRSI-Foundation repositories
+# and mounted under rsi-tasks/ as Git submodules (160000 gitlinks).
+[external_task_collections."rsi-tasks/sglang-omni"]
+url = "https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench.git"
+task_subdir = "tasks"
+tasks = [
+  "cosyvoice3-dual-mode",
+  "fish-s2-pro-dual-mode",
+  "ming3-tts-0.5b-nonstream",
+  "ming3-tts-0.5b-streaming",
+  "ming3-tts-tiny-nonstream",
+  "ming3-tts-tiny-streaming",
+  "moss-transcribe-diarize-dual-mode",
+  "moss-tts-v1.5-dual-mode",
+  "qwen3-asr-1.7b-dual-mode",
+  "qwen3-tts-0.6b-dual-mode",
+  "qwen3-tts-1.7b-dual-mode",
+  "whisper-large-v3-dual-mode",
+]
+
 [historical_tasks]
 "signature-tasks/gpic_generation" = "Published schema-1.3 archive; its runtime differs from the logged 10M continuation. See its README."
 "signature-tasks/pre-training-optimizer-update-geometry" = "Published scaling-ladder archive has no standard tests/test.sh; see its recorded Slurm evaluation protocol."

@@ -1884,14 +1884,15 @@ class LogsModeTests(unittest.TestCase):
         self.assertIn("PASS 4 published files", self.check())
 
     def test_other_root_files_fail(self):
-        for name in ("data.json", "notes.txt", "SGNOMI/data.json"):
+        for name in ("data.json", "notes.txt", "SGNOMI/data.json", "sglang-omni/data.json"):
             with self.subTest(name=name):
                 self.git(self.repo, "reset", "-q", "--hard", self.base)
                 self.write(self.repo, name, "{}\n")
                 self.commit()
                 self.assertFails(
                     f"^rsi-logs/{re.escape(name)}: log files must be inside <task>/, "
-                    "signature-tasks/<task>/ or SGNOMI/<task>/ of the Logs repository"
+                    "signature-tasks/<task>/, sglang-omni/<task>/ or SGNOMI/<task>/ "
+                    "of the Logs repository"
                 )
 
     def test_unknown_top_level_directory_is_a_log_root_without_task(self):
@@ -3003,6 +3004,121 @@ class SecretScannerTests(unittest.TestCase):
         _, output = self.scan()
         self.assertIn("deploy/secret.yaml; rule=kubernetes-secret-yaml", output)
         self.assertNotIn("deploy/secret.txt; rule=kubernetes-secret-yaml", output)
+
+
+class ExternalCollectionSubmoduleTests(unittest.TestCase):
+    SUB_URL = "https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench.git"
+    SUB_SHA = "70b8a68f52ee6189183414ea5b4140559c9b2f67"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.index = Path(self.tmp.name) / "index"
+        self.logs = Path(self.tmp.name) / "logs"
+        for repo in (self.index, self.logs):
+            repo.mkdir()
+            self.git(repo, "init", "-q")
+            self.git(repo, "config", "user.name", "Publication test")
+            self.git(repo, "config", "user.email", "publication-test@example.invalid")
+        self.write(self.index, "README.md", "Index\n")
+        self.base = self.commit(self.index)
+        self.write(self.logs, "README.md", "---\nlicense: apache-2.0\n---\n# Logs\n")
+        self.write(self.logs, "LICENSE", "Apache-2.0\n")
+        self.logs_base = self.commit(self.logs)
+
+    def git(self, repo, *args):
+        return (
+            subprocess.check_output(
+                ["git", "-C", str(repo), *args], stderr=subprocess.DEVNULL
+            )
+            .decode()
+            .strip()
+        )
+
+    def write(self, repo, path, text):
+        p = repo / path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text)
+
+    def commit(self, repo):
+        self.git(repo, "add", "-A")
+        self.git(repo, "commit", "-qm", "fixture", "--allow-empty")
+        return self.git(repo, "rev-parse", "HEAD")
+
+    def add_gitlink(self, repo, path, sha, url=None):
+        if url is not None:
+            self.write(
+                repo,
+                ".gitmodules",
+                f'[submodule "{path}"]\n\tpath = {path}\n\turl = {url}\n',
+            )
+            self.git(repo, "add", ".gitmodules")
+        self.git(repo, "update-index", "--add", "--cacheinfo", f"160000,{sha},{path}")
+        self.git(repo, "commit", "-qm", f"add submodule {path}")
+        return self.git(repo, "rev-parse", "HEAD")
+
+    def test_declared_sglang_omni_submodule_passes_and_resolves_logs(self):
+        ref = self.add_gitlink(
+            self.index, "rsi-tasks/sglang-omni", self.SUB_SHA, self.SUB_URL
+        )
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            pub.check(self.index, self.base, "HEAD", HERE / "publication-policy.toml")
+        self.assertIn(
+            f"PASS rsi-tasks/sglang-omni: external task collection ({self.SUB_SHA[:12]})",
+            out.getvalue(),
+        )
+        # Logs mode resolves all 12 declared sglang-omni tasks without submodule checkout.
+        self.write(self.logs, "sglang-omni/README.md", "# SGLang-Omni logs\n")
+        self.write(
+            self.logs, "sglang-omni/cosyvoice3-dual-mode/README.md", "# CosyVoice3\n"
+        )
+        self.write(
+            self.logs,
+            "sglang-omni/cosyvoice3-dual-mode/codex/evolve_state.json",
+            '{"best_score": 1.17, "best_round": "agent-1", "submissions": [{"round": "agent-1", "score": 1.17}]}\n',
+        )
+        self.commit(self.logs)
+        logs_out = io.StringIO()
+        with contextlib.redirect_stdout(logs_out):
+            pub.check(
+                self.logs,
+                self.logs_base,
+                "HEAD",
+                HERE / "publication-policy.toml",
+                mount="rsi-logs",
+                task_repo=self.index,
+                task_ref=ref,
+            )
+        self.assertIn("PASS 3 published files", logs_out.getvalue())
+
+    def test_undeclared_or_tampered_submodule_fails(self):
+        self.add_gitlink(
+            self.index, "rsi-tasks/untrusted", self.SUB_SHA, self.SUB_URL
+        )
+        with self.assertRaisesRegex(
+            pub.CheckError, "not declared in trusted \\[external_task_collections\\]"
+        ):
+            pub.check(self.index, self.base, "HEAD", HERE / "publication-policy.toml")
+        self.git(self.index, "reset", "-q", "--hard", self.base)
+        self.write(
+            self.index,
+            ".gitmodules",
+            f'[submodule "rsi-tasks/sglang-omni"]\n\tpath = rsi-tasks/sglang-omni\n\turl = {self.SUB_URL}\n\tupdate = !sh\n',
+        )
+        self.git(self.index, "add", ".gitmodules")
+        self.git(
+            self.index,
+            "update-index",
+            "--add",
+            "--cacheinfo",
+            f"160000,{self.SUB_SHA},rsi-tasks/sglang-omni",
+        )
+        self.git(self.index, "commit", "-qm", "unsafe gitmodules")
+        with self.assertRaisesRegex(
+            pub.CheckError, "only path and url settings are allowed"
+        ):
+            pub.check(self.index, self.base, "HEAD", HERE / "publication-policy.toml")
 
 
 if __name__ == "__main__":

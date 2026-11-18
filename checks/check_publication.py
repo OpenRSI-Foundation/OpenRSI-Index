@@ -38,9 +38,11 @@ MAX_TAR_HEADER = 1024**2
 COLLECTIONS = {
     "rsi-tasks",
     "rsi-tasks/SGNOMI",
+    "rsi-tasks/sglang-omni",
     "rsi-tasks/signature-tasks",
     "rsi-logs",
     "rsi-logs/SGNOMI",
+    "rsi-logs/sglang-omni",
     "rsi-logs/signature-tasks",
 }
 # The Harness runs a task's verifier and reference solution; other task Python
@@ -139,10 +141,130 @@ def git(repo: Path, *args: str) -> bytes:
     )
 
 
-def tracked_files(repo: Path, ref: str) -> set[str]:
-    return set(
-        git(repo, "ls-tree", "-r", "--name-only", "-z", ref).decode().split("\0")
-    ) - {""}
+def ls_tree_entries(repo: Path, ref: str, *paths: str) -> list[tuple[str, str, str]]:
+    cmd = ["ls-tree", "-r", "-z", ref]
+    if paths:
+        cmd.extend(["--", *paths])
+    out = []
+    for raw in git(repo, *cmd).decode().split("\0"):
+        if not raw:
+            continue
+        meta, _, path = raw.partition("\t")
+        parts = meta.split()
+        if len(parts) < 3 or not path:
+            continue
+        out.append((parts[0], parts[2], path))
+    return out
+
+
+def tracked_files(repo: Path, ref: str, *paths: str) -> set[str]:
+    return {
+        path
+        for mode, _, path in ls_tree_entries(repo, ref, *paths)
+        if mode != "160000"
+    }
+
+
+def gitlinks(repo: Path, ref: str, *paths: str) -> dict[str, str]:
+    return {
+        path: sha
+        for mode, sha, path in ls_tree_entries(repo, ref, *paths)
+        if mode == "160000"
+    }
+
+
+def parse_gitmodules(text: str) -> dict[str, str]:
+    """Parse .gitmodules strictly: only [submodule "..."] sections with path and url."""
+    sections: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    for number, raw in enumerate(text.splitlines(), 1):
+        line = raw.strip()
+        if not line or line.startswith(("#", ";")):
+            continue
+        if line.startswith("[") and line.endswith("]"):
+            header = line[1:-1].strip()
+            if not re.fullmatch(r'submodule\s+"[^"\\\r\n]+"', header):
+                raise CheckError(f".gitmodules line {number}: unsupported section")
+            current = {}
+            sections.append(current)
+            continue
+        if current is None or "=" not in line:
+            raise CheckError(f".gitmodules line {number}: invalid entry")
+        key, _, value = line.partition("=")
+        key, value = key.strip().lower(), value.strip()
+        if key not in ("path", "url") or not value or any(ord(c) < 32 for c in value):
+            raise CheckError(
+                f".gitmodules line {number}: only path and url settings are allowed"
+            )
+        if key in current:
+            raise CheckError(f".gitmodules line {number}: duplicate {key}")
+        current[key] = value
+    modules: dict[str, str] = {}
+    for entry in sections:
+        if "path" not in entry or "url" not in entry:
+            raise CheckError(".gitmodules section requires both path and url")
+        safe_relative(entry["path"])
+        if entry["path"] in modules:
+            raise CheckError(f".gitmodules: duplicate submodule path {entry['path']}")
+        modules[entry["path"]] = entry["url"]
+    return modules
+
+
+def validate_external_collections(
+    repo: Path, ref: str, config: dict
+) -> tuple[dict[str, str], set[str]]:
+    """Validate 160000 gitlinks and .gitmodules at ``ref`` against trusted policy."""
+    declared = config.get("external_task_collections", {})
+    if not isinstance(declared, dict):
+        raise CheckError("external_task_collections must be a table")
+    links = gitlinks(repo, ref)
+    has_gitmodules = bool(
+        git(repo, "ls-tree", "-z", ref, "--", ":(literal).gitmodules").strip(b"\0")
+    )
+    if not links and not has_gitmodules:
+        return {}, set()
+    modules: dict[str, str] = {}
+    if has_gitmodules:
+        try:
+            raw = git(repo, "show", f"{ref}:.gitmodules").decode("utf-8")
+        except (subprocess.CalledProcessError, UnicodeError) as exc:
+            raise CheckError(".gitmodules: unreadable UTF-8 text") from exc
+        modules = parse_gitmodules(raw)
+    for sub_path in sorted(modules):
+        if sub_path not in links:
+            raise CheckError(
+                f".gitmodules: {sub_path} has no matching 160000 gitlink commit"
+            )
+    virtual_tasks: set[str] = set()
+    for sub_path, sha in sorted(links.items()):
+        safe_relative(sub_path)
+        if not re.fullmatch(r"[0-9a-f]{40}", sha):
+            raise CheckError(f"{sub_path}: submodule gitlink must be a 40-hex commit SHA")
+        spec = declared.get(sub_path)
+        if not isinstance(spec, dict):
+            raise CheckError(
+                f"{sub_path}: git submodule is not declared in trusted [external_task_collections]"
+            )
+        expected_url = spec.get("url")
+        tasks = spec.get("tasks")
+        if (
+            not isinstance(expected_url, str)
+            or not expected_url
+            or not isinstance(tasks, list)
+            or not tasks
+            or not all(isinstance(t, str) and t for t in tasks)
+        ):
+            raise CheckError(
+                f"{sub_path}: external_task_collections entry requires url and non-empty tasks"
+            )
+        if modules.get(sub_path) != expected_url:
+            raise CheckError(
+                f"{sub_path}: .gitmodules url must match trusted policy ({expected_url})"
+            )
+        for slug in tasks:
+            safe_relative(slug)
+            virtual_tasks.add(f"{sub_path}/{slug}/task.toml")
+    return links, virtual_tasks
 
 
 def task_roots(paths) -> set[str]:
@@ -170,7 +292,7 @@ def log_root(path: str) -> str | None:
     parts = PurePosixPath(path).parts
     if len(parts) < 3 or parts[0] != "rsi-logs":
         return None
-    n = 3 if parts[1] in ("signature-tasks", "SGNOMI") else 2
+    n = 3 if parts[1] in ("signature-tasks", "SGNOMI", "sglang-omni") else 2
     return "/".join(parts[:n]) if len(parts) > n else None
 
 
@@ -1024,15 +1146,30 @@ class Revisions:
         self.head, self.base = head, base
         # Repository paths as stored; manifests are verified against these.
         self.stored = tracked_files(self.repo, head)
+        if ".gitmodules" in self.stored:
+            try:
+                parse_gitmodules(git(self.repo, "show", f"{head}:.gitmodules").decode("utf-8"))
+            except (subprocess.CalledProcessError, UnicodeError) as exc:
+                raise CheckError(".gitmodules: unreadable UTF-8 text") from exc
+        self.gitlinks = gitlinks(self.repo, head)
+        self.old_gitlinks = gitlinks(self.repo, base)
         self.files = {self.prefix + p for p in self.stored}
         self.old_files = {self.prefix + p for p in tracked_files(self.repo, base)}
+        all_gitlinks = {self.prefix + p for p in self.gitlinks | self.old_gitlinks}
         self.changed = (
-            self.files | self.old_files
+            self.files | self.old_files | all_gitlinks
             if full
             else {
                 self.prefix + p
                 for p in git(
-                    self.repo, "diff", "--name-only", "--no-renames", "-z", base, head
+                    self.repo,
+                    "diff-tree",
+                    "-r",
+                    "--name-only",
+                    "--no-renames",
+                    "-z",
+                    base,
+                    head,
                 )
                 .decode()
                 .split("\0")
@@ -1087,37 +1224,36 @@ def check(
     snapshots = config.get("task_snapshots", {})
     if not isinstance(snapshots, dict):
         raise CheckError("task_snapshots must be a table")
+    ext_links: dict[str, str] = {}
     if logs_mode:
+        if revisions.gitlinks or ".gitmodules" in revisions.stored:
+            raise CheckError("submodules are not allowed in the Logs repository")
         # Tasks come from the task repository (OpenRSI-Index main in CI), never
         # from the Logs repository under review.
         try:
-            task_files = set(
-                git(
-                    task_repo.resolve(),
-                    "ls-tree",
-                    "-r",
-                    "--name-only",
-                    "-z",
-                    task_ref,
-                    "--",
-                    "rsi-tasks",
-                )
-                .decode()
-                .split("\0")
-            ) - {""}
+            resolved_task_repo = task_repo.resolve()
+            git(resolved_task_repo, "rev-parse", "--verify", task_ref + "^{commit}")
+            task_files = tracked_files(resolved_task_repo, task_ref, "rsi-tasks")
         except subprocess.CalledProcessError as exc:
             raise CheckError("task repository revision not found") from exc
+        _, ext_task_files = validate_external_collections(
+            resolved_task_repo, task_ref, config
+        )
+        task_files |= ext_task_files
         infrastructure = {revisions.prefix + n for n in LOGS_INFRASTRUCTURE}
         print(
             f"NOTICE Logs mode: Logs repository paths are shown as {LOGS_MOUNT}/<path>; "
             "tasks are read from the task repository"
         )
     else:
-        task_files, infrastructure = files | old_files, set()
+        ext_links, _ = validate_external_collections(repo, revisions.head, config)
+        task_files, infrastructure = files | old_files, {".gitmodules"}
     roots = task_roots(task_files)
     tasks = {r for p in changed if (r := task_root(p, roots))}
     logs = {r for p in changed if (r := log_root(p))}
     docs = set()
+    if not logs_mode and ".gitmodules" in changed and ".gitmodules" in files:
+        docs.add(".gitmodules")
     for p in sorted(changed):
         safe_relative(p)
         # A file outside any package escapes every package check, so only
@@ -1136,16 +1272,16 @@ def check(
             raise CheckError(f"{p}: task files have no enclosing task.toml")
         elif logs_mode:
             raise CheckError(
-                f"{p}: log files must be inside <task>/, signature-tasks/<task>/ "
-                "or SGNOMI/<task>/ "
+                f"{p}: log files must be inside <task>/, signature-tasks/<task>/, "
+                "sglang-omni/<task>/ or SGNOMI/<task>/ "
                 "of the Logs repository; only .md documentation, README.md, LICENSE "
                 "and .gitattributes may sit outside them"
             )
         else:
             raise CheckError(
                 f"{p}: log files must be inside rsi-logs/<task>/, "
-                "rsi-logs/signature-tasks/<task>/ or rsi-logs/SGNOMI/<task>/; "
-                "only .md documentation may sit beside them"
+                "rsi-logs/signature-tasks/<task>/, rsi-logs/sglang-omni/<task>/ or "
+                "rsi-logs/SGNOMI/<task>/; only .md documentation may sit beside them"
             )
     if logs_mode:
         attributes = revisions.prefix + ".gitattributes"
@@ -1186,6 +1322,34 @@ def check(
             raise CheckError(
                 f"{p}: stored file must be below GitHub 100 MiB limit; use lossless chunks"
             )
+    ext_checked = []
+    if not logs_mode:
+        for sub_path in sorted(set(ext_links) | set(revisions.old_gitlinks)):
+            if (
+                not full
+                and sub_path not in changed
+                and revisions.old_gitlinks.get(sub_path) == ext_links.get(sub_path)
+                and ".gitmodules" not in changed
+            ):
+                continue
+            if sub_path not in ext_links:
+                ext_checked.append(sub_path)
+                print(f"PASS {sub_path}: external task collection removed")
+                continue
+            sha = ext_links[sub_path]
+            spec = config["external_task_collections"][sub_path]
+            slugs = spec["tasks"]
+            subdir = spec.get("task_subdir", "")
+            prefix = f"{sub_path}/{subdir}" if subdir else sub_path
+            if any((repo / prefix / s / "task.toml").is_file() for s in slugs):
+                for s in slugs:
+                    sub_root = f"{prefix}/{s}"
+                    try:
+                        check_task(repo, sub_root, False, compile_task)
+                    except CheckError as exc:
+                        raise CheckError(f"{sub_root}: {exc}") from exc
+            ext_checked.append(sub_path)
+            print(f"PASS {sub_path}: external task collection ({sha[:12]})")
     for root in sorted(tasks):
         if not any(p.startswith(root + "/") for p in files):
             print(f"PASS {root}: task removed")
@@ -1349,6 +1513,8 @@ def check(
             print(
                 f"PASS {len(published)} published files; {stage.count} scan members; {stage.total} expanded bytes"
             )
+    elif ext_checked:
+        print(f"PASS {len(ext_checked)} external task collection(s) verified")
     else:
         print("PASS no task/log changes; CPU publication check not applicable")
 

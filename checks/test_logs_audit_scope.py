@@ -151,6 +151,23 @@ def test_task_roots_are_the_checkers():
     }
 
 
+def test_external_collection_gitlink_changes_task_list(repo):
+    base = git(repo, "rev-parse", "HEAD")
+    sha = "b9d787273349535b0a3aabc511d9f64d732661a5"
+    git(
+        repo,
+        "update-index",
+        "--add",
+        "--cacheinfo",
+        f"160000,{sha},rsi-tasks/sglang-omni",
+    )
+    git(repo, "commit", "-qm", "mount sglang-omni submodule")
+    head = git(repo, "rev-parse", "HEAD")
+    audit, reason = scope.decide(repo, base, head)
+    assert audit
+    assert "rsi-tasks/sglang-omni/cosyvoice3-dual-mode" in reason
+
+
 def test_cli_writes_the_decision_and_escapes_task_names(repo, tmp_path):
     base = git(repo, "rev-parse", "HEAD")
     write(repo, "rsi-tasks/x\n::error::y/task.toml")
