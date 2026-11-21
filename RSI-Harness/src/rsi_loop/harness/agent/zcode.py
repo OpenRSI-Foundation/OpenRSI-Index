@@ -191,7 +191,7 @@ class ZCodeAgent(DrivenAgent):
     # to a variable; the endpoint a no-network Work pins is the one used.
     api_key_env = "RSI_AGENT_API_KEY"
     api_base_env = "RSI_AGENT_API_BASE_URL"
-    reasoning_efforts = frozenset({"low", "medium", "high"})
+    reasoning_efforts = frozenset({"low", "medium", "high", "xhigh", "max"})
 
     def check_config(self) -> None:
         super().check_config()

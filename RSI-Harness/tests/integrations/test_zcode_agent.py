@@ -257,7 +257,7 @@ def test_prelude_refuses_to_write_the_key_outside_a_tmpfs(
     assert list(root.iterdir()) == []
 
 
-@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+@pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
 def test_reasoning_effort_selects_a_level_sent_as_reasoning_effort(
     effort: str,
 ) -> None:
@@ -280,9 +280,10 @@ def test_reasoning_effort_selects_a_level_sent_as_reasoning_effort(
 
 
 def test_reasoning_effort_outside_the_declared_set_is_refused() -> None:
-    validate_agent_reasoning_effort("zcode", "high")
-    with pytest.raises(SetupError, match="choose one of: high, low, medium"):
-        validate_agent_reasoning_effort("zcode", "xhigh")
+    validate_agent_reasoning_effort("zcode", "max")
+    supported = "choose one of: high, low, max, medium, xhigh"
+    with pytest.raises(SetupError, match=supported):
+        validate_agent_reasoning_effort("zcode", "ultra")
     with pytest.raises(ValueError, match="cannot accept reasoning effort"):
         _agent().apply_reasoning_effort("exec zcode app-server", "high")
 
