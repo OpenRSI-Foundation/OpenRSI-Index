@@ -1810,7 +1810,7 @@ def test_zcode_one_shot_command_uses_print_mode_with_work_config() -> None:
     ("options", "message"),
     [
         # As in Work: an effort ZCode does not declare.
-        ({**MODEL_LIMITS, "effort": "xhigh"}, "unsupported ZCode reasoning effort"),
+        ({**MODEL_LIMITS, "effort": "ultra"}, "unsupported ZCode reasoning effort"),
         ({**MODEL_LIMITS, "model": None}, "needs a model"),
         ({"agent_context_window": "131072"}, "RSI_AGENT_MAX_OUTPUT_TOKENS is not set"),
     ],
