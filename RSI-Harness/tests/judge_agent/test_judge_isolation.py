@@ -686,6 +686,7 @@ def test_on_nfs_every_bind_of_the_export_looks_like_a_hidden_path(monkeypatch):
         "it is on NFS"
     )
     assert "--logs-root" in failure.value.message
+    assert "on a cluster too" in failure.value.message
 
 
 def test_a_local_alias_is_refused_without_the_nfs_hint(monkeypatch):

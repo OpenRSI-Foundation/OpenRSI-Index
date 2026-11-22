@@ -583,8 +583,8 @@ rsi-isolate isolation
   top-level directory, overlaps a system path, `/dev`, `/tests`,
   `/logs/agent` or `/run/rsi-harness`, or holds a file with other hard
   links. On NFS every bind of the run directory looks like another mount of
-  `/logs/verifier`, so a root Harness with `--logs-root` on NFS fails every
-  call (see the Harness README).
+  `/logs/verifier`, so with `--logs-root` on NFS every call fails on a
+  cluster and as root on local Docker (see the Harness README).
 - `--no-network`: only Unix and `NETLINK_ROUTE` sockets, and no `io_uring`,
   by seccomp. Where the Judge shares its network namespace
   (`RSI_JUDGE_NETNS` is not `private`, as for a `public` Judge on a cluster),

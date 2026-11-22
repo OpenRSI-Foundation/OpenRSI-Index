@@ -1165,8 +1165,9 @@ def _alias_hint(alias: str) -> str:
     return (
         "; it is on NFS, where every mount shows / as its root, so binds of "
         "different directories of one NFS file system cannot be told apart: "
-        "put RSI Harness's --logs-root on another file system (with local "
-        "Docker, running it without root also avoids these binds)"
+        "put RSI Harness's --logs-root on a file system other than NFS, on a "
+        "cluster too (on local Docker, running it without root also avoids "
+        "these binds)"
     )
 
 

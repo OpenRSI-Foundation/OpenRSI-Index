@@ -817,6 +817,12 @@ Trajectories and feedback remain available. See [snapshot lifecycle and failure
 recovery](docs/cluster-snapshot-lifecycle.md), also for NFS mount options on
 several nodes.
 
+The cluster Judge binds its `/logs/verifier` and `rsi-isolate` from the run
+directory, as a local run as root does, so with `--logs-root` on NFS every
+`rsi-isolate` call is refused (exit `125`) and a task whose Judge uses it
+fails every round. For such a task keep `--logs-root` on a shared file system
+other than NFS.
+
 Two operator-only `[apptainer]` keys serve sites whose Apptainer cannot give
 phases namespaces of their own. `network_isolation = "seccomp"` (default
 `"namespace"`) runs a phase without network under a host-side filter with no IP
