@@ -544,6 +544,57 @@ def test_unpause_and_stop_reach_members_left_after_the_agent_exits(
             pass
 
 
+_IGNORES_SIGTERM = (
+    "import signal, time\n"
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+    "print('ready', flush=True)\n"
+    "time.sleep(300)\n"
+)
+
+
+def test_stop_kills_a_paused_work_without_continuing_it(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # A round left Work paused for recovery and the Agent is ended: Work must
+    # not run again, even a process that ignores SIGTERM, nor a daemon that
+    # pause() stopped outside the group.
+    runtime = _single_node_gpu_runtime(tmp_path, monkeypatch)
+    leader, daemon = (
+        subprocess.Popen(
+            [sys.executable, "-c", _IGNORES_SIGTERM],
+            start_new_session=True,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(2)
+    )
+    try:
+        for process in (leader, daemon):
+            assert process.stdout.readline() == "ready\n"
+            os.killpg(process.pid, signal.SIGSTOP)
+            deadline = time.monotonic() + 10
+            while _process_state(process.pid) != "T":
+                assert time.monotonic() < deadline
+                time.sleep(0.05)
+        continued = []
+        monkeypatch.setattr(runtime, "_continue_work", continued.append)
+        runtime._process = leader
+        runtime._stopped = {daemon.pid: runtime_module._process_stat(daemon.pid)[2]}
+        runtime._paused = True
+
+        runtime.stop(runtime.work_ref)
+
+        assert leader.wait(timeout=10) == -signal.SIGKILL
+        assert daemon.wait(timeout=10) == -signal.SIGKILL
+        assert continued == []
+        assert runtime._paused is False and runtime._stopped == {}
+    finally:
+        for process in (leader, daemon):
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(process.pid, signal.SIGKILL)
+            process.wait()
+
+
 # Work's leader: one child in its own session, which a group stop misses, and
 # on SIGUSR1 that child starts another in its own session. Each pid is printed.
 _DAEMON_WORK = r"""
