@@ -1134,6 +1134,42 @@ def mount_aliases(paths, text: str | None = None) -> list:
     return sorted(found)
 
 
+def mount_types(text: str | None = None) -> dict:
+    """The file system type of the top mount at each mount point."""
+    if text is None:
+        with open("/proc/self/mountinfo", errors="surrogateescape") as stream:
+            text = stream.read()
+    found = {}
+    for line in text.splitlines():
+        head, separator, tail = line.partition(" - ")
+        fields = head.split(" ")
+        if separator and len(fields) > 4 and tail:
+            point = re.sub(
+                r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), fields[4]
+            )
+            found[point] = tail.split(" ")[0]
+    return found
+
+
+def _alias_hint(alias: str) -> str:
+    """Why an alias may only look like one: NFS shows "/" as the root of every
+    mount (the kernel's nfs_show_path), so two binds of different directories
+    of one NFS file system look like the same directory."""
+    try:
+        types = mount_types()
+    except OSError:
+        return ""
+    holders = [point for point in types if _within(alias, point)]
+    if not holders or types[max(holders, key=len)] not in ("nfs", "nfs4"):
+        return ""
+    return (
+        "; it is on NFS, where every mount shows / as its root, so binds of "
+        "different directories of one NFS file system cannot be told apart: "
+        "put RSI Harness's --logs-root on another file system (with local "
+        "Docker, running it without root also avoids these binds)"
+    )
+
+
 def hidden_aliases(hidden, grants, code: int) -> list:
     """The aliases of ``hidden``; an alias that overlaps a grant is refused
     with ``code``, as granting it would open the hidden path."""
@@ -1143,7 +1179,8 @@ def hidden_aliases(hidden, grants, code: int) -> list:
             if _within(alias, grant) or _within(grant, alias):
                 raise Failure(
                     code,
-                    f"refusing {grant}: {alias} is another mount of a hidden path",
+                    f"refusing {grant}: {alias} is another mount of a hidden path"
+                    + _alias_hint(alias),
                 )
     return aliases
 

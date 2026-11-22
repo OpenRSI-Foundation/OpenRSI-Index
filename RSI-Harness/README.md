@@ -412,6 +412,16 @@ no GPU allocation or NVIDIA tools are required. Mixed CPU/GPU tasks need a GPU
 partition, and only GPU phases enable NVIDIA passthrough. Blue Vela still
 requires Work GPUs. Multi-node CPU Work is not supported.
 
+As root, the Harness binds directories of the run below `--logs-root` into
+the Judge, such as its `/logs/verifier` and `/opt/rsi-isolate`. NFS shows
+`/` as the root of every mount in `/proc/self/mountinfo`, so inside the
+Judge those binds cannot be told apart from other mounts of
+`/logs/verifier`, and `rsi-isolate` refuses every call (exit `125`,
+`refusing /opt: /opt/rsi-isolate/ is another mount of a hidden path`). As
+root, keep `--logs-root` on a local file system. [Without
+root](#run-without-root) these files reach the Judge as volume copies, and
+`--logs-root` may be on NFS.
+
 ### Run without root
 
 On Linux, a user who can use the Docker daemon (for example through the
