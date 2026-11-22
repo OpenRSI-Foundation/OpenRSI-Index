@@ -1403,6 +1403,11 @@ function main() {
   } catch (error) {
     return setupExit(error.message);
   }
+  // Overwrite /proc/<pid>/cmdline so flags and child argv (such as
+  // `-- zcode app-server`) are not exposed to broad cleanup commands like
+  // `pkill -f serve` or `ps aux | grep serve | xargs kill -9`, which would
+  // otherwise kill the driver itself (exit 137) while leaving the task undone.
+  process.title = 'rsi-agent-driver';
   process.on('uncaughtException', (error) => {
     driver.fail(EXIT_AGENT_ENDED, 'internal_error', { error: String(error?.stack ?? error).slice(0, 4096) });
   });

@@ -1778,3 +1778,26 @@ def test_driver_fake_agent_and_fake_model_keep_one_growing_conversation(
         for exchange in trajectory.exchanges
         for call in exchange.tool_calls
     )
+
+
+@requires_node
+def test_driver_hides_launch_argv_from_process_cmdline(driver) -> None:
+    """Setting process.title keeps child argv (e.g. `zcode app-server`) out of
+    /proc/<pid>/cmdline so broad `pkill -f serve` cleanups inside Work cannot
+    kill the driver itself."""
+    run = driver(
+        "zcode",
+        {"turns": [{"text": "ok", "delayMs": 30_000}]},
+        continuation="Keep running app-server benchmarks.",
+    )
+    run.wait_prompts(1)
+    proc_cmdline = Path(f"/proc/{run.process.pid}/cmdline")
+    try:
+        if not proc_cmdline.exists():
+            pytest.skip("/proc/<pid>/cmdline is unavailable on this platform")
+        cmdline = proc_cmdline.read_bytes().rstrip(b"\x00").decode()
+        assert cmdline == "rsi-agent-driver"
+        assert "serve" not in cmdline
+        assert "app-server" not in cmdline
+    finally:
+        run.stop()
