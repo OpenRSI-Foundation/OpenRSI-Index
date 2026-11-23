@@ -1108,6 +1108,11 @@ sudo -E "$(command -v rsi-harness)" recover RUN_ID
 
 Omit `RUN_ID` to recover every unfinished recorded run.
 
+A round that leaves runtime state it cannot prove clean, such as a Judge
+container Docker could not remove, closes submissions and keeps Work paused
+for `recover`. The Agent cannot run on, so the Harness ends it at once and
+the run fails; `resume` keeps the Agent time that was left.
+
 A completed run keeps its final Work state as a Docker image, plus a managed
 WORKDIR volume when split mode is used. `recover` and `cleanup` keep an
 interrupted run's Work state the same way, so it can be resumed. Ordinary

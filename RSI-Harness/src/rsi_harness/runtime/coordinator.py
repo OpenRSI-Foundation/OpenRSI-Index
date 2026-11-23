@@ -146,6 +146,10 @@ class _FinalRoundEnder:
     and FINAL_FEEDBACK_GRACE_SECONDS have passed. The Harness ends it, so no
     stop hook can keep it working on what can no longer count."""
 
+    # None: FINAL_FEEDBACK_GRACE_SECONDS, read once the round is done.
+    grace_seconds: float | None = None
+    thread_name = "rsi-final-round-end"
+
     def __init__(self, round_done: threading.Event, end: Callable[[], None]) -> None:
         self._round_done = round_done
         self._end = end
@@ -153,7 +157,7 @@ class _FinalRoundEnder:
         self.ended = False
         self.error: BaseException | None = None
         self._thread = threading.Thread(
-            target=self._watch, name="rsi-final-round-end", daemon=True
+            target=self._watch, name=self.thread_name, daemon=True
         )
         self._thread.start()
 
@@ -161,7 +165,12 @@ class _FinalRoundEnder:
         while not self._round_done.wait(0.2):
             if self._finished.is_set():
                 return
-        if self._finished.wait(FINAL_FEEDBACK_GRACE_SECONDS):
+        grace = (
+            FINAL_FEEDBACK_GRACE_SECONDS
+            if self.grace_seconds is None
+            else self.grace_seconds
+        )
+        if self._finished.wait(grace):
             return
         try:
             self._end()
@@ -173,6 +182,20 @@ class _FinalRoundEnder:
         """The Agent's exec returned: stop watching, after any end in progress."""
         self._finished.set()
         self._thread.join()
+
+
+class _RecoveryEnder(_FinalRoundEnder):
+    """End the Agent at once when a round leaves Work paused for recovery.
+
+    Such a round closes submissions and keeps Work paused for ``recover``:
+    the Agent can no longer run, nor read its ``rsi-submit`` reply. Waiting
+    for its exec only spends the rest of its time, after which the timed-out
+    exec kills the paused Work anyway. Ending it now does the same, earlier,
+    and leaves that time to ``resume``.
+    """
+
+    grace_seconds = 0.0
+    thread_name = "rsi-recovery-end"
 
 
 def _agent_provider_record(result: AgentRunResult | None) -> dict[str, object]:
@@ -656,6 +679,16 @@ class _RoundEvaluator:
         self.recovery_required = False
         self.recovery_error: str | None = None
         self.submission_closed = False
+        # Set once a round ended requiring recovery with Work still paused
+        # for it: Work stays paused, so the Agent can no longer run.
+        self.work_held = threading.Event()
+
+    def _hold_paused_work(self) -> None:
+        if self.recovery_required and self._state.status in {
+            RunStatus.SNAPSHOTTING,
+            RunStatus.JUDGING,
+        }:
+            self.work_held.set()
 
     def evaluate(self, request: EvaluationRequest) -> SubmissionReport:
         if self.recovery_required or self.submission_closed:
@@ -692,6 +725,7 @@ class _RoundEvaluator:
             ):
                 # As below: Work ended during this round and stays paused.
                 self._transition(RunStatus.AGENT_RUNNING)
+            self._hold_paused_work()
             raise
         if not isinstance(report, SubmissionReport):
             raise TypeError("submission evaluator must return SubmissionReport")
@@ -706,6 +740,7 @@ class _RoundEvaluator:
         if self.recovery_required:
             self.recovery_error = report.error
             self._persist_recovery(report.error or "recovery_required")
+            self._hold_paused_work()
         elif (
             self._sandbox_lifecycle.can_resume
             and self._state.status != RunStatus.AGENT_RUNNING
@@ -1839,6 +1874,16 @@ class RunCoordinator:
                         if final_judge
                         else None
                     )
+                    # A final-judge Agent is ended once its one round
+                    # returns, whatever the round's outcome.
+                    held_ender = (
+                        None
+                        if final_judge
+                        else _RecoveryEnder(
+                            evaluator.work_held,
+                            lambda: self._backend.end_agent(work),
+                        )
+                    )
                     agent_started_at = time.monotonic()
                     try:
                         agent_result = self._backend.run_agent(
@@ -1847,11 +1892,24 @@ class RunCoordinator:
                     finally:
                         if ender is not None:
                             ender.finish()
+                        if held_ender is not None:
+                            held_ender.finish()
                     agent_runtime_seconds = max(
                         0.0, time.monotonic() - agent_started_at
                     )
                     if ender is not None and ender.error is not None:
                         raise ender.error
+                    if held_ender is not None and held_ender.ended:
+                        self._backend.record_event(
+                            "agent_ended_after_recovery_required", None
+                        )
+                    elif held_ender is not None and held_ender.error is not None:
+                        # The round already failed the attempt; the Agent
+                        # only ran out its time, as it did before.
+                        self._backend.record_event(
+                            "agent_end_after_recovery_required_failed",
+                            self._error(held_ender.error),
+                        )
                     if final_judge and not agent_result.cancelled:
                         # A round the Agent started may still be in flight,
                         # and a busy Work may yet give it back.

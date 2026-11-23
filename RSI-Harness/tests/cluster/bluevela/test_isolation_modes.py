@@ -759,7 +759,8 @@ def test_stop_terminates_work_after_its_box_has_gone(tmp_path, monkeypatch):
         runtime.unpause(runtime.work_ref)
         runtime._paused = True
         runtime.stop(runtime.work_ref)
-        assert process.wait(timeout=10) == -signal.SIGTERM
+        # A paused Work is killed where it stands, never continued.
+        assert process.wait(timeout=10) == -signal.SIGKILL
     finally:
         process.kill()
         process.wait()

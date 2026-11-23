@@ -2630,16 +2630,32 @@ class ApptainerAgentRuntime:
                 self._paused = False
                 return
             # Signal the group even after the Agent exits, so members it left
-            # behind (possibly stopped by pause()) are terminated too.
+            # behind are ended too.
             try:
-                if self._paused or process.poll() is not None:
-                    # Best effort: terminate the group whatever happens here.
-                    with contextlib.suppress(InfrastructureError):
-                        self._continue_work(process)
-                os.killpg(process.pid, signal.SIGTERM)
+                if self._paused:
+                    self._kill_paused_work(process)
+                else:
+                    if process.poll() is not None:
+                        # Best effort: terminate the group whatever happens.
+                        with contextlib.suppress(InfrastructureError):
+                            self._continue_work(process)
+                    os.killpg(process.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass  # the whole group has exited
             self._paused = False
+
+    def _kill_paused_work(self, process: subprocess.Popen[str]) -> None:
+        """End a paused Work where it stands, as Docker kills a paused Work.
+        Continuing it to deliver SIGTERM would let its processes run again,
+        and one that ignores SIGTERM run on, while a Judge that a failed
+        round retained for recovery may still read its workspace. SIGKILL
+        ends a stopped process without continuing it: each one pause()
+        stopped outside the group (a daemon), then the group, whose box
+        takes the box's processes with it."""
+        stopped, self._stopped = self._stopped, {}
+        for pid, start in stopped.items():
+            _signal_process(pid, start, signal.SIGKILL)
+        os.killpg(process.pid, signal.SIGKILL)
 
     def fail_work(self, message: str) -> None:
         """Wake the Work execution loop on a controller failure.
