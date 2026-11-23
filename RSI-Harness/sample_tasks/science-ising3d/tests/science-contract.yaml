@@ -1,6 +1,7 @@
 # New public-review runtime contract; the original A7 contract remains unchanged.
 schema_version: rsi-science-contract/0.5-draft
 task_id: science-ising3d
+science_track: scientific_discovery
 status: design_draft
 launch_ready: false   # true only after execution validation passes and launch_blockers is empty
 
@@ -164,7 +165,7 @@ execution:
     The Python 3.11 image pinned by digest (standard library only) with the starter; every Judge starts from the clean
     task image, recomputes the routes isolated, audits with the run's own Agent, model and reasoning effort
     and reviews each rubric with the Judge model gpt-6-astra (medium effort), both through rsi-agent
-    (Judge library science_judge version 9.4).
+    (Judge library science_judge version 14).
   access: >-
     Work has public network access for literature and data. The Judge is offline except the pinned model
     endpoints; routes cannot open internet sockets and get no credentials; reviewers never execute

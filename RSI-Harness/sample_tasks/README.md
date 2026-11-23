@@ -26,7 +26,7 @@ has the details. Its `task.toml` uses every public-Judge feature:
   Agent installs or changes in Work, such as the Python interpreter or the
   Agent CLI, reaches the programs that judge it.
 - The Judge is the public science Judge library, `tests/science_judge.py`,
-  copied unchanged from OpenRSI-X's `science-task-agent` skill, configured by
+  copied unchanged from RSI-Skills' `science-task-agent` skill, configured by
   `tests/judge.py`. It freezes the candidate and re-executes its optional
   `probe.py` and `model.py` probes, each on its own copy with rlimits, a
   minimal environment, a seccomp filter that denies internet sockets, and a
