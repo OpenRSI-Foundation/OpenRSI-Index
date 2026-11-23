@@ -448,7 +448,7 @@ jobs:
               FAILURE_MESSAGE="The review service could not authenticate with its provider. A maintainer must repair the service credentials and rerun this workflow. Your proposal has not been evaluated; no proposal edit is needed."
               ;;
             provider)
-              FAILURE_MESSAGE="The review service could not complete the provider request. A maintainer can rerun this workflow once the service is available. Your proposal has not been evaluated; no proposal edit is needed."
+              FAILURE_MESSAGE="The review service could not complete the provider request. The review is retried automatically about every hour (up to three times); a maintainer can also rerun this workflow. Your proposal has not been evaluated; no proposal edit is needed."
               ;;
             *)
               FAILURE_MESSAGE="A maintainer can inspect the workflow run and rerun it after resolving the error."

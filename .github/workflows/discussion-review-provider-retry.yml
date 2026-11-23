@@ -1,0 +1,48 @@
+name: Rerun provider-failed rubric reviews
+
+# A review model provider outage can outlast the review's own retry window. Each
+# hour, rerun the latest rubric review of a Discussion when it failed only on the
+# provider (never on authentication), at most three times. See
+# checks/review_provider_retry.py.
+on:
+  schedule:
+    - cron: "23 * * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: List the reruns without starting them
+        type: boolean
+        default: false
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: discussion-review-provider-retry
+  cancel-in-progress: false
+
+jobs:
+  rerun:
+    if: github.repository == 'OpenRSI-Foundation/OpenRSI-Index'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout retry helper
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+          sparse-checkout: checks/review_provider_retry.py
+          sparse-checkout-cone-mode: false
+
+      - name: Rerun provider-failed reviews
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          set -euo pipefail
+          args=()
+          if [ "${DRY_RUN:-false}" = "true" ]; then
+            args+=(--dry-run)
+          fi
+          python3 checks/review_provider_retry.py "${args[@]}"

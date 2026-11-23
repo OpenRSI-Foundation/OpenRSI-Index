@@ -108,7 +108,7 @@ def test_review_streams_diagnostics_and_preserves_the_reviewer_exit_status(tmp_p
     "kind,expected",
     [
         ("provider_authentication", "repair the service credentials"),
-        ("provider", "once the service is available"),
+        ("provider", "retried automatically about every hour"),
         ("", "inspect the workflow run"),
     ],
 )
