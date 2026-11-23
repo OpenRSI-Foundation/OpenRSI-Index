@@ -35,6 +35,7 @@ print(json.dumps({'rows':rows,'p0_reference':math.log(2),'scope':'finite public 
 """  # noqa: E501
 
 CONFIG = sj.JudgeConfig(
+    science_track="scientific_discovery",
     workdir="/workspace",
     routes=(
         sj.Route(

@@ -13,7 +13,7 @@ candidate passes.
 It is an RSI Harness demonstration of `visibility = "public"`,
 `model_access = true` and `judge_model`. Its Judge is the generic public
 science Judge library, `tests/science_judge.py`, copied unchanged from
-OpenRSI-X's `science-task-agent` skill (`assets/science_judge.py`), plus this
+RSI-Skills' `science-task-agent` skill (`assets/science_judge.py`), plus this
 task's configuration in `tests/judge.py`; the end-to-end tests in RSI Harness
 therefore exercise the same Judge code that tasks authored with that skill
 use.
@@ -50,7 +50,7 @@ until execution validation with a real Agent passes.
 - Resources: 4 CPUs, 8 GiB shared by Work and the Judge, no GPUs; Agent
   timeout 6 hours; Verifier timeout 3600 s (2 × 60 + 1200 + 1800 = 3120 s plus
   slack).
-- Judge library: `science_judge.__version__` `"9.4"`; `tests/sources.json`
+- Judge library: `science_judge.__version__` `"14"`; `tests/sources.json`
   cites the external facts the rubrics use.
 
 Outputs per round in `/logs/verifier`: `bundle.json`, `integrity.json`,

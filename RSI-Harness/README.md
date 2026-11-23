@@ -420,8 +420,8 @@ neither can host paths (a server can show one directory at two paths).
 Right before a Judge starts, the Harness walks the tree of each bind it
 makes from NFS and records which of them reach no file in common; the Judge
 gets that record read-only at `/run/rsi-harness/judge-binds`, and
-`rsi-isolate` and `rsi-agent` set those binds apart by it, so `--logs-root`
-may be on NFS. A mount of the same NFS file system that the record does not
+`rsi-isolate` and `rsi-agent` (and the science Judge library from release 14)
+set those binds apart by it, so `--logs-root` may be on NFS. A mount of the same NFS file system that the record does not
 set apart still counts as a mount of `/logs/verifier`, and a grant over it
 is refused (exit `125`): one the Harness did not make, one that shares a
 file with it, one whose tree holds another mount, or one whose tree the

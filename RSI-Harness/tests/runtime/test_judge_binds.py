@@ -164,8 +164,12 @@ def test_a_tree_with_another_file_system_in_it_proves_nothing(tmp_path, monkeypa
     assert opened and record["binds"]["/logs/verifier"]["disjoint"] == []
 
 
-def test_only_the_file_systems_of_hidden_targets_are_walked(tmp_path, monkeypatch):
+def test_every_pair_is_recorded_small_trees_first(tmp_path, monkeypatch):
+    """The science Judge library hides more than /logs/verifier (all of
+    /logs, /tmp, WORKDIR...), so any pair can be asked about."""
     logs, isolate, launcher = _trees(tmp_path)
+    workspace = tmp_path / "workspace"
+    (workspace / "submission").mkdir(parents=True)
     walked = []
     real = judge_binds._reach
 
@@ -175,24 +179,41 @@ def test_only_the_file_systems_of_hidden_targets_are_walked(tmp_path, monkeypatc
 
     monkeypatch.setattr(judge_binds, "_reach", spy)
     text = _mountinfo(tmp_path, "nfs")
-    record = judge_binds.nfs_bind_record(
-        [(isolate, "/opt/rsi-isolate"), (launcher, "/usr/local/bin/rsi-isolate")],
-        text,
-    )
-    # No hidden target: nothing to set apart, nothing walked.
-    assert walked == []
-    assert [entry["disjoint"] for entry in record["binds"].values()] == [[], []]
+    # Alone on its file system: no pair, nothing walked.
+    record = judge_binds.nfs_bind_record([(workspace, "/workspace")], text)
+    assert walked == [] and record["binds"]["/workspace"]["disjoint"] == []
     record = judge_binds.nfs_bind_record(
         [
+            (workspace, "/workspace"),
             (isolate, "/opt/rsi-isolate"),
-            (launcher, "/usr/local/bin/rsi-isolate"),
+            (logs, "/logs/agent"),
+        ],
+        text,
+    )
+    assert walked == [str(logs), str(isolate), str(workspace)]
+    # The Harness's own binds come before any other below a hidden root, so
+    # a large site bind there never leaves them unproven.
+    walked.clear()
+    site = tmp_path / "site"
+    (site / "data").mkdir(parents=True)
+    judge_binds.nfs_bind_record(
+        [
+            (site, "/home/group/data"),
+            (workspace, "/workspace"),
+            (isolate, "/opt/rsi-isolate"),
             (logs, "/logs/verifier"),
         ],
         text,
     )
-    # The hidden tree first; and only pairs with it are set apart.
-    assert walked[0] == str(logs)
-    assert record["binds"]["/opt/rsi-isolate"]["disjoint"] == ["/logs/verifier"]
+    assert walked == [str(logs), str(isolate), str(site), str(workspace)]
+    assert record["binds"]["/workspace"]["disjoint"] == [
+        "/logs/agent",
+        "/opt/rsi-isolate",
+    ]
+    assert record["binds"]["/opt/rsi-isolate"]["disjoint"] == [
+        "/logs/agent",
+        "/workspace",
+    ]
 
 
 def test_no_record_without_a_bind_from_nfs(tmp_path):

@@ -1,9 +1,9 @@
 """The science-ising3d sample: a public, model-access Judge built on the
 public science Judge library.
 
-The sample's ``tests/science_judge.py`` is a byte-for-byte copy of OpenRSI-X's
+The sample's ``tests/science_judge.py`` is a byte-for-byte copy of RSI-Skills'
 science-task-agent ``assets/science_judge.py``; that library's own unit tests
-live with it in OpenRSI-X. These tests check the sample's configuration, that
+live with it in RSI-Skills. These tests check the sample's configuration, that
 the library agrees with what RSI Harness provides a Judge (rsi-agent, its exit
 statuses and users, the trajectory manifest, the paths), and whole Judge
 rounds of the sample through the real ``rsi-agent`` program.
@@ -68,8 +68,8 @@ SAMPLE = REPO / "sample_tasks" / "science-ising3d"
 TESTS = SAMPLE / "tests"
 STARTER = SAMPLE / "environment" / "starter"
 RSI_AGENT_PROGRAM = REPO / "src" / "rsi_harness" / "judge_agent" / "rsi_agent.py"
-# sha256 of OpenRSI-X science-task-agent assets/science_judge.py, version 9.4.
-LIBRARY_SHA256 = "5d5bca020962e41b2a0cdafaddd128b2fe9f3aa2ead47f407c70c48a32f30a8e"
+# sha256 of RSI-Skills science-task-agent assets/science_judge.py, release 14.
+LIBRARY_SHA256 = "b85260abf7c38ad25ee88a9120a957e2be3f5f3c37a6f3b88ebc02a9d8fd65b0"
 API_KEY = "sk-synthetic-science-sample-key-4b7a"
 JUDGE_KEY = "sk-synthetic-science-judge-model-key-91c0"
 
@@ -126,7 +126,7 @@ def test_the_sample_declares_every_public_judge_capability():
 def test_the_judge_is_the_unchanged_library_with_this_tasks_config():
     library = (TESTS / "science_judge.py").read_bytes()
     assert hashlib.sha256(library).hexdigest() == LIBRARY_SHA256
-    assert SJ.__version__ == "9.4"
+    assert SJ.__version__ == "14"
     assert CONFIG.problems() == []
     assert SJ.validate_rules(TESTS) == []
     assert [(route.name, route.timeout_sec) for route in CONFIG.routes] == [
@@ -138,7 +138,11 @@ def test_the_judge_is_the_unchanged_library_with_this_tasks_config():
     assert CONFIG.review_workers == 4
     # judge.py leaves the Judge's own paths to the library.
     defaults = SJ.JudgeConfig(
-        workdir="/w", routes=(), audit_seconds=60, review_seconds=60
+        science_track="scientific_discovery",
+        workdir="/w",
+        routes=(),
+        audit_seconds=60,
+        review_seconds=60,
     )
     for name in ("rsi_agent", "tests_dir", "logs_dir", "trajectory_dir", "tmp_dir"):
         assert getattr(CONFIG, name) == getattr(defaults, name), name

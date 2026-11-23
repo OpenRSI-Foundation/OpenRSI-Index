@@ -47,13 +47,26 @@ BIND_RECORD_NAME = "binds.json"
 WALK_ENTRIES = 1_000_000
 WALK_SECONDS = 20.0
 WALK_TOTAL_SECONDS = 60.0
-# The Judge targets whose other mounts rsi-isolate (/logs/verifier) and
-# rsi-agent (also /tests, for a hidden Judge) look for on NFS; the others it
-# hides are never NFS binds (tmpfs or node-local). Only pairs with one of
-# these are ever asked about, so only their file systems are walked. A
-# hidden target missing here is only never set apart: the Judge then keeps
-# every mount of its file system an alias, as it always has.
-HIDDEN_TARGETS = ("/logs/verifier", "/tests")
+# Where the Judge's hidden paths lie: rsi-isolate's /logs/verifier,
+# rsi-agent's /tests, and the science Judge library's /logs, /run, /home,
+# /root, /var/tmp, /tmp and WORKDIR (any target). Any pair of binds can be
+# asked about, so every pair is recorded. The walks share one deadline, so
+# the order matters: first the Harness's own binds that every rsi-isolate
+# and rsi-agent call needs set apart (small, and walked first before any
+# other was), then other binds below the hidden roots, then the rest under
+# /opt and /usr, then the rest (a workspace, a site cache), which the budget
+# may leave unproven.
+OWN_TARGETS = (
+    "/logs/verifier",
+    "/tests",
+    "/logs/agent",
+    "/opt/rsi-isolate",
+    "/usr/local/bin/rsi-isolate",
+    "/opt/rsi-agent",
+    "/usr/local/bin/rsi-agent",
+)
+FIRST_TARGETS = ("/logs", "/tests", "/run", "/home", "/root", "/var/tmp", "/tmp")
+THEN_TARGETS = ("/opt", "/usr")
 
 
 def _within(path: str, root: str) -> bool:
@@ -118,9 +131,8 @@ def nfs_bind_record(
 ) -> dict | None:
     """The record of the ``(source, target)`` binds whose source is on NFS:
     for each target, the device and inode of the source, and the recorded
-    targets whose trees share no inode with its own, of the pairs with a
-    hidden target (HIDDEN_TARGETS or below one). None when no source is on
-    NFS.
+    targets whose trees share no inode with its own. None when no source is
+    on NFS.
 
     A source whose device is not that of its holding mount (a race with a
     remount, or a namespace that differs) is left out, so the Judge keeps
@@ -142,17 +154,22 @@ def nfs_bind_record(
         found[os.path.normpath(str(target))] = (real, status)
     if not found:
         return None
-    hidden = {
-        target
-        for target in found
-        if any(_within(target, anchor) for anchor in HIDDEN_TARGETS)
+    # Only a file system with two recorded binds has a pair to set apart.
+    shared = {
+        device
+        for device in {status.st_dev for _real, status in found.values()}
+        if sum(status.st_dev == device for _real, status in found.values()) > 1
     }
-    # Only file systems that hold a hidden target are walked: hidden ones
-    # first (they are small), then the rest on their device.
-    devices = {found[target][1].st_dev for target in hidden}
+
+    def rank(target: str) -> tuple[int, int]:
+        if target in OWN_TARGETS:
+            return (0, OWN_TARGETS.index(target))
+        if any(_within(target, root) for root in FIRST_TARGETS):
+            return (1, 0)
+        return (2, 0) if any(_within(target, root) for root in THEN_TARGETS) else (3, 0)
+
     order = sorted(
-        (target for target in found if found[target][1].st_dev in devices),
-        key=lambda target: target not in hidden,
+        (target for target in found if found[target][1].st_dev in shared), key=rank
     )
     deadline = time.monotonic() + total_seconds
     reach = {
@@ -163,8 +180,7 @@ def nfs_bind_record(
     def apart(left: str, right: str) -> bool:
         one, two = reach.get(left), reach.get(right)
         return (
-            (left in hidden or right in hidden)
-            and found[left][1].st_dev == found[right][1].st_dev
+            found[left][1].st_dev == found[right][1].st_dev
             and one is not None
             and two is not None
             and one.isdisjoint(two)
