@@ -654,6 +654,54 @@ def test_a_grant_on_an_alias_of_a_hidden_path_is_refused(monkeypatch):
         assert "is another mount of a hidden path" in failure.value.message
 
 
+# A root Judge whose run directory is on NFS: /logs/verifier and
+# /opt/rsi-isolate are binds of different directories of one export, but
+# NFS shows "/" as the root of both.
+NFS_MOUNTINFO = """\
+22 1 0:50 / / rw,relatime - overlay overlay rw
+30 22 0:60 / /logs/verifier rw,relatime - nfs4 server:/export rw
+31 22 0:60 / /opt/rsi-isolate ro,relatime - nfs4 server:/export rw
+32 22 0:60 / /usr/local/bin/rsi-isolate ro,relatime - nfs4 server:/export rw
+"""
+
+
+def test_on_nfs_every_bind_of_the_export_looks_like_a_hidden_path(monkeypatch):
+    """The check cannot tell the binds apart, so it still refuses, and says
+    why."""
+    parse = isolation.mounts
+    monkeypatch.setattr(isolation, "mounts", lambda text=None: parse(NFS_MOUNTINFO))
+    types = isolation.mount_types
+    monkeypatch.setattr(
+        isolation, "mount_types", lambda text=None: types(NFS_MOUNTINFO)
+    )
+    assert isolation.mount_aliases(["/logs/verifier"]) == [
+        "/opt/rsi-isolate/",
+        "/usr/local/bin/rsi-isolate/",
+    ]
+    with pytest.raises(isolation.Failure) as failure:
+        isolation.hidden_aliases(["/logs/verifier"], ["/usr", "/opt"], 125)
+    assert failure.value.code == 125
+    assert failure.value.message.startswith(
+        "refusing /opt: /opt/rsi-isolate/ is another mount of a hidden path; "
+        "it is on NFS"
+    )
+    assert "--logs-root" in failure.value.message
+    assert "on a cluster too" in failure.value.message
+
+
+def test_a_local_alias_is_refused_without_the_nfs_hint(monkeypatch):
+    parse = isolation.mounts
+    monkeypatch.setattr(isolation, "mounts", lambda text=None: parse(MOUNTINFO))
+    types = isolation.mount_types
+    monkeypatch.setattr(isolation, "mount_types", lambda text=None: types(MOUNTINFO))
+    assert isolation.mount_types(MOUNTINFO)["/mnt/copy two"] == "ext4"
+    with pytest.raises(isolation.Failure) as failure:
+        isolation.hidden_aliases(["/logs/verifier"], ["/data"], 2)
+    assert failure.value.message == (
+        "refusing /data: /data/verifier is another mount of a hidden path"
+    )
+
+
 def test_a_bind_remount_keeps_the_locked_flags():
     assert isolation.remount_flags(os.ST_NOSUID | os.ST_NODEV | os.ST_RELATIME) == (
         isolation.MS_NOSUID | isolation.MS_NODEV | isolation.MS_RELATIME

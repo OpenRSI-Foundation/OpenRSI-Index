@@ -412,6 +412,16 @@ no GPU allocation or NVIDIA tools are required. Mixed CPU/GPU tasks need a GPU
 partition, and only GPU phases enable NVIDIA passthrough. Blue Vela still
 requires Work GPUs. Multi-node CPU Work is not supported.
 
+As root, the Harness binds directories of the run below `--logs-root` into
+the Judge, such as its `/logs/verifier` and `/opt/rsi-isolate`. NFS shows
+`/` as the root of every mount in `/proc/self/mountinfo`, so inside the
+Judge those binds cannot be told apart from other mounts of
+`/logs/verifier`, and `rsi-isolate` refuses every call (exit `125`,
+`refusing /opt: /opt/rsi-isolate/ is another mount of a hidden path`). As
+root, keep `--logs-root` on a local file system. [Without
+root](#run-without-root) these files reach the Judge as volume copies, and
+`--logs-root` may be on NFS.
+
 ### Run without root
 
 On Linux, a user who can use the Docker daemon (for example through the
@@ -806,6 +816,12 @@ Harness cannot open. A failed round keeps no copy.
 Trajectories and feedback remain available. See [snapshot lifecycle and failure
 recovery](docs/cluster-snapshot-lifecycle.md), also for NFS mount options on
 several nodes.
+
+The cluster Judge binds its `/logs/verifier` and `rsi-isolate` from the run
+directory, as a local run as root does, so with `--logs-root` on NFS every
+`rsi-isolate` call is refused (exit `125`) and a task whose Judge uses it
+fails every round. For such a task keep `--logs-root` on a shared file system
+other than NFS.
 
 Two operator-only `[apptainer]` keys serve sites whose Apptainer cannot give
 phases namespaces of their own. `network_isolation = "seccomp"` (default
