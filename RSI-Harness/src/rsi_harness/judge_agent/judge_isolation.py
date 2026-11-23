@@ -1085,32 +1085,201 @@ def _rebase(path: str, old: str, new: str) -> str:
     return (new.rstrip("/") + rest) or "/"
 
 
+def _mountinfo() -> str:
+    with open("/proc/self/mountinfo", errors="surrogateescape") as stream:
+        return stream.read()
+
+
+def _unescape(field: str) -> str:
+    return re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
+
+
 def mounts(text: str | None = None) -> list:
     """(device, root, mount point) of each mount, in mountinfo order."""
     if text is None:
-        with open("/proc/self/mountinfo", errors="surrogateescape") as stream:
-            text = stream.read()
+        text = _mountinfo()
     found = []
     for line in text.splitlines():
         fields = line.split(" ")
         if len(fields) > 4:
-            root, point = (
-                re.sub(r"\\([0-7]{3})", lambda m: chr(int(m.group(1), 8)), field)
-                for field in fields[3:5]
-            )
+            root, point = (_unescape(field) for field in fields[3:5])
             found.append((fields[2], root, point))
     return found
 
 
-def mount_aliases(paths, text: str | None = None) -> list:
+# NFS shows "/" as the root of every mount (the kernel's nfs_show_path), so
+# mountinfo cannot tell binds of different directories of one NFS file system
+# apart. For each bind it makes from NFS, the Harness records the device and
+# inode of its top and which of its other recorded binds share no file with
+# it, by the inodes it reached walking both trees (BIND_RECORD); only those
+# pairs are told apart.
+NFS_TYPES = ("nfs", "nfs4")
+BIND_RECORD_DIR = "/run/rsi-harness/judge-binds"
+BIND_RECORD = BIND_RECORD_DIR + "/binds.json"
+_BIND_RECORD_MAX_BYTES = 1 << 20
+_DEVICE = re.compile(r"^[0-9]+:[0-9]+$")
+
+
+def mount_table(text: str | None = None) -> dict:
+    """mount point -> (device, root, per-mount options, file system type) of
+    the top mount at each point."""
+    if text is None:
+        text = _mountinfo()
+    found = {}
+    for line in text.splitlines():
+        head, separator, tail = line.partition(" - ")
+        fields = head.split(" ")
+        if separator and len(fields) > 5 and tail:
+            found[_unescape(fields[4])] = (
+                fields[2],
+                _unescape(fields[3]),
+                fields[5],
+                tail.split(" ")[0],
+            )
+    return found
+
+
+def device_of(status: os.stat_result) -> str:
+    return f"{os.major(status.st_dev)}:{os.minor(status.st_dev)}"
+
+
+def _clean_path(value) -> bool:
+    return (
+        isinstance(value, str)
+        and value.startswith("/")
+        and "\0" not in value
+        and os.path.normpath(value) == value
+        and value != "//"
+    )
+
+
+def _parse_bind_record(data: bytes) -> dict | None:
+    """{target: entry} from the record's bytes, or None when anything in it
+    is malformed: then no entry of it is used."""
+    try:
+        record = json.loads(data.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return None
+    if (
+        not isinstance(record, dict)
+        or set(record) != {"version", "binds"}
+        or record["version"] != 2
+        or not isinstance(record["binds"], dict)
+    ):
+        return None
+    binds = {}
+    for target, entry in record["binds"].items():
+        if (
+            not _clean_path(target)
+            or not isinstance(entry, dict)
+            or set(entry) != {"device", "inode", "disjoint"}
+            or not isinstance(entry["device"], str)
+            or not _DEVICE.match(entry["device"])
+            or type(entry["inode"]) is not int
+            or entry["inode"] <= 0
+            or not isinstance(entry["disjoint"], list)
+            or not all(_clean_path(other) for other in entry["disjoint"])
+        ):
+            return None
+        binds[target] = entry
+    return binds
+
+
+def bind_record(table: dict, text: str) -> dict | None:
+    """The Harness's record of its NFS binds (BIND_RECORD), or None.
+
+    It counts only as the Harness's own read-only bind: a regular file that
+    no group or other user can write, owned by root or by this user, below a
+    mount at exactly BIND_RECORD_DIR that ``table`` (the mountinfo ``text``)
+    shows read-only, on that mount's device, from a file system other than
+    NFS that no other mount shows (through which the Judge could rewrite
+    it). A file the Judge could have written fails one of these; then every
+    NFS alias stays an alias."""
+    mount = table.get(BIND_RECORD_DIR)
+    if (
+        mount is None
+        or "ro" not in mount[2].split(",")
+        or mount[3] in NFS_TYPES
+        or mount_aliases([BIND_RECORD_DIR], text, record={})
+    ):
+        return None
+    try:
+        descriptor = os.open(
+            BIND_RECORD,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK,
+        )
+    except OSError:
+        return None
+    try:
+        status = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(status.st_mode)
+            or status.st_mode & 0o022
+            or status.st_uid not in (0, os.geteuid())
+            or status.st_size > _BIND_RECORD_MAX_BYTES
+            or device_of(status) != mount[0]
+            or not os.fstatvfs(descriptor).f_flag & os.ST_RDONLY
+        ):
+            return None
+        data = os.read(descriptor, _BIND_RECORD_MAX_BYTES + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+    if len(data) > _BIND_RECORD_MAX_BYTES:
+        return None
+    return _parse_bind_record(data)
+
+
+def _shows(target: str, entry: dict) -> bool:
+    """Whether the mount at ``target`` is the recorded host directory: the
+    device and inode of its top, as the Harness saw that directory."""
+    try:
+        status = os.lstat(target)
+    except OSError:
+        return False
+    return device_of(status) == entry["device"] and status.st_ino == entry["inode"]
+
+
+def _recorded_apart(holder: str, point: str, device: str, record) -> bool:
+    """Whether the record shows that the NFS mounts at ``holder`` and
+    ``point`` share no file: both are recorded on ``device``, each lists the
+    other as disjoint, and the top of each is the recorded directory."""
+    if not record:
+        return False
+    mine, other = record.get(holder), record.get(point)
+    return (
+        mine is not None
+        and other is not None
+        and mine["device"] == device
+        and other["device"] == device
+        and point in mine["disjoint"]
+        and holder in other["disjoint"]
+        and _shows(holder, mine)
+        and _shows(point, other)
+    )
+
+
+def mount_aliases(paths, text: str | None = None, record=None) -> list:
     """Every other place that shows the files of ``paths`` (real paths).
 
     That is the same device mounted elsewhere with a root that overlaps the
     root-relative path of one of them or of a mount below one. Only the top
     mount at each point counts; places inside ``paths`` are left out.
+
+    Two NFS mounts both show "/" as their root, so each would overlap the
+    other; ``record`` (the Harness's BIND_RECORD, read here when ``text`` is
+    not given) sets apart the pairs it shows share no file, and every other
+    NFS mount stays an alias, where it always was.
     """
     paths = list(paths)
+    if text is None:
+        text = _mountinfo()
+        load = record is None
+    else:
+        load = False
     top = {point: (device, root) for device, root, point in mounts(text)}
+    table = None
     found = set()
     below = [point for point in top if any(_within(point, path) for path in paths)]
     for path in dict.fromkeys(paths + below):
@@ -1129,6 +1298,16 @@ def mount_aliases(paths, text: str | None = None) -> list:
                 alias = point
             else:
                 continue
+            if root == "/" and other_root == "/":
+                if table is None:
+                    table = mount_table(text)
+                if (table.get(holder, ("",) * 4)[3] in NFS_TYPES) and (
+                    table.get(point, ("",) * 4)[3] in NFS_TYPES
+                ):
+                    if load:
+                        record, load = bind_record(table, text), False
+                    if _recorded_apart(holder, point, device, record):
+                        continue
             if not any(_within(alias, item) for item in paths):
                 found.add(alias)
     return sorted(found)
@@ -1153,21 +1332,21 @@ def mount_types(text: str | None = None) -> dict:
 
 def _alias_hint(alias: str) -> str:
     """Why an alias may only look like one: NFS shows "/" as the root of every
-    mount (the kernel's nfs_show_path), so two binds of different directories
-    of one NFS file system look like the same directory."""
+    mount (the kernel's nfs_show_path), and only the binds the Harness records
+    (BIND_RECORD) are told apart."""
     try:
         types = mount_types()
     except OSError:
         return ""
     holders = [point for point in types if _within(alias, point)]
-    if not holders or types[max(holders, key=len)] not in ("nfs", "nfs4"):
+    if not holders or types[max(holders, key=len)] not in NFS_TYPES:
         return ""
     return (
-        "; it is on NFS, where every mount shows / as its root, so binds of "
-        "different directories of one NFS file system cannot be told apart: "
-        "put RSI Harness's --logs-root on a file system other than NFS, on a "
-        "cluster too (on local Docker, running it without root also avoids "
-        "these binds)"
+        "; it is on NFS, where every mount shows / as its root, and RSI "
+        "Harness's record of its own binds does not tell it apart from the "
+        "hidden path (a mount the Harness did not make, such as a site bind "
+        "or a second host mount of the same file system, or one it could not "
+        "verify)"
     )
 
 

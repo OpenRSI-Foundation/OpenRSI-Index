@@ -415,12 +415,21 @@ requires Work GPUs. Multi-node CPU Work is not supported.
 As root, the Harness binds directories of the run below `--logs-root` into
 the Judge, such as its `/logs/verifier` and `/opt/rsi-isolate`. NFS shows
 `/` as the root of every mount in `/proc/self/mountinfo`, so inside the
-Judge those binds cannot be told apart from other mounts of
-`/logs/verifier`, and `rsi-isolate` refuses every call (exit `125`,
-`refusing /opt: /opt/rsi-isolate/ is another mount of a hidden path`). As
-root, keep `--logs-root` on a local file system. [Without
-root](#run-without-root) these files reach the Judge as volume copies, and
-`--logs-root` may be on NFS.
+Judge two binds from one NFS file system cannot be told apart by it, and
+neither can host paths (a server can show one directory at two paths).
+Right before a Judge starts, the Harness walks the tree of each bind it
+makes from NFS and records which of them reach no file in common; the Judge
+gets that record read-only at `/run/rsi-harness/judge-binds`, and
+`rsi-isolate` and `rsi-agent` set those binds apart by it, so `--logs-root`
+may be on NFS. A mount of the same NFS file system that the record does not
+set apart still counts as a mount of `/logs/verifier`, and a grant over it
+is refused (exit `125`): one the Harness did not make, one that shares a
+file with it, one whose tree holds another mount, or one whose tree the
+Harness cannot read fully or walk within its bound (a million entries and
+20 seconds for each bind, and a minute for all binds of a Judge; a
+multi-node Judge spends it within its own timeout).
+[Without root](#run-without-root) these files reach the Judge as volume
+copies, and no record is needed.
 
 ### Run without root
 
@@ -817,11 +826,11 @@ Trajectories and feedback remain available. See [snapshot lifecycle and failure
 recovery](docs/cluster-snapshot-lifecycle.md), also for NFS mount options on
 several nodes.
 
-The cluster Judge binds its `/logs/verifier` and `rsi-isolate` from the run
-directory, as a local run as root does, so with `--logs-root` on NFS every
-`rsi-isolate` call is refused (exit `125`) and a task whose Judge uses it
-fails every round. For such a task keep `--logs-root` on a shared file system
-other than NFS.
+The cluster Judge binds its `/logs/verifier`, workspace and `rsi-isolate`
+from shared storage, as a local run as root does, and gets the same record
+of its NFS binds, made on each node that starts a Judge container (every
+rank of a multi-node Judge), so the logs and run roots may be on NFS, with
+the same limit.
 
 Two operator-only `[apptainer]` keys serve sites whose Apptainer cannot give
 phases namespaces of their own. `network_isolation = "seccomp"` (default

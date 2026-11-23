@@ -20,6 +20,11 @@ from rsi_harness.cluster.bluevela.multinode import RemoteWorkerTemplate
 from rsi_harness.cluster.bluevela.preflight import is_singularity_ce
 from rsi_harness.errors import InfrastructureError
 from rsi_harness.models import PersistedModel
+from rsi_harness.runtime.judge_binds import (
+    BIND_RECORD_TARGET,
+    bind_record_for,
+    remove_bind_record,
+)
 
 
 class JudgeControllerControl(PersistedModel):
@@ -86,11 +91,26 @@ def _environment_values(control: JudgeControllerControl) -> dict[str, str]:
     }
 
 
+def controller_binds(
+    control: JudgeControllerControl, local_tmp: Path
+) -> list[tuple[Path, Path, bool]]:
+    """Every (source, target, read-only) bind of the controller's container."""
+    return [
+        *(
+            (binding.source, binding.target, binding.read_only)
+            for binding in control.worker.binds
+        ),
+        (control.broker_root, Path("/run/rsi-harness/torchrun"), False),
+        (local_tmp, Path("/tmp"), False),
+    ]
+
+
 def build_apptainer_command(
     control: JudgeControllerControl,
     *,
     current_host: str,
     local_tmp: Path,
+    bind_record: Path | None = None,
 ) -> tuple[str, ...]:
     host = current_host.split(".", 1)[0]
     if host != control.host:
@@ -116,17 +136,11 @@ def build_apptainer_command(
             str(control.worker.container_workdir),
         )
     )
-    for binding in control.worker.binds:
-        suffix = ":ro" if binding.read_only else ""
-        command.extend(("--bind", f"{binding.source}:{binding.target}{suffix}"))
-    command.extend(
-        (
-            "--bind",
-            f"{control.broker_root}:/run/rsi-harness/torchrun",
-            "--bind",
-            f"{expected_tmp}:/tmp",
-        )
-    )
+    for source, target, read_only in controller_binds(control, expected_tmp):
+        suffix = ":ro" if read_only else ""
+        command.extend(("--bind", f"{source}:{target}{suffix}"))
+    if bind_record is not None:
+        command.extend(("--bind", f"{bind_record}:{BIND_RECORD_TARGET}:ro"))
     _environment_values(control)
     command.extend((str(control.worker.sif_path), *control.command))
     if "--nv" in command or any(
@@ -151,12 +165,26 @@ def _run(control: JudgeControllerControl) -> int:
     local_tmp = controller_tmp_dir(control)
     local_tmp.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     local_tmp.mkdir(mode=0o700, exist_ok=False)
-    command = build_apptainer_command(
-        control,
-        current_host=socket.gethostname(),
-        local_tmp=local_tmp,
-    )
     environment = build_apptainer_environment(control)
+    # On this node, in the namespace that starts the container: NFS device
+    # numbers belong to one node.
+    record = bind_record_for(
+        (
+            (source, target)
+            for source, target, _ro in controller_binds(control, local_tmp)
+        ),
+        local_tmp.parent,
+    )
+    try:
+        command = build_apptainer_command(
+            control,
+            current_host=socket.gethostname(),
+            local_tmp=local_tmp,
+            bind_record=record,
+        )
+    except BaseException:
+        remove_bind_record(record)
+        raise
     process: subprocess.Popen[bytes] | None = None
 
     def forward(signum: int, _frame: object) -> None:
@@ -179,6 +207,7 @@ def _run(control: JudgeControllerControl) -> int:
         signal.signal(signal.SIGINT, previous_int)
         if process is not None and process.poll() is None:
             os.killpg(process.pid, signal.SIGTERM)
+        remove_bind_record(record)
         shutil.rmtree(local_tmp, ignore_errors=True)
 
 

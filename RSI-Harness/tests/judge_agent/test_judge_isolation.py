@@ -666,10 +666,10 @@ NFS_MOUNTINFO = """\
 
 
 def test_on_nfs_every_bind_of_the_export_looks_like_a_hidden_path(monkeypatch):
-    """The check cannot tell the binds apart, so it still refuses, and says
-    why."""
-    parse = isolation.mounts
-    monkeypatch.setattr(isolation, "mounts", lambda text=None: parse(NFS_MOUNTINFO))
+    """Without the Harness's record of its binds the check cannot tell them
+    apart, so it still refuses, and says why."""
+    monkeypatch.setattr(isolation, "_mountinfo", lambda: NFS_MOUNTINFO)
+    monkeypatch.setattr(isolation, "BIND_RECORD_DIR", "/nonexistent/judge-binds")
     types = isolation.mount_types
     monkeypatch.setattr(
         isolation, "mount_types", lambda text=None: types(NFS_MOUNTINFO)
@@ -685,8 +685,7 @@ def test_on_nfs_every_bind_of_the_export_looks_like_a_hidden_path(monkeypatch):
         "refusing /opt: /opt/rsi-isolate/ is another mount of a hidden path; "
         "it is on NFS"
     )
-    assert "--logs-root" in failure.value.message
-    assert "on a cluster too" in failure.value.message
+    assert "record of its own binds" in failure.value.message
 
 
 def test_a_local_alias_is_refused_without_the_nfs_hint(monkeypatch):

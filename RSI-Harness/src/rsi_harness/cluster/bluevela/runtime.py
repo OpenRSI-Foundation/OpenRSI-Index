@@ -138,6 +138,7 @@ from rsi_harness.runtime.gpu import (
     resolve_allocation,
 )
 from rsi_harness.runtime.judge import JUDGE_ROUND_END_SLACK_SECONDS
+from rsi_harness.runtime.judge_binds import BIND_RECORD_TARGET, bind_record_for
 from rsi_harness.runtime.judge_llm import config_proxy_environment, judge_codex_login
 from rsi_harness.runtime.judge_login_refresh import renew_operator_login
 from rsi_harness.runtime.judge_model_access import (
@@ -1914,6 +1915,8 @@ class ApptainerAgentRuntime:
             redact = (sandbox_endpoint.environment["RSI_SANDBOX_TOKEN"],)
         round_digest = hashlib.sha256(request.round_id.encode()).hexdigest()[:16]
         judge_tmp = self.judge_tmp_root / f"round-{round_digest}"
+        # Node-local and outside every bind, as judge_binds requires.
+        bind_records = self.judge_tmp_root / f"round-{round_digest}-binds"
         access = self.judge_model_access
         if judge_needs_rsi_agent(request.run_plan.task.verifier) and access is None:
             raise InfrastructureError("Judge model access was not resolved")
@@ -2005,6 +2008,7 @@ class ApptainerAgentRuntime:
                 box="judge",
                 output_redact_values=redact,
                 timeout_seconds=request.run_plan.task.verifier.timeout_seconds,
+                bind_record_parent=bind_records,
             )
         finally:
             try:
@@ -2015,6 +2019,7 @@ class ApptainerAgentRuntime:
             finally:
                 if agent_root is not None:
                     shutil.rmtree(agent_root, ignore_errors=True)
+                shutil.rmtree(bind_records, ignore_errors=True)
                 shutil.rmtree(judge_tmp)
 
     def _renew_work_login(
@@ -2711,6 +2716,7 @@ class ApptainerAgentRuntime:
         | None = None,
         image_tmp: bool = False,
         boxed: bool = False,
+        bind_record_parent: Path | None = None,
     ) -> tuple[str, ...]:
         # The phase's declared mode chooses its binds, caches and HF
         # environment; network_mode only its network (a site-egress Judge
@@ -2818,6 +2824,15 @@ class ApptainerAgentRuntime:
             authority = self._judge_authority_bind()
             if authority is not None:
                 binds.append(authority)
+        if phase == "judge" and bind_record_parent is not None:
+            # Last, from the final list, on this node right before the
+            # Judge starts (see judge_binds).
+            record = bind_record_for(
+                ((source, target) for source, target, _ro in binds),
+                bind_record_parent,
+            )
+            if record is not None:
+                binds.append((record, BIND_RECORD_TARGET, True))
         if self.singularity_ce:
             # Apptainer creates these mount points itself.
             create_nested_mount_points(binds)
@@ -2969,6 +2984,7 @@ class ApptainerAgentRuntime:
         box: Literal["work", "judge"] | None = None,
         timeout_seconds: float | None,
         track_work: bool = False,
+        bind_record_parent: Path | None = None,
     ) -> AgentRunResult:
         isolated_command = self._network_command(
             tuple(command),
@@ -2987,6 +3003,7 @@ class ApptainerAgentRuntime:
                 declared_network_mode=declared_network_mode,
                 image_tmp=image_tmp,
                 boxed=layer is not None,
+                bind_record_parent=bind_record_parent,
             )
             + tuple(layer or ())
             + isolated_command
