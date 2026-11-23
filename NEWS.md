@@ -2,12 +2,14 @@
 
 Milestones from OpenRSI Index and RSI Harness, newest first. Code updates use the date they merged in Los Angeles time; announcements use their published dates.
 
-Last updated: **2026-11-16**.
+Last updated: **2026-11-23**.
 
 [← Back to OpenRSI Index](README.md#-news)
 
 ## November 2026
 
+- **[2026-11-23]** Can AI make AI faster? 🚀 **[OpenRSI AI-Infra-Bench](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench)** is here—8 single-GPU tasks, open trajectories, and a leaderboard. Let the agents cook!
+- **[2026-11-21]** Calling all robot people! 🤖 **OpenRSI Robotics** is looking for contributors and research tasks. Help AI become a better robotics researcher!
 - **[2026-11-16] OpenPhysics Bench:** Exciting progress on **60+ open physics problems**—expert reviewers wanted!
 - **[2026-11-14] 26 public task packages.** The published collection spans pre-training, post-training, vision, robotics, agents and AI systems, including 12 SGLang-Omni packages. This count covers the published `task.toml` packages in `rsi-tasks/`, not pending proposals. [Explore tasks](rsi-tasks/)
 - **[2026-11-13] SGLang Summit talk.** We presented Scaling RSI for AI Infra: agents continuously optimize model serving, with gains independently verified. [Conference program](https://www.sglang.io/summit) · [Slide](https://docs.google.com/presentation/d/1ODcBjqT9sl0NRa7SdtV4rwULmMZI71xx/edit)
