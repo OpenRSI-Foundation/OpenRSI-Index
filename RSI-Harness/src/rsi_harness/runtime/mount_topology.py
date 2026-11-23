@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import PurePosixPath
 
 from rsi_harness.errors import SetupError
+from rsi_harness.judge_agent.judge_isolation import BIND_RECORD_DIR
 from rsi_harness.models import (
     JUDGE_TRAJECTORY_ROOT,
     WORK_FEEDBACK_ROOT,
@@ -18,6 +19,7 @@ ENGINE_MOUNT_TARGETS = (
     JUDGE_TRAJECTORY_ROOT,
     PurePosixPath("/run/rsi-harness/staging"),
     WORK_FEEDBACK_ROOT,
+    PurePosixPath(BIND_RECORD_DIR),
 )
 SANDBOX_MOUNT_TARGET = PurePosixPath("/run/rsi-harness/sandbox")
 

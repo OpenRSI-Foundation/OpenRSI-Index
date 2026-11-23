@@ -67,6 +67,11 @@ from rsi_harness.runtime.gpu import (
     NVIDIA_VISIBLE_DEVICES_VOID,
     nvidia_visible_devices_value,
 )
+from rsi_harness.runtime.judge_binds import (
+    BIND_RECORD_TARGET,
+    bind_record_for,
+    remove_bind_record,
+)
 from rsi_harness.runtime.local_auth import (
     MAX_AUTH_BYTES,
     AgentAuthMaterial,
@@ -94,6 +99,9 @@ from rsi_harness.runtime.work_seccomp import work_seccomp_option
 from rsi_harness.runtime.workdir_volume import DockerWorkdirVolumeBackend
 
 _STAGING_TARGET = PurePosixPath("/run/rsi-harness/staging")
+# Root mode keeps each Judge's bind record (judge_binds) here: on the host's
+# /run, which is not NFS, and outside every bind of a Judge.
+JUDGE_BIND_RECORD_ROOT = Path("/run/rsi-harness-judge-binds")
 _DOCKER_SOCKET_TARGETS = frozenset(
     {PurePosixPath("/var/run/docker.sock"), PurePosixPath("/run/docker.sock")}
 )
@@ -526,6 +534,8 @@ class DockerContainerRuntime:
                 ) from error
         self._container_networks: dict[str, str] = {}
         self._private_log_targets: dict[str, Path] = {}
+        # A root Judge's record of its NFS binds (judge_binds), until removal.
+        self._bind_records: dict[str, Path] = {}
         self._policy_leases: dict[str, NetworkPolicyLease] = {}
         self._netns_holders: dict[str, str] = {}
         # Non-root controller: a container's carried volume and, per target,
@@ -713,11 +723,40 @@ class DockerContainerRuntime:
             kwargs["network"] = self._network.name
         else:
             kwargs["network_mode"] = "none"
+        bind_record: Path | None = None
+        if (
+            self._role == "judge"
+            and not private_logs
+            and not holder_mode
+            and os.geteuid() == 0
+        ):
+            # A root Judge's host binds; last, right before it is created
+            # (see judge_binds). Holder mode and Desktop bind no host path.
+            bind_record = bind_record_for(
+                (
+                    (typed["Source"], typed["Target"])
+                    for typed in typed_mounts
+                    if typed["Type"] == "bind"
+                ),
+                JUDGE_BIND_RECORD_ROOT,
+            )
+            if bind_record is not None:
+                typed_mounts.append(
+                    Mount(
+                        target=str(BIND_RECORD_TARGET),
+                        source=str(bind_record),
+                        type="bind",
+                        read_only=True,
+                    )
+                )
         try:
             container = self._client.containers.create(
                 spec.image, list(spec.command), **kwargs
             )
-        except APIError as error:
+        except BaseException as error:
+            remove_bind_record(bind_record)
+            if not isinstance(error, APIError):
+                raise
             if holder is not None:
                 if carrier_volume is not None:
                     self._remove_carrier_volume(carrier_volume)
@@ -726,6 +765,8 @@ class DockerContainerRuntime:
                 f"failed to create {self._role.title()} container: {error}"
             ) from error
         ref = ContainerRef(container_id=container.id, role=self._role)
+        if bind_record is not None:
+            self._bind_records[ref.container_id] = bind_record
         if holder is not None:
             self._netns_holders[ref.container_id] = holder.id
             if carrier_volume is not None:
@@ -1173,6 +1214,7 @@ class DockerContainerRuntime:
                 f"failed to remove {self._role.title()} container "
                 f"{container.container_id}: {error}"
             ) from error
+        remove_bind_record(self._bind_records.pop(container.container_id, None))
         # The holder goes last: recovery finds a carried volume through it.
         carrier = self._carriers.pop(container.container_id, None)
         if carrier is not None:

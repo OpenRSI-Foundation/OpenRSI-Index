@@ -19,6 +19,11 @@ from rsi_harness.cluster.bluevela.multinode import RemoteRequestControl
 from rsi_harness.cluster.bluevela.preflight import is_singularity_ce
 from rsi_harness.errors import InfrastructureError
 from rsi_harness.judge_agent import JUDGE_BOX_TARGET, judge_box_command
+from rsi_harness.runtime.judge_binds import (
+    BIND_RECORD_TARGET,
+    bind_record_for,
+    remove_bind_record,
+)
 
 _SIZE_FLAGS = {"--nnodes", "--nproc-per-node", "--nproc_per_node"}
 _TORCHRUN_VALUE_FLAGS = {
@@ -135,6 +140,19 @@ def _rank_authority(
     return node, environment
 
 
+def worker_binds(
+    control: RemoteRequestControl, local_tmp: Path
+) -> list[tuple[Path, Path, bool]]:
+    """Every (source, target, read-only) bind of a rank's container."""
+    return [
+        *(
+            (binding.source, binding.target, binding.read_only)
+            for binding in control.worker.binds
+        ),
+        (local_tmp, Path("/tmp"), False),
+    ]
+
+
 def build_apptainer_command(
     control: RemoteRequestControl,
     *,
@@ -143,6 +161,7 @@ def build_apptainer_command(
     node_rank: int,
     current_host: str,
     local_tmp: Path,
+    bind_record: Path | None = None,
 ) -> tuple[str, ...]:
     """Build the only container command a remote worker may execute."""
     node, rank_environment = _rank_authority(
@@ -182,10 +201,13 @@ def build_apptainer_command(
             str(workdir),
         )
     )
-    for binding in control.worker.binds:
-        suffix = ":ro" if binding.read_only else ""
-        command.extend(("--bind", f"{binding.source}:{binding.target}{suffix}"))
-    command.extend(("--bind", f"{expected_tmp}:/tmp"))
+    for source, target, read_only in worker_binds(control, expected_tmp):
+        suffix = ":ro" if read_only else ""
+        command.extend(("--bind", f"{source}:{target}{suffix}"))
+    if bind_record is not None:
+        if control.phase != "verifier":
+            raise InfrastructureError("only a Judge rank gets a bind record")
+        command.extend(("--bind", f"{bind_record}:{BIND_RECORD_TARGET}:ro"))
     command.append(str(control.worker.sif_path))
     if control.phase == "work":
         # Work ranks run without file watches, as Work does on its own node.
@@ -273,14 +295,6 @@ def run_worker(
     local_tmp.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
     local_tmp.mkdir(mode=0o700, exist_ok=False)
     current_host = socket.gethostname()
-    command = build_apptainer_command(
-        control,
-        request_id=request_id,
-        pool_rank=pool_rank,
-        node_rank=node_rank,
-        current_host=current_host,
-        local_tmp=local_tmp,
-    )
     environment = build_apptainer_environment(
         control,
         request_id=request_id,
@@ -288,6 +302,32 @@ def run_worker(
         node_rank=node_rank,
         current_host=current_host,
     )
+    # A Judge rank's NFS binds, recorded on this node, in the namespace that
+    # starts its container: NFS device numbers belong to one node.
+    record = (
+        bind_record_for(
+            (
+                (source, target)
+                for source, target, _ro in worker_binds(control, local_tmp)
+            ),
+            local_tmp.parent,
+        )
+        if control.phase == "verifier"
+        else None
+    )
+    try:
+        command = build_apptainer_command(
+            control,
+            request_id=request_id,
+            pool_rank=pool_rank,
+            node_rank=node_rank,
+            current_host=current_host,
+            local_tmp=local_tmp,
+            bind_record=record,
+        )
+    except BaseException:
+        remove_bind_record(record)
+        raise
     process: subprocess.Popen[bytes] | None = None
 
     def forward(signum: int, _frame: object) -> None:
@@ -313,6 +353,7 @@ def run_worker(
         signal.signal(signal.SIGINT, previous_int)
         if process is not None and process.poll() is None:
             os.killpg(process.pid, signal.SIGTERM)
+        remove_bind_record(record)
         shutil.rmtree(local_tmp, ignore_errors=True)
 
 
