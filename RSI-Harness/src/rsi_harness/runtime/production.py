@@ -43,6 +43,7 @@ from rsi_harness.models import (
     ContainerSpec,
     ContainerVolumeMount,
     EvaluationRequest,
+    MainServiceConfig,
     ManagedNetwork,
     ManagedWorkdirVolume,
     RootfsSnapshotLease,
@@ -493,6 +494,25 @@ def firewall_commands_running(
 # Long enough for the daemon to finish a create a killed broker already sent;
 # anything later still carries the run's labels for the next sweep.
 ENV_CREATE_SETTLE_SEC = 5.0
+
+
+def _check_docker_resource_limits(client: Any, service: MainServiceConfig) -> None:
+    required = []
+    if service.cpus is not None and service.cpus > 0:
+        required.append("CpuCfsQuota")
+    if service.memory_mb is not None and service.memory_mb > 0:
+        required.append("MemoryLimit")
+    if not required:
+        return
+
+    info = client.info()
+    missing = [field for field in required if info.get(field) is not True]
+    if missing:
+        raise SetupError(
+            "Docker does not report support for the task's requested limits "
+            f"({', '.join(missing)}). Check `docker info` on the selected daemon "
+            "and, for rootless Docker, check cgroup controller delegation."
+        )
 
 
 def run_firewall(client: Any, definition: Any) -> Any:
@@ -2347,6 +2367,7 @@ class ProductionRuntimeServices:
             self.event_callback("judge_llm_ignored", None)
         if client is None:
             client = self._client()
+        _check_docker_resource_limits(client, definition.service)
         if is_desktop(client):
             validate_desktop_task(definition, judge_llm)
         snapshot = self.snapshot or OverlaySnapshotBackend(self.data_root)
