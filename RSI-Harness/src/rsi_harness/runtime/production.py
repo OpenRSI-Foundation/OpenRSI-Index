@@ -43,6 +43,7 @@ from rsi_harness.models import (
     ContainerSpec,
     ContainerVolumeMount,
     EvaluationRequest,
+    MainServiceConfig,
     ManagedNetwork,
     ManagedWorkdirVolume,
     RootfsSnapshotLease,
@@ -493,6 +494,36 @@ def firewall_commands_running(
 # Long enough for the daemon to finish a create a killed broker already sent;
 # anything later still carries the run's labels for the next sweep.
 ENV_CREATE_SETTLE_SEC = 5.0
+
+
+def _check_docker_resource_limits(
+    client: Any, service: MainServiceConfig, *, holders: bool
+) -> bool:
+    """Refuse, before any image or run state, a daemon that would refuse the
+    run's CPU limits; return whether it would drop the task's memory limit.
+
+    Docker refuses a container with a CPU limit on a daemon without CPU CFS
+    quota, but only warns and drops a memory limit on one without memory
+    limits. The task's CPUs need the quota, and so does a non-root
+    controller (``holders``), whose network-namespace holders and helper
+    containers always carry a CPU limit."""
+    cpus = holders or (service.cpus is not None and service.cpus > 0)
+    memory = service.memory_mb is not None and service.memory_mb > 0
+    if not (cpus or memory):
+        return False
+    info = client.info()
+    if cpus and info.get("CpuCfsQuota") is not True:
+        needed = (
+            "the task's CPU limit"
+            if service.cpus
+            else "the CPU limit of the non-root controller's helper containers"
+        )
+        raise SetupError(
+            "Docker does not report CPU CFS quota support (CpuCfsQuota), needed "
+            f"for {needed}. Check `docker info` on the selected daemon and, for "
+            "rootless Docker, check cgroup controller delegation."
+        )
+    return memory and info.get("MemoryLimit") is not True
 
 
 def run_firewall(client: Any, definition: Any) -> Any:
@@ -2347,6 +2378,15 @@ class ProductionRuntimeServices:
             self.event_callback("judge_llm_ignored", None)
         if client is None:
             client = self._client()
+        if _check_docker_resource_limits(
+            client,
+            definition.service,
+            holders=container_netns_firewall_selected(),
+        ):
+            # Docker drops the limit and runs the containers without it.
+            self.event_callback(
+                "docker_memory_limit_unsupported", definition.service.memory_mb
+            )
         if is_desktop(client):
             validate_desktop_task(definition, judge_llm)
         snapshot = self.snapshot or OverlaySnapshotBackend(self.data_root)

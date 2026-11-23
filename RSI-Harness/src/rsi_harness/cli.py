@@ -150,6 +150,13 @@ class _RunConsole:
                 f"Sandbox envelope: {value['cpus']} CPUs, {value['memory_mb']} MiB "
                 "(parents + children + broker)"
             )
+        elif name == "docker_memory_limit_unsupported":
+            typer.echo(
+                "Warning: Docker does not report memory limit support (MemoryLimit), "
+                f"so the task's {value} MiB limit is not enforced; Work and the Judge "
+                "run without it. Check `docker info` and, for rootless Docker, "
+                "cgroup controller delegation."
+            )
         elif name == "judge_clean_image_unavailable":
             typer.echo(
                 f"Warning: {value}, so every Judge runs from a snapshot of Work, "
