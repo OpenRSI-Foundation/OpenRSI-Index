@@ -15,7 +15,6 @@
 
 ## ✨ News
 
-- **[2026-11-23]** Can AI make AI faster? 🚀 **[OpenRSI AI-Infra-Bench](https://github.com/OpenRSI-Foundation/OpenRSI-AI-Infra-Bench)** is here—8 single-GPU tasks, open trajectories, and a leaderboard. Let the agents cook!
 - **[2026-11-21]** Calling all robot people! 🤖 **OpenRSI Robotics** is looking for contributors and research tasks. Help AI become a better robotics researcher!
 - **[2026-11-16] OpenPhysics Bench:** Exciting progress on **60+ open physics problems**—expert reviewers wanted!
 - **[2026-11-13]** At [SGLang Summit 2026](https://www.sglang.io/summit), we presented **Scaling RSI for AI Infra**. [[Slide]](https://docs.google.com/presentation/d/1ODcBjqT9sl0NRa7SdtV4rwULmMZI71xx/edit)
