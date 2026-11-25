@@ -253,12 +253,19 @@ def _gemini_turn(body: dict[str, Any]) -> _Turn:
             if isinstance(part, dict) and key in part and not part.get("thought")
         ]
 
+    # Antigravity appends synthetic system notices (efficiency reminders,
+    # restart notices) as trailing role="user" messages; keep last_user on the
+    # last real user prompt instead of letting those shadow it.
     users = [
-        "".join(map(str, parts(c, "text")))
+        text
         for c in contents
-        if c.get("role", "user") == "user" and not parts(c, "functionResponse")
+        if c.get("role", "user") == "user"
+        and not parts(c, "functionResponse")
+        and (text := "".join(map(str, parts(c, "text"))))
+        and not text.startswith(
+            "The following is a <SYSTEM_MESSAGE> not actually sent by the user."
+        )
     ]
-    users = [text for text in users if text]
     results = [
         response.get("output")
         if isinstance(response, dict) and isinstance(response.get("output"), str)

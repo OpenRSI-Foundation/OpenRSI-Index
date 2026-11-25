@@ -116,9 +116,9 @@ class DrivenCase:
     # The run's model, and the one its requests name when the CLI maps it.
     model: str = MODEL
     wire_model: str | None = None
-    # A notice the CLI sends as a user message of its own after a resumed
-    # session's first prompt.
-    resume_notice: str = ""
+    # The CLI wraps every user prompt in its own XML/metadata envelope
+    # (e.g. Antigravity's <USER_REQUEST>...<ADDITIONAL_METADATA>...).
+    wraps_user_prompt: bool = False
 
     def __str__(self) -> str:
         return self.agent
@@ -214,7 +214,7 @@ CASES = (
         api_path="/v1beta/models/gemini-4-hydrogen:streamGenerateContent",
         model="gemini-4-hydrogen-low",
         wire_model="gemini-4-hydrogen",
-        resume_notice="stopped due to server restart",
+        wraps_user_prompt=True,
     ),
     # Not driven: its own extension continues it and writes the transcript.
     DrivenCase(

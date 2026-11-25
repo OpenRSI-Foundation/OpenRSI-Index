@@ -673,9 +673,8 @@ def _assert_session_continued(
     assert opening["n_messages"] > attempt_1[-1]["n_messages"], (attempt_1, opening)
     assert opening["last_role"] == "user", opening
     last_user = (opening["last_user"] or "").strip()
-    if case.resume_notice:
-        # The CLI's own notice follows the resume message.
-        assert case.resume_notice in last_user, opening
+    if case.wraps_user_prompt:
+        assert context.message.strip() in last_user, opening
     else:
         assert last_user == context.message.strip(), opening
     # The continued session ran its tools in the kept Work.
