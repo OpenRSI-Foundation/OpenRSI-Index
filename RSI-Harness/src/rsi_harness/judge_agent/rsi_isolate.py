@@ -11,9 +11,11 @@ switching users itself.
     rsi-isolate isolation
 
 ``run`` runs COMMAND with the caller's stdin, stdout and stderr. It reads
-only system paths, its own executable and ``--read`` paths, writes only
-``--write`` paths, /dev/shm and a private HOME and TMPDIR (deleted
-afterwards), and gets only PATH, HOME, TMPDIR and each ``--env``. The
+only system paths, the GPU driver Apptainer binds at /.singularity.d/libs,
+its own executable and ``--read`` paths, writes only ``--write`` paths,
+/dev/shm, a private HOME and TMPDIR (deleted afterwards) and the /proc files
+its user may write (such as its threads' names), and gets only PATH, HOME,
+TMPDIR and each ``--env`` (with that driver appended to LD_LIBRARY_PATH). The
 isolation is chosen automatically: when the Judge is root, the command runs
 as its own unprivileged uid (62000 to 62063, one per concurrent call) with
 no supplementary groups, and the write grants are handed to that uid for the
@@ -97,6 +99,21 @@ SYSTEM_PATHS = (
     "/proc",
     "/sys",
 )
+# The host GPU driver Apptainer's --nv binds outside the system paths
+# (Docker's NVIDIA runtime puts it under /usr/lib). Readable where present,
+# and appended to the command's LD_LIBRARY_PATH, so a CUDA command finds its
+# driver as it does under Docker.
+DRIVER_PATHS = ("/.singularity.d/libs",)
+# Landlock keeps /proc readable and lets the command write the /proc files
+# the kernel lets its user write. The CUDA driver names its threads through
+# /proc/self/task/TID/comm and fails to start (error 304) when it cannot.
+# Another process's entries stay closed: Landlock refuses ptrace access to
+# processes outside the command's domain (mem, environ, fd, ...), comm takes
+# only the writer's own threads and other users' files keep their
+# permissions. What remains for the Judge user's other processes (such as a
+# higher oom_score_adj) can only slow them or make them likelier to be killed;
+# the Judge's PID namespace shows only its own processes.
+PROC_WRITE = isolation.FS_WRITE_FILE | isolation.FS_TRUNCATE
 # Never granted: the Judge's outputs and rsi-agent's state.
 NEVER_GRANTED = ("/logs/verifier", "/run/rsi-agent")
 # Never writable.
@@ -398,7 +415,18 @@ def _environment(entries) -> dict:
             environment[name] = value
         elif name in os.environ:
             environment[name] = os.environ[name]
+    drivers = _driver_paths()
+    if drivers:
+        # Appended, so the caller's own library path keeps precedence.
+        paths = [p for p in environment.get("LD_LIBRARY_PATH", "").split(":") if p]
+        paths += [path for path in drivers if path not in paths]
+        environment["LD_LIBRARY_PATH"] = ":".join(paths)
     return environment
+
+
+def _driver_paths() -> list:
+    """The GPU driver directories of DRIVER_PATHS this Judge has."""
+    return [path for path in DRIVER_PATHS if os.path.isdir(path)]
 
 
 def _pass_fds(values) -> tuple:
@@ -455,7 +483,8 @@ def _ruleset(libc, abi: int, reads, writes, private: str, executable):
     )
     try:
         for path in read:
-            ruleset.allow(path, isolation.FS_READ)
+            access = isolation.FS_READ | (PROC_WRITE if path == "/proc" else 0)
+            ruleset.allow(path, access)
         isolation.allow_devices(ruleset)
         if os.path.isdir("/dev/shm") and not os.path.islink("/dev/shm"):
             ruleset.allow("/dev/shm", ruleset.handled)
@@ -571,6 +600,7 @@ def run(options: argparse.Namespace, command: list) -> int:
     environment = _environment(options.env)
     pass_fds = _pass_fds(options.pass_fd)
     reads = [_grant(path, "--read", write=False) for path in options.read]
+    reads += [path for path in _driver_paths() if path not in reads]
     writes = [_grant(path, "--write", write=True) for path in options.write]
     cwd = None
     if options.cwd is not None:

@@ -566,7 +566,9 @@ rsi-isolate isolation
 
 - `--read PATH`: the command may read and execute PATH and everything below
   it. Otherwise it reads only system paths (`/usr`, `/bin`, `/sbin`,
-  `/lib*`, `/etc`, `/opt`, `/proc`, `/sys`), the Python that runs
+  `/lib*`, `/etc`, `/opt`, `/proc`, `/sys`), the GPU driver Apptainer's
+  `--nv` binds at `/.singularity.d/libs` (also appended to the command's
+  `LD_LIBRARY_PATH`, so CUDA finds it as under Docker), the Python that runs
   `rsi-isolate`, its own executable and character devices. `/tmp`,
   `WORKDIR`, `/tests`, `/logs`, `/home`, `/root`, `/run` and `/var` stay
   closed unless granted, and so does a virtual environment outside `/opt`.
@@ -576,7 +578,10 @@ rsi-isolate isolation
   It always may write a private `HOME` and `TMPDIR`, deleted afterwards,
   and `/dev/shm`. In a root Judge what it left in `/dev/shm` is removed
   afterwards; in Landlock mode `/dev/shm` is shared with the Judge's user and
-  later calls, so do not pass anything through it.
+  later calls, so do not pass anything through it. In `/proc` it may write
+  what the kernel lets its user write there, as the CUDA driver does to name
+  its threads; Landlock still refuses ptrace access (memory, environment,
+  descriptors) to every process outside the command.
 - Refused grants (exit `125`), checked on the resolved path: a missing path;
   a grant that is, contains or lies inside `/logs/verifier` or
   `/run/rsi-agent`, or another mount of them; a write grant that is a

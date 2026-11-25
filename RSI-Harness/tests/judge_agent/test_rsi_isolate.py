@@ -251,6 +251,135 @@ def test_the_command_gets_only_path_home_tmpdir_and_its_env(tmp_path):
     assert "never passed on" in refused.stderr
 
 
+PROC_PROBE = r"""
+import json, os, sys, threading
+other = int(sys.argv[1])
+found = {}
+def attempt(name, action):
+    try:
+        action()
+        found[name] = "ok"
+    except OSError as error:
+        found[name] = error.strerror
+def write(path, text):
+    with open(path, "w") as stream:
+        stream.write(text)
+def read(path):
+    with open(path, "rb") as stream:
+        stream.read()
+ready, done = threading.Event(), threading.Event()
+thread = threading.Thread(target=lambda: (ready.set(), done.wait()))
+thread.start()
+ready.wait()
+# As the CUDA driver names its threads (pthread_setname_np on another thread).
+own = f"/proc/self/task/{thread.native_id}/comm"
+attempt("own_thread_name", lambda: write(own, "named"))
+found["name"] = open(own).read().strip()
+attempt("own_oom_score_adj", lambda: write("/proc/self/oom_score_adj", "500"))
+attempt("other_name", lambda: write(f"/proc/{other}/comm", "x"))
+attempt("other_environ", lambda: read(f"/proc/{other}/environ"))
+attempt("other_memory", lambda: read(f"/proc/{other}/mem"))
+attempt("sysctl", lambda: write("/proc/sys/kernel/hostname", "x"))
+done.set()
+thread.join()
+print(json.dumps(found))
+"""
+
+
+@requires_landlock
+def test_the_command_writes_its_own_proc_entries_only(tmp_path):
+    script = tmp_path / "bin" / "proc.py"
+    script.parent.mkdir()
+    script.write_text(PROC_PROBE)
+    # A process of the same user outside the command's Landlock domain.
+    other = subprocess.Popen(["sleep", "60"])
+    try:
+        result = _run(
+            "run",
+            "--read",
+            str(script.parent),
+            "--",
+            PYTHON,
+            "-I",
+            str(script),
+            str(other.pid),
+        )
+    finally:
+        other.kill()
+        other.wait()
+
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {
+        "own_thread_name": "ok",
+        "name": "named",
+        "own_oom_score_adj": "ok",
+        # The kernel names only the writer's own threads.
+        "other_name": "Invalid argument",
+        # Landlock refuses ptrace access outside the command's domain.
+        "other_environ": "Permission denied",
+        "other_memory": "Permission denied",
+        "sysctl": "Permission denied",
+    }
+
+
+def test_the_apptainer_driver_is_appended_to_the_library_path(monkeypatch, tmp_path):
+    driver = tmp_path / "libs"
+    monkeypatch.setattr(rsi_isolate, "DRIVER_PATHS", (str(driver), "/no/such/driver"))
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/judge/lib")
+
+    assert "LD_LIBRARY_PATH" not in rsi_isolate._environment([])
+
+    driver.mkdir()
+    assert rsi_isolate._environment([])["LD_LIBRARY_PATH"] == str(driver)
+    passed = rsi_isolate._environment(["LD_LIBRARY_PATH"])
+    assert passed["LD_LIBRARY_PATH"] == f"/judge/lib:{driver}"
+    fixed = rsi_isolate._environment([f"LD_LIBRARY_PATH=/a::{driver}:/b"])
+    assert fixed["LD_LIBRARY_PATH"] == f"/a:{driver}:/b"
+
+
+def test_the_apptainer_driver_is_always_readable(monkeypatch, tmp_path):
+    started = []
+
+    class Process:
+        pid = 2**22 + 1
+        returncode = 0
+
+        def __init__(self, argv, **options):
+            started.append((argv, options))
+
+        def wait(self, timeout=None):
+            return 0
+
+    class Libc:
+        def prctl(self, *args):
+            return 0
+
+    driver = tmp_path / "libs"
+    driver.mkdir()
+    out = tmp_path / "out"
+    out.mkdir()
+    monkeypatch.setattr(rsi_isolate, "DRIVER_PATHS", (str(driver),))
+    monkeypatch.setattr(isolation, "load_libc", Libc)
+    monkeypatch.setattr(
+        rsi_isolate,
+        "isolation_mode",
+        lambda libc: {"mode": "userns", "landlock_abi": 0, "fallback": "none"},
+    )
+    monkeypatch.setattr(isolation, "mount_aliases", lambda paths: [])
+    monkeypatch.setattr(rsi_isolate.subprocess, "Popen", Process)
+    monkeypatch.setattr(isolation, "end_descendants", lambda: True)
+    for grant in ([], ["--read", str(driver)]):
+        options = rsi_isolate._parser().parse_args(["run", *grant, "--write", str(out)])
+        assert rsi_isolate.run(options, ["true"]) == 0
+
+    for argv, options in started:
+        plan = json.loads(argv[argv.index("--plan") + 1])
+        # Granted without --read, and once when the caller grants it too.
+        assert plan["read"].count(str(driver)) == 1
+        assert options["env"]["LD_LIBRARY_PATH"] == str(driver)
+    assert len(started) == 2
+
+
 @requires_landlock
 def test_the_working_directory_must_lie_inside_a_grant(tmp_path):
     work = tmp_path / "work"
