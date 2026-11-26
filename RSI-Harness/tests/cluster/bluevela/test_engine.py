@@ -891,3 +891,36 @@ def test_a_flow2_node_job_runs_a_one_plus_one_task_on_its_four_gpus(
     _, plan = captured[0]
     assert plan.gpu_plan.authorized_pool.uuids == ("0", "1")
     assert (plan.gpu_plan.work.uuids, plan.gpu_plan.judge.uuids) == (("0",), ("1",))
+
+
+def test_the_driver_checks_the_judge_sif_of_an_agent_layer_run(
+    tmp_path: Path,
+) -> None:
+    payload = _payload(tmp_path).model_copy(
+        update={
+            "judge_sif_path": tmp_path / "cache" / "task.sif",
+            "judge_sif_sha256_path": tmp_path / "cache" / "task.sif.sha256",
+        }
+    )
+    profile = load_cluster_profile("bluevela", {"USER": "alice"})
+    output = (tmp_path / "run.sh").resolve()
+
+    render_engine_driver(payload, profile, output)
+
+    script = output.read_text()
+    assert f"(cd {tmp_path / 'cache'} && \\\n  sha256sum -c task.sif.sha256)" in script
+    assert script.index("sha256sum -c task.sif.sha256") < script.index("nvidia-smi")
+
+
+def test_a_judge_sif_needs_its_digest_and_a_single_node_run(tmp_path: Path) -> None:
+    payload = _payload(tmp_path)
+    data = payload.model_dump(mode="json")
+
+    with pytest.raises(ValueError, match="digest sidecar"):
+        EnginePayload.model_validate(
+            {**data, "judge_sif_path": str(tmp_path / "t.sif")}
+        )
+    with pytest.raises(ValueError, match="absolute"):
+        EnginePayload.model_validate(
+            {**data, "judge_sif_path": "t.sif", "judge_sif_sha256_path": "t.sha"}
+        )

@@ -2,18 +2,30 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shlex
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 
 from rsi_harness.cluster import podman_bundle
 from rsi_harness.cluster.bluevela.image import (
+    agent_layer,
     plan_image,
+    render_agent_build_driver,
     render_build_driver,
     validate_cached_image,
 )
 from rsi_harness.cluster.config import load_cluster_profile
+from rsi_harness.runtime.images import (
+    agent_install_instructions,
+    agent_install_steps,
+    chmod_command,
+)
+from rsi_harness.task.digest import hash_tree
+from rsi_loop.harness.config import load_config
+from tests.fakes import register_fake_driven_agent
 
 
 def _context(root: Path, content: str = "FROM scratch\n") -> Path:
@@ -441,3 +453,218 @@ def test_build_partials_are_named_after_the_batch_job(
     )
     job_tag, pid = completed.stdout.split()
     assert job_tag == next(iter(environment.values()), pid)
+
+
+def _fake_driven_agent(monkeypatch: pytest.MonkeyPatch, **attributes: object):
+    agent_class = register_fake_driven_agent(monkeypatch)
+    for name, value in attributes.items():
+        monkeypatch.setattr(agent_class, name, value)
+    return agent_class(load_config())
+
+
+def test_an_image_without_an_agent_layer_keeps_its_cache_key(tmp_path: Path) -> None:
+    """Existing SIF caches of the task's own image stay valid."""
+    context = _context(tmp_path)
+    digest = hash_tree(context.resolve(), excluded_roots=(".git",))
+    expected = hashlib.sha256(
+        b"rsi-harness-bluevela-sif-v3\0" + digest.encode("ascii")
+    ).hexdigest()
+
+    assert plan_image(context, tmp_path / "cache").cache_key == expected
+
+
+def test_an_agent_layer_has_its_own_key_that_follows_its_contents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = _context(tmp_path)
+    task_only = plan_image(context, tmp_path / "cache")
+    layer = agent_layer(_fake_driven_agent(monkeypatch))
+    with_layer = plan_image(context, tmp_path / "cache", layer)
+    other = agent_layer(
+        _fake_driven_agent(
+            monkeypatch, install_cmds=["sudo -E npm install -g fake-cli@1.2.4"]
+        )
+    )
+
+    assert with_layer.cache_key != task_only.cache_key
+    assert plan_image(context, tmp_path / "cache", layer) == with_layer
+    assert plan_image(context, tmp_path / "cache", other).cache_key not in (
+        with_layer.cache_key,
+        task_only.cache_key,
+    )
+    changed_file = replace(
+        layer, files=((layer.files[0][0], b"other"), *layer.files[1:])
+    )
+    assert changed_file.digest != layer.digest
+
+
+def test_an_agent_layer_runs_the_local_work_images_steps_in_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same quarantine, files, pinned installs, shebang pins and checks."""
+    agent = _fake_driven_agent(monkeypatch)
+    monkeypatch.setattr(
+        type(agent), "build_args", lambda _self: {"RSI_FAKE_MIRROR": "https://m/a b"}
+    )
+    steps = agent_install_steps(agent)
+    script = agent_layer(agent).script
+
+    expected = []
+    for step in steps:
+        if step.copy is not None:
+            expected.append(
+                f"install -D -m 0644 /opt/rsi-harness/.agent-files/"
+                f"{step.copy.context_name} {step.copy.target}"
+            )
+        elif step.chmod:
+            expected.append(shlex.join(("/bin/bash", "-lc", chmod_command(step.chmod))))
+        elif step.arg is not None:
+            expected.append("export RSI_FAKE_MIRROR='https://m/a b'")
+        else:
+            expected.append(shlex.join(step.argv))
+    first, prerequisites, rest = script.split("\n", 2)
+    assert first == "set -eu"
+    # Its own command: a failure inside its `&&` list stops the script.
+    assert prerequisites.startswith("/bin/sh -c 'if command -v apt-get")
+    assert "apt-get install -y bash ca-certificates curl" in prerequisites
+    assert rest == "\n".join([*expected, "rm -rf /opt/rsi-harness/.agent-files"]) + "\n"
+    # The Docker Work image runs the same steps, one instruction each.
+    install, _files = agent_install_instructions(agent)
+    assert len(install) == len(steps)
+    assert "npm install -g fake-cli@1.2.3" in script
+    assert rest.index("install -D -m 0644") < rest.index("chmod 0755")
+
+
+def test_an_agent_layer_definition_builds_on_the_task_sif(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    layer = agent_layer(_fake_driven_agent(monkeypatch))
+    task_sif = tmp_path / "cache" / "task.sif"
+
+    definition = layer.write(tmp_path / "agent-layer", task_sif)
+
+    text = definition.read_text()
+    assert text.startswith(f"Bootstrap: localimage\nFrom: {task_sif}\n\n%files\n")
+    for name, content in layer.files:
+        assert (tmp_path / "agent-layer" / name).read_bytes() == content
+        staged = f"/opt/rsi-harness/.agent-files/{name}"
+        assert f"    {tmp_path / 'agent-layer' / name} {staged}\n" in text
+    script = tmp_path / "agent-layer" / "install-agent.sh"
+    assert script.read_text() == layer.script
+    assert f"    {script} /opt/rsi-harness/.agent-files/install-agent.sh\n" in text
+    assert text.endswith(
+        "%post\n    /bin/sh -eu /opt/rsi-harness/.agent-files/install-agent.sh\n"
+    )
+
+
+def _agent_build(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    cached: bool,
+    recorded_base: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], str, object]:
+    context = _context(tmp_path)
+    calls = tmp_path / "calls.log"
+    apptainer = _executable(
+        tmp_path / "apptainer",
+        f"printf 'apptainer %s\\n' \"$*\" >> {calls}\n"
+        'if [[ "$1" == build ]]; then printf agent-sif > "${@: -2:1}"; fi\n',
+    )
+    base = load_cluster_profile("bluevela", {"USER": "alice"})
+    profile = base.model_copy(
+        update={
+            "builder": base.builder.model_copy(
+                update={"temp_root": tmp_path, "min_tmp_mb": 1}
+            ),
+            "apptainer": base.apptainer.model_copy(update={"binary": apptainer}),
+        }
+    )
+    task = plan_image(context, tmp_path / "cache")
+    task.sif_path.parent.mkdir(parents=True)
+    task_driver = _executable(
+        tmp_path / "build-task.sh",
+        f"printf 'task driver\\n' >> {calls}\nprintf task-sif > {task.sif_path}\n"
+        f"printf '%s  %s\\n' {hashlib.sha256(b'task-sif').hexdigest()} "
+        f"{task.sif_path.name} > {task.sha256_path}\n",
+    )
+    layer = agent_layer(_fake_driven_agent(monkeypatch))
+    definition = layer.write(tmp_path / "agent-layer", task.sif_path)
+    plan = plan_image(context, tmp_path / "cache", layer)
+    if cached:
+        plan.sif_path.write_bytes(b"cached")
+        digest = hashlib.sha256(b"cached").hexdigest()
+        plan.sha256_path.write_text(f"{digest}  {plan.sif_path.name}\n")
+        assert plan.base_path is not None
+        plan.base_path.write_text(
+            recorded_base or hashlib.sha256(b"task-sif").hexdigest()
+        )
+    driver = tmp_path / "build.sh"
+    render_agent_build_driver(plan, task, profile, task_driver, definition, driver, 1)
+    completed = subprocess.run(
+        (str(driver),), check=False, capture_output=True, text=True
+    )
+    return completed, calls.read_text(), plan
+
+
+def test_an_agent_layer_build_runs_the_task_driver_then_builds_on_its_sif(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    completed, calls, plan = _agent_build(tmp_path, monkeypatch, cached=False)
+
+    assert completed.returncode == 0, completed.stderr
+    lines = calls.splitlines()
+    (build,) = [line for line in lines if line.startswith("apptainer build ")]
+    assert lines.index("task driver") < lines.index(build)
+    assert build.startswith("apptainer build --fakeroot ")
+    assert build.endswith(f"{tmp_path / 'agent-layer' / 'agent.def'}")
+    assert validate_cached_image(plan) is True
+    assert plan.sif_path.read_bytes() == b"agent-sif"
+    # Bound to the task SIF it was built on.
+    assert plan.base_path.read_text() == hashlib.sha256(b"task-sif").hexdigest() + "\n"
+    assert not list(plan.sif_path.parent.glob("*.partial"))
+
+
+def test_a_cached_agent_layer_is_not_rebuilt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    completed, calls, plan = _agent_build(tmp_path, monkeypatch, cached=True)
+
+    assert completed.returncode == 0, completed.stderr
+    assert "apptainer build" not in calls
+    assert plan.sif_path.read_bytes() == b"cached"
+
+
+def test_a_cached_agent_layer_on_another_task_sif_is_rebuilt(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A task SIF evicted and rebuilt since leaves the layer stale."""
+    completed, calls, plan = _agent_build(
+        tmp_path, monkeypatch, cached=True, recorded_base="0" * 64
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "apptainer build" in calls
+    assert plan.sif_path.read_bytes() == b"agent-sif"
+
+
+def test_an_agent_layer_is_a_cache_hit_only_on_the_task_sif_it_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    context = _context(tmp_path)
+    cache = tmp_path / "cache"
+    layer = agent_layer(_fake_driven_agent(monkeypatch))
+    plan = plan_image(context, cache, layer)
+    task = plan_image(context, cache)
+    cache.mkdir()
+    for path, content in ((task.sif_path, b"task"), (plan.sif_path, b"layer")):
+        path.write_bytes(content)
+        sidecar = task.sha256_path if path == task.sif_path else plan.sha256_path
+        sidecar.write_text(f"{hashlib.sha256(content).hexdigest()}  {path.name}\n")
+    assert plan.base_path is not None
+
+    assert plan_image(context, cache, layer).cache_hit is False  # no record
+    plan.base_path.write_text(hashlib.sha256(b"task").hexdigest() + "\n")
+    assert plan_image(context, cache, layer).cache_hit is True
+    task.sif_path.write_bytes(b"rebuilt task")
+    assert plan_image(context, cache, layer).cache_hit is False
