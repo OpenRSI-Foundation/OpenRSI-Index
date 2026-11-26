@@ -200,6 +200,110 @@ def _agent_image_files(agent: Agent) -> tuple[_AgentImageFile, ...]:
     return tuple(files)
 
 
+# The tools the pinned install commands and the launcher checks need.
+AGENT_PREREQUISITES = (
+    "RUN if command -v apt-get >/dev/null 2>&1; then "
+    "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y "
+    "bash ca-certificates curl passwd sudo tar xz-utils && "
+    "rm -rf /var/lib/apt/lists/*; "
+    "elif command -v apk >/dev/null 2>&1; then "
+    "apk add --no-cache bash ca-certificates curl shadow sudo tar xz; "
+    "else echo 'setup command failed: supported package manager' >&2; "
+    "exit 86; fi"
+)
+
+
+@dataclass(frozen=True)
+class AgentInstallStep:
+    """One step of an Agent's install, in order.
+
+    Exactly one field is set: a command to run (``argv``), a packaged file
+    to copy (``copy``), the modes of the copied files (``chmod``), or a build
+    argument the later commands may read (``arg``).
+    """
+
+    argv: tuple[str, ...] = ()
+    copy: _AgentImageFile | None = None
+    chmod: tuple[_AgentImageFile, ...] = ()
+    arg: str | None = None
+
+
+def agent_install_steps(agent: Agent) -> tuple[AgentInstallStep, ...]:
+    """The steps that install an Agent's pinned CLI and files into an image.
+
+    The local Work image renders them as Dockerfile instructions and a
+    cluster image's Agent layer as an Apptainer build section: the same
+    launcher quarantine, packaged files, install commands, node shebang pins
+    and launcher checks. Checks and pins run in AGENT_SHELL, which sees the
+    image's PATH as the Agent will; install commands in a login shell.
+    """
+    launchers = _agent_launchers(agent)
+    steps = [
+        AgentInstallStep(argv=(*AGENT_SHELL, _quarantine_launcher_script(launcher)))
+        for launcher in launchers
+    ]
+    # After the quarantine, which would otherwise move a baked-in
+    # launcher aside, and before install_cmds, which may use the files.
+    image_files = _agent_image_files(agent)
+    steps.extend(AgentInstallStep(copy=image_file) for image_file in image_files)
+    if image_files:
+        steps.append(AgentInstallStep(chmod=image_files))
+    steps.extend(AgentInstallStep(arg=name) for name in _agent_build_args(agent))
+    for command in agent.install_cmds:
+        build_command = command.replace("sudo -E ", "")
+        steps.append(AgentInstallStep(argv=("/bin/bash", "-lc", build_command)))
+    for launcher in launchers:
+        steps.append(
+            AgentInstallStep(argv=(*AGENT_SHELL, _pin_node_launcher_script(launcher)))
+        )
+    for launcher in launchers:
+        steps.append(
+            AgentInstallStep(
+                argv=(
+                    *AGENT_SHELL,
+                    f"launcher=$(command -v {shlex.quote(launcher)}) && "
+                    'test -n "$launcher" && test -x "$launcher"',
+                )
+            )
+        )
+    return tuple(steps)
+
+
+def chmod_command(files: tuple[_AgentImageFile, ...]) -> str:
+    return " && ".join(
+        f"chmod {item.mode:04o} {shlex.quote(str(item.target))}" for item in files
+    )
+
+
+def agent_install_instructions(
+    agent: Agent,
+) -> tuple[list[str], tuple[_AgentImageFile, ...]]:
+    """The Agent's install steps as Dockerfile instructions, and its files
+    as the build context entries their COPY steps name."""
+    lines: list[str] = []
+    files: list[_AgentImageFile] = []
+    for step in agent_install_steps(agent):
+        if step.copy is not None:
+            files.append(step.copy)
+            lines.append(
+                "COPY " + json.dumps([step.copy.context_name, str(step.copy.target)])
+            )
+        elif step.chmod:
+            lines.append(_bash_run_instruction(chmod_command(step.chmod)))
+        elif step.arg is not None:
+            lines.append(f"ARG {step.arg}")
+        elif step.argv[:2] == ("/bin/bash", "-lc"):
+            lines.append(_bash_run_instruction(step.argv[2]))
+        else:
+            lines.append("RUN " + json.dumps(list(step.argv)))
+    return lines, tuple(files)
+
+
+def agent_build_args(agent: Agent) -> dict[str, str | None]:
+    """The Agent's checked build arguments (see the install commands' ARGs)."""
+    return _agent_build_args(agent)
+
+
 def _drain_build_logs(logs: Any) -> None:
     for _event in logs:
         pass
@@ -477,58 +581,16 @@ class DockerImageBuilder:
         workdir: PurePosixPath,
         final_user: str,
     ) -> str:
-        launchers = _agent_launchers(agent)
         lines = [
             f"FROM {base_ref}",
             "USER root",
-            "RUN if command -v apt-get >/dev/null 2>&1; then "
-            "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y "
-            "bash ca-certificates curl passwd sudo tar xz-utils && "
-            "rm -rf /var/lib/apt/lists/*; "
-            "elif command -v apk >/dev/null 2>&1; then "
-            "apk add --no-cache bash ca-certificates curl shadow sudo tar xz; "
-            "else echo 'setup command failed: supported package manager' >&2; "
-            "exit 86; fi",
+            AGENT_PREREQUISITES,
             _bash_run_instruction(build_agent_identity_script(final_user)),
             "COPY rsi-submit /usr/local/bin/rsi-submit",
             "RUN chmod 0755 /usr/local/bin/rsi-submit",
         ]
-        for launcher in launchers:
-            lines.append(
-                _agent_shell_run_instruction(_quarantine_launcher_script(launcher))
-            )
-        # After the quarantine, which would otherwise move a baked-in
-        # launcher aside, and before install_cmds, which may use the files.
-        image_files = _agent_image_files(agent)
-        for image_file in image_files:
-            lines.append(
-                "COPY " + json.dumps([image_file.context_name, str(image_file.target)])
-            )
-        if image_files:
-            lines.append(
-                _bash_run_instruction(
-                    " && ".join(
-                        f"chmod {image_file.mode:04o} "
-                        f"{shlex.quote(str(image_file.target))}"
-                        for image_file in image_files
-                    )
-                )
-            )
-        lines.extend(f"ARG {name}" for name in _agent_build_args(agent))
-        for command in agent.install_cmds:
-            build_command = command.replace("sudo -E ", "")
-            lines.append(_bash_run_instruction(build_command))
-        for launcher in launchers:
-            lines.append(
-                _agent_shell_run_instruction(_pin_node_launcher_script(launcher))
-            )
-        for launcher in launchers:
-            lines.append(
-                _agent_shell_run_instruction(
-                    f"launcher=$(command -v {shlex.quote(launcher)}) && "
-                    'test -n "$launcher" && test -x "$launcher"'
-                )
-            )
+        install, _image_files = agent_install_instructions(agent)
+        lines.extend(install)
         lines.extend(["ENV HOME=/home/agent", f"WORKDIR {workdir}"])
         if final_user:
             lines.append(f"USER {final_user}")

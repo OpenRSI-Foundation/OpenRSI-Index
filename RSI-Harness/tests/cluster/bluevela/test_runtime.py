@@ -58,7 +58,7 @@ from rsi_harness.runtime.local_auth import (
 )
 from rsi_harness.runtime.submissions import SubmissionService
 from tests.factories import make_run_plan
-from tests.fakes import FakeClock
+from tests.fakes import FakeClock, register_fake_driven_agent
 
 # The last lines of a finished isolation probe (initialize's last exec) in
 # Work's filter.
@@ -3540,3 +3540,182 @@ def test_a_group_stop_has_begun_once_a_thread_is_stopped() -> None:
         process.kill()
         process.wait()
     assert not runtime_module._group_stop_begun(process.pid)
+
+
+def _image_agent_runtime(tmp_path: Path, monkeypatch) -> ApptainerAgentRuntime:
+    """A driven Agent, whose CLI an Agent layer installed into the SIF."""
+    register_fake_driven_agent(monkeypatch)
+    node_tmp = tmp_path / "node-tmp"
+    node_tmp.mkdir()
+    monkeypatch.setenv("RSI_HARNESS_NODE_TMP", str(node_tmp))
+    plan = make_run_plan(tmp_path)
+    agent = plan.task.agent.model_copy(update={"name": "fake-driven"})
+    plan = plan.model_copy(
+        update={"task": plan.task.model_copy(update={"agent": agent})}
+    )
+    return ApptainerAgentRuntime(
+        SimpleNamespace(
+            profile=load_cluster_profile("bluevela"),
+            run_id="native-run",
+            sif_path=tmp_path / "task.sif",
+            agent_binary=None,
+            agent_launcher="rsi-agent-driver",
+            agent_companions=(),
+            agent_auth=None,
+            agent_version="1.2.3",
+        ),
+        plan,
+    )
+
+
+def test_an_image_agent_binds_no_host_cli_and_probes_its_own_cli(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _image_agent_runtime(tmp_path, monkeypatch)
+    calls: list[tuple[str, ...]] = []
+
+    def fake_run(command, **_options):
+        calls.append(tuple(command))
+        return AgentRunResult(exit_code=0, output="fake-cli 1.2.3\n" + PROBE_END)
+
+    monkeypatch.setattr(runtime, "_run", fake_run)
+
+    runtime.initialize()
+
+    # The CLI behind the driver, found by name as the layer's check finds it.
+    assert ("/bin/bash", "-c", "exec fake-cli --version") in calls
+    assert not [
+        target
+        for target in runtime._copies
+        if target.parent == PurePosixPath("/usr/local/bin")
+        and target.name in ("rsi-agent-driver", "fake-cli")
+    ]
+    assert runtime._agent_cli_targets == []
+
+
+def test_an_image_agent_probe_names_its_image_layer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _image_agent_runtime(tmp_path, monkeypatch)
+    results = iter(
+        [
+            AgentRunResult(exit_code=0, output="fake-cli 0.9.0\n"),
+            AgentRunResult(exit_code=127, output="fake-cli: not found\n"),
+            AgentRunResult(exit_code=0, output="no version here\n"),
+        ]
+    )
+    monkeypatch.setattr(runtime, "_run", lambda *_a, **_kw: next(results))
+
+    # A CLI may report a version of its own: the image fixes the install.
+    runtime._smoke_agent()
+    for _failure in range(2):
+        with pytest.raises(
+            InfrastructureError, match="Agent layer installed it"
+        ) as caught:
+            runtime._smoke_agent()
+        message = str(caught.value)
+        assert message.startswith(
+            "cluster Agent layer CLI smoke failed: fake-cli --version"
+        )
+        assert "None" not in message.split(";")[0]
+        assert "host-only wrappers" not in message
+        assert "  " not in message
+
+
+@pytest.mark.parametrize(
+    ("command", "inner"),
+    [
+        ("printf ok", ("/bin/bash", "-lc", "printf ok")),
+        (
+            ("/bin/bash", "-c", "exec rsi-agent-driver"),
+            ("/bin/bash", "-c", "exec rsi-agent-driver"),
+        ),
+    ],
+)
+def test_an_image_agent_runs_in_its_home(
+    tmp_path: Path, monkeypatch, command, inner
+) -> None:
+    """Its settings, sessions and local login under /home/agent, as on Docker."""
+    runtime = _image_agent_runtime(tmp_path, monkeypatch)
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        runtime,
+        "_run",
+        lambda argv, **_kw: (
+            calls.append(tuple(argv)) or AgentRunResult(exit_code=0, output="")
+        ),
+    )
+
+    runtime.exec(runtime.work_ref, command, timeout_seconds=10)
+
+    assert calls == [("/usr/bin/env", "HOME=/home/agent", *inner)]
+
+
+def test_a_bound_agent_keeps_apptainers_home(tmp_path: Path, monkeypatch) -> None:
+    runtime = _codex_runtime(tmp_path, monkeypatch)
+    calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        runtime,
+        "_run",
+        lambda argv, **_kw: (
+            calls.append(tuple(argv)) or AgentRunResult(exit_code=0, output="")
+        ),
+    )
+
+    runtime.exec(runtime.work_ref, "printf ok", timeout_seconds=10)
+
+    assert calls == [("/bin/bash", "-lc", "printf ok")]
+
+
+@pytest.mark.parametrize(("key", "local"), [(None, True), ("explicit-key", False)])
+def test_the_engine_launches_on_a_local_login_unless_a_key_is_set(
+    monkeypatch, key, local
+) -> None:
+    if key is None:
+        monkeypatch.delenv("RSI_AGENT_API_KEY", raising=False)
+    else:
+        monkeypatch.setenv("RSI_AGENT_API_KEY", key)
+    login = SimpleNamespace(agent_auth=AgentAuthSource.LOCAL)
+    none = SimpleNamespace(agent_auth=None)
+
+    assert runtime_module.engine_loop_config(login).agent_local_auth is local
+    assert runtime_module.engine_loop_config(none).agent_local_auth is False
+
+
+def test_an_api_key_wins_over_the_local_login_in_the_job(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """As on Docker: the login, with its refresh token, is not copied."""
+    runtime = _image_agent_runtime(tmp_path, monkeypatch)
+    runtime.payload.agent_auth = AgentAuthSource.LOCAL
+    monkeypatch.setenv("RSI_AGENT_API_KEY", "explicit-key")
+    monkeypatch.setattr(
+        runtime_module,
+        "resolve_agent_auth",
+        lambda **_kw: pytest.fail("the login must not be read"),
+    )
+
+    runtime._install_auth()
+
+    assert runtime.auth_material is None
+    assert not (runtime.node_tmp / "agent-auth").exists()
+
+
+def test_the_judge_runs_on_the_task_sif_under_an_agent_layer(
+    tmp_path: Path, monkeypatch
+) -> None:
+    runtime = _image_agent_runtime(tmp_path, monkeypatch)
+    runtime.payload.judge_sif_path = tmp_path / "task-only.sif"
+    common = {
+        "devices": (),
+        "extra_binds": (),
+        "mount_workspace": True,
+        "mount_agent_home": False,
+        "network_mode": "no-network",
+    }
+
+    judge = runtime._base_command(**common, phase="judge")
+    work = runtime._base_command(**common, phase="work")
+
+    assert judge[-1] == str(tmp_path / "task-only.sif")
+    assert work[-1] == str(tmp_path / "task.sif")

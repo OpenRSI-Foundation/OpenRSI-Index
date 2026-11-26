@@ -13,7 +13,7 @@ import shlex
 import shutil
 import subprocess
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Protocol
@@ -25,12 +25,16 @@ from rsi_harness.cluster.base import (
     ClusterRunRequest,
     ClusterRunResult,
 )
-from rsi_harness.cluster.bluevela.image import ImagePlan as SIFImagePlan
 from rsi_harness.cluster.bluevela.image import (
+    AgentLayer,
+    agent_layer,
+    agent_layer_required,
     plan_image,
+    render_agent_build_driver,
     render_build_driver,
     validate_cached_image,
 )
+from rsi_harness.cluster.bluevela.image import ImagePlan as SIFImagePlan
 from rsi_harness.cluster.bluevela.judge_llm import (
     _MACHINES,
     ClusterJudgeLLM,
@@ -57,9 +61,11 @@ from rsi_harness.cluster.schedulers.lsf import (
 from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.integrations.rsi_loop import (
     task_solution_script,
+    validate_agent_config,
     validate_agent_reasoning_effort,
 )
 from rsi_harness.models import (
+    AgentAuthSource,
     AssetRequirement,
     GPUAllocation,
     GPUDevice,
@@ -152,17 +158,23 @@ def _agent_launcher(agent_name: str) -> str:
 
 
 def require_cluster_agent(agent_name: str, *, oracle: bool = False) -> None:
-    """Refuse Agents whose Work image needs files a cluster image cannot carry."""
+    """Refuse an unregistered Agent; every registered one runs on clusters.
+
+    Codex and Claude Code run as one native binary from shared storage. An
+    Agent with packaged image files (the Agent driver, pi's extension) gets
+    them, its pinned CLI and node in an Agent layer of the cluster image.
+    """
+    del oracle
     try:
-        agent_class = get_agent_class(agent_name)
+        get_agent_class(agent_name)
     except ValueError as error:
         raise SetupError(str(error)) from error
-    if agent_class.image_files and not (oracle and agent_name == "oracle"):
-        raise SetupError(
-            f"Agent {agent_name!r} needs files baked into its Work image (such "
-            "as rsi-agent-driver or pi's extension), which cluster images do "
-            "not carry yet; it runs on the local Docker backend only for now"
-        )
+
+
+def _layer_agent_version(agent_name: str) -> str | None:
+    """The version an Agent layer installs: the Harness's pin."""
+    pinned = getattr(get_agent_class(agent_name), "agent_version", None)
+    return pinned or {"pi": versions.PI}.get(agent_name)
 
 
 def _binary_version(executable: Path) -> str:
@@ -207,12 +219,17 @@ def _native_agent_binary(agent_name: str, executable: Path) -> Path:
 
 
 def _pinned_agent_version(agent_name: str) -> str | None:
+    if agent_layer_required(agent_name):
+        return _layer_agent_version(agent_name)
     return {"codex": versions.CODEX, "claude-code": versions.CLAUDE_CODE}.get(
         agent_name
     )
 
 
 def _resolve_agent_version(agent_name: str) -> str | None:
+    if agent_layer_required(agent_name):
+        # Installed in the image at the pin; no host CLI is involved.
+        return _layer_agent_version(agent_name)
     launcher = _agent_launcher(agent_name)
     executable = shutil.which(launcher)
     if executable is None:
@@ -424,11 +441,24 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         if build_context is None:
             raise SetupError("Blue Vela cluster runs require a Docker build context")
         self._validate_runtime_inputs(request)
-        agent_version = (
-            None if oracle else self.agent_version_resolver(definition.agent.name)
-        )
         agent_launcher = _agent_launcher(definition.agent.name)
-        raw_agent_binary = None if oracle else shutil.which(agent_launcher)
+        layer = self._agent_layer(definition, request)
+        if layer is not None and resource_plan.multi_node is not None:
+            raise SetupError(
+                f"Agent {definition.agent.name!r} runs from an Agent layer of the "
+                "image, which multi-node runs do not support yet: their Work and "
+                "Judge ranks share one SIF; use a single-node allocation"
+            )
+        if oracle:
+            agent_version = None
+        elif layer is not None:
+            # Installed in the image at the Harness's pin.
+            agent_version = _layer_agent_version(definition.agent.name)
+        else:
+            agent_version = self.agent_version_resolver(definition.agent.name)
+        raw_agent_binary = (
+            None if oracle or layer is not None else shutil.which(agent_launcher)
+        )
         agent_binary = (
             None
             if raw_agent_binary is None
@@ -463,7 +493,9 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             stage: self._job_name(definition.task_id, stage, definition.agent.name)
             for stage in ("build", "run")
         }
-        planned_image = plan_image(build_context, self.profile.storage.image_cache)
+        planned_image = plan_image(
+            build_context, self.profile.storage.image_cache, layer
+        )
         build_spec = self._build_spec(
             run_dir, names["build"], resources, run_dir / "control" / "build.sh"
         )
@@ -534,6 +566,7 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                         require_ready=False,
                     ),
                     "agent_version": agent_version,
+                    "agent_layer": None if layer is None else layer.digest,
                 },
             )
             return ClusterRunResult(
@@ -557,14 +590,51 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         image = plan_image(
             definition.service.build_context,
             self.profile.storage.image_cache,
+            layer,
         )
-        render_build_driver(
-            image,
-            self.profile,
-            definition.service.build_context,
-            build_spec.script_path,
-            build_spec.local_tmp_mb,
+        task_image = (
+            None
+            if layer is None
+            else plan_image(
+                definition.service.build_context, self.profile.storage.image_cache
+            )
         )
+        # The Judge runs on the task's own SIF, as a local Docker Judge on
+        # the task's Base image; one calling the Agent's model needs its CLI.
+        judge_image = (
+            None
+            if task_image is None or definition.verifier.model_access
+            else task_image
+        )
+        if layer is None:
+            render_build_driver(
+                image,
+                self.profile,
+                definition.service.build_context,
+                build_spec.script_path,
+                build_spec.local_tmp_mb,
+            )
+        else:
+            # The task's own SIF first, shared with the Oracle and every
+            # other Agent; the layer is built on its exact bytes.
+            assert task_image is not None
+            task_driver = control / "build-task.sh"
+            render_build_driver(
+                task_image,
+                self.profile,
+                definition.service.build_context,
+                task_driver,
+                build_spec.local_tmp_mb,
+            )
+            render_agent_build_driver(
+                image,
+                task_image,
+                self.profile,
+                task_driver,
+                layer.write(control / "agent-layer", task_image.sif_path),
+                build_spec.script_path,
+                build_spec.local_tmp_mb,
+            )
         manifest = self._manifest(
             run_id=run_id,
             run_dir=run_dir,
@@ -617,7 +687,9 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             )
             _atomic_json(manifest_path, manifest)
 
-            run_plan = self._run_plan(definition, image, resources, run_dir)
+            run_plan = self._run_plan(
+                definition, image, resources, run_dir, judge_image=judge_image
+            )
             if sandbox is not None:
                 run_plan = run_plan.model_copy(update={"sandbox": sandbox})
             from rsi_harness.cluster.bluevela.engine import (
@@ -634,6 +706,10 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 run_plan=run_plan,
                 sif_path=image.sif_path,
                 sif_sha256_path=image.sha256_path,
+                judge_sif_path=None if judge_image is None else judge_image.sif_path,
+                judge_sif_sha256_path=(
+                    None if judge_image is None else judge_image.sha256_path
+                ),
                 source_root=frozen_source,
                 resources=(
                     resources if isinstance(resources, ClusterResources) else None
@@ -667,6 +743,11 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 ),
             )
             manifest["sif_sha256"] = image.sha256_path.read_text().split()[0]
+            if judge_image is not None:
+                manifest["judge_sif_path"] = str(judge_image.sif_path)
+                manifest["judge_sif_sha256"] = (
+                    judge_image.sha256_path.read_text().split()[0]
+                )
             manifest["control_sha256"] = self._control_hashes(control)
             manifest["state"] = "ready"
             _atomic_json(manifest_path, manifest)
@@ -802,6 +883,23 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 f"the SIF of run {run_id} was evicted or rebuilt; it cannot "
                 "resume on the image it ran on"
             )
+        if payload.judge_sif_path is not None and (
+            payload.judge_sif_sha256_path is None
+            or not validate_cached_image(
+                SIFImagePlan(
+                    cache_key=payload.judge_sif_path.stem,
+                    sif_path=payload.judge_sif_path,
+                    sha256_path=payload.judge_sif_sha256_path,
+                    cache_hit=True,
+                )
+            )
+            or payload.judge_sif_sha256_path.read_text().split()[0]
+            != manifest.get("judge_sif_sha256")
+        ):
+            raise SetupError(
+                f"the Judge SIF of run {run_id} was evicted or rebuilt; it cannot "
+                "resume on the image it ran on"
+            )
         # The job refuses an Agent CLI of another version than the run's
         # (runtime._smoke_agent): refuse it here, before it costs an attempt.
         binary = payload.agent_binary
@@ -809,6 +907,9 @@ class BlueVelaClusterAdapter(ClusterAdapter):
             version = None if binary is None else self.binary_version(binary)
         except (OSError, SetupError):
             version = None
+        if binary is None and agent_layer_required(payload.run_plan.task.agent.name):
+            # Installed in the SIF, whose identity was checked above.
+            version = payload.agent_version
         if version != payload.agent_version:
             raise SetupError(
                 f"run {run_id} ran Agent CLI {binary} {payload.agent_version}, "
@@ -1079,6 +1180,25 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         validate_cluster_sandbox(task, grant, multi_node=multi_node)
         return grant
 
+    @staticmethod
+    def _agent_layer(
+        definition: TaskDefinition, request: ClusterRunRequest
+    ) -> AgentLayer | None:
+        """The image layer an Agent with packaged Work files needs, or None.
+
+        Its configuration is checked here as the job checks it: a local
+        login stands in for the API key the Agent would otherwise need.
+        """
+        if not agent_layer_required(definition.agent.name):
+            return None
+        config = load_config()
+        if request.agent_auth == AgentAuthSource.LOCAL and not config.agent_api_key:
+            config = replace(config, agent_local_auth=True)
+        agent = validate_agent_config(
+            config, definition.agent.name, model=definition.agent.model
+        )
+        return agent_layer(agent)
+
     def _validate_runtime_inputs(self, request: ClusterRunRequest) -> None:
         if request.agent_name == "codex" and request.model is None:
             raise SetupError("cluster Codex runs require an explicit --model")
@@ -1089,7 +1209,11 @@ class BlueVelaClusterAdapter(ClusterAdapter):
                 agent_api_key=None,
             )
         launcher = _agent_launcher(request.agent_name)
-        if request.agent_name != "oracle" and shutil.which(launcher) is None:
+        if (
+            request.agent_name != "oracle"
+            and not agent_layer_required(request.agent_name)
+            and shutil.which(launcher) is None
+        ):
             raise SetupError(f"cluster agent executable is unavailable: {launcher}")
         # Apptainer may only be installed on compute nodes. Both generated
         # build and Engine drivers check it there before starting their work.
@@ -1331,6 +1455,8 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         image: SIFImagePlan,
         resources: ClusterResources | MultiNodeResources,
         run_dir: Path,
+        *,
+        judge_image: SIFImagePlan | None = None,
     ) -> RunPlan:
         if isinstance(resources, MultiNodeResources):
             work_devices = tuple(
@@ -1390,12 +1516,12 @@ class BlueVelaClusterAdapter(ClusterAdapter):
         runtime_image = ImagePlan(
             base_ref=str(image.sif_path),
             work_ref=str(image.sif_path),
-            judge_ref=str(image.sif_path),
+            judge_ref=str((judge_image or image).sif_path),
             workdir=workdir,
             rootfs_snapshot_mode=RootfsSnapshotMode.SPLIT_WORKDIR,
             base_digest=f"sha256:{image.cache_key}",
             work_digest=f"sha256:{image.cache_key}",
-            judge_digest=f"sha256:{image.cache_key}",
+            judge_digest=f"sha256:{(judge_image or image).cache_key}",
         )
         # Every cluster Judge starts from the task SIF with Work's workspace
         # only, never from Work's rootfs, whatever clean_image says:

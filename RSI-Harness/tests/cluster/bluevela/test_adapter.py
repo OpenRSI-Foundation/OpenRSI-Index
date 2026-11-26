@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shlex
 import sys
 from datetime import UTC, datetime
@@ -18,6 +19,7 @@ from rsi_harness.cluster.bluevela.adapter import (
 )
 from rsi_harness.cluster.bluevela.engine import load_engine_payload
 from rsi_harness.cluster.bluevela.image import ImagePlan as SIFImagePlan
+from rsi_harness.cluster.bluevela.image import plan_image
 from rsi_harness.cluster.bluevela.resources import derive_resource_plan
 from rsi_harness.cluster.config import (
     ApptainerBindProfile,
@@ -148,14 +150,31 @@ class RecordingScheduler:
             assignments = {
                 line.split("=", 1)[0]: shlex.split(line.split("=", 1)[1])[0]
                 for line in spec.script_path.read_text().splitlines()
-                if line.startswith(("final_sif=", "final_sha="))
+                if line.startswith(
+                    (
+                        "final_sif=",
+                        "final_sha=",
+                        "task_sif=",
+                        "task_sha=",
+                        "final_base=",
+                    )
+                )
             }
-            sif = Path(assignments["final_sif"])
-            sha = Path(assignments["final_sha"])
-            sif.parent.mkdir(parents=True, exist_ok=True)
-            sif.write_bytes(b"test-sif")
-            digest = hashlib.sha256(b"test-sif").hexdigest()
-            sha.write_text(f"{digest}  {sif.name}\n")
+            # An Agent layer's driver builds the task's own SIF first.
+            images = [("final_sif", "final_sha", b"test-sif")]
+            if "task_sif" in assignments:
+                images.append(("task_sif", "task_sha", b"task-sif"))
+            for sif_name, sha_name, content in images:
+                sif = Path(assignments[sif_name])
+                sha = Path(assignments[sha_name])
+                sif.parent.mkdir(parents=True, exist_ok=True)
+                sif.write_bytes(content)
+                digest = hashlib.sha256(content).hexdigest()
+                sha.write_text(f"{digest}  {sif.name}\n")
+            if "final_base" in assignments:
+                Path(assignments["final_base"]).write_text(
+                    hashlib.sha256(b"task-sif").hexdigest() + "\n"
+                )
         else:
             payload = load_engine_payload(spec.script_path.with_suffix(".json"))
             writer = RunArtifactWriter(payload.run_plan, run_id=payload.run_id)
@@ -320,38 +339,87 @@ def test_judge_model_access_a_cluster_cannot_serve_is_refused_before_submission(
     assert not profile.storage.run_root.parent.exists()
 
 
+def _driven_request(tmp_path: Path, monkeypatch, *, dry_run: bool) -> ClusterRunRequest:
+    register_fake_driven_agent(monkeypatch)
+    for name, value in (
+        ("RSI_AGENT_API_KEY", "driven-key"),
+        ("RSI_AGENT_CONTEXT_WINDOW", "200000"),
+        ("RSI_AGENT_MAX_OUTPUT_TOKENS", "8192"),
+    ):
+        monkeypatch.setenv(name, value)
+    return _request(tmp_path, dry_run=dry_run).model_copy(
+        update={
+            "agent_name": "fake-driven",
+            "options": CompileOptions(agent_name="fake-driven"),
+            "model": "fake-model",
+            "reasoning_effort": None,
+            "agent_auth": None,
+        }
+    )
+
+
 @pytest.mark.parametrize("dry_run", [True, False])
-def test_driven_agent_is_refused_before_cluster_runtime_or_storage(
+def test_driven_agent_runs_from_an_agent_layer_of_the_cluster_image(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     dry_run: bool,
 ) -> None:
-    """Cluster images cannot carry rsi-agent-driver yet."""
-    register_fake_driven_agent(monkeypatch)
+    """Its pinned CLI, node and driver go into the image; no host CLI is used."""
+    request = _driven_request(tmp_path, monkeypatch, dry_run=dry_run)
+    looked_up: list[str] = []
+    monkeypatch.setattr(
+        adapter_module.shutil, "which", lambda name: looked_up.append(name)
+    )
+    events: list[tuple[str, object]] = []
     profile = _profile(tmp_path)
     scheduler = RecordingScheduler()
-    adapter = BlueVelaClusterAdapter(profile, scheduler=scheduler)
-    monkeypatch.setattr(
-        adapter,
-        "_validate_runtime_inputs",
-        lambda _request: pytest.fail("driven Agent reached runtime validation"),
-    )
-    request = _request(tmp_path, dry_run=dry_run).model_copy(
-        update={
-            "agent_name": "fake-driven",
-            "options": CompileOptions(agent_name="fake-driven"),
-            "model": None,
-            "reasoning_effort": None,
-        }
+    adapter = BlueVelaClusterAdapter(
+        profile,
+        scheduler=scheduler,
+        event_callback=lambda name, data: events.append((name, data)),
     )
 
-    with pytest.raises(SetupError, match="local Docker backend only"):
-        adapter.run(request)
+    result = adapter.run(request)
 
-    assert scheduler.events == []
-    assert scheduler.specs == []
-    assert not profile.storage.run_root.parent.exists()
-    assert not request.logs_root.exists()
+    assert looked_up == []
+    task_only = plan_image(
+        request.task_dir / "environment", profile.storage.image_cache
+    )
+    if dry_run:
+        (dry,) = [data for name, data in events if name == "dry_run"]
+        assert dry["agent_version"] == "1.2.3"
+        assert re.fullmatch(r"[0-9a-f]{64}", dry["agent_layer"])
+        assert dry["image"] != str(task_only.sif_path)
+        assert scheduler.specs == []
+        return
+    assert result.status.value == "completed"
+    payload = load_engine_payload(scheduler.specs[1].script_path.with_suffix(".json"))
+    assert payload.agent_binary is None
+    assert payload.agent_companions == ()
+    assert payload.agent_version == "1.2.3"
+    assert payload.agent_launcher == "rsi-agent-driver"
+    assert payload.sif_path != task_only.sif_path
+    # The Judge runs on the task's own SIF, as a local Docker Judge does.
+    assert payload.judge_sif_path == task_only.sif_path
+    assert payload.judge_sif_sha256_path == task_only.sha256_path
+    assert payload.run_plan.images.judge_ref == str(task_only.sif_path)
+    assert payload.run_plan.images.work_ref == str(payload.sif_path)
+    info = json.loads((payload.run_plan.paths.root / "RUN_INFO.json").read_text())
+    assert info["judge_sif_path"] == str(task_only.sif_path)
+    control = payload.run_plan.paths.root / "control"
+    layer = control / "agent-layer"
+    definition = (layer / "agent.def").read_text()
+    # Built on the task's own SIF, which the Oracle and Codex runs share.
+    assert definition.startswith(f"Bootstrap: localimage\nFrom: {task_only.sif_path}\n")
+    script = (layer / "install-agent.sh").read_text()
+    assert "npm install -g fake-cli@1.2.3" in script
+    assert "sudo -E" not in script
+    assert "/opt/rsi-harness/agent-driver.mjs" in script
+    assert sorted(path.name for path in (layer / "agent-files").iterdir()) == ["0", "1"]
+    build = scheduler.specs[0].script_path.read_text()
+    assert f"task_driver={control / 'build-task.sh'}" in build
+    assert f"final_sif={task_only.sif_path}" in (control / "build-task.sh").read_text()
+    assert not [name for name, _data in events if name == "agent_version_mismatch"]
 
 
 @pytest.mark.parametrize("dry_run", [True, False])
