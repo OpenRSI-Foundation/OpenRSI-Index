@@ -22,6 +22,7 @@ from rsi_harness.cluster.bluevela.runtime import NativeEngineComposition
 from rsi_harness.cluster.schedulers.lsf import LSFJobResult
 from rsi_harness.errors import InfrastructureError, SetupError
 from rsi_harness.models import (
+    CompileOptions,
     ContainerRef,
     FrozenRewardMap,
     RootfsSnapshotMode,
@@ -46,6 +47,7 @@ from tests.cluster.bluevela.test_adapter import (
 from tests.cluster.bluevela.test_adapter import (
     _fake_codex_runtime as _fake_codex_runtime,
 )
+from tests.fakes import register_fake_driven_agent
 
 
 class ResumeScheduler(RecordingScheduler):
@@ -336,6 +338,34 @@ def test_resume_refuses_another_agent_cli_version(tmp_path: Path) -> None:
 
     assert _tree(run.run_dir, run.profile.storage.logs_root) == before
     assert len(run.scheduler.specs) == submitted
+
+
+def test_an_image_agent_resumes_on_its_sif_without_a_host_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Its CLI is in the SIF, whose identity resume checks; none on the host."""
+    register_fake_driven_agent(monkeypatch)
+    for name, value in (
+        ("RSI_AGENT_API_KEY", "driven-key"),
+        ("RSI_AGENT_CONTEXT_WINDOW", "200000"),
+        ("RSI_AGENT_MAX_OUTPUT_TOKENS", "8192"),
+    ):
+        monkeypatch.setenv(name, value)
+    request = _request(tmp_path, dry_run=False).model_copy(
+        update={
+            "agent_name": "fake-driven",
+            "options": CompileOptions(agent_name="fake-driven"),
+            "model": "fake-model",
+            "reasoning_effort": None,
+            "agent_auth": None,
+        }
+    )
+    run = _interrupted_run(tmp_path, request)
+    run.adapter.binary_version = lambda _path: pytest.fail("no host CLI to probe")
+    payload = load_engine_payload(run.run_dir / "control" / "run.json")
+    assert (payload.agent_binary, payload.agent_version) == (None, "1.2.3")
+
+    run.adapter.plan_resume(run.run_id, AttemptGrants(), dry_run=True)
 
 
 def test_resume_refuses_a_sif_rebuilt_since_the_run(tmp_path: Path) -> None:

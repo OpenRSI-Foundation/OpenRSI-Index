@@ -37,6 +37,7 @@ from rsi_harness.cluster.bluevela.allocation import AllocatedPools
 from rsi_harness.cluster.bluevela.apptainer_environment import (
     isolated_apptainer_environment,
 )
+from rsi_harness.cluster.bluevela.image import agent_layer_required
 from rsi_harness.cluster.bluevela.judge_controller import JudgeControllerControl
 from rsi_harness.cluster.bluevela.judge_llm import (
     JUDGE_CODEX_SCRATCH,
@@ -72,6 +73,7 @@ from rsi_harness.errors import (
     SubmissionError,
 )
 from rsi_harness.integrations.rsi_loop import (
+    AGENT_SHELL,
     RSILoopAgentAdapter,
     rsi_loop_runtime_secret_values,
     task_solution_script,
@@ -98,6 +100,7 @@ from rsi_harness.models import (
     JUDGE_ISOLATION_FALLBACK_ENV,
     JUDGE_NETNS_ENV,
     JUDGE_TRAJECTORY_ROOT,
+    AgentAuthSource,
     AgentHookRequest,
     AgentPrepareRequest,
     AgentResume,
@@ -177,7 +180,7 @@ from rsi_harness.task.compiler import HarborTaskCompiler
 from rsi_harness.task.digest import require_tests_digest
 from rsi_loop.harness.agent import create_agent, get_agent_class
 from rsi_loop.harness.agent import oracle as oracle_module
-from rsi_loop.harness.config import load_config
+from rsi_loop.harness.config import RSILoopConfig, load_config
 
 
 class _Clock:
@@ -866,6 +869,8 @@ class ApptainerAgentRuntime:
         self._oracle_solution: Path | None = None
         # The Agent CLI and its companions, also bound into a model-access Judge.
         self._agent_cli_targets: list[PurePosixPath] = []
+        # Installed in the SIF by an Agent layer, not bound from the host.
+        self._image_agent = agent_layer_required(plan.task.agent.name)
         self.auth_material: AgentAuthMaterial | None = None
         # Set by the composition once the Agent's login is known.
         self.judge_model_access: JudgeModelAccess | None = None
@@ -1043,6 +1048,7 @@ class ApptainerAgentRuntime:
         submit.chmod(0o755)
         self._copies[PurePosixPath("/usr/local/bin/rsi-submit")] = submit
         launcher = getattr(self.payload, "agent_launcher", "codex")
+        binary: Path | None
         if self.plan.task.agent.name == "oracle":
             # The frozen Harness package supplies this script; no installed model
             # CLI, credential, root operation or image rebuild is needed.
@@ -1050,6 +1056,9 @@ class ApptainerAgentRuntime:
             binary = self.control / "rsi-oracle"
             shutil.copyfile(source, binary)
             binary.chmod(0o755)
+        elif self._image_agent:
+            # The SIF's Agent layer installed the CLI, node and Agent files.
+            binary = None
         else:
             if (
                 self.payload.agent_binary is None
@@ -1057,10 +1066,11 @@ class ApptainerAgentRuntime:
             ):
                 raise SetupError("cluster Agent binary does not exist")
             binary = self.payload.agent_binary
-        self._copies[PurePosixPath("/usr/local/bin") / launcher] = binary
+        if binary is not None:
+            self._copies[PurePosixPath("/usr/local/bin") / launcher] = binary
         self._agent_cli_targets = (
             []
-            if self.plan.task.agent.name == "oracle"
+            if self.plan.task.agent.name == "oracle" or self._image_agent
             else [PurePosixPath("/usr/local/bin") / launcher]
         )
         for companion in self.payload.agent_companions:
@@ -1648,6 +1658,11 @@ class ApptainerAgentRuntime:
     def _install_auth(self) -> None:
         if self.payload.agent_auth is None:
             return
+        if load_config().agent_api_key:
+            # An API key wins over the login, as on local Docker
+            # (engine_loop_config): the Agent runs on the key, and the login,
+            # with its refresh token, stays on the operator's host.
+            return
         material = resolve_agent_auth(
             source=self.payload.agent_auth,
             agent_name=self.plan.task.agent.name,
@@ -1717,7 +1732,14 @@ class ApptainerAgentRuntime:
         if not version:
             raise SetupError("cluster Agent runtime requires an exact version")
         launcher = getattr(self.payload, "agent_launcher", "codex")
-        command = (f"/usr/local/bin/{launcher}", "--version")
+        command: tuple[str, ...] = (f"/usr/local/bin/{launcher}", "--version")
+        if self._image_agent:
+            # The CLI behind the Agent driver (or pi itself), not the driver,
+            # found by name on the image's PATH as the layer's check and the
+            # Agent's own shell find it.
+            agent_class = get_agent_class(self.plan.task.agent.name)
+            launcher = (agent_class.extra_launchers or (launcher,))[0]
+            command = (*AGENT_SHELL, f"exec {shlex.quote(launcher)} --version")
         result = self._run(
             command,
             devices=self.work_devices,
@@ -1731,17 +1753,30 @@ class ApptainerAgentRuntime:
                 reported = parse_agent_version(result.output)
             except SetupError:
                 pass
+        if self._image_agent and reported is not None:
+            # The Agent layer installed the pin; a CLI may report a version of
+            # its own (ZCode's CLI is not its package's release).
+            return
         if reported != version:
-            raise InfrastructureError(
-                "cluster Agent binary smoke failed: "
+            subject = (
+                f"cluster Agent layer CLI smoke failed: {launcher} --version "
+                if self._image_agent
+                else "cluster Agent binary smoke failed: "
                 f"{self.payload.agent_binary} as {command[0]} --version "
-                f"exited {result.exit_code}; expected {version!r}, "
+            )
+            raise InfrastructureError(
+                subject + f"exited {result.exit_code}; expected {version!r}, "
                 f"parsed version {reported!r}; "
                 f"output={result.output!r}.{self._namespace_remedy(result)} "
-                "Put a native executable that works inside the task container "
-                "on the submit host's PATH (a Codex npm launcher resolves to "
-                "its bundled binary); host-only wrappers and their dependencies "
-                "are not installed implicitly."
+                + (
+                    "The SIF's Agent layer installed it at the Harness's pin; "
+                    "it must run in the task container and report a version."
+                    if self._image_agent
+                    else "Put a native executable that works inside the task "
+                    "container on the submit host's PATH (a Codex npm launcher "
+                    "resolves to its bundled binary); host-only wrappers and their "
+                    "dependencies are not installed implicitly."
+                )
             )
 
     def _oracle_solution_path(self) -> Path:
@@ -1860,6 +1895,11 @@ class ApptainerAgentRuntime:
             if isinstance(command, str)
             else tuple(command)
         )
+        if self._image_agent:
+            # The Agent's settings, sessions and local login live under its
+            # home, as on local Docker; Work's own $HOME is Apptainer's
+            # in-memory one, lost with each exec.
+            argv = ("/usr/bin/env", "HOME=/home/agent", *argv)
         # RSI Loop's Docker hook assumes an injected `agent` account. Apptainer
         # executes as the mapped host UID, so ownership is already correct.
         if argv[:2] == ("/bin/bash", "-lc"):
@@ -2839,7 +2879,11 @@ class ApptainerAgentRuntime:
         for source, target, read_only in binds:
             suffix = ":ro" if read_only else ""
             command.extend(("--bind", f"{source}:{target}{suffix}"))
-        command.append(str(self.payload.sif_path))
+        # The Judge runs on the task's own SIF when Work has an Agent layer.
+        judge_sif = getattr(self.payload, "judge_sif_path", None)
+        command.append(
+            str(judge_sif if phase == "judge" and judge_sif else self.payload.sif_path)
+        )
         return tuple(command)
 
     def _container_environment(
@@ -3458,6 +3502,18 @@ class _ClusterAgentAdapter(RSILoopAgentAdapter):
         runtime.stage_solution()
 
 
+def engine_loop_config(payload: Any) -> RSILoopConfig:
+    """RSI Loop's configuration in the job, as local Docker resolves it.
+
+    The Agent launches on a local login unless an API key is set, which
+    wins; Agents that read it (Antigravity) configure themselves for it.
+    """
+    config = load_config()
+    if payload.agent_auth == AgentAuthSource.LOCAL and not config.agent_api_key:
+        config = replace(config, agent_local_auth=True)
+    return config
+
+
 class NativeEngineComposition:
     def __init__(
         self,
@@ -3478,7 +3534,7 @@ class NativeEngineComposition:
             allocated_pools=allocated_pools,
         )
         self.artifacts: RunArtifactWriter | None = None
-        config = load_config()
+        config = engine_loop_config(payload)
         self.rsi_loop_config = config
         self.agent = _ClusterAgentAdapter(config, runtime=self.runtime)
         self.provider_urls = (

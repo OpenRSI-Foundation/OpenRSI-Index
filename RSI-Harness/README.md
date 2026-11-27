@@ -209,7 +209,9 @@ or `--agent claude-code --model claude-opus-5-5 --reasoning-effort max`
 to `rsi-harness run`.
 
 Each Agent CLI is installed at an exact pinned version, over HTTPS, into the
-Work image when the image is built, together with the node it runs on. All of
+Work image when the image is built, together with the node it runs on; on a
+cluster, the six Agents below get the same install in an Agent layer of the
+cluster image, while Codex and Claude Code are bound from shared storage. All of
 these versions live in one table,
 [`src/rsi_loop/harness/agent/versions.py`](src/rsi_loop/harness/agent/versions.py).
 Native downloads (node, the OpenCode binary, its ripgrep, the ZCode
@@ -246,9 +248,10 @@ reply, and that the API key stays out of every artifact.
 Codex and Claude Code keep working through their native stop hook. The stop
 hooks of Qwen Code, Kimi Code, ZCode and Antigravity allow only a limited
 number of continuations, and OpenCode has none, so RSI Harness runs them under
-`rsi-agent-driver`, a small program baked into their Work image. pi's own stop
-point has no limit, so it needs no driver: an extension baked into its Work
-image does the same job inside pi. For these six Agents:
+`rsi-agent-driver`, a small program baked into their Work image (on a cluster,
+into the image's Agent layer). pi's own stop point has no limit, so it needs no
+driver: an extension baked into its Work image does the same job inside pi. For
+these six Agents:
 
 - **Same process, same session.** The CLI is started once. The driver talks to
   it over the Agent Client Protocol (ZCode over its own app-server protocol)
@@ -309,8 +312,31 @@ image does the same job inside pi. For these six Agents:
   blocked in a no-network Work, which it tolerates. A model-access Judge
   gets the short-lived access token without the refresh token, so it can
   call the Agent only until that token expires.
-- **Local Docker only.** These six Agents need files baked into their Work
-  image, which cluster images do not carry yet, so `--cluster` refuses them.
+- **On clusters.** These six Agents need files baked into their Work image,
+  so a cluster image gets an Agent layer: an Apptainer build on the task's own
+  SIF (`Bootstrap: localimage`), the one the Oracle, Codex and Claude Code runs
+  use, never a rebuild of the task. It runs the same steps as the local Work
+  image (the prerequisites, launcher quarantine, the Harness's Agent files,
+  the pinned install commands with node, shebang pins and launcher checks) as
+  one staged script, with the build job's network; `%post` needs
+  `apptainer.build_args = ["--fakeroot"]` (or root). The task's SIF is built
+  first when missing. Each task and Agent gets an image with its own cache
+  key, bound to the digest of the task SIF it was built on: a task SIF
+  evicted and rebuilt since leaves the layer stale, and it is rebuilt. The
+  task's image alone keeps its key. Only Work uses the layer: the Judge runs
+  on the task's own SIF, as a local Docker Judge on the task's Base image,
+  except a `model_access` Judge, which needs the Agent's CLI. Multi-node runs,
+  whose ranks share one SIF, refuse these Agents for now. The job runs the Agent's
+  commands with `HOME=/home/agent`, the run's Agent home on shared storage, so
+  its settings, sessions and a local login live there as on Docker. The smoke
+  check runs the CLI's own `--version` (`agy --version`, not the driver's),
+  which must run in the task container and report a version; the layer fixes
+  the install at the pin, which the run records (ZCode's CLI reports its own
+  version, not its package's). No CLI is needed on the submit host. A local
+  login works as on Docker: the submit host checks it, and the job copies it
+  from the operator's home to node-local storage bound under `/home/agent`.
+  An API key, when set, wins, and the login is then not copied. Kubernetes
+  still refuses `--agent-auth local`.
 
 ### Same model, no account tools
 
@@ -669,15 +695,20 @@ privileges; the submit host refuses the first before any job when it sees the
 same file. There, install a runtime without setuid, such as an unprivileged
 Apptainer (upstream `install-unprivileged.sh`), under your storage. The submit
 host needs scheduler commands, task/configuration files, shared staging storage
-and any Agent CLI/credentials to stage; Oracle needs no Work model CLI. A research Agent's CLI
-must also run inside the task container: its `--version` probe runs before model
-calls. Host-only wrappers and undeclared dependencies are not installed for it.
+and any Agent CLI/credentials to stage; Oracle needs no Work model CLI, and an
+Agent installed by an Agent layer (see [Agents](#agents)) none either. A research
+Agent's CLI must also run inside the task container: its `--version` probe runs
+before model calls. Host-only wrappers and undeclared dependencies are not installed for it.
 Both probes run the resolved native binary (see below) and require one distinct
 three-part version in `--version` output (prerelease/build suffixes and
 surrounding banners are allowed). Missing or ambiguous versions are refused; the
 container version must equal the frozen submit-host version, including on
 resume. A version other than the Harness's pin still runs, with an
 `agent_version_mismatch` event and `agent_pinned_version` in `RUN_INFO.json`.
+An Agent layer's CLI has neither: there is no submit-host probe, the container
+probe only requires it to run and report a version (it need not equal the pin,
+and no `agent_version_mismatch` is emitted), the run records the pin the layer
+installed, and resume relies on the SIF's identity.
 
 `--dry-run` checks the task and allocation without submitting jobs. Runtime
 validation must exercise the actual image, container/isolation support, Agent
@@ -793,9 +824,10 @@ only in `judge_binds`. These binds (or a legacy profile's `extra_binds`) are the
 only way data reaches a phase: the Harness ignores `APPTAINER_*` and
 `SINGULARITY_*` variables in the operator's shell, except `APPTAINER_TMPDIR` and
 `APPTAINER_CACHEDIR` (for SingularityCE, `SINGULARITY_TMPDIR` and
-`SINGULARITY_CACHEDIR`, which those fill in where unset). The cluster Agent CLI
-must be a native binary on shared storage; a script launcher is refused at
-submit, and an npm-installed Codex resolves to its bundled binary.
+`SINGULARITY_CACHEDIR`, which those fill in where unset). A Codex or Claude Code
+CLI must be a native binary on shared storage; a script launcher is refused at
+submit, and an npm-installed Codex resolves to its bundled binary. The other
+Agents are installed into the image's Agent layer instead.
 
 Enabling `mount_policy = "scoped"` on an existing installation is a separate,
 explicit migration. Remove nonempty `extra_binds` (rejected in scoped mode) and

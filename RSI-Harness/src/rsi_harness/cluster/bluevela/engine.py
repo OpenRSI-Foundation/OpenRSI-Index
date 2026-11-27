@@ -86,6 +86,10 @@ class EnginePayload(PersistedModel):
     run_plan: RunPlan
     sif_path: Path
     sif_sha256_path: Path
+    # The Judge's image when it differs from Work's: the task's own SIF under
+    # an Agent layer, as a local Docker Judge runs on the task's Base image.
+    judge_sif_path: Path | None = None
+    judge_sif_sha256_path: Path | None = None
     source_root: Path
     resources: ClusterResources | None = None
     multi_node: MultiNodeResources | None = None
@@ -107,9 +111,20 @@ class EnginePayload(PersistedModel):
             raise ValueError(
                 "Engine payload requires exactly one Blue Vela resource branch"
             )
+        if (self.judge_sif_path is None) != (self.judge_sif_sha256_path is None):
+            raise ValueError("a Judge SIF needs its digest sidecar")
+        if self.judge_sif_path is not None and self.multi_node is not None:
+            raise ValueError("a multi-node run has one SIF for every phase")
         return self
 
-    @field_validator("sif_path", "sif_sha256_path", "source_root", "agent_binary")
+    @field_validator(
+        "sif_path",
+        "sif_sha256_path",
+        "judge_sif_path",
+        "judge_sif_sha256_path",
+        "source_root",
+        "agent_binary",
+    )
     @classmethod
     def _absolute(cls, value: Path | None) -> Path | None:
         if value is None:
@@ -334,6 +349,12 @@ trap - INT TERM
 if (( engine_status )); then exit "$engine_status"; fi
 test -s {_quote(leaf / "final_result.json")}
 """
+    judge_check = (
+        ""
+        if payload.judge_sif_path is None or payload.judge_sif_sha256_path is None
+        else f"(cd {_quote(payload.judge_sif_path.parent)} && \\\n"
+        f"  sha256sum -c {_quote(payload.judge_sif_sha256_path.name)})\n"
+    )
     if payload.resources is not None:
         if payload.resources.total_gpus:
             # Unset: the Engine finds the GPUs the job can open.
@@ -387,7 +408,7 @@ trap cleanup EXIT
 
 (cd {_quote(payload.sif_path.parent)} && \
   sha256sum -c {_quote(payload.sif_sha256_path.name)})
-{device_preflight}
+{judge_check}{device_preflight}
 
 {engine}"""
     else:
@@ -442,6 +463,18 @@ def _usable_image(payload: EnginePayload) -> EnginePayload:
         return payload
     scratch = Path(os.environ.get("RSI_HARNESS_NODE_TMP") or tempfile.gettempdir())
     sandbox = scratch / "image"
+    _extract_sandbox(payload, payload.sif_path, sandbox, scratch)
+    updates: dict[str, Path] = {"sif_path": sandbox}
+    if payload.judge_sif_path is not None:
+        judge = scratch / "judge-image"
+        _extract_sandbox(payload, payload.judge_sif_path, judge, scratch)
+        updates["judge_sif_path"] = judge
+    return payload.model_copy(update=updates)
+
+
+def _extract_sandbox(
+    payload: EnginePayload, source: Path, sandbox: Path, scratch: Path
+) -> None:
     print(
         f"kubernetes: no /dev/fuse in this Pod; extracting the image to {sandbox}",
         file=sys.stderr,
@@ -455,7 +488,7 @@ def _usable_image(payload: EnginePayload) -> EnginePayload:
             "--force",
             "--sandbox",
             str(sandbox),
-            str(payload.sif_path),
+            str(source),
         ),
         env={
             **os.environ,
@@ -481,7 +514,6 @@ def _usable_image(payload: EnginePayload) -> EnginePayload:
         raise InfrastructureError(
             f"cannot extract the task image for a Pod without /dev/fuse: {cause}"
         )
-    return payload.model_copy(update={"sif_path": sandbox})
 
 
 def _runtime_tmp_root(profile: ClusterProfile) -> str:

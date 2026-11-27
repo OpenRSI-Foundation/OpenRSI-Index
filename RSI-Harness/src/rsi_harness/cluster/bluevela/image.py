@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import shlex
+from dataclasses import dataclass
 from pathlib import Path
 
 from pydantic import field_validator
@@ -16,8 +17,131 @@ from rsi_harness.cluster.bluevela.preflight import (
 from rsi_harness.cluster.config import ClusterProfile
 from rsi_harness.models import PersistedModel
 from rsi_harness.task.digest import hash_tree
+from rsi_loop.harness.agent.base import Agent
+from rsi_loop.harness.agent.factory import get_agent_class
 
 _CACHE_SCHEMA = b"rsi-harness-bluevela-sif-v3\0"
+_AGENT_LAYER_SCHEMA = b"rsi-harness-bluevela-agent-layer-v1\0"
+# Where the definition's %files stage the Harness's Agent files, which the
+# build section installs in order and then removes.
+AGENT_FILES = "/opt/rsi-harness/.agent-files"
+_AGENT_SCRIPT = "install-agent.sh"
+# The local Work image's prerequisite step (bash, curl, tar, xz ...), as a
+# command: the RUN instruction without its keyword.
+_AGENT_PREREQUISITES_SCRIPT = (
+    "if command -v apt-get >/dev/null 2>&1; then "
+    "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y "
+    "bash ca-certificates curl passwd sudo tar xz-utils && "
+    "rm -rf /var/lib/apt/lists/*; "
+    "elif command -v apk >/dev/null 2>&1; then "
+    "apk add --no-cache bash ca-certificates curl shadow sudo tar xz; "
+    "else echo 'setup command failed: supported package manager' >&2; "
+    "exit 86; fi"
+)
+
+
+def agent_layer_required(agent_name: str) -> bool:
+    """Whether the Agent's Work files must be installed into the image.
+
+    Codex and Claude Code run as one native binary bound from shared
+    storage. An Agent with packaged image files (the Agent driver, pi's
+    extension) needs its pinned CLI, node and those files in the image, as
+    on local Docker: the cluster image gets an Agent layer on top of the
+    task's own SIF.
+    """
+    return agent_name != "oracle" and bool(get_agent_class(agent_name).image_files)
+
+
+@dataclass(frozen=True)
+class AgentLayer:
+    """An Agent's install as an Apptainer build section on the task's SIF.
+
+    ``script`` runs the same steps as the local Work image's Dockerfile;
+    ``files`` are the Harness's packaged Agent files, staged under
+    ``AGENT_FILES`` by the definition's ``%files`` and installed by the
+    script at their targets in the Dockerfile's order.
+    """
+
+    agent_name: str
+    script: str
+    files: tuple[tuple[str, bytes], ...]
+
+    @property
+    def digest(self) -> str:
+        digest = hashlib.sha256(_AGENT_LAYER_SCHEMA)
+        for value in (self.agent_name, self.script):
+            encoded = value.encode()
+            digest.update(len(encoded).to_bytes(8, "big") + encoded)
+        for name, content in self.files:
+            digest.update(len(name).to_bytes(8, "big") + name.encode())
+            digest.update(len(content).to_bytes(8, "big") + content)
+        return digest.hexdigest()
+
+    def definition(self, task_sif: Path, directory: Path) -> str:
+        """The Apptainer definition, with the layer written in ``directory``.
+
+        The script runs as a staged file, so its text needs no quoting or
+        indentation for the definition format.
+        """
+        names = (*(name for name, _content in self.files), _AGENT_SCRIPT)
+        files = "".join(
+            f"    {directory / name} {AGENT_FILES}/{name}\n" for name in names
+        )
+        return (
+            f"Bootstrap: localimage\nFrom: {task_sif}\n\n"
+            f"%files\n{files}\n"
+            f"%post\n    /bin/sh -eu {AGENT_FILES}/{_AGENT_SCRIPT}\n"
+        )
+
+    def write(self, directory: Path, task_sif: Path) -> Path:
+        """Write the files, the script and the definition into a new directory."""
+        directory.mkdir(mode=0o700)
+        for name, content in self.files:
+            path = directory / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(content)
+        (directory / _AGENT_SCRIPT).write_text(self.script)
+        definition = directory / "agent.def"
+        definition.write_text(self.definition(task_sif, directory))
+        return definition
+
+
+def agent_layer(agent: Agent) -> AgentLayer:
+    """The layer that installs the Agent as the local Work image does."""
+    # Here, not at import: the image module loads the Docker SDK, which the
+    # CLI and the cluster job otherwise never need.
+    from rsi_harness.runtime.images import (
+        agent_build_args,
+        agent_install_steps,
+        chmod_command,
+    )
+
+    arguments = agent_build_args(agent)
+    # Its own command, as its own RUN on Docker: `sh -e` would not stop on a
+    # failure inside its `if ... && ...` list.
+    lines = ["set -eu", shlex.join(("/bin/sh", "-c", _AGENT_PREREQUISITES_SCRIPT))]
+    files: list[tuple[str, bytes]] = []
+    for step in agent_install_steps(agent):
+        if step.copy is not None:
+            files.append((step.copy.context_name, step.copy.content))
+            lines.append(
+                "install -D -m 0644 "
+                f"{shlex.quote(f'{AGENT_FILES}/{step.copy.context_name}')} "
+                f"{shlex.quote(str(step.copy.target))}"
+            )
+        elif step.chmod:
+            lines.append(shlex.join(("/bin/bash", "-lc", chmod_command(step.chmod))))
+        elif step.arg is not None:
+            # A Dockerfile ARG without a value leaves the variable unset.
+            value = arguments.get(step.arg)
+            if value:
+                lines.append(f"export {step.arg}={shlex.quote(value)}")
+        else:
+            lines.append(shlex.join(step.argv))
+    lines.append(f"rm -rf {AGENT_FILES}")
+    return AgentLayer(
+        agent_name=agent.name, script="\n".join(lines) + "\n", files=tuple(files)
+    )
 
 
 class ImagePlan(PersistedModel):
@@ -25,6 +149,8 @@ class ImagePlan(PersistedModel):
     sif_path: Path
     sha256_path: Path
     cache_hit: bool
+    # An Agent layer's record of the task SIF digest it was built on.
+    base_path: Path | None = None
 
     @field_validator("sif_path", "sha256_path")
     @classmethod
@@ -58,21 +184,42 @@ def validate_cached_image(plan: ImagePlan) -> bool:
         return False
 
 
-def plan_image(build_context: Path, cache_root: Path) -> ImagePlan:
+def plan_image(
+    build_context: Path, cache_root: Path, agent: AgentLayer | None = None
+) -> ImagePlan:
     context = Path(build_context).resolve()
     cache = Path(cache_root).resolve()
     context_digest = hash_tree(context, excluded_roots=(".git",))
-    cache_key = hashlib.sha256(
-        _CACHE_SCHEMA + context_digest.encode("ascii")
-    ).hexdigest()
+    key_input = _CACHE_SCHEMA + context_digest.encode("ascii")
+    if agent is not None:
+        # The task's image alone keeps its key; each Agent layer has its own.
+        key_input += b"\0agent\0" + agent.digest.encode("ascii")
+    cache_key = hashlib.sha256(key_input).hexdigest()
     sif_path = cache / f"{cache_key}.sif"
     plan = ImagePlan(
         cache_key=cache_key,
         sif_path=sif_path,
         sha256_path=cache / f"{cache_key}.sif.sha256",
         cache_hit=False,
+        base_path=None if agent is None else cache / f"{cache_key}.sif.base",
     )
-    return plan.model_copy(update={"cache_hit": validate_cached_image(plan)})
+    hit = validate_cached_image(plan)
+    if agent is not None and hit:
+        # Only on the task SIF the cache holds now: one evicted and rebuilt
+        # since would leave the layer on bytes the Oracle no longer uses.
+        task = plan_image(context, cache)
+        hit = task.cache_hit and _recorded_digest(plan.base_path) == (
+            _recorded_digest(task.sha256_path)
+        )
+    return plan.model_copy(update={"cache_hit": hit})
+
+
+def _recorded_digest(path: Path | None) -> str | None:
+    try:
+        fields = path.read_text().split() if path is not None else []
+    except OSError:
+        return None
+    return fields[0] if fields else None
 
 
 def _quote(value: str | Path) -> str:
@@ -337,6 +484,117 @@ digest="$(sha256sum "$local_sif" | awk '{{print $1}}')"
 /usr/bin/dd if="$local_sif" of="$partial_sif" bs=16M status=none conv=fsync
 printf '%s  %s\n' "$digest" "$(basename "$final_sif")" > "$partial_sha"
 mv "$partial_sif" "$final_sif"
+mv "$partial_sha" "$final_sha"
+(cd "$cache_dir" && sha256sum -c "$(basename "$final_sha")")
+"""
+    output.write_text(script)
+    output.chmod(0o700)
+
+
+def render_agent_build_driver(
+    plan: ImagePlan,
+    task: ImagePlan,
+    profile: ClusterProfile,
+    task_driver: Path,
+    definition: Path,
+    output_path: Path,
+    minimum_tmp_mb: int,
+) -> None:
+    """Render the build of an Agent layer's SIF on the task's own SIF.
+
+    The task driver builds the task's SIF first or finds it cached, so the
+    Oracle, Codex, Claude Code and every Agent layer of a task share its
+    exact bytes. The layer is an Apptainer build from that local image.
+    """
+    if plan.base_path is None:
+        raise ValueError("an Agent layer plan records the task SIF it is built on")
+    base_path = plan.base_path
+    output = Path(output_path)
+    cache_dir = plan.sif_path.parent
+    apptainer_args = " ".join(_quote(arg) for arg in profile.apptainer.build_args)
+    builder_tmp = node_tmp_assignment(
+        "builder_tmp_root",
+        profile.builder.temp_root,
+        profile.resources.node_tmp_variable,
+    )
+    script = f"""#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+
+{apptainer_preflight(profile.apptainer.binary)}
+task_driver={_quote(Path(task_driver).resolve())}
+definition={_quote(Path(definition).resolve())}
+task_sif={_quote(task.sif_path)}
+task_sha={_quote(task.sha256_path)}
+final_base={_quote(base_path)}
+cache_dir={_quote(cache_dir)}
+final_sif={_quote(plan.sif_path)}
+final_sha={_quote(plan.sha256_path)}
+{builder_tmp}
+# The task's own SIF: built now, or the cached one the Oracle, Codex,
+# Claude Code and the other Agent layers of this task use.
+"$task_driver"
+(cd "$(dirname "$task_sif")" && sha256sum -c "$(basename "$task_sha")") >/dev/null
+task_digest="$(awk '{{print $1}}' "$task_sha")"
+if [[ ! -d "$builder_tmp_root" ]]; then
+  echo "builder temp_root does not exist on this node: $builder_tmp_root" >&2
+  exit 1
+fi
+available_tmp_kb="$(df -Pk -- "$builder_tmp_root" | awk 'NR == 2 {{print $4}}')"
+required_tmp_kb=$(({minimum_tmp_mb} * 1024))
+if [[ ! "$available_tmp_kb" =~ ^[0-9]+$ ]] || \\
+   (( available_tmp_kb < required_tmp_kb )); then
+  echo "insufficient node-local build scratch:" \\
+    "need {minimum_tmp_mb} MiB under $builder_tmp_root," \\
+    "have ${{available_tmp_kb:-unknown}} KiB" >&2
+  exit 1
+fi
+
+mkdir -p "$cache_dir"
+exec 9>"$cache_dir/.{plan.cache_key}.build.lock"
+/usr/bin/flock 9
+
+if [[ -s "$final_sif" && -s "$final_sha" ]] && \\
+   [[ "$(cat "$final_base" 2>/dev/null)" == "$task_digest" ]] && \\
+   (cd "$cache_dir" && sha256sum -c "$(basename "$final_sha")"); then
+  exit 0
+fi
+
+local_root="$(mktemp -d "$builder_tmp_root/rsi-harness-agent-sif.XXXXXX")"
+job_tag="${{SLURM_JOB_ID:-${{LSB_JOBID:-${{PBS_JOBID:-${{PJM_JOBID:-$$}}}}}}}}"
+partial_sif="$cache_dir/.{plan.cache_key}.$job_tag.sif.partial"
+partial_sha="$cache_dir/.{plan.cache_key}.$job_tag.sha256.partial"
+partial_base="$cache_dir/.{plan.cache_key}.$job_tag.base.partial"
+cleanup() {{
+  rm -rf "$local_root"
+  rm -f "$partial_sif" "$partial_sha" "$partial_base"
+}}
+trap cleanup EXIT
+local_sif="$local_root/image.sif"
+export APPTAINER_BIND={_quote(profile.apptainer.dns_bind)}
+export APPTAINER_TMPDIR="$local_root/apptainer-tmp"
+export APPTAINER_CACHEDIR="$local_root/apptainer-cache"
+mkdir -p "$APPTAINER_TMPDIR" "$APPTAINER_CACHEDIR"
+squashfs_args=(--mksquashfs-args {_quote(f"-processors {profile.builder.cpu_slots}")})
+if (( singularity_ce )); then
+  export SINGULARITY_BIND="$APPTAINER_BIND"
+  export SINGULARITY_TMPDIR="$APPTAINER_TMPDIR"
+  export SINGULARITY_CACHEDIR="$APPTAINER_CACHEDIR"
+  squashfs_args=()
+fi
+"$apptainer" build {apptainer_args} ${{squashfs_args[@]+"${{squashfs_args[@]}}"}} \\
+  "$local_sif" "$definition"
+"$apptainer" inspect "$local_sif" >/dev/null
+test -s "$local_sif"
+
+digest="$(sha256sum "$local_sif" | awk '{{print $1}}')"
+/usr/bin/dd if="$local_sif" of="$partial_sif" bs=16M status=none conv=fsync
+printf '%s  %s\\n' "$digest" "$(basename "$final_sif")" > "$partial_sha"
+printf '%s\\n' "$task_digest" > "$partial_base"
+# The digest last: a valid sidecar implies the SIF and its base record.
+rm -f "$final_sha"
+mv "$partial_sif" "$final_sif"
+mv "$partial_base" "$final_base"
 mv "$partial_sha" "$final_sha"
 (cd "$cache_dir" && sha256sum -c "$(basename "$final_sha")")
 """
