@@ -44,7 +44,10 @@ _LAUNCHER = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]*")
 # Synthetic, distinctive values: what every Agent needs to render a command.
 API_KEY = "sk-contract-test-key-4c1e"
 _NPM_INSTALL = re.compile(r"\bnpm install -g ([^;&|]+)")
-_PINNED_PACKAGE = re.compile(r"(@?[a-z0-9][a-z0-9._/-]*)@\d+\.\d+\.\d+")
+# X.Y.Z, or X.Y.Z-PRE for a CLI that publishes only pre-releases.
+_PINNED_PACKAGE = re.compile(
+    r"(@?[a-z0-9][a-z0-9._/-]*)@\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?"
+)
 
 
 @pytest.fixture(autouse=True)

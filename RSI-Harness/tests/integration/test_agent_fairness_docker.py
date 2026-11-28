@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shlex
 import shutil
 import threading
 from collections.abc import Mapping
@@ -166,6 +167,26 @@ _KIMI_POOL = (
     'provider = "rsi"\\nmodel = "big-model"\\nmax_context_size = 200000\\n'
     'max_output_size = 8192\\ncapabilities = ["tool_use"]\\n\' >> "$cfg"'
     ' && sleep 2 && grep -c big-model "$cfg" && echo config-edited'
+)
+# What would give dsh's subagents another model, as the Agent could write it
+# into its own patch layer during Work: the subagent tool's model choice with
+# a default of its own, and live reload.
+_DSH_ROWS = (
+    {"id": "hmr", "disabled": False},
+    {
+        "id": "tool-subagent",
+        "config": {
+            "provider": "spawn",
+            "toolName": "subagent",
+            "modelSelection": True,
+            "agentOptions": {"provider": "rsi", "model": "big-model"},
+        },
+    },
+)
+_DSH_PATCH = (
+    "p=\"$HOME/.dsh/cordis.patch.yml\" && printf '%s\\n' "
+    + shlex.join(f"- {json.dumps(row)}" for row in _DSH_ROWS)
+    + ' >> "$p" && sleep 2 && grep -c big-model "$p" && echo config-edited'
 )
 
 # Antigravity's tools that its PreToolUse hook denies, with arguments that
@@ -338,14 +359,31 @@ CASES = (
         model=CODEX_MODEL,
         submit=False,
     ),
+    # Kimi's Agent and AgentSwarm take a model alias from the subagent pool,
+    # which holds the run's model alone: a subagent asked for the model the
+    # Agent added to its config still reaches the run's model, or none.
     FairnessCase(
         "kimi-code",
         calls=(
             (_KIMI_POOL, "config-edited"),
             (_spawn("Agent", 1, subagent_type="coder"), DONE),
+            (_spawn("Agent", 2, subagent_type="coder", model="big"), ""),
         ),
         subagents=(1,),
-        no_model_param=("Agent", "AgentSwarm"),
+    ),
+    # dsh reads its patch layers only at launch, and the route holds the
+    # run's model alone: a subagent after the Agent edited its patch still
+    # reaches the run's model. The subagent tool returns once the subagent
+    # starts; its answer arrives as a later message.
+    FairnessCase(
+        "dsh",
+        calls=(
+            (_DSH_PATCH, "config-edited"),
+            (_spawn("subagent", 1), "started subagent"),
+        ),
+        subagents=(1,),
+        absent_tools=("web_fetch", "web_search", "create_goal", "update_goal"),
+        no_model_param=("subagent",),
     ),
     FairnessCase(
         "opencode",

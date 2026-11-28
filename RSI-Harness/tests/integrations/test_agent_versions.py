@@ -301,6 +301,13 @@ def test_rewrite_sets_node() -> None:
     assert 'NODE_VERSION = "22.24.0"' in text
 
 
+def test_rewrite_accepts_an_exact_prerelease() -> None:
+    text, old = bump.rewrite(_TABLE, "CODEX", "0.160.0-rc.5")
+
+    assert old == "0.159.2"
+    assert 'CODEX = "0.160.0-rc.5"' in text
+
+
 @pytest.mark.parametrize(
     ("table", "found"),
     [
@@ -316,7 +323,7 @@ def test_rewrite_refuses_unless_the_constant_appears_once(
 
 
 @pytest.mark.parametrize(
-    "version", ["v0.160.0", "0.160", "0.160.0-beta.1", "", "1.2.3 "]
+    "version", ["v0.160.0", "0.160", "0.160.0-", "0.160.0-rc..1", "", "1.2.3 "]
 )
 def test_rewrite_refuses_anything_but_an_exact_version(version: str) -> None:
     with pytest.raises(bump.BumpError, match="X.Y.Z"):

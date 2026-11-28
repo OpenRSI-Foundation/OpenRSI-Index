@@ -40,6 +40,7 @@ AGENT_FILES = {
     "zcode": ("zcode.py", "zcode/"),
     "pi": ("pi.py", "pi/"),
     "antigravity": ("antigravity.py",),
+    "dsh": ("dsh.py", "dsh/"),
     "oracle": ("oracle.py", "oracle/"),
 }
 AGENTS = tuple(AGENT_FILES)
@@ -57,6 +58,7 @@ VERSION_OWNERS = {
     "PI": "pi",
     "ANTIGRAVITY": "antigravity",
     "ANTIGRAVITY_BUILD": "antigravity",
+    "DSH": "dsh",
 }
 MODEL_ACCESS_AGENTS = {"codex", "claude-code"}
 _VERSION_LINE = re.compile(r'^[+-]([A-Z_]+) = "[^"]*"$')

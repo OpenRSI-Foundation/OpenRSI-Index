@@ -162,6 +162,16 @@ CASES = (
     DrivenCase("qwen-code"),
     DrivenCase("kimi-code", reasoning_effort="high"),
     DrivenCase(
+        "dsh",
+        reasoning_effort="max",
+        checks=(
+            (
+                {"tool": "read", "arguments": {"file_path": "/workspace/answer.txt"}},
+                "42",
+            ),
+        ),
+    ),
+    DrivenCase(
         "opencode",
         reasoning_effort="high",
         # Its grep tool needs ripgrep, which it would otherwise download on
@@ -299,7 +309,7 @@ def _wire_listing(glob: str) -> str:
     pattern = glob.replace("{session}", "*")
     return (
         f'for f in {pattern}; do echo "wire-file $f '
-        'turn-ends=$(grep -c \'"agent.turn.ended"\' "$f")"; done'
+        'turn-ends=$(grep -cE \'"(agent\\.)?turn\\.ended"\' "$f")"; done'
     )
 
 

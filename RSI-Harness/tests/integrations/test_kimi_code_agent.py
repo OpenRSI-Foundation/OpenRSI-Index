@@ -133,6 +133,8 @@ def test_config_names_the_key_variable_and_keeps_the_run_unattended(
             "capabilities": ["tool_use"],
         }
     }
+    # Subagents bind only the pool's models; a lone default pins them.
+    assert config["secondary_model"] == {"default_model": "rsi"}
     disabled = set(config["tools"]["disabled"])
     assert {
         "AskUserQuestion",
@@ -169,7 +171,7 @@ def test_prelude_writes_config_under_kimi_home(tmp_path: Path) -> None:
             assert API_KEY not in path.read_text()
 
 
-@pytest.mark.parametrize("effort", ["low", "medium", "high"])
+@pytest.mark.parametrize("effort", ["low", "medium", "high", "xhigh", "max"])
 def test_reasoning_effort_makes_the_model_think_at_that_effort(
     effort: str, tmp_path: Path
 ) -> None:
@@ -190,9 +192,10 @@ def test_reasoning_effort_makes_the_model_think_at_that_effort(
 
 
 def test_reasoning_effort_outside_the_declared_set_is_refused() -> None:
-    validate_agent_reasoning_effort("kimi-code", "high")
-    with pytest.raises(SetupError, match="choose one of: high, low, medium"):
-        validate_agent_reasoning_effort("kimi-code", "xhigh")
+    validate_agent_reasoning_effort("kimi-code", "max")
+    supported = "choose one of: high, low, max, medium, xhigh"
+    with pytest.raises(SetupError, match=supported):
+        validate_agent_reasoning_effort("kimi-code", "ultra")
     with pytest.raises(ValueError, match="cannot accept reasoning effort"):
         _agent().apply_reasoning_effort("exec kimi acp", "high")
 

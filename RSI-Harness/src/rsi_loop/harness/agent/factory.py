@@ -22,6 +22,7 @@ from rsi_loop.harness.config import RSILoopConfig
 from rsi_loop.harness.agent.antigravity import AntigravityAgent
 from rsi_loop.harness.agent.claude_code import ClaudeCodeAgent
 from rsi_loop.harness.agent.codex import CodexAgent
+from rsi_loop.harness.agent.dsh import DshAgent
 from rsi_loop.harness.agent.kimi_code import KimiCodeAgent
 from rsi_loop.harness.agent.opencode import OpenCodeAgent
 from rsi_loop.harness.agent.oracle import OracleAgent
@@ -37,6 +38,7 @@ _REGISTRY: dict[str, type[Agent]] = {
     "antigravity": AntigravityAgent,
     "claude-code": ClaudeCodeAgent,
     "codex": CodexAgent,
+    "dsh": DshAgent,
     "kimi-code": KimiCodeAgent,
     "opencode": OpenCodeAgent,
     "oracle": OracleAgent,

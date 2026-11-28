@@ -405,7 +405,7 @@ def test_codex_reasoning_effort_still_applies_to_the_guarded_launch() -> None:
 
 
 @pytest.mark.parametrize("internet", [True, False])
-def test_kimi_forces_subagents_onto_the_run_model(internet: bool) -> None:
+def test_kimi_pins_subagents_to_the_run_model(internet: bool) -> None:
     agent = create_agent("kimi-code", _config())
     config = tomllib.loads(agent.config_toml(model=MODEL, internet=internet))
     assert config["default_model"] == "rsi"
@@ -418,7 +418,8 @@ def test_kimi_forces_subagents_onto_the_run_model(internet: bool) -> None:
             "capabilities": ["tool_use"],
         }
     }
-    assert config["secondary_model"] == {"model": "rsi", "force": True}
+    # A lone pool default: the subagent tools' model can name no other.
+    assert config["secondary_model"] == {"default_model": "rsi"}
     # The marker apply_reasoning_effort rewrites is still there once.
     command = agent.format_run_cmd("/tmp/p.md", model=MODEL, internet=internet)
     assert "effort" in agent.apply_reasoning_effort(command, "high")
@@ -431,8 +432,29 @@ def test_kimi_reads_its_config_only_at_launch() -> None:
     oneshot = _oneshot("kimi-code", internet=False)
     assert oneshot["environment"]["KIMI_CODE_WATCH"] == "0"
     assert "[secondary_model]" in oneshot["command"]
-    assert "force = true" in oneshot["command"]
+    assert '[secondary_model]\ndefault_model = "rsi"' in oneshot["command"]
     assert "disallowedTools: Agent, AgentSwarm" in oneshot["command"]
+
+
+# -- dsh --------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("internet", [True, False])
+def test_dsh_routes_every_agent_to_the_run_model_and_reads_its_patch_at_launch(
+    internet: bool,
+) -> None:
+    agent = create_agent("dsh", _config())
+    command = agent.format_run_cmd("/tmp/p.md", model=MODEL, internet=internet)
+    # One route, holding the run's model alone, as every Agent's default.
+    assert command.count('"providers": {"rsi": {') == 1
+    assert command.count('"models": [{"id": ') == 1
+    selection = json.dumps({"provider": "rsi", "model": MODEL})
+    assert f'{{"id": "agent-default-model", "config": {selection}}}' in command
+    # No live reload, and a fresh profile each launch.
+    assert '{"id": "hmr", "disabled": true}' in command
+    assert 'rm -rf "$DSH_HOME/profiles" "$DSH_HOME/settings.yaml"' in command
+    oneshot = _oneshot("dsh", internet=internet)
+    assert '{"id": "tool-subagent", "disabled": true}' in oneshot["command"]
 
 
 # -- OpenCode ---------------------------------------------------------------
