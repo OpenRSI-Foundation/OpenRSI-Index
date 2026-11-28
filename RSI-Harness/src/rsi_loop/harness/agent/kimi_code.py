@@ -104,7 +104,7 @@ class KimiCodeAgent(DrivenAgent):
     api_key_env = "OPENAI_API_KEY"
     api_base_env = "OPENAI_BASE_URL"
     # Sent as the OpenAI ``reasoning_effort``, without a client-side mapping.
-    reasoning_efforts = frozenset({"low", "medium", "high"})
+    reasoning_efforts = frozenset({"low", "medium", "high", "xhigh", "max"})
 
     def check_config(self) -> None:
         super().check_config()
@@ -149,12 +149,12 @@ class KimiCodeAgent(DrivenAgent):
                 f"max_output_size = {output}",
                 _CAPABILITIES,
                 "",
-                # Subagents (Agent, AgentSwarm) run on the main model: forced,
-                # a call cannot name another one, and the Agent tool offers
-                # no model parameter. Profiles carry no model of their own.
+                # Subagents (Agent, AgentSwarm, tower workers) run only on the
+                # pool's models, and a lone default_model pins them to the
+                # main model: the tools' model parameter can name no other.
+                # Profiles carry no model of their own.
                 "[secondary_model]",
-                f"model = {_toml_string(_PROVIDER)}",
-                "force = true",
+                f"default_model = {_toml_string(_PROVIDER)}",
                 "",
                 "[tools]",
                 f"disabled = {json.dumps(disabled)}",

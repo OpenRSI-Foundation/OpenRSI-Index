@@ -1296,7 +1296,7 @@ function acpToolOutput(tool) {
 }
 
 // ---------------------------------------------------------------------------
-// Kimi idle probe: the newest agent.turn.* event of the main agent in the
+// Kimi idle probe: the newest turn event of the main agent in the
 // session's wire.jsonl, and how long the file has been quiet.
 // ---------------------------------------------------------------------------
 
@@ -1316,6 +1316,9 @@ function globFiles(pattern) {
   });
 }
 
+const KIMI_TURN_STARTS = new Set(['turn.prompt', 'agent.turn.started']);
+const KIMI_TURN_ENDS = new Set(['turn.ended', 'agent.turn.ended']);
+
 function kimiWireState(probe, sessionId) {
   if (!probe.startsWith('kimi-wire:')) return null;
   const pattern = expandEnv(probe.slice('kimi-wire:'.length)).replaceAll('{session}', sessionId);
@@ -1331,16 +1334,19 @@ function kimiWireState(probe, sessionId) {
     readSync(fd, buffer, 0, length, stat.size - length);
     let last = null;
     for (const line of buffer.toString('utf8').split('\n')) {
-      if (!line.includes('"agent.turn.')) continue;
+      if (!line.includes('turn.')) continue;
       try {
         const event = JSON.parse(line);
         if ((event.agentId ?? 'main') !== 'main') continue;
-        if (event.type === 'agent.turn.started' || event.type === 'agent.turn.ended') last = event.type;
+        // Kimi 2.8 writes turn.prompt and turn.ended; earlier releases
+        // agent.turn.started and agent.turn.ended.
+        if (KIMI_TURN_STARTS.has(event.type)) last = 'started';
+        else if (KIMI_TURN_ENDS.has(event.type)) last = 'ended';
       } catch {
         // A partial line at the read boundary.
       }
     }
-    return { busy: last === 'agent.turn.started', quietMs: now() - stat.mtimeMs };
+    return { busy: last === 'started', quietMs: now() - stat.mtimeMs };
   } catch {
     return null;
   } finally {

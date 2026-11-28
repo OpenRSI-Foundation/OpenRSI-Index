@@ -18,13 +18,14 @@ This is the only place an Agent's version is written down: its install
 commands and the version its transcript reports are built from it. Upgrade
 one with ``scripts/bump_agent.py <agent|node> <version>``, which rewrites the
 constant below and runs that Agent's Docker tests; keep each one a plain
-``NAME = "X.Y.Z"`` line so the script can find it.
+``NAME = "X.Y.Z"`` line (``X.Y.Z-PRE`` for a CLI that publishes only
+pre-releases) so the script can find it.
 
 Each value is an exact version, downloaded over HTTPS; npm checks the
 integrity of what it installs against the registry.
 """
 
-NODE_VERSION = "22.23.3"
+NODE_VERSION = "24.22.3"
 
 CODEX = "0.162.1"
 # SHA-256 of that release's native Linux binary (the npm package's
@@ -37,7 +38,7 @@ CODEX_SHA256_AARCH64 = "071cbe8d821cf1b02b6d8ba6c8b7991b228fcb8519dcb68a37d31222
 # fmt: on
 CLAUDE_CODE = "2.1.296"
 QWEN_CODE = "0.25.1"
-KIMI_CODE = "2.1.1"
+KIMI_CODE = "2.8.1"
 OPENCODE = "1.19.0"
 ZCODE = "3.15.1"
 PI = "1.1.0"
@@ -45,6 +46,8 @@ ANTIGRAVITY = "1.5.17"
 # The build id in that release's download URL; bump_agent.py rewrites it
 # with ANTIGRAVITY.
 ANTIGRAVITY_BUILD = "4823843970351104"
+# Every release so far is a pre-release.
+DSH = "0.2.2-rc.5"
 
 # Not an Agent: OpenCode's grep tool downloads ripgrep on first use when no
 # ``rg`` is on PATH, which a no-network Work cannot do, so its image carries

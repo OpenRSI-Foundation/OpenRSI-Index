@@ -52,8 +52,9 @@ DOCKER_TESTS = (
 # instead of skip: pytest exits 0 when every selected case skipped, which
 # would pass a bump that tested nothing.
 REQUIRE_ENV = "RSI_REQUIRE_DOCKER_TESTS"
-# Exact versions only: the install commands and their tests expect X.Y.Z.
-_VERSION = re.compile(r"\d+\.\d+\.\d+")
+# Exact versions only: X.Y.Z, or X.Y.Z-PRE for a CLI that publishes only
+# pre-releases.
+_VERSION = re.compile(r"\d+\.\d+\.\d+(?:-[0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*)?")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _BUILD = re.compile(r"\d+")
 
@@ -129,6 +130,7 @@ TARGETS = {
     "kimi-code": Target(
         "KIMI_CODE", npm_package="@moonshot-ai/kimi-code", agents=("kimi-code",)
     ),
+    "dsh": Target("DSH", npm_package="@deepseek-ai/dsh", agents=("dsh",)),
     "opencode": Target(
         "OPENCODE",
         npm_package="opencode-linux-{arch}",
@@ -178,7 +180,7 @@ def rewrite(text: str, constant: str, version: str) -> tuple[str, str]:
     duplicated constant is never half-updated.
     """
     if not _VERSION.fullmatch(version):
-        raise BumpError(f"version must be X.Y.Z, got {version!r}")
+        raise BumpError(f"version must be X.Y.Z[-PRE], got {version!r}")
     pattern = re.compile(rf'^({re.escape(constant)} = )"([^"\n]*)"$', re.MULTILINE)
     matches = pattern.findall(text)
     if len(matches) != 1:
@@ -341,7 +343,7 @@ def main(argv: list[str] | None = None) -> int:
         description="Upgrade one pinned Agent CLI (or node) and run its Docker tests."
     )
     parser.add_argument("name", choices=sorted(TARGETS))
-    parser.add_argument("version", help="the exact new version, X.Y.Z")
+    parser.add_argument("version", help="the exact new version, X.Y.Z[-PRE]")
     parser.add_argument(
         "--no-test", action="store_true", help="only edit; skip the Docker tests"
     )

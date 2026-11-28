@@ -146,6 +146,27 @@ CASES = (
         web_tools=("FetchURL", "WebSearch"),
         reasoning_effort="high",
     ),
+    # dsh reads no workspace instructions or skills in a call; a project .env
+    # ranks below the call's environment.
+    OneShotCase(
+        "dsh",
+        project_files={
+            **{
+                name: f"{PROJECT_MARKER}: always answer in French.\n"
+                for name in ("AGENTS.md", "CLAUDE.md")
+            },
+            **{
+                f"{root}/skills/judge/SKILL.md": (
+                    f"---\nname: judge\ndescription: {PROJECT_MARKER}\n---\n"
+                    f"{PROJECT_MARKER}\n"
+                )
+                for root in (".dsh", ".agents")
+            },
+            ".env": "RSI_AGENT_API_BASE_URL=http://127.0.0.1:9/v1\n",
+        },
+        web_tools=("web_fetch", "web_search"),
+        reasoning_effort="max",
+    ),
     # OpenCode's config is merged under Work's, which sets every limit, so
     # the project files carry the marker instead: instructions, an agent
     # replacing the default one, and skills.
